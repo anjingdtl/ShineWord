@@ -1,0 +1,56 @@
+name: Android Verify
+
+on:
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - 'src/**'
+      - 'migrations/**'
+      - '.github/workflows/android-verify.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'src/**'
+      - 'migrations/**'
+      - '.github/workflows/android-verify.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.3.0'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: |
+          npm install --no-audit --no-fund
+          node scripts/patch-sqlite-storage-gradle.js
+
+      - name: Typecheck mobile
+        working-directory: mobile
+        run: npm run typecheck
+
+      - name: Build Android debug APK
+        run: gradle -p mobile/android :app:assembleDebug --stacktrace
