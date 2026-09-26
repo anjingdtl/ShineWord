@@ -30,6 +30,7 @@ export interface RunLlmTurnInput {
   branchId: string;
   turnId: string;
   playerIntent: string;
+  worldContext?: string;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
   resolveRollSpec(contract: ActionContract): RollSpec;
@@ -52,6 +53,10 @@ function plannerSystem(): string {
     'Output exactly one JSON ActionContract object and no prose.',
     'Never include random values, dice rolls, diceCount, final result, balance changes, or invented authoritative state.',
     'The four outcome clauses must be frozen before any roll.',
+    'Required keys: protocolVersion="1.0", turnId, expectedStateVersion, actorId, actionType, evidenceIds, requiresRoll, intent, timeCostMinutes, resourcePreconditions, outcomes.',
+    'outcomes must contain full_success, success, failure, severe_failure; each has achieved, publicSummary, effects.',
+    'Allowed effects: consumeResource, changeLocation, applyCondition, advanceClock, transferItem, recordEvent.',
+    'For requiresRoll=true include skillId and difficultyBand in simple|normal|challenging|hard|extreme|peak.',
   ].join(' ');
 }
 
@@ -133,6 +138,7 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
         turnId: input.turnId,
         expectedStateVersion: state.stateVersion,
         playerIntent: input.playerIntent,
+        worldContext: input.worldContext ?? '',
       }),
       maxOutputTokens: 2200,
       jsonMode: true,
