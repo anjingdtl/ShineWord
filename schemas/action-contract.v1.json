@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shineword.local/schemas/action-contract.v1.json",
+  "title": "ShineWord Action Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "turnId",
+    "expectedStateVersion",
+    "actorId",
+    "actionType",
+    "evidenceIds",
+    "requiresRoll",
+    "intent",
+    "timeCostMinutes",
+    "resourcePreconditions",
+    "outcomes"
+  ],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "turnId": { "type": "string", "minLength": 1 },
+    "expectedStateVersion": { "type": "integer", "minimum": 0 },
+    "actorId": { "type": "string", "minLength": 1 },
+    "actionType": { "type": "string", "minLength": 1 },
+    "targetId": { "type": "string", "minLength": 1 },
+    "skillId": { "type": "string", "minLength": 1 },
+    "difficultyBand": {
+      "enum": ["simple", "normal", "challenging", "hard", "extreme", "peak"]
+    },
+    "evidenceIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "requiresRoll": { "type": "boolean" },
+    "intent": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "timeCostMinutes": { "type": "number", "minimum": 0 },
+    "resourcePreconditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actorId", "resourceId", "minimum"],
+        "properties": {
+          "actorId": { "type": "string", "minLength": 1 },
+          "resourceId": { "type": "string", "minLength": 1 },
+          "minimum": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["full_success", "success", "failure", "severe_failure"],
+      "properties": {
+        "full_success": { "$ref": "#/$defs/outcome" },
+        "success": { "$ref": "#/$defs/outcome" },
+        "failure": { "$ref": "#/$defs/outcome" },
+        "severe_failure": { "$ref": "#/$defs/outcome" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "requiresRoll": { "const": true } } },
+      "then": { "required": ["skillId", "difficultyBand"] }
+    }
+  ],
+  "$defs": {
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["achieved", "publicSummary", "effects"],
+      "properties": {
+        "achieved": { "type": "boolean" },
+        "publicSummary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/effect" }
+        }
+      }
+    },
+    "effect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "actorId", "resourceId", "amount"],
+          "properties": {
+            "op": { "const": "consumeResource" },
+            "actorId": { "type": "string", "minLength": 1 },
+            "resourceId": { "type": "string", "minLength": 1 },
+            "amount": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "actorId", "locationId"],
+          "properties": {
+            "op": { "const": "changeLocation" },
+            "actorId": { "type": "string", "minLength": 1 },
+            "locationId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "actorId", "conditionId"],
+          "properties": {
+            "op": { "const": "applyCondition" },
+            "actorId": { "type": "string", "minLength": 1 },
+            "conditionId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "minutes"],
+          "properties": {
+            "op": { "const": "advanceClock" },
+            "minutes": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "itemId", "fromActorId", "toActorId"],
+          "properties": {
+            "op": { "const": "transferItem" },
+            "itemId": { "type": "string", "minLength": 1 },
+            "fromActorId": { "type": "string", "minLength": 1 },
+            "toActorId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "eventType", "summary"],
+          "properties": {
+            "op": { "const": "recordEvent" },
+            "eventType": { "type": "string", "minLength": 1 },
+            "summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        }
+      ]
+    }
+  }
+}

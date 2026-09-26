@@ -1,0 +1,28 @@
+name: Core Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.3.0'
+
+      - name: Install dev dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Verify deterministic core
+        run: npm run verify:core

@@ -1,0 +1,39 @@
+{
+  "rulesetId": "shineword-core",
+  "rulesetVersion": "0.1.0",
+  "attributes": {
+    "physique": { "label": "体魄", "min": 1, "max": 3 },
+    "agility": { "label": "敏捷", "min": 1, "max": 3 },
+    "insight": { "label": "洞察", "min": 1, "max": 3 },
+    "knowledge": { "label": "学识", "min": 1, "max": 3 },
+    "willpower": { "label": "意志", "min": 1, "max": 3 },
+    "social": { "label": "交涉", "min": 1, "max": 3 }
+  },
+  "skills": {
+    "untrained": { "label": "未训练", "dieSides": 4 },
+    "novice": { "label": "入�{�", "dieSides": 6 },
+    "trained": { "label": "熟练", "dieSides": 8 },
+    "expert": { "label": "精通", "dieSides": 10 },
+    "master": { "label": "大师", "dieSides": 12 }
+  },
+  "difficultyBands": {
+    "simple": 3,
+    "normal": 4,
+    "challenging": 6,
+    "hard": 8,
+    "extreme": 10,
+    "peak": 12
+  },
+  "diceCount": {
+    "formula": "clamp(attribute + situationalModifier, 1, 4)",
+    "situationalModifierMin": -1,
+    "situationalModifierMax": 1,
+    "resolution": "roll n dice and keep the highest"
+  },
+  "resultGrades": {
+    "full_success": "margin >= 3",
+    "success": "0 <= margin <= 2",
+    "failure": "-2 <= margin <= -1",
+    "severe_failure": "margin <= -3"
+  }
+}

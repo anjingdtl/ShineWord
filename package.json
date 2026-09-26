@@ -1,0 +1,18 @@
+{
+  "name": "shineword",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ShineWord deterministic interactive-novel RPG core",
+  "scripts": {
+    "build:core": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:core && node --test tests/*.test.cjs",
+    "verify:core": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=24.3.0"
+  }
+}
