@@ -7,3 +7,6 @@ export * from './rules/roll';
 export * from './turns/types';
 export * from './turns/stateMachine';
 export * from './turns/contracts';
+export * from './turns/canonical';
+export * from './state/types';
+export * from './state/effects';

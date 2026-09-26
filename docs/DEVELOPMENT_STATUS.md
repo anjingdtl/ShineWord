@@ -29,17 +29,20 @@
 - [x] 禁止 Planner 注入骰点、骰池、结果等级等本地权威字段。
 - [x] 回合状态机及非法跳转阻断。
 - [x] 可注入随机源与不可变 RollRecord 基础结构。
-- [x] 11 项自动测试通过。
+- [x] 16 项自动测试通过（规则、合同、幂等、分支隔离与 stateVersion）。
 - [x] GitHub Actions 核心验证工作流，不上传构建产物。
 
 尚未完成：
 
 - [ ] Android 原生安全随机源（拒绝采样）。
-- [ ] Action Contract 稳定序列化与哈希。
-- [ ] SQLite schema、事务、stateVersion、幂等提交。
-- [ ] branch event / snapshot / RollRecord 持久化。
+- [x] Action Contract 稳定序列化与 SHA-256 Provider 接口。
+- [x] SQLite M1 核心 schema（branches / turns / roll_records / events / snapshots）。
+- [x] stateVersion 比较交换语义与内存原子提交适配器。
+- [ ] React Native SQLite 实际事务适配器。
+- [x] branch event / snapshot / RollRecord 持久化表结构。
+- [ ] React Native SQLite 持久化实现与迁移执行器。
 - [ ] 断电/杀进程恢复夹具。
-- [ ] 固定小世界的无 LLM 完整回合模拟器。
+- [x] 固定“雨夜潜入藏书阁”小世界的无 LLM 完整回合测试。
 
 ## 本地验证命令
 
