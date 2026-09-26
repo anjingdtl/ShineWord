@@ -28,25 +28,24 @@
 - [x] Action Contract TypeScript 模型、JSON Schema、稳定序列化与 SHA-256 Provider 接口。
 - [x] 禁止 Planner 注入骰点、骰池、结果等级等本地权威字段。
 - [x] 回合状态机及非法跳转阻断。
-- [x] 可注入随机源与不可变 RollRecord。
-- [x] 0～255 字节拒绝采样随机源，消除取模偏差。
-- [x] SQLite M1 核心 schema（branches / turns / roll_records / events / snapshots）。
-- [x] stateVersion 比较交换语义与内存原子提交适配器。
-- [x] 平台无关 SQLite `TurnStore` 事务适配器。
+- [x] 可注入随机源、拒绝采样算法与不可变 RollRecord。
+- [x] SQLite M1 核心 schema。
+- [x] `schema_migrations` 迁移执行器：顺序校验、幂等执行、失败回滚。
+- [x] stateVersion 比较交换语义与原子提交。
+- [x] 平台无关 SQLite `TurnStore`。
 - [x] branch event / snapshot / RollRecord 同事务持久化。
 - [x] 风险回合先冻结 Action Contract，再持久化 RollRecord。
-- [x] Narrator 失败或进程重启后读取并复用原 RollRecord，禁止重掷。
-- [x] 真实 SQLite 集成测试：提交、重复请求幂等、晚期写失败事务回滚、骰点恢复。
-- [x] 固定“雨夜潜入藏书阁”小世界的无 LLM 完整回合测试。
+- [x] Narrator 失败或进程重启后复用原 RollRecord，禁止重掷。
+- [x] 固定“雨夜潜入藏书阁”小世界的无 LLM 单回合测试。
+- [x] 无 LLM 三回合完整执行器测试：风险检定 → 风险检定 → 自动行动。
 - [x] GitHub Actions 核心验证工作流，不上传构建产物。
 
 尚未完成：
 
 - [ ] Android 原生 `SecureRandom` 字节源桥接到拒绝采样器。
 - [ ] React Native `react-native-sqlite-storage` 驱动桥接。
-- [ ] 数据库迁移执行器与 `schema_version` 管理。
 - [ ] Paused / Repair / Narrated 阶段的完整恢复清单。
-- [ ] M1 无 LLM 多回合模拟器与最终验收。
+- [ ] M1 最终验收清单与冻结版本标签。
 
 ## 本地验证命令
 
@@ -55,4 +54,4 @@ npm install
 npm run verify:core
 ```
 
-核心测试持续由 GitHub Actions 验证；M1 尚未最终验收。
+当前核心已具备不依赖 LLM 的完整多回合执行能力；Android 平台桥接完成后即可进行 M1 最终验收。
