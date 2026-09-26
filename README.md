@@ -4,7 +4,7 @@
 
 用户导入小说 TXT 后，ShineWord 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过固定选项或自由行动推进自己的故事。LLM 负责主持与叙事，本地规则引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前状态：**M0 / M1 开发中**。已经落地第一版确定性规则内核，尚未提供可运行 Android App 或 APK。
+> 当前状态：**M0 / M1 开发中**。确定性规则内核与 SQLite 事务骨架已落地，尚未提供可运行 Android App 或 APK。
 
 ## 当前已实现
 
@@ -12,10 +12,12 @@
 - 简单 3 / 一般 4 / 挑战 6 / 困难 8 / 极难 10 / 巅峰 12 难度。
 - 精确成功率计算与四档结果等级。
 - 行动资格预判：违反硬规则或缺少能力时不允许靠投骰“赌奇迹”。
-- Action Contract v1 类型与 JSON Schema。
+- Action Contract v1 类型、JSON Schema、稳定序列化与哈希接口。
 - Planner 不得写入随机值、骰池、最终结果等本地权威字段。
 - Draft → Planned → AwaitRoll → Resolved → Narrated → Validated → Committed 回合状态机，以及 Repair / Paused 修复路径。
 - 可注入随机源与 RollRecord 基础结构。
+- `stateVersion` 并发保护、同 turn 幂等提交与分支隔离。
+- SQLite `TurnStore` 事务适配器：状态、Action Contract、RollRecord、事件与快照原子提交。
 - 自动测试与 GitHub Actions 核心验证；CI 不上传 APK 或其他构建产物。
 
 ## 建设方案
@@ -31,7 +33,7 @@ npm install
 npm run verify:core
 ```
 
-目前领域层为纯 TypeScript，不依赖 React、网络或数据库。这样可以先验证规则、概率和状态机，再接入 Android UI、SQLite 与 LLM。
+规则域保持纯 TypeScript；数据库通过平台无关端口接入。当前 CI 使用 Node 原生 SQLite 做事务集成测试，后续 Android 层再桥接 `react-native-sqlite-storage`。
 
 ## 参考底座
 

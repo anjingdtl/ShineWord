@@ -1,6 +1,7 @@
 import type { RollGrade, RollRecord } from '../../domain/rules/types';
 import { applyEffects, assertResourcePreconditions } from '../../domain/state/effects';
 import { assertValidActionContract } from '../../domain/turns/contracts';
+import { serializeActionContract } from '../../domain/turns/canonical';
 import type { ActionContract } from '../../domain/turns/types';
 import type { CommittedTurn, TurnStore } from '../ports/turnStore';
 
@@ -75,6 +76,8 @@ export async function commitResolvedTurn({
     turnId: contract.turnId,
     expectedStateVersion: state.stateVersion,
     nextState,
+    actionContractJson: serializeActionContract(contract),
+    actionContractHash: contractHash,
     committedTurn,
   });
 

@@ -29,20 +29,23 @@
 - [x] 禁止 Planner 注入骰点、骰池、结果等级等本地权威字段。
 - [x] 回合状态机及非法跳转阻断。
 - [x] 可注入随机源与不可变 RollRecord 基础结构。
-- [x] 16 项自动测试通过（规则、合同、幂等、分支隔离与 stateVersion）。
+- [x] Action Contract 稳定序列化与 SHA-256 Provider 接口。
+- [x] SQLite M1 核心 schema（branches / turns / roll_records / events / snapshots）。
+- [x] stateVersion 比较交换语义与内存原子提交适配器。
+- [x] 平台无关 SQLite `TurnStore` 事务适配器。
+- [x] branch event / snapshot / RollRecord 同事务持久化。
+- [x] 真实 SQLite 集成测试：提交、重复请求幂等、晚期写失败事务回滚。
+- [x] 固定“雨夜潜入藏书阁”小世界的无 LLM 完整回合测试。
 - [x] GitHub Actions 核心验证工作流，不上传构建产物。
 
 尚未完成：
 
 - [ ] Android 原生安全随机源（拒绝采样）。
-- [x] Action Contract 稳定序列化与 SHA-256 Provider 接口。
-- [x] SQLite M1 核心 schema（branches / turns / roll_records / events / snapshots）。
-- [x] stateVersion 比较交换语义与内存原子提交适配器。
-- [ ] React Native SQLite 实际事务适配器。
-- [x] branch event / snapshot / RollRecord 持久化表结构。
-- [ ] React Native SQLite 持久化实现与迁移执行器。
-- [ ] 断电/杀进程恢复夹具。
-- [x] 固定“雨夜潜入藏书阁”小世界的无 LLM 完整回合测试。
+- [ ] React Native `react-native-sqlite-storage` 驱动桥接。
+- [ ] 数据库迁移执行器与 schema_version 管理。
+- [ ] 杀进程/断电后恢复未完成回合的恢复夹具。
+- [ ] RollRecord 在 AwaitRoll 后先持久化、Narrator 失败后复用同一骰点。
+- [ ] M1 最终无 LLM 多回合模拟器与验收清单。
 
 ## 本地验证命令
 
@@ -51,4 +54,4 @@ npm install
 npm run verify:core
 ```
 
-当前测试覆盖建设方案中的首个骰点样例及关键边界，但不代表 M1 已验收完成。
+当前核心测试覆盖规则、合同、幂等、分支隔离、stateVersion 与真实 SQLite 原子事务；M1 尚未最终验收。

@@ -19,6 +19,8 @@ export interface AtomicCommitInput {
   turnId: string;
   expectedStateVersion: number;
   nextState: GameStateSnapshot;
+  actionContractJson: string;
+  actionContractHash: string;
   committedTurn: CommittedTurn;
 }
 

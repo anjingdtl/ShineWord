@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS turns (
   action_contract_hash TEXT NOT NULL,
   outcome_grade TEXT,
   public_summary TEXT,
+  effects_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   committed_at TEXT,
   PRIMARY KEY(branch_id, turn_id),
