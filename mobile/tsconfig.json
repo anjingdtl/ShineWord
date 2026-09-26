@@ -1,11 +1,8 @@
 {
-  "extends": "@react-native/typescript-config/tsconfig.json",
+  "extends": "@react-native/typescript-config",
   "compilerOptions": {
     "strict": true,
-    "baseUrl": ".",
-    "paths": {
-      "@core/*": ["../src/*"]
-    }
+    "moduleDetection": "force"
   },
   "include": [
     "App.tsx",
@@ -15,6 +12,7 @@
   "exclude": [
     "../dist",
     "../tests",
-    "../node_modules"
+    "**/node_modules",
+    "android/**"
   ]
 }
