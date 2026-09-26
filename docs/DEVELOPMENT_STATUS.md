@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-### M0 方案与抽取审计 — 进行中
+### M0 方案与抽取审计 — ✅ 完成
 
 已完成：
 
@@ -12,7 +12,7 @@
 - [x] 核查 React Native / React / TypeScript / SQLite / Keychain 技术基线。
 - [x] 检查 TXT 导入、LLM 入口、安全存储、上下文预算四个核心模块。
 - [x] 明确第一轮复用与不复用边界。
-- [ ] 进入对应功能开发前，对 Provider、Scheduler、TXT Streaming、Parser、数据库迁移做函数级审计。
+- [x] 完成 Provider、Scheduler、TXT Streaming、Parser、SQLite/Keychain 与 Android 工程的函数级审计；见 `docs/M0_FUNCTION_AUDIT.md`。
 
 ### M1 确定性内核 — 进行中
 
