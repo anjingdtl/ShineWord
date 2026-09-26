@@ -8,7 +8,7 @@
 
 ## 建设方案
 
-请阅读 [ShineWord 完整建设方案](docs/SHINEWORD_IMPLEMENTATION_PLAN.md)。方案包含项目调研、tavo-mini 复用边界、世界构建、骰池规则、角色成长、回合状态机、LLM 协议、数据库与分支存档、安卓实现、里程碑和验收标准。
+请阅读 [ShineWord 完整建设方案](docs/CONSTRUCTION_PLAN.md)。方案包含项目调研、tavo-mini 复用边界、世界构建、骰池规则、角色成长、回合状态机、LLM 协议、数据库与分支存档、安卓实现、里程碑和验收标准。
 
 ## 核心原则
 
