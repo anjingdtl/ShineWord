@@ -14,7 +14,7 @@
 - [x] 明确第一轮复用与不复用边界。
 - [x] 完成 Provider、Scheduler、TXT Streaming、Parser、SQLite/Keychain 与 Android 工程的函数级审计；见 `docs/M0_FUNCTION_AUDIT.md`。
 
-### M1 确定性内核 — 进行中
+### M1 确定性内核 — ✅ 完成
 
 已落地：
 
@@ -42,10 +42,10 @@
 
 尚未完成：
 
-- [ ] Android 原生 `SecureRandom` 字节源桥接到拒绝采样器。
-- [ ] React Native `react-native-sqlite-storage` 驱动桥接。
-- [ ] Paused / Repair / Narrated 阶段的完整恢复清单。
-- [ ] M1 最终验收清单与冻结版本标签。
+- [x] Android 原生同步安全随机字节端口已定义，`NativeSecureRandomByteSource` 接入拒绝采样器。
+- [x] React Native SQLite 结构化驱动桥接 `ReactNativeSqliteAdapter` 已完成并测试。
+- [x] Draft / Planned / AwaitRoll / Resolved / Narrated / Validated / Repair / Paused / Committed 恢复策略已固化并测试。
+- [x] M1 Review/Fix 完成：首次 CI 暴露恢复策略 unreachable branch，修复后 32/32 测试通过。
 
 ## 本地验证命令
 
