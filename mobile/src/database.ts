@@ -1,7 +1,7 @@
 import SQLite from 'react-native-sqlite-storage';
 import { BUILTIN_MIGRATIONS } from '../../src/infra/sqlite/builtinMigrations';
 import { applySqliteMigrations } from '../../src/infra/sqlite/migrations';
-import { ReactNativeSqliteAdapter } from '../../src/infra/sqlite/reactNativeSqliteAdapter';
+import { ReactNativeSqliteAdapter, type ReactNativeSqliteDatabase } from '../../src/infra/sqlite/reactNativeSqliteAdapter';
 import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStore';
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 
@@ -20,9 +20,9 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     name: 'shineword.db',
     location: 'default',
   });
-  const db = new ReactNativeSqliteAdapter(nativeDb as unknown as {
-    executeSql(sql: string, params?: readonly unknown[]): Promise<[unknown]>;
-  });
+  const db = new ReactNativeSqliteAdapter(
+    nativeDb as unknown as ReactNativeSqliteDatabase,
+  );
   await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
 
   const branch = await db.queryOne<{ branch_id: string }>(
