@@ -12,12 +12,12 @@ import {
 import type { ApiProfile } from '../src/application/llm/types';
 import { loadApiProfile, saveApiProfile } from './src/profileStore';
 import { KeychainSecretStore } from './src/secureKeyStore';
-import { playIntent, type PlayedTurn } from './src/runtime';
+import { loadHistory, playIntent, type PlayedTurn } from './src/runtime';
 
 export default function App(): React.JSX.Element {
   const [profile, setProfile] = useState<ApiProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [endpoint, setEndpoint] = useState('https://api.openai.com/v1');
+  const [endpoint, setEndpoint] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [intent, setIntent] = useState('');
@@ -26,19 +26,52 @@ export default function App(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadApiProfile()
-      .then(setProfile)
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    async function bootstrap() {
+      try {
+        const saved = await loadApiProfile();
+        if (cancelled) return;
+        if (saved) {
+          setProfile(saved);
+          setEndpoint(saved.endpoint);
+          setModel(saved.model);
+        }
+        const history = await loadHistory();
+        if (!cancelled) setTurns(history);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  function openSettings() {
+    if (profile) {
+      setEndpoint(profile.endpoint);
+      setModel(profile.model);
+    }
+    setProfile(null);
+  }
 
   async function saveSettings() {
     setBusy(true);
     setError(null);
     try {
       const saved = await saveApiProfile({ endpoint, model });
-      await new KeychainSecretStore().set(saved.keyRef, apiKey);
-      setApiKey('');
+      const trimmedKey = apiKey.trim();
+      const keyStore = new KeychainSecretStore();
+      if (trimmedKey) {
+        await keyStore.set(saved.keyRef, trimmedKey);
+        setApiKey('');
+      } else {
+        const existing = await keyStore.get(saved.keyRef);
+        if (!existing) throw new Error('请输入 API Key（将只写入系统 Keychain）。');
+      }
       setProfile(saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -55,7 +88,11 @@ export default function App(): React.JSX.Element {
     setError(null);
     try {
       const turn = await playIntent(profile, value);
-      setTurns(previous => [...previous, turn]);
+      setTurns(previous =>
+        previous.some(item => item.turnId === turn.turnId)
+          ? previous.map(item => (item.turnId === turn.turnId ? turn : item))
+          : [...previous, turn],
+      );
     } catch (e) {
       setIntent(value);
       setError(e instanceof Error ? e.message : String(e));
@@ -121,7 +158,7 @@ export default function App(): React.JSX.Element {
           <Text style={styles.title}>雨夜旧宅</Text>
           <Text style={styles.subtitle}>{profile.model}</Text>
         </View>
-        <TouchableOpacity onPress={() => setProfile(null)}>
+        <TouchableOpacity onPress={openSettings}>
           <Text style={styles.link}>设置</Text>
         </TouchableOpacity>
       </View>

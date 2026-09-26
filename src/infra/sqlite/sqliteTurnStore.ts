@@ -7,7 +7,7 @@ import type { TurnRollJournal, StageRollTurnInput, StagedTurnRecord } from '../.
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
 import type { EffectOperation } from '../../domain/turns/types';
-import type { RollRecord } from '../../domain/rules/types';
+import type { RollGrade, RollRecord } from '../../domain/rules/types';
 
 interface BranchRow extends SqliteRow {
   branch_id: string;
@@ -43,6 +43,80 @@ interface StagedTurnRow extends SqliteRow {
   action_contract_json: string;
   action_contract_hash: string;
   created_at: string;
+}
+
+type NarrativeStatus = 'Candidate' | 'Committed';
+
+interface CommittedTurnRow extends SqliteRow {
+  branch_id: string;
+  turn_id: string;
+  expected_state_version: number;
+  committed_state_version: number;
+  outcome_grade: string;
+  public_summary: string;
+  effects_json: string;
+  committed_at: string;
+}
+
+interface CommittedTurnHistoryRow extends CommittedTurnRow {
+  narrative_text: string | null;
+  narrative_status: string | null;
+  ruleset_id: string | null;
+  ruleset_version: string | null;
+  roll_index: number | null;
+  contract_hash: string | null;
+  dice_count: number | null;
+  die_sides: number | null;
+  rolls_json: string | null;
+  highest: number | null;
+  difficulty: number | null;
+  margin: number | null;
+  grade: string | null;
+  roll_created_at: string | null;
+}
+
+export interface CommittedTurnHistoryEntry {
+  branchId: string;
+  turnId: string;
+  stateVersion: number;
+  outcomeGrade: RollGrade;
+  publicSummary: string;
+  narrativeText: string | null;
+  narrativeStatus: NarrativeStatus | null;
+  rollRecord: RollRecord | null;
+  committedAt: string;
+}
+
+interface CommittedTurnHistoryRowWithRoll extends CommittedTurnHistoryRow {
+  ruleset_id: string;
+  ruleset_version: string;
+  roll_index: number;
+  contract_hash: string;
+  dice_count: number;
+  die_sides: number;
+  rolls_json: string;
+  highest: number;
+  difficulty: number;
+  margin: number;
+  grade: string;
+  roll_created_at: string;
+}
+
+function hasRollColumns(row: CommittedTurnHistoryRow): row is CommittedTurnHistoryRowWithRoll {
+  return (
+    row.ruleset_id !== null &&
+    row.ruleset_version !== null &&
+    row.roll_index !== null &&
+    row.contract_hash !== null &&
+    row.dice_count !== null &&
+    row.die_sides !== null &&
+    row.rolls_json !== null &&
+    row.highest !== null &&
+    row.difficulty !== null &&
+    row.margin !== null &&
+    row.grade !== null &&
+    row.roll_created_at !== null
+  );
 }
 
 interface RollRow extends SqliteRow {
@@ -110,6 +184,57 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
 
   async getCommittedTurn(branchId: string, turnId: string): Promise<CommittedTurn | null> {
     return this.readCommittedTurn(this.db, branchId, turnId);
+  }
+
+  async listCommittedTurns(branchId: string): Promise<CommittedTurnHistoryEntry[]> {
+    const rows = await this.db.queryAll<CommittedTurnHistoryRow>(
+      `SELECT t.branch_id, t.turn_id, t.expected_state_version, t.committed_state_version,
+              t.outcome_grade, t.public_summary, t.effects_json, t.committed_at,
+              n.text AS narrative_text, n.status AS narrative_status,
+              r.ruleset_id, r.ruleset_version, r.roll_index, r.contract_hash, r.dice_count,
+              r.die_sides, r.rolls_json, r.highest, r.difficulty, r.margin, r.grade,
+              r.created_at AS roll_created_at
+         FROM turns t
+         LEFT JOIN turn_narratives n
+           ON n.branch_id = t.branch_id AND n.turn_id = t.turn_id
+         LEFT JOIN roll_records r
+           ON r.branch_id = t.branch_id AND r.turn_id = t.turn_id AND r.roll_index = 0
+        WHERE t.branch_id = ? AND t.status = 'Committed'
+        ORDER BY t.committed_state_version ASC`,
+      [branchId],
+    );
+    return rows.map(row => {
+      const roll = hasRollColumns(row)
+        ? rollFromRow({
+            ruleset_id: row.ruleset_id,
+            ruleset_version: row.ruleset_version,
+            turn_id: row.turn_id,
+            roll_index: row.roll_index,
+            contract_hash: row.contract_hash,
+            dice_count: row.dice_count,
+            die_sides: row.die_sides,
+            rolls_json: row.rolls_json,
+            highest: row.highest,
+            difficulty: row.difficulty,
+            margin: row.margin,
+            grade: row.grade,
+            created_at: row.roll_created_at,
+          })
+        : null;
+      return {
+        branchId: row.branch_id,
+        turnId: row.turn_id,
+        stateVersion: row.committed_state_version,
+        outcomeGrade: row.outcome_grade as CommittedTurnHistoryEntry['outcomeGrade'],
+        publicSummary: row.public_summary,
+        narrativeText: row.narrative_text,
+        narrativeStatus: row.narrative_status === null
+          ? null
+          : (row.narrative_status as NarrativeStatus),
+        rollRecord: roll,
+        committedAt: row.committed_at,
+      };
+    });
   }
 
   async getStagedTurn(branchId: string, turnId: string): Promise<StagedTurnRecord | null> {

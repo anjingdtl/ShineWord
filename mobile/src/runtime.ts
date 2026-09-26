@@ -24,6 +24,22 @@ export interface PlayedTurn {
   resumed: boolean;
 }
 
+export async function loadHistory(): Promise<PlayedTurn[]> {
+  const runtime = await getDatabaseRuntime();
+  const rows = await runtime.turns.listCommittedTurns('demo-main');
+  return rows
+    .filter(row => row.narrativeText !== null)
+    .map(row => ({
+      turnId: row.turnId,
+      text: row.narrativeText ?? row.publicSummary,
+      grade: row.rollRecord?.grade ?? row.outcomeGrade,
+      dice: row.rollRecord
+        ? `${row.rollRecord.diceCount}d${row.rollRecord.dieSides}: [${row.rollRecord.rolls.join(', ')}]`
+        : undefined,
+      resumed: false,
+    }));
+}
+
 export async function playIntent(
   profile: ApiProfile,
   intent: string,

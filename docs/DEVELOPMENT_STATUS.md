@@ -1,6 +1,6 @@
 # ShineWord 开发状态
 
-更新日期：2026-09-26
+更新日期：2026-09-27
 
 ## 当前阶段
 
@@ -47,11 +47,42 @@
 - [x] Draft / Planned / AwaitRoll / Resolved / Narrated / Validated / Repair / Paused / Committed 恢复策略已固化并测试。
 - [x] M1 Review/Fix 完成：首次 CI 暴露恢复策略 unreachable branch，修复后 32/32 测试通过。
 
+### M2 安卓闭环 — ✅ 完成
+
+已落地：
+
+- [x] OpenAI-compatible LLM Provider（HTTPS 强制、本地/私网例外、错误归一化、usage 记录）。
+- [x] Fetch Transport 超时与取消。
+- [x] API Profile 与 Key 引用分离；AsyncStorage 仅存 keyRef。
+- [x] API Key 安全存储（Keychain，`WHEN_UNLOCKED_THIS_DEVICE_ONLY`，独立 `com.shineword.app.secret.*` namespace）。
+- [x] 每回合物理请求预算（默认上限 4）。
+- [x] Planner JSON ActionContract 生成、本地验证、合同哈希冻结与暂存持久化。
+- [x] 本地确定性掷骰（Android SecureRandom → 拒绝采样），RollRecord 先持久化再调用 Narrator。
+- [x] Narrator 结果验证：turnId / 冻结 grade / 文本长度限制；Candidate 不可变。
+- [x] SQLite 原子状态提交、幂等重放、committed 唯一索引。
+- [x] Planner / Roll / Narrator 中断恢复；重启不重新 Planner、已持久化骰子不重掷。
+- [x] Android 应用壳：`com.shineword.app`、`shineword.db`、Native SecureRandom、Native SHA-256。
+- [x] 基础游戏 UI：API 设置页、自由行动输入、剧情卡片、骰子摘要。
+- [x] Android CI（mobile typecheck + `:app:assembleDebug`）。
+- [x] M2 Review/Fix：修复设置页 Key 保存逻辑、新增 SQLite 回合历史加载、补齐 gitignore 与 lockfile；见 `docs/reviews/M2_REVIEW.md`。
+- [x] 本地模拟器 Smoke Test 15 项全部通过（Medium_Phone / API 37.1 + 本地 mock OpenAI-compatible 服务器，含 Narrator 故障注入恢复与 Key 泄漏扫描）。
+
+回归结果：Core tests 38/38、mobile typecheck PASS、`:app:assembleDebug` BUILD SUCCESSFUL。
+
+## 当前阶段
+
+### M3 原著世界构建 — 进行中
+
+目标：TXT 导入 → 不可变原文 → chapter/chunk → fact extraction → entity merge → timeline/conflict → world rule mapping → interactive world；fact 五类状态与证据定位；时间有效性、事件依赖与 divergence marker；NPC 认知隔离；原著/自创角色开局。详见 `docs/CONSTRUCTION_PLAN.md` 第 4、5 节。
+
 ## 本地验证命令
 
 ```bash
 npm install
 npm run verify:core
+
+cd mobile && npm install && npm run typecheck
+gradle -p mobile/android :app:assembleDebug   # 或 CI 同版本 Gradle 9.3.1
 ```
 
-当前核心已具备不依赖 LLM 的完整多回合执行能力；Android 平台桥接完成后即可进行 M1 最终验收。
+M1/M2 已具备：无 LLM 多回合内核 + LLM Planner/Narrator 安卓闭环 + 断网恢复。下一步进入 M3 原著世界构建。

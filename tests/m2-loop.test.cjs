@@ -174,6 +174,17 @@ test('M2 scripted Planner/Narrator loop completes 30 committed turns', async () 
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM turns WHERE status='Committed'").get().count, 30);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM turn_narratives WHERE status='Committed'").get().count, 30);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM roll_records').get().count, 10);
+
+    const history = await store.listCommittedTurns('branch-a');
+    assert.equal(history.length, 30);
+    assert.equal(history[0].turnId, 'turn-001');
+    assert.equal(history[0].narrativeStatus, 'Committed');
+    assert.ok(history[0].narrativeText.includes('turn-001'));
+    assert.equal(history[0].rollRecord, null);
+    const rolled = history.find(row => row.turnId === 'turn-003');
+    assert.ok(rolled.rollRecord);
+    assert.equal(rolled.rollRecord.turnId, 'turn-003');
+    assert.ok(rolled.rollRecord.rolls.length >= 1);
   } finally {
     db.close();
   }
