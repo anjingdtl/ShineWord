@@ -25,3 +25,4 @@ mobile/android/app/.lint/
 *.shineword-save.json
 *.shineword-world.zip
 *.txt
+!tests/fixtures/**/*.txt

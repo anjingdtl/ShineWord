@@ -1,0 +1,30 @@
+{
+  "novel": "novel-small.txt",
+  "facts": [
+    { "subject": "陈青云", "predicate": "faction_member", "value": { "faction": "青岚派" }, "quote": "他是青岚派的外门弟子" },
+    { "subject": "陈青云", "predicate": "master", "value": { "person": "顾长风" }, "quote": "师从长老顾长风" },
+    { "subject": "陈青云", "predicate": "home_location", "value": { "location": "青云院" }, "quote": "陈青云居住在青岚山脚下的青云院" },
+    { "subject": "陈青云", "predicate": "skill", "value": { "skill": "剑术" }, "quote": "他擅长剑术和轻功" },
+    { "subject": "陈青云", "predicate": "skill", "value": { "skill": "轻功" }, "quote": "他擅长剑术和轻功" },
+    { "subject": "陈青云", "predicate": "faction_member", "value": { "faction": "青岚派" }, "quote": "他效忠于青岚派" },
+    { "subject": "陈青云", "predicate": "rank", "value": { "rank": "巡山弟子" }, "quote": "在门中担任巡山弟子" },
+    { "subject": "陈青云", "predicate": "owns_item", "value": { "item": "青锋剑" }, "quote": "他持有一把青锋剑" },
+    { "subject": "陈青云", "predicate": "ability_tier", "value": { "skill": "剑术", "tier": "后天" }, "quote": "他知道自己剑术已达后天境界" },
+    { "subject": "陈青云", "predicate": "goal", "value": { "goal": "夺取魁首" }, "quote": "陈青云想要在论剑大会上夺取魁首" },
+    { "subject": "柳无痕", "predicate": "faction_member", "value": { "faction": "离火教" }, "quote": "柳无痕其实是离火教的人" },
+    { "subject": "柳无痕", "predicate": "faction_member", "value": { "faction": "离火教" }, "quote": "柳无痕效忠于离火教" },
+    { "subject": "柳无痕", "predicate": "rank", "value": { "rank": "执事" }, "quote": "是教中的执事" },
+    { "subject": "柳无痕", "predicate": "skill", "value": { "skill": "毒术" }, "quote": "他擅长毒术" },
+    { "subject": "柳无痕", "predicate": "owns_item", "value": { "item": "蚀骨丸" }, "quote": "持有一枚蚀骨丸" },
+    { "subject": "柳无痕", "predicate": "relationship", "value": { "person": "炎无极", "relation": "同门" }, "quote": "柳无痕与炎无极是同门" },
+    { "subject": "柳无痕", "predicate": "home_location", "value": { "location": "赤霄殿" }, "quote": "柳无痕居住在离火教总坛的赤霄殿" },
+    { "subject": "顾长风", "predicate": "home_location", "value": { "location": "凌云阁" }, "quote": "顾长风居住在青岚派主峰的凌云阁" },
+    { "subject": "顾长风", "predicate": "skill", "value": { "skill": "剑术" }, "quote": "顾长风擅长剑术和琴艺" },
+    { "subject": "顾长风", "predicate": "skill", "value": { "skill": "琴艺" }, "quote": "顾长风擅长剑术和琴艺" },
+    { "subject": "顾长风", "predicate": "rank", "value": { "rank": "执法长老" }, "quote": "在青岚派担任执法长老" },
+    { "subject": "顾长风", "predicate": "owns_item", "value": { "item": "玉笛" }, "quote": "顾长风持有一支玉笛" },
+    { "subject": "顾长风", "predicate": "relationship", "value": { "person": "陈青云", "relation": "师徒" }, "quote": "顾长风与陈青云是师徒" },
+    { "subject": "炎无极", "predicate": "rank", "value": { "rank": "教主" }, "quote": "教主炎无极立志吞并青岚派" },
+    { "subject": "陈青云", "predicate": "current_location", "value": { "location": "黑风客栈" }, "quote": "走进了落雁镇的黑风客栈" }
+  ]
+}

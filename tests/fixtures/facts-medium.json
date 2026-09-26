@@ -1,0 +1,2467 @@
+{
+  "novel": "novel-medium.txt",
+  "facts": [
+    {
+      "subject": "楚清歌",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "天枢阁"
+      },
+      "quote": "楚清歌效忠于天枢阁"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "rank",
+      "value": {
+        "rank": "副掌门"
+      },
+      "quote": "在门中担任副掌门",
+      "subjectFromPrevious": "楚清歌"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "楚清歌擅长剑术"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "棋艺，同辈之中少有人及",
+      "subjectFromPrevious": "楚清歌"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "owns_item",
+      "value": {
+        "item": "寒光剑"
+      },
+      "quote": "楚清歌持有一件寒光剑"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "home_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "楚清歌居住在听潮崖"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "剑术",
+        "tier": "后天"
+      },
+      "quote": "楚清歌的剑术已达后天境界",
+      "subjectInsideQuote": "楚清歌"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "沧海门"
+      },
+      "quote": "苏望舒效忠于沧海门"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "苏望舒"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "苏望舒擅长医术"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "御风诀，同辈之中少有人及",
+      "subjectFromPrevious": "苏望舒"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碧玉箫"
+      },
+      "quote": "苏望舒持有一件碧玉箫"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "home_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "苏望舒居住在落星湖"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "医术",
+        "tier": "先天"
+      },
+      "quote": "苏望舒的医术已达先天境界",
+      "subjectInsideQuote": "苏望舒"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "赤霄盟"
+      },
+      "quote": "萧知远效忠于赤霄盟"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "萧知远"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "萧知远擅长追踪术"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "轻功，同辈之中少有人及",
+      "subjectFromPrevious": "萧知远"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "owns_item",
+      "value": {
+        "item": "千机匣"
+      },
+      "quote": "萧知远持有一件千机匣"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "home_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "萧知远居住在孤鸿岭"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "追踪术",
+        "tier": "宗师"
+      },
+      "quote": "萧知远的追踪术已达宗师境界",
+      "subjectInsideQuote": "萧知远"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "幽篁谷"
+      },
+      "quote": "沈若雪效忠于幽篁谷"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "沈若雪"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "skill",
+      "value": {
+        "skill": "寒冰掌"
+      },
+      "quote": "沈若雪擅长寒冰掌"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "skill",
+      "value": {
+        "skill": "琴艺"
+      },
+      "quote": "琴艺，同辈之中少有人及",
+      "subjectFromPrevious": "沈若雪"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "owns_item",
+      "value": {
+        "item": "软猬甲"
+      },
+      "quote": "沈若雪持有一件软猬甲"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "home_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "沈若雪居住在栖霞渡"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "寒冰掌",
+        "tier": "后天"
+      },
+      "quote": "沈若雪的寒冰掌已达后天境界",
+      "subjectInsideQuote": "沈若雪"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "凌霄殿"
+      },
+      "quote": "沈流云效忠于凌霄殿"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "沈流云"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "毒术"
+      },
+      "quote": "沈流云擅长毒术"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "易容术"
+      },
+      "quote": "易容术，同辈之中少有人及",
+      "subjectFromPrevious": "沈流云"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "owns_item",
+      "value": {
+        "item": "踏云靴"
+      },
+      "quote": "沈流云持有一件踏云靴"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "home_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "沈流云居住在断云峡"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "毒术",
+        "tier": "先天"
+      },
+      "quote": "沈流云的毒术已达先天境界",
+      "subjectInsideQuote": "沈流云"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "百川会"
+      },
+      "quote": "陆惊鸿效忠于百川会"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "陆惊鸿"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "陆惊鸿擅长棋艺"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "剑术，同辈之中少有人及",
+      "subjectFromPrevious": "陆惊鸿"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "owns_item",
+      "value": {
+        "item": "凝露瓶"
+      },
+      "quote": "陆惊鸿持有一件凝露瓶"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "home_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "陆惊鸿居住在白帝城"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "棋艺",
+        "tier": "宗师"
+      },
+      "quote": "陆惊鸿的棋艺已达宗师境界",
+      "subjectInsideQuote": "陆惊鸿"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "天枢阁"
+      },
+      "quote": "沈照夜效忠于天枢阁"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "rank",
+      "value": {
+        "rank": "首席长老"
+      },
+      "quote": "在门中担任首席长老",
+      "subjectFromPrevious": "沈照夜"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "沈照夜擅长御风诀"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "医术，同辈之中少有人及",
+      "subjectFromPrevious": "沈照夜"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碎星弓"
+      },
+      "quote": "沈照夜持有一件碎星弓"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "home_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "沈照夜居住在青竹坞"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "御风诀",
+        "tier": "后天"
+      },
+      "quote": "沈照夜的御风诀已达后天境界",
+      "subjectInsideQuote": "沈照夜"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "沧海门"
+      },
+      "quote": "陆明轩效忠于沧海门"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "rank",
+      "value": {
+        "rank": "副掌门"
+      },
+      "quote": "在门中担任副掌门",
+      "subjectFromPrevious": "陆明轩"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "陆明轩擅长轻功"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "追踪术，同辈之中少有人及",
+      "subjectFromPrevious": "陆明轩"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "owns_item",
+      "value": {
+        "item": "无相佩"
+      },
+      "quote": "陆明轩持有一件无相佩"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "home_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "陆明轩居住在望江楼"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "轻功",
+        "tier": "先天"
+      },
+      "quote": "陆明轩的轻功已达先天境界",
+      "subjectInsideQuote": "陆明轩"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "赤霄盟"
+      },
+      "quote": "孟惊鸿效忠于赤霄盟"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "rank",
+      "value": {
+        "rank": "首席长老"
+      },
+      "quote": "在门中担任首席长老",
+      "subjectFromPrevious": "孟惊鸿"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "琴艺"
+      },
+      "quote": "孟惊鸿擅长琴艺"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "寒冰掌"
+      },
+      "quote": "寒冰掌，同辈之中少有人及",
+      "subjectFromPrevious": "孟惊鸿"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "owns_item",
+      "value": {
+        "item": "寒光剑"
+      },
+      "quote": "孟惊鸿持有一件寒光剑"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "home_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "孟惊鸿居住在听潮崖"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "琴艺",
+        "tier": "宗师"
+      },
+      "quote": "孟惊鸿的琴艺已达宗师境界",
+      "subjectInsideQuote": "孟惊鸿"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "幽篁谷"
+      },
+      "quote": "白望舒效忠于幽篁谷"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "rank",
+      "value": {
+        "rank": "首席长老"
+      },
+      "quote": "在门中担任首席长老",
+      "subjectFromPrevious": "白望舒"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "易容术"
+      },
+      "quote": "白望舒擅长易容术"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "毒术"
+      },
+      "quote": "毒术，同辈之中少有人及",
+      "subjectFromPrevious": "白望舒"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碧玉箫"
+      },
+      "quote": "白望舒持有一件碧玉箫"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "home_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "白望舒居住在落星湖"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "易容术",
+        "tier": "后天"
+      },
+      "quote": "白望舒的易容术已达后天境界",
+      "subjectInsideQuote": "白望舒"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "凌霄殿"
+      },
+      "quote": "沈清歌效忠于凌霄殿"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "rank",
+      "value": {
+        "rank": "巡山弟子"
+      },
+      "quote": "在门中担任巡山弟子",
+      "subjectFromPrevious": "沈清歌"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "沈清歌擅长剑术"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "棋艺，同辈之中少有人及",
+      "subjectFromPrevious": "沈清歌"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "owns_item",
+      "value": {
+        "item": "千机匣"
+      },
+      "quote": "沈清歌持有一件千机匣"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "home_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "沈清歌居住在孤鸿岭"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "剑术",
+        "tier": "先天"
+      },
+      "quote": "沈清歌的剑术已达先天境界",
+      "subjectInsideQuote": "沈清歌"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "百川会"
+      },
+      "quote": "沈凌波效忠于百川会"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "沈凌波"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "沈凌波擅长医术"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "御风诀，同辈之中少有人及",
+      "subjectFromPrevious": "沈凌波"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "owns_item",
+      "value": {
+        "item": "软猬甲"
+      },
+      "quote": "沈凌波持有一件软猬甲"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "home_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "沈凌波居住在栖霞渡"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "医术",
+        "tier": "宗师"
+      },
+      "quote": "沈凌波的医术已达宗师境界",
+      "subjectInsideQuote": "沈凌波"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "天枢阁"
+      },
+      "quote": "楚望舒效忠于天枢阁"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "rank",
+      "value": {
+        "rank": "巡山弟子"
+      },
+      "quote": "在门中担任巡山弟子",
+      "subjectFromPrevious": "楚望舒"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "楚望舒擅长追踪术"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "轻功，同辈之中少有人及",
+      "subjectFromPrevious": "楚望舒"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "owns_item",
+      "value": {
+        "item": "踏云靴"
+      },
+      "quote": "楚望舒持有一件踏云靴"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "home_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "楚望舒居住在断云峡"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "追踪术",
+        "tier": "后天"
+      },
+      "quote": "楚望舒的追踪术已达后天境界",
+      "subjectInsideQuote": "楚望舒"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "沧海门"
+      },
+      "quote": "叶望舒效忠于沧海门"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "叶望舒"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "寒冰掌"
+      },
+      "quote": "叶望舒擅长寒冰掌"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "skill",
+      "value": {
+        "skill": "琴艺"
+      },
+      "quote": "琴艺，同辈之中少有人及",
+      "subjectFromPrevious": "叶望舒"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "owns_item",
+      "value": {
+        "item": "凝露瓶"
+      },
+      "quote": "叶望舒持有一件凝露瓶"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "home_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "叶望舒居住在白帝城"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "寒冰掌",
+        "tier": "先天"
+      },
+      "quote": "叶望舒的寒冰掌已达先天境界",
+      "subjectInsideQuote": "叶望舒"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "赤霄盟"
+      },
+      "quote": "苏惊鸿效忠于赤霄盟"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "rank",
+      "value": {
+        "rank": "首席长老"
+      },
+      "quote": "在门中担任首席长老",
+      "subjectFromPrevious": "苏惊鸿"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "毒术"
+      },
+      "quote": "苏惊鸿擅长毒术"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "易容术"
+      },
+      "quote": "易容术，同辈之中少有人及",
+      "subjectFromPrevious": "苏惊鸿"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碎星弓"
+      },
+      "quote": "苏惊鸿持有一件碎星弓"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "home_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "苏惊鸿居住在青竹坞"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "master",
+      "value": {
+        "person": "楚清歌"
+      },
+      "quote": "苏惊鸿师从楚清歌"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "幽篁谷"
+      },
+      "quote": "江惊鸿效忠于幽篁谷"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "rank",
+      "value": {
+        "rank": "副掌门"
+      },
+      "quote": "在门中担任副掌门",
+      "subjectFromPrevious": "江惊鸿"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "江惊鸿擅长棋艺"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "剑术，同辈之中少有人及",
+      "subjectFromPrevious": "江惊鸿"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "owns_item",
+      "value": {
+        "item": "无相佩"
+      },
+      "quote": "江惊鸿持有一件无相佩"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "home_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "江惊鸿居住在望江楼"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "master",
+      "value": {
+        "person": "苏望舒"
+      },
+      "quote": "江惊鸿师从苏望舒"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "凌霄殿"
+      },
+      "quote": "萧慕青效忠于凌霄殿"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "rank",
+      "value": {
+        "rank": "掌门"
+      },
+      "quote": "在门中担任掌门",
+      "subjectFromPrevious": "萧慕青"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "萧慕青擅长御风诀"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "医术，同辈之中少有人及",
+      "subjectFromPrevious": "萧慕青"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "owns_item",
+      "value": {
+        "item": "寒光剑"
+      },
+      "quote": "萧慕青持有一件寒光剑"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "home_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "萧慕青居住在听潮崖"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "master",
+      "value": {
+        "person": "萧知远"
+      },
+      "quote": "萧慕青师从萧知远"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "百川会"
+      },
+      "quote": "洛流云效忠于百川会"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "洛流云"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "洛流云擅长轻功"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "追踪术，同辈之中少有人及",
+      "subjectFromPrevious": "洛流云"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碧玉箫"
+      },
+      "quote": "洛流云持有一件碧玉箫"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "home_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "洛流云居住在落星湖"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "master",
+      "value": {
+        "person": "沈若雪"
+      },
+      "quote": "洛流云师从沈若雪"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "天枢阁"
+      },
+      "quote": "苏听雨效忠于天枢阁"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "rank",
+      "value": {
+        "rank": "巡山弟子"
+      },
+      "quote": "在门中担任巡山弟子",
+      "subjectFromPrevious": "苏听雨"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "琴艺"
+      },
+      "quote": "苏听雨擅长琴艺"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "寒冰掌"
+      },
+      "quote": "寒冰掌，同辈之中少有人及",
+      "subjectFromPrevious": "苏听雨"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "owns_item",
+      "value": {
+        "item": "千机匣"
+      },
+      "quote": "苏听雨持有一件千机匣"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "home_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "苏听雨居住在孤鸿岭"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "master",
+      "value": {
+        "person": "沈流云"
+      },
+      "quote": "苏听雨师从沈流云"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "沧海门"
+      },
+      "quote": "楚听雨效忠于沧海门"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "楚听雨"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "易容术"
+      },
+      "quote": "楚听雨擅长易容术"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "毒术"
+      },
+      "quote": "毒术，同辈之中少有人及",
+      "subjectFromPrevious": "楚听雨"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "owns_item",
+      "value": {
+        "item": "软猬甲"
+      },
+      "quote": "楚听雨持有一件软猬甲"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "home_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "楚听雨居住在栖霞渡"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "master",
+      "value": {
+        "person": "陆惊鸿"
+      },
+      "quote": "楚听雨师从陆惊鸿"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "赤霄盟"
+      },
+      "quote": "林听雨效忠于赤霄盟"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "rank",
+      "value": {
+        "rank": "副掌门"
+      },
+      "quote": "在门中担任副掌门",
+      "subjectFromPrevious": "林听雨"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "林听雨擅长剑术"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "棋艺，同辈之中少有人及",
+      "subjectFromPrevious": "林听雨"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "owns_item",
+      "value": {
+        "item": "踏云靴"
+      },
+      "quote": "林听雨持有一件踏云靴"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "home_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "林听雨居住在断云峡"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "master",
+      "value": {
+        "person": "沈照夜"
+      },
+      "quote": "林听雨师从沈照夜"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "幽篁谷"
+      },
+      "quote": "孟若雪效忠于幽篁谷"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "rank",
+      "value": {
+        "rank": "巡山弟子"
+      },
+      "quote": "在门中担任巡山弟子",
+      "subjectFromPrevious": "孟若雪"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "孟若雪擅长医术"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "御风诀，同辈之中少有人及",
+      "subjectFromPrevious": "孟若雪"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "owns_item",
+      "value": {
+        "item": "凝露瓶"
+      },
+      "quote": "孟若雪持有一件凝露瓶"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "home_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "孟若雪居住在白帝城"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "master",
+      "value": {
+        "person": "陆明轩"
+      },
+      "quote": "孟若雪师从陆明轩"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "凌霄殿"
+      },
+      "quote": "沈听雨效忠于凌霄殿"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "rank",
+      "value": {
+        "rank": "外门弟子"
+      },
+      "quote": "在门中担任外门弟子",
+      "subjectFromPrevious": "沈听雨"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "沈听雨擅长追踪术"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "轻功，同辈之中少有人及",
+      "subjectFromPrevious": "沈听雨"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碎星弓"
+      },
+      "quote": "沈听雨持有一件碎星弓"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "home_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "沈听雨居住在青竹坞"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "master",
+      "value": {
+        "person": "孟惊鸿"
+      },
+      "quote": "沈听雨师从孟惊鸿"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "百川会"
+      },
+      "quote": "江慕青效忠于百川会"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "rank",
+      "value": {
+        "rank": "首席长老"
+      },
+      "quote": "在门中担任首席长老",
+      "subjectFromPrevious": "江慕青"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "寒冰掌"
+      },
+      "quote": "江慕青擅长寒冰掌"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "琴艺"
+      },
+      "quote": "琴艺，同辈之中少有人及",
+      "subjectFromPrevious": "江慕青"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "owns_item",
+      "value": {
+        "item": "无相佩"
+      },
+      "quote": "江慕青持有一件无相佩"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "home_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "江慕青居住在望江楼"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "master",
+      "value": {
+        "person": "白望舒"
+      },
+      "quote": "江慕青师从白望舒"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "天枢阁"
+      },
+      "quote": "苏清歌效忠于天枢阁"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "rank",
+      "value": {
+        "rank": "副掌门"
+      },
+      "quote": "在门中担任副掌门",
+      "subjectFromPrevious": "苏清歌"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "毒术"
+      },
+      "quote": "苏清歌擅长毒术"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "skill",
+      "value": {
+        "skill": "易容术"
+      },
+      "quote": "易容术，同辈之中少有人及",
+      "subjectFromPrevious": "苏清歌"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "owns_item",
+      "value": {
+        "item": "寒光剑"
+      },
+      "quote": "苏清歌持有一件寒光剑"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "home_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "苏清歌居住在听潮崖"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "master",
+      "value": {
+        "person": "沈清歌"
+      },
+      "quote": "苏清歌师从沈清歌"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "沧海门"
+      },
+      "quote": "孟照夜效忠于沧海门"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "孟照夜"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "skill",
+      "value": {
+        "skill": "棋艺"
+      },
+      "quote": "孟照夜擅长棋艺"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "skill",
+      "value": {
+        "skill": "剑术"
+      },
+      "quote": "剑术，同辈之中少有人及",
+      "subjectFromPrevious": "孟照夜"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "owns_item",
+      "value": {
+        "item": "碧玉箫"
+      },
+      "quote": "孟照夜持有一件碧玉箫"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "home_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "孟照夜居住在落星湖"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "master",
+      "value": {
+        "person": "沈凌波"
+      },
+      "quote": "孟照夜师从沈凌波"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "赤霄盟"
+      },
+      "quote": "陆流云效忠于赤霄盟"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "rank",
+      "value": {
+        "rank": "巡山弟子"
+      },
+      "quote": "在门中担任巡山弟子",
+      "subjectFromPrevious": "陆流云"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "御风诀"
+      },
+      "quote": "陆流云擅长御风诀"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "skill",
+      "value": {
+        "skill": "医术"
+      },
+      "quote": "医术，同辈之中少有人及",
+      "subjectFromPrevious": "陆流云"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "owns_item",
+      "value": {
+        "item": "千机匣"
+      },
+      "quote": "陆流云持有一件千机匣"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "home_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "陆流云居住在孤鸿岭"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "master",
+      "value": {
+        "person": "楚望舒"
+      },
+      "quote": "陆流云师从楚望舒"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "faction_member",
+      "value": {
+        "faction": "幽篁谷"
+      },
+      "quote": "叶慕青效忠于幽篁谷"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "rank",
+      "value": {
+        "rank": "执法长老"
+      },
+      "quote": "在门中担任执法长老",
+      "subjectFromPrevious": "叶慕青"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "轻功"
+      },
+      "quote": "叶慕青擅长轻功"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "skill",
+      "value": {
+        "skill": "追踪术"
+      },
+      "quote": "追踪术，同辈之中少有人及",
+      "subjectFromPrevious": "叶慕青"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "owns_item",
+      "value": {
+        "item": "软猬甲"
+      },
+      "quote": "叶慕青持有一件软猬甲"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "home_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "叶慕青居住在栖霞渡"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "master",
+      "value": {
+        "person": "叶望舒"
+      },
+      "quote": "叶慕青师从叶望舒"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "current_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "楚清歌来到栖霞渡"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "relationship",
+      "value": {
+        "person": "白望舒",
+        "relation": "挚友"
+      },
+      "quote": "楚清歌与白望舒是挚友"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "棋艺",
+        "tier": "后天"
+      },
+      "quote": "楚清歌的棋艺也已臻后天境界",
+      "subjectInsideQuote": "楚清歌"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "current_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "苏望舒来到断云峡"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈清歌",
+        "relation": "宿敌"
+      },
+      "quote": "苏望舒与沈清歌是宿敌"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "御风诀",
+        "tier": "先天"
+      },
+      "quote": "苏望舒的御风诀也已臻先天境界",
+      "subjectInsideQuote": "苏望舒"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "current_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "萧知远来到白帝城"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈凌波",
+        "relation": "同门"
+      },
+      "quote": "萧知远与沈凌波是同门"
+    },
+    {
+      "subject": "萧知远",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "轻功",
+        "tier": "宗师"
+      },
+      "quote": "萧知远的轻功也已臻宗师境界",
+      "subjectInsideQuote": "萧知远"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "current_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "沈若雪来到青竹坞"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "relationship",
+      "value": {
+        "person": "楚望舒",
+        "relation": "挚友"
+      },
+      "quote": "沈若雪与楚望舒是挚友"
+    },
+    {
+      "subject": "沈若雪",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "琴艺",
+        "tier": "后天"
+      },
+      "quote": "沈若雪的琴艺也已臻后天境界",
+      "subjectInsideQuote": "沈若雪"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "current_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "沈流云来到望江楼"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "relationship",
+      "value": {
+        "person": "叶望舒",
+        "relation": "宿敌"
+      },
+      "quote": "沈流云与叶望舒是宿敌"
+    },
+    {
+      "subject": "沈流云",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "易容术",
+        "tier": "先天"
+      },
+      "quote": "沈流云的易容术也已臻先天境界",
+      "subjectInsideQuote": "沈流云"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "current_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "陆惊鸿来到听潮崖"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "relationship",
+      "value": {
+        "person": "苏惊鸿",
+        "relation": "同门"
+      },
+      "quote": "陆惊鸿与苏惊鸿是同门"
+    },
+    {
+      "subject": "陆惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "剑术",
+        "tier": "宗师"
+      },
+      "quote": "陆惊鸿的剑术也已臻宗师境界",
+      "subjectInsideQuote": "陆惊鸿"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "current_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "沈照夜来到落星湖"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "relationship",
+      "value": {
+        "person": "江惊鸿",
+        "relation": "挚友"
+      },
+      "quote": "沈照夜与江惊鸿是挚友"
+    },
+    {
+      "subject": "沈照夜",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "医术",
+        "tier": "后天"
+      },
+      "quote": "沈照夜的医术也已臻后天境界",
+      "subjectInsideQuote": "沈照夜"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "current_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "陆明轩来到孤鸿岭"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "relationship",
+      "value": {
+        "person": "萧慕青",
+        "relation": "宿敌"
+      },
+      "quote": "陆明轩与萧慕青是宿敌"
+    },
+    {
+      "subject": "陆明轩",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "追踪术",
+        "tier": "先天"
+      },
+      "quote": "陆明轩的追踪术也已臻先天境界",
+      "subjectInsideQuote": "陆明轩"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "current_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "孟惊鸿来到栖霞渡"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "relationship",
+      "value": {
+        "person": "洛流云",
+        "relation": "同门"
+      },
+      "quote": "孟惊鸿与洛流云是同门"
+    },
+    {
+      "subject": "孟惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "寒冰掌",
+        "tier": "宗师"
+      },
+      "quote": "孟惊鸿的寒冰掌也已臻宗师境界",
+      "subjectInsideQuote": "孟惊鸿"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "current_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "白望舒来到断云峡"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "relationship",
+      "value": {
+        "person": "苏听雨",
+        "relation": "挚友"
+      },
+      "quote": "白望舒与苏听雨是挚友"
+    },
+    {
+      "subject": "白望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "毒术",
+        "tier": "后天"
+      },
+      "quote": "白望舒的毒术也已臻后天境界",
+      "subjectInsideQuote": "白望舒"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "current_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "沈清歌来到白帝城"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "relationship",
+      "value": {
+        "person": "楚听雨",
+        "relation": "宿敌"
+      },
+      "quote": "沈清歌与楚听雨是宿敌"
+    },
+    {
+      "subject": "沈清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "棋艺",
+        "tier": "先天"
+      },
+      "quote": "沈清歌的棋艺也已臻先天境界",
+      "subjectInsideQuote": "沈清歌"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "current_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "沈凌波来到青竹坞"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "relationship",
+      "value": {
+        "person": "林听雨",
+        "relation": "同门"
+      },
+      "quote": "沈凌波与林听雨是同门"
+    },
+    {
+      "subject": "沈凌波",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "御风诀",
+        "tier": "宗师"
+      },
+      "quote": "沈凌波的御风诀也已臻宗师境界",
+      "subjectInsideQuote": "沈凌波"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "current_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "楚望舒来到望江楼"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "relationship",
+      "value": {
+        "person": "孟若雪",
+        "relation": "挚友"
+      },
+      "quote": "楚望舒与孟若雪是挚友"
+    },
+    {
+      "subject": "楚望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "轻功",
+        "tier": "后天"
+      },
+      "quote": "楚望舒的轻功也已臻后天境界",
+      "subjectInsideQuote": "楚望舒"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "current_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "叶望舒来到听潮崖"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈听雨",
+        "relation": "宿敌"
+      },
+      "quote": "叶望舒与沈听雨是宿敌"
+    },
+    {
+      "subject": "叶望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "琴艺",
+        "tier": "先天"
+      },
+      "quote": "叶望舒的琴艺也已臻先天境界",
+      "subjectInsideQuote": "叶望舒"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "current_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "苏惊鸿来到落星湖"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "relationship",
+      "value": {
+        "person": "江慕青",
+        "relation": "同门"
+      },
+      "quote": "苏惊鸿与江慕青是同门"
+    },
+    {
+      "subject": "苏惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "易容术",
+        "tier": "宗师"
+      },
+      "quote": "苏惊鸿的易容术也已臻宗师境界",
+      "subjectInsideQuote": "苏惊鸿"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "current_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "江惊鸿来到孤鸿岭"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "relationship",
+      "value": {
+        "person": "苏清歌",
+        "relation": "挚友"
+      },
+      "quote": "江惊鸿与苏清歌是挚友"
+    },
+    {
+      "subject": "江惊鸿",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "剑术",
+        "tier": "后天"
+      },
+      "quote": "江惊鸿的剑术也已臻后天境界",
+      "subjectInsideQuote": "江惊鸿"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "current_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "萧慕青来到栖霞渡"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "relationship",
+      "value": {
+        "person": "孟照夜",
+        "relation": "宿敌"
+      },
+      "quote": "萧慕青与孟照夜是宿敌"
+    },
+    {
+      "subject": "萧慕青",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "医术",
+        "tier": "先天"
+      },
+      "quote": "萧慕青的医术也已臻先天境界",
+      "subjectInsideQuote": "萧慕青"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "current_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "洛流云来到断云峡"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "relationship",
+      "value": {
+        "person": "陆流云",
+        "relation": "同门"
+      },
+      "quote": "洛流云与陆流云是同门"
+    },
+    {
+      "subject": "洛流云",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "追踪术",
+        "tier": "宗师"
+      },
+      "quote": "洛流云的追踪术也已臻宗师境界",
+      "subjectInsideQuote": "洛流云"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "current_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "苏听雨来到白帝城"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "relationship",
+      "value": {
+        "person": "叶慕青",
+        "relation": "挚友"
+      },
+      "quote": "苏听雨与叶慕青是挚友"
+    },
+    {
+      "subject": "苏听雨",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "寒冰掌",
+        "tier": "后天"
+      },
+      "quote": "苏听雨的寒冰掌也已臻后天境界",
+      "subjectInsideQuote": "苏听雨"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "current_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "楚听雨来到青竹坞"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "relationship",
+      "value": {
+        "person": "楚清歌",
+        "relation": "宿敌"
+      },
+      "quote": "楚听雨与楚清歌是宿敌"
+    },
+    {
+      "subject": "楚听雨",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "毒术",
+        "tier": "先天"
+      },
+      "quote": "楚听雨的毒术也已臻先天境界",
+      "subjectInsideQuote": "楚听雨"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "current_location",
+      "value": {
+        "location": "望江楼"
+      },
+      "quote": "林听雨来到望江楼"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "relationship",
+      "value": {
+        "person": "苏望舒",
+        "relation": "同门"
+      },
+      "quote": "林听雨与苏望舒是同门"
+    },
+    {
+      "subject": "林听雨",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "棋艺",
+        "tier": "宗师"
+      },
+      "quote": "林听雨的棋艺也已臻宗师境界",
+      "subjectInsideQuote": "林听雨"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "current_location",
+      "value": {
+        "location": "听潮崖"
+      },
+      "quote": "孟若雪来到听潮崖"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "relationship",
+      "value": {
+        "person": "萧知远",
+        "relation": "挚友"
+      },
+      "quote": "孟若雪与萧知远是挚友"
+    },
+    {
+      "subject": "孟若雪",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "御风诀",
+        "tier": "后天"
+      },
+      "quote": "孟若雪的御风诀也已臻后天境界",
+      "subjectInsideQuote": "孟若雪"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "current_location",
+      "value": {
+        "location": "落星湖"
+      },
+      "quote": "沈听雨来到落星湖"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈若雪",
+        "relation": "宿敌"
+      },
+      "quote": "沈听雨与沈若雪是宿敌"
+    },
+    {
+      "subject": "沈听雨",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "轻功",
+        "tier": "先天"
+      },
+      "quote": "沈听雨的轻功也已臻先天境界",
+      "subjectInsideQuote": "沈听雨"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "current_location",
+      "value": {
+        "location": "孤鸿岭"
+      },
+      "quote": "江慕青来到孤鸿岭"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈流云",
+        "relation": "同门"
+      },
+      "quote": "江慕青与沈流云是同门"
+    },
+    {
+      "subject": "江慕青",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "琴艺",
+        "tier": "宗师"
+      },
+      "quote": "江慕青的琴艺也已臻宗师境界",
+      "subjectInsideQuote": "江慕青"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "current_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "苏清歌来到栖霞渡"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "relationship",
+      "value": {
+        "person": "陆惊鸿",
+        "relation": "挚友"
+      },
+      "quote": "苏清歌与陆惊鸿是挚友"
+    },
+    {
+      "subject": "苏清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "易容术",
+        "tier": "后天"
+      },
+      "quote": "苏清歌的易容术也已臻后天境界",
+      "subjectInsideQuote": "苏清歌"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "current_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "孟照夜来到断云峡"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈照夜",
+        "relation": "宿敌"
+      },
+      "quote": "孟照夜与沈照夜是宿敌"
+    },
+    {
+      "subject": "孟照夜",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "剑术",
+        "tier": "先天"
+      },
+      "quote": "孟照夜的剑术也已臻先天境界",
+      "subjectInsideQuote": "孟照夜"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "current_location",
+      "value": {
+        "location": "白帝城"
+      },
+      "quote": "陆流云来到白帝城"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "relationship",
+      "value": {
+        "person": "陆明轩",
+        "relation": "同门"
+      },
+      "quote": "陆流云与陆明轩是同门"
+    },
+    {
+      "subject": "陆流云",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "医术",
+        "tier": "宗师"
+      },
+      "quote": "陆流云的医术也已臻宗师境界",
+      "subjectInsideQuote": "陆流云"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "current_location",
+      "value": {
+        "location": "青竹坞"
+      },
+      "quote": "叶慕青来到青竹坞"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "relationship",
+      "value": {
+        "person": "孟惊鸿",
+        "relation": "挚友"
+      },
+      "quote": "叶慕青与孟惊鸿是挚友"
+    },
+    {
+      "subject": "叶慕青",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "追踪术",
+        "tier": "后天"
+      },
+      "quote": "叶慕青的追踪术也已臻后天境界",
+      "subjectInsideQuote": "叶慕青"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "current_location",
+      "value": {
+        "location": "栖霞渡"
+      },
+      "quote": "楚清歌来到栖霞渡"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "relationship",
+      "value": {
+        "person": "白望舒",
+        "relation": "挚友"
+      },
+      "quote": "楚清歌与白望舒是挚友"
+    },
+    {
+      "subject": "楚清歌",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "棋艺",
+        "tier": "后天"
+      },
+      "quote": "楚清歌的棋艺也已臻后天境界",
+      "subjectInsideQuote": "楚清歌"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "current_location",
+      "value": {
+        "location": "断云峡"
+      },
+      "quote": "苏望舒来到断云峡"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "relationship",
+      "value": {
+        "person": "沈清歌",
+        "relation": "宿敌"
+      },
+      "quote": "苏望舒与沈清歌是宿敌"
+    },
+    {
+      "subject": "苏望舒",
+      "predicate": "ability_tier",
+      "value": {
+        "skill": "御风诀",
+        "tier": "先天"
+      },
+      "quote": "苏望舒的御风诀也已臻先天境界",
+      "subjectInsideQuote": "苏望舒"
+    }
+  ]
+}
