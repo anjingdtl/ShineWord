@@ -51,9 +51,9 @@ function normalizeEndpoint(endpoint: string): string {
   return `${trimmed}/chat/completions`;
 }
 
-function messageText(content: OpenAIResponseShape['choices'] extends Array<infer C> | undefined
-  ? C extends { message?: { content?: infer V } } ? V : never
-  : never): string {
+function messageText(
+  content: string | Array<{ type?: string; text?: string }> | undefined,
+): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
