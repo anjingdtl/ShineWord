@@ -25,6 +25,13 @@ function assertMigrationSequence(migrations: readonly SqliteMigration[]): void {
   }
 }
 
+export function splitSqlStatements(sql: string): string[] {
+  return sql
+    .split(';')
+    .map(statement => statement.trim())
+    .filter(Boolean);
+}
+
 export async function applySqliteMigrations(
   db: SqliteDatabase,
   migrations: readonly SqliteMigration[],
@@ -51,7 +58,9 @@ export async function applySqliteMigrations(
     if (applied.has(migration.version)) continue;
 
     await db.transaction(async tx => {
-      await tx.execute(migration.sql);
+      for (const statement of splitSqlStatements(migration.sql)) {
+        await tx.execute(statement);
+      }
       await tx.execute(
         'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
         [migration.version, migration.name, appliedAt()],

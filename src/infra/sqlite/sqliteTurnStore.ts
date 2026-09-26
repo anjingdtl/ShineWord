@@ -3,7 +3,7 @@ import type {
   CommittedTurn,
   TurnStore,
 } from '../../application/ports/turnStore';
-import type { TurnRollJournal, StageRollTurnInput } from '../../application/ports/turnRollJournal';
+import type { TurnRollJournal, StageRollTurnInput, StagedTurnRecord } from '../../application/ports/turnRollJournal';
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
 import type { EffectOperation } from '../../domain/turns/types';
@@ -40,7 +40,9 @@ interface TurnRow extends SqliteRow {
 interface StagedTurnRow extends SqliteRow {
   status: string;
   expected_state_version: number;
+  action_contract_json: string;
   action_contract_hash: string;
+  created_at: string;
 }
 
 interface RollRow extends SqliteRow {
@@ -110,10 +112,29 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     return this.readCommittedTurn(this.db, branchId, turnId);
   }
 
+  async getStagedTurn(branchId: string, turnId: string): Promise<StagedTurnRecord | null> {
+    const row = await this.db.queryOne<StagedTurnRow>(
+      `SELECT status, expected_state_version, action_contract_json, action_contract_hash, created_at
+         FROM turns
+        WHERE branch_id = ? AND turn_id = ?`,
+      [branchId, turnId],
+    );
+    if (!row) return null;
+    return {
+      branchId,
+      turnId,
+      expectedStateVersion: row.expected_state_version,
+      actionContractJson: row.action_contract_json,
+      actionContractHash: row.action_contract_hash,
+      createdAt: row.created_at,
+      status: row.status as StagedTurnRecord['status'],
+    };
+  }
+
   async stageRollTurn(input: StageRollTurnInput): Promise<void> {
     await this.db.transaction(async tx => {
       const existing = await tx.queryOne<StagedTurnRow>(
-        `SELECT status, expected_state_version, action_contract_hash
+        `SELECT status, expected_state_version, action_contract_json, action_contract_hash, created_at
            FROM turns
           WHERE branch_id = ? AND turn_id = ?`,
         [input.branchId, input.turnId],
@@ -144,10 +165,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           (branch_id, turn_id, status, expected_state_version, committed_state_version,
            action_contract_json, action_contract_hash, outcome_grade, public_summary,
            effects_json, created_at, committed_at)
-         VALUES (?, ?, 'AwaitRoll', ?, NULL, ?, ?, NULL, NULL, '[]', ?, NULL)`,
+         VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL, '[]', ?, NULL)`,
         [
           input.branchId,
           input.turnId,
+          input.status ?? 'AwaitRoll',
           input.expectedStateVersion,
           input.actionContractJson,
           input.actionContractHash,
@@ -186,7 +208,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       }
 
       const staged = await tx.queryOne<StagedTurnRow>(
-        `SELECT status, expected_state_version, action_contract_hash
+        `SELECT status, expected_state_version, action_contract_json, action_contract_hash, created_at
            FROM turns
           WHERE branch_id = ? AND turn_id = ?`,
         [branchId, record.turnId],
@@ -390,7 +412,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
   ): Promise<void> {
     const turn = input.committedTurn;
     const staged = await tx.queryOne<StagedTurnRow>(
-      `SELECT status, expected_state_version, action_contract_hash
+      `SELECT status, expected_state_version, action_contract_json, action_contract_hash, created_at
          FROM turns
         WHERE branch_id = ? AND turn_id = ?`,
       [turn.branchId, turn.turnId],
