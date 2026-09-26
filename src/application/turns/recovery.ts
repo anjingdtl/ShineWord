@@ -41,7 +41,5 @@ export function classifyTurnRecovery(
       return 'resume-repair';
     case 'Paused':
       return 'remain-paused';
-    case 'Committed':
-      return 'read-committed';
   }
 }
