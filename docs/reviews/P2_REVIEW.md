@@ -86,3 +86,36 @@
 ## 八、结论
 
 P2-0 ～ P2-4 出口条件中，除上节标注项外全部达成：一期五个阻塞缺陷修复且每项有复现级回归测试；世界包/三宝书/角色卡/战役会话形成手机端真实闭环；真实 GLM 下从 TXT 到三宝书到可玩战役的端上链路完整走通；成长/回退/隔离/恢复的正确性以数据库状态而非界面提示为准。104/104 核心测试通过，core + mobile typecheck 通过。
+
+## 附录 A：独立验收整改轮（2026-09-27 深夜）
+
+对照 `docs/reviews/P2_ACCEPTANCE_REVIEW.md` 的 7 项动态缺陷与 6 项范围缺口，本轮全部关闭；逐项证据与命令见 `docs/reviews/P2_ACCEPTANCE_FIXES.md`。要点补充：
+
+### 回归
+
+- 核心测试 **123/123**（新增 `tests/phase2-acceptance.test.cjs`：A01~A07 等价回归 16 项 + G01 遭遇调度 2 项 + G04 分批覆盖 1 项）。
+- `node docs/reviews/P2_ACCEPTANCE_REPRO.cjs` → **acceptanceFailures: 0**（7/7 PASS，原样保留未修改断言）。
+- mobile typecheck PASS；`:app:assembleDebug`（Gradle 9.3.1）BUILD SUCCESSFUL。
+
+### 真实模型（GLM-5.3-Flash，推理保持开启——维护者指令，Provider 参照 tavo-mini 处理 reasoning_content）
+
+- V2 冒烟：3 提交 / 2 干净拒绝（编造技能「sword-strike」「jianfa」、未知地点）/ 0 失败；hp 不越上限。
+- 《白篱梦》小样（12KB）：pass1 4 块中 1 块 300s 超时 → G04 门禁拒绝发布 → 续建 3 块复用 + 1 块重试成功 → 包 r1 published；证据引用 100% 可解析。
+- **100+ 动作跨模式长程 PASS**：committed=100、cleanRefused=21、providerFailed=0、hp=10、台账 14 行无重复、rolls=26、世界钟 2680 分钟；阶段间不变量断言（HP 封顶/台账去重/版本不超前）全过；含里程碑幂等、回退分叉隔离、存档导出→干净库恢复→续玩。
+
+### 模拟器（Medium_Phone / emulator-5554 / V0.2.0-p2.2 debug，升级安装保留旧数据，升级前 DB 备份）
+
+导入真实原文（G06 真字节哈希 f9330ea0e0）→ 三宝书玩家视图/编辑模式 → 开局向导（真实锚点事件、京城、原著角色定安伯三女、同伴守卫、锁定 r1·规则 0.2.0）→ stealth 提案干净拒绝 → turn-0001 提交（双请求 tokens 落库）→ 遭遇完整闭环（跨区 touch 拒绝→移动→攻击 1d8 full_success→无攻击技能干净报错→跳过戒备→NPC 1d8→撤退、敌对投影清理）→ 长休 → 杀进程遭遇面板恢复 → 回退分叉（快照含战斗时钟与当时敌对者）→ 导出 16,123B v3 存档 → 干净内存库恢复续玩 + 设备导入为新战役续玩至 v6 → 断网干净失败（0 残留）→ 复网重试成功 → 审核队列解决 1 项。
+
+### 过程缺陷（本轮发现并修复，均有复测）
+
+1. SAF 选择器缺 application/json → 存档不可选（补 MIME 并重装复测通过）。
+2. 无攻击技能角色战斗卡轮 → 新增 passTurn（戒备）动作。
+3. 杀进程后活跃遭遇不回显 → PlayScreen 恢复活跃遭遇。
+4. 快照式模拟器崩溃回滚用户数据/安装 → 之后以 -no-snapshot 重启规避（用户旧数据最终确认完好）。
+5. 开局向导缺场景条目时地点为空 → 从原著 location 实体派生。
+6. canon 角色无位置事实 → 回退玩家所选开局地点（证据优先原则不变）。
+
+### 仍未验收（如实）
+
+真机 / minSdk 24 低版本；Release 签名 APK（口令仅维护者）；第二种已配置模型服务（多模型矩阵）；G03 深层 memory 相关度融合；映射条目产出量调优（推理开启后单批 novel 条目偏少，覆盖计数如实入校验报告）。
