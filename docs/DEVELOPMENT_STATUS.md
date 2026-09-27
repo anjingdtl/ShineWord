@@ -89,9 +89,24 @@
 
 回归结果：Core tests 54/54、mobile typecheck PASS、`:app:assembleDebug` PASS、模拟器端到端通过。
 
-### M4 完整游戏系统 — 进行中
+### M4 完整游戏系统 — ✅ 完成
 
-目标：成长系统（六属性/技能骰/练习点阈值）、叙事战斗（距离带/HP/体力）、关系与认知（knowledge 可见性过滤）、检索记忆（过滤先于相关度）、分支（fork/rewind/隔离/快照）、导出（.shineword-save.json，不含 Key）。
+已落地（详见 `docs/reviews/M4_REVIEW.md`）：
+
+- [x] 成长引擎：练习点 5/10/20/40 阈值、每遭遇每技能 1 点（turn-id 去重阻断回档刷点）、里程碑 1~2 级仅限已解锁技能。
+- [x] 叙事战斗：near/mid/far 距离带、冻结先攻（跳过阵亡、环绕计轮）、伤害模板减护甲下限 0、0 HP disabled + 场景合同结局枚举。
+- [x] Migration 004：campaigns / actor_skills / relationships / encounters / encounter_actors / memories / llm_requests。
+- [x] 检索记忆：可见性 → 时间窗 → 状态有效性 → 分支作用域 → 相关度（强制顺序）；秘密/未来/过期/跨分支/冲突全部拦截；每 8 回合摘要节奏。
+- [x] 分支：fork/rewind（历史快照 fork）、技能与关系复制、源分支不可变、跨分支无泄漏。
+- [x] 导出：`.shineword-save.json`（manifest + 哈希引用世界）+ 递归禁键扫描（API Key 结构性不可入备份）+ 导入校验。
+- [x] LLM 用量记录接入回合管线（llm_requests，模型/tokens/估算标记）。
+- [x] 100 回合长程一致性测试：100 committed + fork-50 回退双分支独立 + 重放不重掷。
+
+回归结果：Core tests 69/69、mobile typecheck PASS、`:app:assembleDebug` PASS、模拟器 smoke 通过（llm_requests 落库验证）。
+
+### M5 Alpha 验收 — 进行中
+
+目标：多 OpenAI-compatible Provider（GLM + MiniMax/DeepSeek）、能力探测、预算与重试/取消/超时、故障注入、20 万字基准 + 100 万字压力、真机/模拟器验收、APK 交付物。
 
 ## 本地验证命令
 
