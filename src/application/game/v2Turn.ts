@@ -82,6 +82,7 @@ export function plannerV2System(): string {
     'Required keys: proposalVersion="2.0", turnId, expectedStateVersion, actorId, actionKind, evidenceIds, intent.',
     'actionKind must be one of skill_check | ability | observe | talk | interact | move.',
     'skill_check: also skillId (a world skill id) and optionally difficultyBand in simple|normal|challenging|hard|extreme|peak and destinationId (only when success would move the actor to a known location).',
+    'When the player action carries a real chance of failure and the actor knows a matching skill, prefer skill_check over observe/talk - risky actions deserve dice.',
     'ability: also abilityId (a world ability id the actor knows) and targetId when the ability has a target.',
     'move: also destinationId (a location id that exists in this world).',
     'Optional: narrativeHint with successSummary and failureSummary strings (wording only).',

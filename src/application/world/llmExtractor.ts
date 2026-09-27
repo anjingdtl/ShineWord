@@ -80,7 +80,6 @@ export class LlmChunkExtractor implements ChunkExtractor {
       }),
       maxOutputTokens: 6000,
       jsonMode: true,
-      vendorOptions: { thinkingDisabled: true },
     });
 
     const raw = parseExtractorJson(response.text);

@@ -10,6 +10,8 @@ export interface LlmUsage {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  /** Provider-reported chain-of-thought tokens (never part of text). */
+  reasoningTokens?: number;
   estimated: boolean;
 }
 
@@ -25,7 +27,7 @@ export interface LlmRequest {
   user: string;
   maxOutputTokens: number;
   jsonMode?: boolean;
-  /** Provider-specific request tuning (e.g. disable reasoning for GLM). */
+  /** Provider-specific request tuning; an explicit thinking opt-out. */
   vendorOptions?: {
     thinkingDisabled?: boolean;
   };
@@ -50,8 +52,11 @@ export interface ApiProfile {
   model: string;
   keyRef: string;
   capabilities: LlmProviderCapabilities;
-  // Zhipu GLM reasoning models spend the whole output budget on thinking and
-  // return an empty content body unless thinking is explicitly disabled.
+  /**
+   * EXPLICIT opt-out only (policy 2026-09-27): reasoning models run with
+   * reasoning ON; the provider retries reasoning-only completions with a
+   * grown budget instead of disabling thinking. Never auto-set.
+   */
   thinkingDisabled?: boolean;
   inputPricePerMillion?: number;
   outputPricePerMillion?: number;
