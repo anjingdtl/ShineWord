@@ -37,6 +37,20 @@ android {
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            // Independent ShineWord signing; credentials arrive via
+            // SHINEWORD_RELEASE_* env vars (never committed).
+            def ksFile = file("../keystores/shineword-release.keystore")
+            if (ksFile.exists() && System.getenv("SHINEWORD_RELEASE_STORE_PASS") != null) {
+                signingConfigs {
+                    release {
+                        storeFile ksFile
+                        storePassword System.getenv("SHINEWORD_RELEASE_STORE_PASS")
+                        keyAlias "shineword"
+                        keyPassword System.getenv("SHINEWORD_RELEASE_KEY_PASS")
+                    }
+                }
+                signingConfig signingConfigs.release
+            }
         }
     }
 
