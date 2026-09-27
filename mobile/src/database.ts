@@ -4,6 +4,7 @@ import { applySqliteMigrations } from '../../src/infra/sqlite/migrations';
 import { ReactNativeSqliteAdapter, type ReactNativeSqliteDatabase } from '../../src/infra/sqlite/reactNativeSqliteAdapter';
 import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStore';
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
+import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
 
 SQLite.enablePromise(true);
 
@@ -11,6 +12,7 @@ export interface MobileDatabaseRuntime {
   db: ReactNativeSqliteAdapter;
   turns: SqliteTurnStore;
   narratives: SqliteNarrativeStore;
+  game: SqliteGameStore;
 }
 
 let singleton: Promise<MobileDatabaseRuntime> | null = null;
@@ -74,6 +76,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     db,
     turns: new SqliteTurnStore(db),
     narratives: new SqliteNarrativeStore(db),
+    game: new SqliteGameStore(db),
   };
 }
 

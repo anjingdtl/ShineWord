@@ -45,6 +45,7 @@ export async function playIntent(
   intent: string,
 ): Promise<PlayedTurn> {
   const runtime = await getDatabaseRuntime();
+  let usageSeq = 0;
   const state = await runtime.turns.getState('demo-main');
   if (!state) throw new Error('Demo campaign is unavailable.');
 
@@ -75,6 +76,19 @@ export async function playIntent(
           ? difficultyForBand(contract.difficultyBand)
           : 4,
       };
+    },
+    usageRecorder(record) {
+      void runtime.game.recordLlmUsage({
+        branchId: 'demo-main',
+        turnId,
+        role: record.role,
+        requestSeq: ++usageSeq,
+        model: profile.model,
+        inputTokens: record.inputTokens,
+        outputTokens: record.outputTokens,
+        estimated: record.estimated,
+        createdAt: new Date().toISOString(),
+      }).catch(() => undefined);
     },
   });
 

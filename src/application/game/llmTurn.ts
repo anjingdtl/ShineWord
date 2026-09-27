@@ -36,6 +36,13 @@ export interface RunLlmTurnInput {
   resolveRollSpec(contract: ActionContract): RollSpec;
   now?: () => string;
   budget?: TurnRequestBudget;
+  /** Optional usage persistence (llm_requests) wired by the platform layer. */
+  usageRecorder?: (record: {
+    role: 'Planner' | 'Narrator';
+    inputTokens: number | null;
+    outputTokens: number | null;
+    estimated: boolean;
+  }) => void;
 }
 
 export interface RunLlmTurnResult {
@@ -79,6 +86,20 @@ function validateNarrative(
   }
   if (!candidate.text.trim()) throw new Error('Narrator returned empty story text.');
   if (candidate.text.length > 12_000) throw new Error('Narrator story text exceeds safety limit.');
+}
+
+function recordUsage(
+  input: RunLlmTurnInput,
+  role: 'Planner' | 'Narrator',
+  response: { usage?: { inputTokens?: number; outputTokens?: number; estimated: boolean } },
+): void {
+  if (!input.usageRecorder) return;
+  input.usageRecorder({
+    role,
+    inputTokens: response.usage?.inputTokens ?? null,
+    outputTokens: response.usage?.outputTokens ?? null,
+    estimated: response.usage?.estimated ?? true,
+  });
 }
 
 export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResult> {
@@ -143,6 +164,7 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
       maxOutputTokens: 2200,
       jsonMode: true,
     });
+    recordUsage(input, 'Planner', planned);
     contract = parseStrictJsonObject<ActionContract>(
       planned.text,
       'Planner ActionContract',
@@ -216,6 +238,7 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
       narrated.text,
       'Narrator candidate',
     );
+    recordUsage(input, 'Narrator', narrated);
     validateNarrative(candidate, input.turnId, grade);
     narrative = await input.narratives.saveCandidate({
       branchId: input.branchId,
