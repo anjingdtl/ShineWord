@@ -25,6 +25,10 @@ export interface LlmRequest {
   user: string;
   maxOutputTokens: number;
   jsonMode?: boolean;
+  /** Provider-specific request tuning (e.g. disable reasoning for GLM). */
+  vendorOptions?: {
+    thinkingDisabled?: boolean;
+  };
 }
 
 export interface LlmProvider {

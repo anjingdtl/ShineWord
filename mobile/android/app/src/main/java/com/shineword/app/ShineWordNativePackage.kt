@@ -8,7 +8,10 @@ import com.facebook.react.uimanager.ViewManager
 class ShineWordNativePackage : ReactPackage {
   override fun createNativeModules(
     reactContext: ReactApplicationContext,
-  ): List<NativeModule> = listOf(ShineWordCryptoModule(reactContext))
+  ): List<NativeModule> = listOf(
+    ShineWordCryptoModule(reactContext),
+    ShineWordFilesModule(reactContext),
+  )
 
   override fun createViewManagers(
     reactContext: ReactApplicationContext,

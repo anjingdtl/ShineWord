@@ -4,7 +4,7 @@ import type {
   SourceChapter,
   SourceChunk,
 } from '../../domain/world/types';
-import { CodePointOffsetIndex, codePointLength } from '../../domain/world/textOffsets';
+import { CodePointOffsetIndex, codePointLength, utf8Bytes } from '../../domain/world/textOffsets';
 
 export const NORMALIZE_VERSION = 'normalize-1';
 export const CHAPTER_SPLIT_VERSION = 'chapter-split-1';
@@ -210,7 +210,7 @@ export async function importTxtSource(
       startOffset: draft.startOffset,
       endOffset: draft.endOffset,
       charCount: codePointLength(chapterText),
-      contentHash: await sha.sha256BytesHex(new TextEncoder().encode(chapterText)),
+      contentHash: await sha.sha256BytesHex(utf8Bytes(chapterText)),
     };
     chapters.push(chapter);
 
@@ -259,7 +259,7 @@ export async function importTxtSource(
   for (const chunk of chunks) {
     const chunkText = index.slice(chunk.startOffset, chunk.endOffset);
     chunk.charCount = codePointLength(chunkText);
-    chunk.contentHash = await sha.sha256BytesHex(new TextEncoder().encode(chunkText));
+    chunk.contentHash = await sha.sha256BytesHex(utf8Bytes(chunkText));
   }
 
   return {

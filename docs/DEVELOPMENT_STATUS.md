@@ -71,9 +71,27 @@
 
 ## 当前阶段
 
-### M3 原著世界构建 — 进行中
+### M3 原著世界构建 — ✅ 完成
 
-目标：TXT 导入 → 不可变原文 → chapter/chunk → fact extraction → entity merge → timeline/conflict → world rule mapping → interactive world；fact 五类状态与证据定位；时间有效性、事件依赖与 divergence marker；NPC 认知隔离；原著/自创角色开局。详见 `docs/CONSTRUCTION_PLAN.md` 第 4、5 节。
+已落地（详见 `docs/reviews/M3_REVIEW.md`）：
+
+- [x] Migration 003：worlds / source_chapters / source_chunks / entities / entity_aliases / canon_facts / fact_sources / canon_events / event_dependencies / divergence_markers / world_rule_mappings / knowledge_records / world_jobs。
+- [x] TXT 导入：编码探测（BOM/UTF-8/GBK）、归一化、标准/宽松/兜底分章、SHA-256 哈希分块、码点偏移体系；《白篱梦》100 万字 300 章导入 94ms。
+- [x] Extractor 协议：LLM 只给 verbatim 引文，本地解析偏移并强制证据校验（source location 100%）。
+- [x] 事实五类状态；speculation 永不升 canon；多值/单值谓词冲突策略。
+- [x] 实体合并候选（同名不自动合并）；两类角色开局（原创 1+4 自由点 / 原著从 canon 派生）。
+- [x] 事件依赖 + `markEventsPendingAfter` 分叉失效；knowledge_records 建表。
+- [x] 构建管线：chunk 任务、哈希复用、失败恢复、并发 1~2。
+- [x] 200+ 条人工标注事实测试集（fixture 286 条）+ 召回 ≥90% 测试。
+- [x] 真实 GLM-5.3-Flash 抽取《白篱梦》3.6 万字：11/11 块成功、91 条事实全部带证据入库。
+- [x] Android：SAF 文件选择原生模块、世界书架 UI、设备端真实导入构建（实体 29/事实 40/事件 8/失败 0）。
+- [x] M3 Review/Fix：分章边界、REPLACE 级联自毁、动态 import、跨 chunk 事件依赖、冲突误判、GLM thinking、Hermes 兼容。
+
+回归结果：Core tests 54/54、mobile typecheck PASS、`:app:assembleDebug` PASS、模拟器端到端通过。
+
+### M4 完整游戏系统 — 进行中
+
+目标：成长系统（六属性/技能骰/练习点阈值）、叙事战斗（距离带/HP/体力）、关系与认知（knowledge 可见性过滤）、检索记忆（过滤先于相关度）、分支（fork/rewind/隔离/快照）、导出（.shineword-save.json，不含 Key）。
 
 ## 本地验证命令
 

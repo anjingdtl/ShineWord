@@ -95,6 +95,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
     if (request.jsonMode && this.profile.capabilities.supportsJson) {
       body.response_format = { type: 'json_object' };
     }
+    if (request.vendorOptions?.thinkingDisabled) {
+      // Zhipu GLM reasoning models otherwise spend the whole output budget on
+      // thinking and return an empty content body.
+      body.thinking = { type: 'disabled' };
+    }
 
     const response = await this.transport.post({
       url: normalizeEndpoint(this.profile.endpoint),

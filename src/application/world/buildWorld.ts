@@ -1,5 +1,6 @@
 import type { ExtractionResult, ParsedTxtSource } from '../../domain/world/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
+import { CodePointOffsetIndex } from '../../domain/world/textOffsets';
 import type { StoredChunk, WorldJobRecord, WorldRecord, WorldStore } from '../ports/worldStore';
 import { importTxtSource, type ByteSha256Provider, type TextDecodeProvider, type TxtImportOptions } from '../import/txtImport';
 import { applyExtraction, entityIdFor, eventIdFor } from './extraction';
@@ -290,7 +291,6 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
  * extractor always sees text that maps 1:1 back to the immutable source.
  */
 async function extractChunkText(parsed: ParsedTxtSource, chunk: StoredChunk): Promise<string> {
-  const { CodePointOffsetIndex } = await import('../../domain/world/textOffsets');
   const index = new CodePointOffsetIndex(parsed.text);
   return index.slice(chunk.startOffset, chunk.endOffset);
 }

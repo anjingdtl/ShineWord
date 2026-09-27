@@ -13,10 +13,37 @@ import type { ApiProfile } from '../src/application/llm/types';
 import { loadApiProfile, saveApiProfile } from './src/profileStore';
 import { KeychainSecretStore } from './src/secureKeyStore';
 import { loadHistory, playIntent, type PlayedTurn } from './src/runtime';
+import { pickNovelFile } from './src/fileBridge';
+import {
+  buildWorldOnDevice,
+  previewNovel,
+  type WorldBuildProgress,
+} from './src/worldImport';
+
+interface WorldPreviewInfo {
+  fileName: string;
+  chapters: number;
+  codePoints: number;
+  encoding: string;
+  sourceSha256: string;
+}
+
+interface BuiltWorld extends ReturnType<typeof Object> {
+  worldId: string;
+  title: string;
+  chapterCount: number;
+  chunkCount: number;
+  entityCount: number;
+  factCount: number;
+  eventCount: number;
+  failedChunks: number;
+  rejected: number;
+}
 
 export default function App(): React.JSX.Element {
   const [profile, setProfile] = useState<ApiProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [screen, setScreen] = useState<'game' | 'world'>('game');
   const [endpoint, setEndpoint] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -24,6 +51,9 @@ export default function App(): React.JSX.Element {
   const [turns, setTurns] = useState<PlayedTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [worldPreview, setWorldPreview] = useState<WorldPreviewInfo | null>(null);
+  const [worldProgress, setWorldProgress] = useState<WorldBuildProgress | null>(null);
+  const [builtWorld, setBuiltWorld] = useState<BuiltWorld | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +86,41 @@ export default function App(): React.JSX.Element {
       setModel(profile.model);
     }
     setProfile(null);
+  }
+
+  async function importAndBuildWorld() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setBuiltWorld(null);
+    try {
+      const picked = await pickNovelFile();
+      if (!picked) {
+        setBusy(false);
+        return;
+      }
+      const preview = await previewNovel(picked.bytes, picked.name.replace(/\.txt$/i, ''));
+      setWorldPreview({
+        fileName: picked.name,
+        chapters: preview.parsed.chapters.length,
+        codePoints: preview.parsed.codePointCount,
+        encoding: preview.parsed.encoding,
+        sourceSha256: preview.parsed.sourceSha256Hex.slice(0, 16),
+      });
+      if (!profile) throw new Error('请先在设置中配置 LLM API，再构建世界。');
+      const summary = await buildWorldOnDevice(
+        picked.bytes,
+        picked.name.replace(/\.txt$/i, ''),
+        profile,
+        progress => setWorldProgress(progress),
+      );
+      setBuiltWorld(summary);
+    } catch (e) {
+      setWorldProgress({ phase: 'failed', message: e instanceof Error ? e.message : String(e) });
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveSettings() {
@@ -151,6 +216,62 @@ export default function App(): React.JSX.Element {
     );
   }
 
+  if (screen === 'world' && profile) {
+    return (
+      <SafeAreaView style={styles.page}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.title}>世界书架</Text>
+            <Text style={styles.subtitle}>导入 TXT → 事实抽取 → 世界</Text>
+          </View>
+          <TouchableOpacity onPress={() => setScreen('game')}>
+            <Text style={styles.link}>返回游戏</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity style={styles.primary} onPress={importAndBuildWorld} disabled={busy}>
+          <Text style={styles.primaryText}>{busy ? '处理中…' : '导入小说 TXT 并构建世界'}</Text>
+        </TouchableOpacity>
+
+        {worldPreview ? (
+          <View style={styles.card}>
+            <Text style={styles.turn}>{worldPreview.fileName}</Text>
+            <Text style={styles.storyText}>
+              {worldPreview.chapters} 章 · {worldPreview.codePoints} 字 · 编码 {worldPreview.encoding}
+              {'\n'}SHA-256 {worldPreview.sourceSha256}…
+            </Text>
+          </View>
+        ) : null}
+
+        {worldProgress ? (
+          <View style={styles.card}>
+            <Text style={styles.turn}>
+              {worldProgress.phase === 'importing' && '解析原文…'}
+              {worldProgress.phase === 'done' && '世界构建完成'}
+              {worldProgress.phase === 'failed' && '构建失败'}
+            </Text>
+            {worldProgress.message ? (
+              <Text style={styles.storyText}>{worldProgress.message}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {builtWorld ? (
+          <View style={styles.card}>
+            <Text style={styles.turn}>{builtWorld.title}</Text>
+            <Text style={styles.storyText}>
+              {builtWorld.chapterCount} 章 · {builtWorld.chunkCount} 块{'\n'}
+              实体 {builtWorld.entityCount} · 事实 {builtWorld.factCount} · 事件 {builtWorld.eventCount}
+              {'\n'}失败块 {builtWorld.failedChunks} · 拒绝提案 {builtWorld.rejected}
+            </Text>
+          </View>
+        ) : null}
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.page}>
       <View style={styles.header}>
@@ -158,9 +279,14 @@ export default function App(): React.JSX.Element {
           <Text style={styles.title}>雨夜旧宅</Text>
           <Text style={styles.subtitle}>{profile.model}</Text>
         </View>
-        <TouchableOpacity onPress={openSettings}>
-          <Text style={styles.link}>设置</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 14 }}>
+          <TouchableOpacity onPress={() => setScreen('world')}>
+            <Text style={styles.link}>世界</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={openSettings}>
+            <Text style={styles.link}>设置</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
