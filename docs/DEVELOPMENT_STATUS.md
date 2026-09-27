@@ -119,6 +119,10 @@
 
 回归结果：Core tests 82/82、core + mobile typecheck PASS。
 
+### 最终全量回归 — ✅ 完成
+
+20/20 回归项 + 12/12 人工审查项全部通过（详见 `docs/reviews/FINAL_REGRESSION.md`）：确定性概率、恢复、分支隔离、时间/知识泄漏、100 回合长程（本地 + 真实 GLM）、TXT 导入与真实《白篱梦》100 万字、证据定位、Canon 测试集、导出/导入、秘密扫描、debug 构建、双构建模拟器冒烟（release 离线 + debug Metro + run-as DB 校验）、release 签名核查、CI 绿（deterministic-core + android-debug）。README 已更新至 Alpha 状态。
+
 ## 本地验证命令
 
 ```bash
