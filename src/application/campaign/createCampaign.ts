@@ -132,6 +132,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       kind: 'canon',
       worldTimeOrder: input.anchor.worldTimeOrder,
       canonEntity: entity,
+      fallbackLocationId: input.anchor.locationId,
     }, { facts, mappings });
     protagonistCard = {
       actorId: input.protagonist.actorId,

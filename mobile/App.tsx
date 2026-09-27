@@ -936,6 +936,24 @@ function PlayScreen(props: {
     refresh();
   }, [refresh]);
 
+  // Kill-process recovery: an ACTIVE encounter restores its panel on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await createSession(props.profile, await buildProvider(props.profile));
+        const active = await session.getActiveEncounter(props.campaignId, props.branchId);
+        if (!cancelled && active) setEncounter(active);
+      } catch {
+        // No encounter or a transient read error: the panel simply stays closed.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.campaignId, props.branchId]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1151,6 +1169,14 @@ function PlayScreen(props: {
                     <Text style={styles.secondaryText}>援救 {disabledAlly.name}</Text>
                   </TouchableOpacity>
                 ) : null}
+                <TouchableOpacity
+                  style={styles.secondary}
+                  disabled={busy}
+                  onPress={() => encounterCall(s => s.encounterPassTurn({
+                    campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+                  }))}>
+                  <Text style={styles.secondaryText}>跳过（戒备）</Text>
+                </TouchableOpacity>
                 {encounter.zones.map(zone => (
                   <TouchableOpacity
                     key={zone.zoneId}

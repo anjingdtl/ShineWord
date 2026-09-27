@@ -87,7 +87,7 @@ class ShineWordFilesModule(
     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
       addCategory(Intent.CATEGORY_OPENABLE)
       setType("text/*")
-      putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "application/octet-stream"))
+      putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "application/octet-stream", "application/json"))
     }
     try {
       activity.startActivityForResult(intent, REQUEST_PICK_TEXT)

@@ -711,7 +711,14 @@ export class CampaignSession {
     const scenes = entries
       .filter(entry => entry.kind === 'scene')
       .map(entry => entry.definition as SceneDefinition);
-    const locations = [...new Set(scenes.map(scene => scene.locationId))];
+    // Locations come from package scene entries AND the novel's canon
+    // location entities (the extractor always produces those) - a package
+    // without scene entries still offers real novel places to start at
+    // instead of blocking the opening wizard (G02).
+    const canonLocations = (await this.deps.worldStore.listEntities(worldId))
+      .filter(entity => entity.type === 'location')
+      .map(entity => entity.name);
+    const locations = [...new Set([...scenes.map(scene => scene.locationId), ...canonLocations])];
     const companionTemplates = entries
       .filter(entry => entry.kind === 'actor_template')
       .map(entry => {
@@ -794,6 +801,10 @@ export class CampaignSession {
     return this.encounters.getView(campaignId, branchId, encounterId);
   }
 
+  getActiveEncounter(campaignId: string, branchId: string): Promise<EncounterView | null> {
+    return this.encounters.getActiveEncounter(campaignId, branchId);
+  }
+
   encounterAttack(input: Parameters<EncounterService['playerAttack']>[0]): Promise<EncounterView> {
     return this.encounters.playerAttack(input);
   }
@@ -812,6 +823,10 @@ export class CampaignSession {
 
   encounterRetreat(input: Parameters<EncounterService['retreat']>[0]): Promise<EncounterView> {
     return this.encounters.retreat(input);
+  }
+
+  encounterPassTurn(input: Parameters<EncounterService['passTurn']>[0]): Promise<EncounterView> {
+    return this.encounters.passTurn(input);
   }
 }
 

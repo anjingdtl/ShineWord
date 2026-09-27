@@ -179,22 +179,36 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     const state = await input.store.getState(input.branchId);
     if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
 
-    budget.consume('Planner');
-    const planned = await input.provider.complete({
-      role: 'Planner',
-      system: plannerV2System(),
-      user: JSON.stringify({
-        turnId: input.turnId,
-        expectedStateVersion: state.stateVersion,
-        playerIntent: input.playerIntent,
-        worldContext: input.worldContext ?? '',
-      }),
-      maxOutputTokens: 1200,
-      jsonMode: true,
-    });
-    recordUsage(input, 'Planner', planned);
-    const proposal = parseStrictJsonObject<PlannerProposal>(planned.text, 'Planner proposal');
-    assertValidPlannerProposal(proposal);
+    // One repair round for malformed proposals (plan §13.1 step 8): a real
+    // model occasionally drops required keys; feeding the validator's errors
+    // back once recovers the turn instead of failing it outright. A second
+    // failure is final - the proposal channel stays strict.
+    const requestPlanner = async (repairErrors?: string[]): Promise<PlannerProposal> => {
+      budget.consume('Planner');
+      const planned = await input.provider.complete({
+        role: 'Planner',
+        system: plannerV2System(),
+        user: JSON.stringify({
+          turnId: input.turnId,
+          expectedStateVersion: state.stateVersion,
+          playerIntent: input.playerIntent,
+          worldContext: input.worldContext ?? '',
+          ...(repairErrors ? { repairInstructions: `Your previous proposal was rejected: ${repairErrors.join('; ')}. Output the corrected complete JSON proposal only.` } : {}),
+        }),
+        maxOutputTokens: 1200,
+        jsonMode: true,
+      });
+      recordUsage(input, 'Planner', planned);
+      return parseStrictJsonObject<PlannerProposal>(planned.text, 'Planner proposal');
+    };
+    let proposal = await requestPlanner();
+    try {
+      assertValidPlannerProposal(proposal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      proposal = await requestPlanner([message.replace(/\n/g, ' ').slice(0, 400)]);
+      assertValidPlannerProposal(proposal);
+    }
     if (proposal.turnId !== input.turnId) throw new Error('Planner turnId mismatch.');
     if (proposal.expectedStateVersion !== state.stateVersion) {
       throw new Error('Planner expectedStateVersion mismatch.');

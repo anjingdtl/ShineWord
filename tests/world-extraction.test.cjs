@@ -171,7 +171,7 @@ test('original character opening distributes 4 free points with single cap 3', (
   assert.equal(profile.attributes.physique, 2);
   assert.equal(profile.attributes.insight, 2);
   assert.equal(profile.attributes.willpower, 1);
-  assert.equal(snapshot.actors['actor-new'].locationId, 'opening-anchor');
+  assert.equal(snapshot.actors['actor-new'].locationId, 'unset');
 
   assert.throws(() => buildOpening({
     branchId: 'b1',

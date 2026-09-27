@@ -32,6 +32,12 @@ export interface OpeningRequest {
   freeAttributePoints?: Partial<Record<AttributeName, number>>;
   /** Canon characters: the entity to derive the opening state from. */
   canonEntity?: StoredEntity;
+  /**
+   * Player-chosen opening location (G02): used when the canon records no
+   * usable location fact for a canon character at the anchor, and as the
+   * original character's start location.
+   */
+  fallbackLocationId?: string;
 }
 
 export interface CanonContext {
@@ -88,14 +94,14 @@ export function buildOpening(
       actors: {
         [request.actorId]: {
           actorId: request.actorId,
-          locationId: 'opening-anchor',
+          locationId: request.fallbackLocationId ?? 'unset',
           resources: { hp: 10, stamina: 10 },
           conditions: [],
         },
       },
       itemOwners: {},
     };
-    return { profile, snapshot, startLocation: 'opening-anchor' };
+    return { profile, snapshot, startLocation: request.fallbackLocationId ?? 'unset' };
   }
 
   const entity = request.canonEntity;
@@ -117,7 +123,14 @@ export function buildOpening(
 
   const locationFact = subjectFacts.find(fact => fact.predicate === 'current_location')
     ?? subjectFacts.find(fact => fact.predicate === 'home_location');
-  const startLocation = locationFact ? factValueString(locationFact) : undefined;
+  // Conservative fallback (G02): when the novel records no location for this
+  // character at the anchor, the PLAYER-CHOSEN opening location stands in
+  // instead of blocking the opening. Evidence-backed locations always win.
+  const startLocation = locationFact
+    ? factValueString(locationFact)
+    : (request.fallbackLocationId && request.fallbackLocationId.trim().length > 0
+        ? request.fallbackLocationId.trim()
+        : undefined);
   if (!startLocation) {
     throw new Error(
       `Canon character ${entity.name} has no usable location fact at anchor ${anchorOrder}.`,

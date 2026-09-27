@@ -48,7 +48,7 @@ export async function createSession(
 }
 
 export async function buildProvider(profile: ApiProfile): Promise<OpenAICompatibleProvider> {
-  return new OpenAICompatibleProvider(profile, new KeychainSecretStore(), new FetchHttpTransport(), 120_000);
+  return new OpenAICompatibleProvider(profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000);
 }
 
 export async function listCampaigns(): Promise<CampaignListItem[]> {

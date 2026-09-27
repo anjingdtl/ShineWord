@@ -141,15 +141,23 @@ export class OpenAICompatibleProvider implements LlmProvider {
         body.thinking = { type: 'disabled' };
       }
 
-      const response = await this.transport.post({
-        url: normalizeEndpoint(this.profile.endpoint),
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
-        timeoutMs: this.timeoutMs,
-      });
+      let response;
+      try {
+        response = await this.transport.post({
+          url: normalizeEndpoint(this.profile.endpoint),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(body),
+          timeoutMs: this.timeoutMs,
+        });
+      } catch (error) {
+        if (error instanceof Error && /aborted?/i.test(error.name + error.message)) {
+          throw new Error(`LLM 请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`);
+        }
+        throw error;
+      }
 
       let parsed: OpenAIResponseShape;
       try {

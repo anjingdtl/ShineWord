@@ -156,7 +156,7 @@ export async function buildWorldOnDevice(
     profile,
     new KeychainSecretStore(),
     new FetchHttpTransport(),
-    120_000,
+    300_000,
   );
   const extractor = new LlmChunkExtractor(request => provider.complete(request));
 

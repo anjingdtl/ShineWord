@@ -439,6 +439,32 @@ export class EncounterService {
       `${actorCard.name} 援救了 ${targetCard.name}（恢复意识）。`, null, ctx.cards);
   }
 
+  /**
+   * Pass the current player-side main action (guard/observe): consumes the
+   * action economy and advances initiative. A character with no usable
+   * attack must still be able to yield its slot instead of deadlocking
+   * the round.
+   */
+  async passTurn(input: {
+    campaignId: string;
+    branchId: string;
+    encounterId: string;
+  }): Promise<EncounterView> {
+    const ctx = await this.context(input.campaignId, input.branchId, input.encounterId);
+    const currentActorId = currentActor(ctx.encounter);
+    const actorCard = ctx.cards.find(card => card.actorId === currentActorId);
+    if (!actorCard || actorCard.controller === 'gm') {
+      throw new Error('当前行动者不是玩家方角色。');
+    }
+    const actor = ctx.encounter.actors[currentActorId];
+    if (!actor || actor.actedThisRound) throw new Error('本回合的主要行动已用尽。');
+    markActed(ctx.encounter, currentActorId);
+    advanceInitiative(ctx.encounter);
+    await this.persist(input.branchId, ctx.encounter, ctx.zones, ctx.exits, ctx.zoneMap);
+    return this.buildView(ctx.encounter, ctx.zones, ctx.exits, ctx.zoneMap,
+      `${actorCard.name} 保持戒备，让出了行动机会。`, null, ctx.cards);
+  }
+
   /** Player retreat through a scene exit: the encounter ends as escaped. */
   async retreat(input: {
     campaignId: string;
@@ -458,6 +484,16 @@ export class EncounterService {
   async getView(campaignId: string, branchId: string, encounterId: string): Promise<EncounterView> {
     const ctx = await this.context(campaignId, branchId, encounterId);
     return this.buildView(ctx.encounter, ctx.zones, ctx.exits, ctx.zoneMap, null, null, ctx.cards);
+  }
+
+  /** The branch's ACTIVE encounter, if any (kill-process recovery for the UI). */
+  async getActiveEncounter(campaignId: string, branchId: string): Promise<EncounterView | null> {
+    const row = await this.deps.db.queryOne<{ encounter_id: string }>(
+      "SELECT encounter_id FROM encounters WHERE branch_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+      [branchId],
+    );
+    if (!row) return null;
+    return this.getView(campaignId, branchId, row.encounter_id);
   }
 
   // ----------------------------------------------------------------- helpers
