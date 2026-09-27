@@ -12,6 +12,7 @@ const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeSt
 const { forkBranch } = require('../dist/application/branch/fork');
 const { retrieveContext, shouldSummarize, buildSummaryRequest, SUMMARY_INTERVAL_TURNS } = require('../dist/application/memory/retrieval');
 const { exportSave, validateSaveJson, SAVE_SCHEMA_VERSION } = require('../dist/application/export/saveFile');
+const sha256HexForSave = input => sha.sha256Hex(input);
 const { runLlmTurn } = require('../dist/application/game/llmTurn');
 const { commitResolvedTurn } = require('../dist/application/turns/commitTurn');
 
@@ -67,6 +68,8 @@ function seedBranch(db, branchId, stateVersion = 0) {
       branchId, stateVersion, clockMinutes: 0,
       actors: { 'actor-player': { actorId: 'actor-player', locationId: 'start', resources: { hp: 10, stamina: 10 }, conditions: [] } },
       itemOwners: {},
+      skills: [],
+      relationships: [],
     }), '2026-09-27T00:00:00.000Z');
 }
 
@@ -75,8 +78,8 @@ test('game store persists skill practice with turn-id dedup and advancement', as
   try {
     seedBranch(db, 'b-skills');
     const store = new SqliteGameStore(new NodeSqliteAdapter(db));
-    let progress = { skillId: 'sword', rank: 'untrained', practicePoints: 0, awardedTurns: [] };
-    progress = { ...progress, practicePoints: 1, awardedTurns: ['turn-1'] };
+    let progress = { skillId: 'sword', rank: 'untrained', practicePoints: 0, awardedKeys: [] };
+    progress = { ...progress, practicePoints: 1, awardedKeys: ['enc-1:practice'] };
     await store.upsertSkillProgress('b-skills', 'actor-player', progress, 1);
 
     const loaded = await store.getSkillProgress('b-skills', 'actor-player', 'sword');
@@ -84,7 +87,7 @@ test('game store persists skill practice with turn-id dedup and advancement', as
 
     // Re-awarding the same turn changes nothing after reload.
     const { awardPractice } = require('../dist/domain/progression/growth');
-    const deduped = awardPractice(loaded, 'turn-1');
+    const deduped = awardPractice(loaded, 'enc-1');
     assert.equal(deduped, loaded);
   } finally {
     db.close();
@@ -99,7 +102,7 @@ test('fork copies state, skills and relationships; branches never leak into each
     const turnStore = new SqliteTurnStore(adapter);
     const gameStore = new SqliteGameStore(adapter);
 
-    await gameStore.upsertSkillProgress('main-b', 'actor-player', { skillId: 'sword', rank: 'trained', practicePoints: 3, awardedTurns: ['t1', 't2', 't3'] }, 0);
+    await gameStore.upsertSkillProgress('main-b', 'actor-player', { skillId: 'sword', rank: 'trained', practicePoints: 3, awardedKeys: ['e1', 'e2', 'e3'] }, 0);
     await gameStore.upsertRelationship({ branchId: 'main-b', relId: 'r1', fromActorId: 'actor-player', toActorId: 'npc-guard', stance: 'wary', closeness: -2, updatedTurnId: null }, 0);
 
     const forked = await forkBranch({
@@ -117,7 +120,7 @@ test('fork copies state, skills and relationships; branches never leak into each
     assert.equal(forked.copiedRelationships, 1);
 
     // Mutations on the fork never touch the source.
-    await gameStore.upsertSkillProgress('fork-b', 'actor-player', { skillId: 'sword', rank: 'expert', practicePoints: 0, awardedTurns: [] }, 1);
+    await gameStore.upsertSkillProgress('fork-b', 'actor-player', { skillId: 'sword', rank: 'expert', practicePoints: 0, awardedKeys: [] }, 1);
     await gameStore.upsertRelationship({ branchId: 'fork-b', relId: 'r1', fromActorId: 'actor-player', toActorId: 'npc-guard', stance: 'friendly', closeness: 3, updatedTurnId: 't9' }, 1);
 
     const mainSkills = await gameStore.listSkillProgress('main-b', 'actor-player');
@@ -248,17 +251,24 @@ test('save export contains no secrets and import validation rejects tampered fil
     assert.equal(parsed.manifest.worldRef.sourceSha256, 'a'.repeat(64));
     assert.ok(!json.toLowerCase().includes('apikey'), 'no api key material in export');
 
-    const valid = validateSaveJson(json);
+    const valid = await validateSaveJson(json, sha256HexForSave);
     assert.equal(valid.ok, true);
 
-    const badSchema = validateSaveJson(JSON.stringify({ ...parsed, manifest: { ...parsed.manifest, schemaVersion: 'x' } }));
+    const badSchema = await validateSaveJson(JSON.stringify({ ...parsed, manifest: { ...parsed.manifest, schemaVersion: 'x' } }), sha256HexForSave);
     assert.equal(badSchema.ok, false);
 
-    const secret = validateSaveJson(JSON.stringify({ ...parsed, apiKey: 'sk-leak' }));
+    const secret = await validateSaveJson(JSON.stringify({ ...parsed, apiKey: 'sk-leak' }), sha256HexForSave);
     assert.equal(secret.ok, false);
     assert.ok(secret.errors.some(error => /forbidden key/i.test(error)));
 
-    assert.equal(validateSaveJson('not json').ok, false);
+    assert.equal((await validateSaveJson('not json', sha256HexForSave)).ok, false);
+
+    // Tampering with the payload must break the manifest digest.
+    const tampered = JSON.parse(json);
+    tampered.state.clockMinutes = 9999;
+    const tamperCheck = await validateSaveJson(JSON.stringify(tampered), sha256HexForSave);
+    assert.equal(tamperCheck.ok, false);
+    assert.ok(tamperCheck.errors.some(error => /digest mismatch/i.test(error)));
   } finally {
     db.close();
   }
@@ -328,7 +338,7 @@ test('100-turn long-range campaign stays consistent; rewind keeps original branc
     seedBranch(db, 'main-100');
     const adapter = new NodeSqliteAdapter(db);
     const gameStore = new SqliteGameStore(adapter);
-    await gameStore.upsertSkillProgress('main-100', 'actor-player', { skillId: 'sword', rank: 'trained', practicePoints: 0, awardedTurns: [] }, 0);
+    await gameStore.upsertSkillProgress('main-100', 'actor-player', { skillId: 'sword', rank: 'trained', practicePoints: 0, awardedKeys: [] }, 0);
 
     for (let i = 1; i <= 100; i += 1) {
       const result = await runTurn(adapter, 'main-100', i);

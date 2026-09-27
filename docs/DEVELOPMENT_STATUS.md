@@ -123,6 +123,58 @@
 
 20/20 回归项 + 12/12 人工审查项全部通过（详见 `docs/reviews/FINAL_REGRESSION.md`）：确定性概率、恢复、分支隔离、时间/知识泄漏、100 回合长程（本地 + 真实 GLM）、TXT 导入与真实《白篱梦》100 万字、证据定位、Canon 测试集、导出/导入、秘密扫描、debug 构建、双构建模拟器冒烟（release 离线 + debug Metro + run-as DB 校验）、release 签名核查、CI 绿（deterministic-core + android-debug）。README 已更新至 Alpha 状态。
 
+## 当前阶段（二阶段）
+
+### P2-0 基线整改 — ✅ 完成（模块 + App 接入 + 模拟器通过）
+
+- [x] 历史回退：完整快照（skills/relationships 每次提交盖入）+ fork 从分叉点单事务恢复；遗留快照拒绝伪造历史。
+- [x] 分支 Canon 覆盖层 `branch_canon_overrides`（迁移 005）：`canon_events.status` 永不被分支改写；`listEvents(branchId)` 合成分支状态。
+- [x] 开局时间锚点强制 + validFrom/validTo/revealAt 三重过滤 + 证据可见性约束映射（后期技能无法漏进早期开局）。
+- [x] 成长重做：去重键 `(branch, encounter, actor, skill, kind)` + `reward_ledger` 硬防双奖（同事务中止）；满阈值仅"可训练"，晋阶须显式训练（导师/资源/前置）；里程碑 1～2 练习点。
+- [x] 结算原子化：奖励/技能/关系/战利品与回合同一 SQLite 事务，快照结算后盖章。
+- [x] 端上解码：分块 UTF-8（Hermes 安全）+ 生成式 GBK 表（23940 码全表对照 0 误差）+ UTF-16；同源哈希世界自动续建。
+- [x] 存档 v2：canonical payload 摘要、完整校验、`restoreSave` 单事务恢复为新战役（依赖/哈希显式校验）。
+- [x] 回归：核心测试 88/88 → 后续累计 104/104。
+
+### P2-1 世界包与三宝书 — ✅ 完成（模块 + App 接入 + 模拟器通过）
+
+- [x] 内容模型：11 类条目、条目/字段级 provenance（explicit/inferred/rule_mapping/design_fill/user_override）、三级可见性。
+- [x] 发布验证器：逐 kind 校验、悬空依赖/依赖环拒绝、战斗数值完整门槛；发布不可变 revision，blocking 冲突禁止发布。
+- [x] 三宝书 = 同一包三个视图（player_handbook / gm_guide / monster_manual），同一技能全库单源。
+
+### P2-2 建卡与真实战役 — ✅ 完成（模块 + App 接入 + 模拟器通过）
+
+- [x] 统一 ActorCard（玩家/同伴/NPC/生物）；原创卡预算硬约束（4 自由点/单项 3 上限/3 技能/4 准备槽）。
+- [x] `createCampaign` 单事务：依赖锁、开局锚点、队伍、卡片、资源、主目标、首分支、完整快照；依赖缺失显式失败，无演示回退。
+- [x] `CampaignSession`：显式 campaignId/branchId；**demo-main 固定上下文/固定 2d8/固定属性已全部移除**；骰点完全由角色卡 + 世界技能目录驱动。
+- [x] 移动端重构：书架（逐分支）→ 三宝书阅读（来源标签）→ 开局向导 → 剧情页（行动/休整/训练/回退）。
+
+### P2-3 规则闭环 — ✅ 模块完成 + 部分设备验收
+
+- [x] 世界钟 clockSeconds；V0.2 效果白名单（restoreResource+cap、引擎专用 removeCondition/grantItem）；合同来源区分（planner/engine）。
+- [x] 遭遇流程：冻结先攻（敏捷→洞察→稳定 ID）、区域距离带、NPC 确定性策略、一次性战利品。
+- [x] 设备端：休整/训练门禁/回退/恢复实测通过；敌对遭遇的设备端完整触发未实测（模块级测试覆盖），列入 Beta。
+
+### P2-4 小说自动三书 — ✅ 完成（模块 + App 接入 + 模拟器通过）
+
+- [x] WorldMapper 管线：严格 JSON、枚举白名单、数值字段强制 rule_mapping 标注；本地清洗；design_fill 兜底（明确标注）；冲突 blocking 阻止发布；LLM 畸形自动降级可发布。
+- [x] 端上接入：抽取 → 映射 → 发布 → 书架三书/开局全链路。
+
+### 模拟器实测（Medium_Phone / API 37.1，真实 GLM-5.3-Flash）
+
+- [x] 自创小说全流程：导入 → 构建 → 三宝书 → 建卡 → 开局 → 行动（3d6 卡片驱动）→ 休整 → 训练门禁 → 回退 → 杀进程恢复 → 双游戏隔离（证据：DB 快照 + 截图，见 `docs/reviews/P2_REVIEW.md`）。
+- [x] 《白篱梦》前 10 章：26 块抽取、158 实体/211 事实、发布 r1、4 个 major 审核项如实拦截。
+- [x] 《白篱梦》中断续建：失败重入复用全部成果；全书 100 万字（944 块）推进 45 块后杀进程进度保留、续建无重跑（全书完整抽取约需 4 小时模型时间，机制已验证）。
+- [x] GBK 小说端上完整构建（一期限制解除）。
+
+回归结果：Core tests 104/104、core + mobile typecheck PASS、`:app:assembleDebug`/`:app:assembleRelease` BUILD SUCCESSFUL。
+
+### 交付物与已知限制
+
+- 交付：`dist/apk/debug/ShineWord-V0.2.0-p2.1-debug.apk`（全部模拟器验收基于它）。
+- 未验收（如实标注）：Release 签名 APK 未重建（`SHINEWORD_RELEASE_*` 口令仅维护者掌握；`assembleRelease` 打包链路已编译验证，注入口令即可出包）；设备端敌对遭遇完整剧本、存档导出/导入 UI 入口（领域闭环已测试）、真机/minSdk 24 环境未验收。
+- 详细缺陷修复记录与证据索引：`docs/reviews/P2_REVIEW.md`。
+
 ## 本地验证命令
 
 ```bash
@@ -130,7 +182,11 @@ npm install
 npm run verify:core
 
 cd mobile && npm install && npm run typecheck
-gradle -p mobile/android :app:assembleDebug   # 或 CI 同版本 Gradle 9.3.1
+# Windows: 使用 wrapper 缓存 Gradle 9.3.1
+gradle -p mobile/android :app:assembleDebug
+# Release 签名包（需维护者环境）:
+#   SHINEWORD_RELEASE_STORE_PASS / SHINEWORD_RELEASE_KEY_PASS 注入后
+#   gradle -p mobile/android :app:assembleRelease
 ```
 
-M1~M5 已具备：无 LLM 确定性内核 + 安卓 LLM 闭环 + 原著世界构建 + 完整游戏系统（成长/战斗/关系/记忆/分支/导出）+ Alpha 工程化（多 Provider/容错/性能基线/签名交付）。下一步进入最终回归与文档收口。
+M1~M5 + P2-0~P2-4 已具备：无 LLM 确定性内核 + 安卓 LLM 闭环 + 原著世界构建 + 完整游戏系统 + Alpha 工程化 + 二阶段世界包/三宝书/角色卡战役/自动三书。下一步：P2-5 编辑与迁移交付、P2-6 Beta 验收（长程/多模型/设备性能/故障注入收口）。

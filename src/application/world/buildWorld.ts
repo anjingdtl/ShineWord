@@ -32,7 +32,7 @@ export interface BuildWorldResult {
   worldId: string;
   parsed: ParsedTxtSource;
   entityCount: number;
-  factCounts: { inserted: number; duplicate: number; conflict: number };
+  factCounts: { inserted: number; duplicate: number; conflict: number; total: number };
   eventCount: number;
   rejectedCount: number;
   failedChunks: string[];
@@ -274,12 +274,25 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
   }, now());
 
   await store.setWorldStatus(worldId, 'ready', now());
+  // Totals read back from the store so a RESUMED build reports the world's
+  // cumulative content, not just this run's delta (which is 0 when every
+  // chunk was reused).
+  const [totalEntities, totalFacts, totalEvents] = await Promise.all([
+    store.listEntities(worldId),
+    store.listFacts(worldId),
+    store.listEvents(worldId),
+  ]);
   return {
     worldId,
     parsed,
-    entityCount: entityIds.size,
-    factCounts,
-    eventCount: eventIds.size,
+    entityCount: totalEntities.length,
+    factCounts: {
+      inserted: factCounts.inserted,
+      duplicate: factCounts.duplicate,
+      conflict: factCounts.conflict,
+      total: totalFacts.length,
+    },
+    eventCount: totalEvents.length,
     rejectedCount: rejected.length,
     failedChunks,
     reusedJobs,

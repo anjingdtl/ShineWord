@@ -134,8 +134,9 @@ export interface WorldStore {
   listFacts(worldId: string): Promise<StoredFact[]>;
 
   saveEvent(event: StoredEvent, createdAt: string): Promise<void>;
-  listEvents(worldId: string): Promise<StoredEvent[]>;
-  markEventsPendingAfter(worldId: string, anchorEventId: string): Promise<number>;
+  listEvents(worldId: string, branchId?: string): Promise<StoredEvent[]>;
+  /** Branch-scoped divergence overlay; never rewrites shared canon_events. */
+  markEventsPendingAfter(worldId: string, anchorEventId: string, branchId: string): Promise<number>;
 
   saveRuleMapping(mapping: StoredRuleMapping, createdAt: string): Promise<void>;
   listRuleMappings(worldId: string): Promise<StoredRuleMapping[]>;

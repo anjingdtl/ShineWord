@@ -101,7 +101,7 @@ export class SqliteGameStore {
       skillId: row.skill_id,
       rank: row.rank as SkillRank,
       practicePoints: row.practice_points,
-      awardedTurns: JSON.parse(row.awarded_turns_json) as string[],
+      awardedKeys: JSON.parse(row.awarded_turns_json) as string[],
     };
   }
 
@@ -114,7 +114,7 @@ export class SqliteGameStore {
       skillId: row.skill_id,
       rank: row.rank as SkillRank,
       practicePoints: row.practice_points,
-      awardedTurns: JSON.parse(row.awarded_turns_json) as string[],
+      awardedKeys: JSON.parse(row.awarded_turns_json) as string[],
     }));
   }
 
@@ -127,7 +127,7 @@ export class SqliteGameStore {
          practice_points = excluded.practice_points,
          awarded_turns_json = excluded.awarded_turns_json,
          state_version = excluded.state_version`,
-      [branchId, actorId, progress.skillId, progress.rank, progress.practicePoints, JSON.stringify(progress.awardedTurns), stateVersion],
+      [branchId, actorId, progress.skillId, progress.rank, progress.practicePoints, JSON.stringify(progress.awardedKeys), stateVersion],
     );
   }
 

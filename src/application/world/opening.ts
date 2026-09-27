@@ -22,6 +22,12 @@ export interface OpeningRequest {
   actorId: string;
   displayName: string;
   kind: 'canon' | 'original';
+  /**
+   * Opening world-time anchor. Canon openings MUST provide it: facts and rule
+   * mappings are filtered through this anchor, so a character cannot begin
+   * with abilities they will only gain later in the story.
+   */
+  worldTimeOrder?: number;
   /** Original characters: free points distributed over base 1, single cap 3. */
   freeAttributePoints?: Partial<Record<AttributeName, number>>;
   /** Canon characters: the entity to derive the opening state from. */
@@ -94,17 +100,45 @@ export function buildOpening(
 
   const entity = request.canonEntity;
   if (!entity) throw new Error('Canon opening requires a canon entity.');
+  if (request.worldTimeOrder === undefined || !Number.isFinite(request.worldTimeOrder)) {
+    throw new Error('Canon opening requires a finite worldTimeOrder anchor.');
+  }
+  const anchorOrder = request.worldTimeOrder;
 
-  const subjectFacts = context.facts.filter(
-    fact => fact.subjectEntityId === entity.entityId && fact.status !== 'speculation' && fact.status !== 'conflict',
+  // Time-anchored, validity-windowed fact filtering: facts that have not
+  // happened yet or have expired at the anchor never shape the opening.
+  const visibleFacts = canonFactsVisibleAt(
+    context.facts.filter(fact => fact.subjectEntityId === entity.entityId),
+    anchorOrder,
+  );
+  const subjectFacts = visibleFacts.filter(
+    fact => fact.status !== 'speculation' && fact.status !== 'conflict',
   );
 
   const locationFact = subjectFacts.find(fact => fact.predicate === 'current_location')
     ?? subjectFacts.find(fact => fact.predicate === 'home_location');
   const startLocation = locationFact ? factValueString(locationFact) : undefined;
   if (!startLocation) {
-    throw new Error(`Canon character ${entity.name} has no usable location fact for opening.`);
+    throw new Error(
+      `Canon character ${entity.name} has no usable location fact at anchor ${anchorOrder}.`,
+    );
   }
+
+  // Rule mappings carry no time bounds of their own; they are only usable at
+  // the anchor when EVERY cited evidence fact is visible there. This blocks
+  // late-story abilities leaking into an early opening.
+  const evidenceVisibleAtAnchor = new Map(
+    context.facts.map(fact => [fact.factId, fact]),
+  );
+  const factVisibleCache = new Map<string, boolean>();
+  const isFactVisible = (factId: string): boolean => {
+    const cached = factVisibleCache.get(factId);
+    if (cached !== undefined) return cached;
+    const fact = evidenceVisibleAtAnchor.get(factId);
+    const visible = fact ? isFactVisibleAtAnchor(fact, anchorOrder) : false;
+    factVisibleCache.set(factId, visible);
+    return visible;
+  };
 
   const skillRanks: Record<string, SkillRank> = {};
   const evidenceFactIds: string[] = [];
@@ -114,6 +148,7 @@ export function buildOpening(
     const rank = mapping.mapping.rank;
     const evidence = mapping.evidenceRefs;
     if (!skillId) continue;
+    if (!evidence.every(factId => isFactVisible(factId))) continue;
     if (rank === 'untrained' || rank === 'novice' || rank === 'trained' || rank === 'expert' || rank === 'master') {
       skillRanks[skillId] = rank;
     }
@@ -125,7 +160,8 @@ export function buildOpening(
     const attributeMapping = context.mappings.find(
       mapping => mapping.targetEntityId === entity.entityId
         && mapping.mappingKind === 'attribute'
-        && mapping.mapping.attribute === name,
+        && mapping.mapping.attribute === name
+        && mapping.evidenceRefs.every(factId => isFactVisible(factId)),
     );
     const value = attributeMapping?.mapping.value;
     if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 3) {
@@ -163,6 +199,30 @@ export function buildOpening(
   return { profile, snapshot, startLocation };
 }
 
+function parseOrder(raw: string | null): number | null {
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Time-windowed visibility at one world-time anchor:
+ * - `validFrom > anchor` → the fact does not hold yet;
+ * - `validTo < anchor` → the fact has already stopped holding;
+ * - `revealAt > anchor` → the story has not revealed it yet (foresight block).
+ * Unparseable bounds are treated as unbounded (visible) — the extraction
+ * pipeline stores numeric world-time orders as strings.
+ */
+export function isFactVisibleAtAnchor(fact: StoredFact, worldTimeOrder: number): boolean {
+  const from = parseOrder(fact.validFrom);
+  if (from !== null && from > worldTimeOrder) return false;
+  const to = parseOrder(fact.validTo);
+  if (to !== null && to < worldTimeOrder) return false;
+  const reveal = parseOrder(fact.revealAt);
+  if (reveal !== null && reveal > worldTimeOrder) return false;
+  return true;
+}
+
 /**
  * Divergence rule: once the game starts, canon events strictly after the
  * anchor become candidate outcomes ('pending'), not guaranteed history.
@@ -172,10 +232,5 @@ export function canonFactsVisibleAt(
   facts: readonly StoredFact[],
   worldTimeOrder: number,
 ): StoredFact[] {
-  return facts.filter(fact => {
-    if (fact.validFrom === null) return true;
-    const from = Number.parseInt(fact.validFrom, 10);
-    if (Number.isNaN(from)) return true;
-    return from <= worldTimeOrder;
-  });
+  return facts.filter(fact => isFactVisibleAtAnchor(fact, worldTimeOrder));
 }

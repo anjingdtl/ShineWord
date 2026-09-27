@@ -247,8 +247,29 @@ test('canon character opening derives location and only mapped skills, never spe
     actorId: 'actor-chen',
     displayName: '陈青云',
     kind: 'canon',
+    worldTimeOrder: 5,
     canonEntity: entity,
   }, { facts: [locationFact, speculatedSkillFact], mappings });
+
+  // Missing anchor: canon openings are refused instead of silently reading
+  // the whole timeline.
+  assert.throws(
+    () => buildOpening({
+      branchId: 'b-canon', actorId: 'actor-chen', displayName: '陈青云',
+      kind: 'canon', canonEntity: entity,
+    }, { facts: [locationFact], mappings }),
+    /worldTimeOrder/,
+  );
+
+  // Late-story evidence cannot leak into an early anchor: the sword mapping
+  // cites a fact only valid from order 8, so at anchor 5 the skill is gone.
+  const lateEvidence = { ...locationFact, factId: 'f-late-sword', validFrom: '8' };
+  const lateMapping = { ...mappings[0], evidenceRefs: ['f-late-sword'] };
+  const early = buildOpening({
+    branchId: 'b-canon', actorId: 'actor-chen', displayName: '陈青云',
+    kind: 'canon', worldTimeOrder: 5, canonEntity: entity,
+  }, { facts: [locationFact, lateEvidence], mappings: [lateMapping] });
+  assert.deepEqual(early.profile.skillRanks, {}, 'evidence after the anchor grants nothing');
 
   assert.equal(startLocation, '黑风客栈');
   assert.equal(snapshot.actors['actor-chen'].locationId, '黑风客栈');
@@ -256,7 +277,13 @@ test('canon character opening derives location and only mapped skills, never spe
   assert.equal(profile.attributes.physique, 1, 'unmapped attributes default to base 1');
   assert.ok(profile.evidenceFactIds.includes('f-loc'));
 
-  // Temporal filter: future facts are invisible at earlier world time.
+  // Temporal filter: future facts are invisible at earlier world time, and
+  // expired facts (validTo in the past) are invisible at later times.
   const futureFact = { ...locationFact, factId: 'f-future', validFrom: '10' };
   assert.deepEqual(canonFactsVisibleAt([locationFact, futureFact], 3), [locationFact]);
+  const expiredFact = { ...locationFact, factId: 'f-expired', validTo: '2' };
+  assert.deepEqual(canonFactsVisibleAt([locationFact, expiredFact], 3), [locationFact]);
+  // Not-yet-revealed facts stay hidden (foresight block).
+  const unrevealedFact = { ...locationFact, factId: 'f-secret', revealAt: '9' };
+  assert.deepEqual(canonFactsVisibleAt([locationFact, unrevealedFact], 3), [locationFact]);
 });

@@ -1,4 +1,9 @@
-import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
+import {
+  cloneGameState,
+  type GameStateSnapshot,
+  type RelationshipSnapshotEntry,
+  type SkillSnapshotEntry,
+} from '../../domain/state/types';
 import type { SqliteDatabase } from '../ports/sqlite';
 import type { TurnStore } from '../ports/turnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
@@ -20,6 +25,8 @@ export interface ForkBranchResult {
   snapshot: GameStateSnapshot;
   copiedSkills: number;
   copiedRelationships: number;
+  /** True when the fork point snapshot carried a complete skill/relationship history. */
+  historyComplete: boolean;
 }
 
 /**
@@ -28,19 +35,28 @@ export interface ForkBranchResult {
  * Any UNRESOLVED turn on the source branch stays there: its persisted roll
  * belongs to the source branch and can never leak into or re-roll on the new
  * branch.
+ *
+ * Phase 2 correctness rules:
+ * - Skills, relationships and every other authoritative projection are
+ *   restored FROM THE FORK-POINT SNAPSHOT inside the branch-creation
+ *   transaction — never copied from the source branch's current rows.
+ * - Phase-2 snapshots are complete. Legacy snapshots (no skills/relationships)
+ *   can only be forked at their head (where current rows are correct); a
+ *   historical legacy fork refuses instead of fabricating history.
  */
 export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResult> {
-  const { db, turnStore, gameStore } = input;
+  const { db, turnStore } = input;
   const sourceState = await turnStore.getState(input.sourceBranchId);
   if (!sourceState) throw new Error(`Unknown source branch: ${input.sourceBranchId}.`);
 
+  const atHead = input.atStateVersion === undefined || input.atStateVersion === sourceState.stateVersion;
   let snapshot: GameStateSnapshot;
-  if (input.atStateVersion === undefined || input.atStateVersion === sourceState.stateVersion) {
+  if (atHead) {
     snapshot = cloneGameState(sourceState);
   } else {
     const row = await db.queryOne<{ snapshot_json: string }>(
       'SELECT snapshot_json FROM snapshots WHERE branch_id = ? AND state_version = ?',
-      [input.sourceBranchId, input.atStateVersion],
+      [input.sourceBranchId, input.atStateVersion!],
     );
     if (!row) {
       throw new Error(
@@ -50,12 +66,23 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     snapshot = cloneGameState(JSON.parse(row.snapshot_json) as GameStateSnapshot);
   }
 
+  const historyComplete = Array.isArray(snapshot.skills) && Array.isArray(snapshot.relationships);
+  if (!historyComplete && !atHead) {
+    throw new Error(
+      `Legacy snapshot at version ${input.atStateVersion} lacks skill/relationship history; ` +
+        'a historical fork would fabricate progress. Continue the branch read-only or create a new Phase-2 baseline.',
+    );
+  }
+
   const existing = await db.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [input.targetBranchId]);
   if (existing) throw new Error(`Target branch already exists: ${input.targetBranchId}.`);
 
   snapshot.branchId = input.targetBranchId;
   const targetStateVersion = snapshot.stateVersion;
+  const skills: SkillSnapshotEntry[] = snapshot.skills ?? [];
+  const relationships: RelationshipSnapshotEntry[] = snapshot.relationships ?? [];
 
+  // Branch creation and ALL authoritative projections commit atomically.
   await db.transaction(async tx => {
     await tx.execute(
       `INSERT INTO branches (branch_id, campaign_id, parent_branch_id, fork_turn_id, state_version, created_at)
@@ -75,6 +102,20 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         [input.targetBranchId, itemId, owner, targetStateVersion],
       );
     }
+    for (const skill of skills) {
+      await tx.execute(
+        `INSERT INTO actor_skills (branch_id, actor_id, skill_id, rank, practice_points, awarded_turns_json, state_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [input.targetBranchId, skill.actorId, skill.skillId, skill.rank, skill.practicePoints, JSON.stringify(skill.awardedKeys), targetStateVersion],
+      );
+    }
+    for (const rel of relationships) {
+      await tx.execute(
+        `INSERT INTO relationships (branch_id, rel_id, from_actor_id, to_actor_id, stance, closeness, updated_turn_id, state_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [input.targetBranchId, rel.relId, rel.fromActorId, rel.toActorId, rel.stance, rel.closeness, rel.updatedTurnId, targetStateVersion],
+      );
+    }
     await tx.execute(
       `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
        VALUES (?, ?, ?, NULL, ?)`,
@@ -82,27 +123,28 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     );
   });
 
-  const copiedSkills = await gameStore.copySkills(input.sourceBranchId, input.targetBranchId);
-  await gameStore.copyRelationships(input.sourceBranchId, input.targetBranchId);
-
   return {
     snapshot,
-    copiedSkills,
-    copiedRelationships: (await gameStore.listRelationships(input.targetBranchId)).length,
+    copiedSkills: skills.length,
+    copiedRelationships: relationships.length,
+    historyComplete,
   };
 }
 
 /**
- * Marks canonical events after the fork anchor as pending for this branch —
+ * Marks canonical events after the fork anchor as pending FOR THIS BRANCH —
  * entering the game diverges the world; original-story events after the
- * anchor become candidate outcomes, not guaranteed history.
+ * anchor become candidate outcomes, not guaranteed history. The shared
+ * canon_events table is never modified; the overlay is branch-scoped so two
+ * campaigns of the same novel stay isolated.
  */
 export async function markDivergence(
   worldStore: {
-    markEventsPendingAfter(worldId: string, anchorEventId: string): Promise<number>;
+    markEventsPendingAfter(worldId: string, anchorEventId: string, branchId: string): Promise<number>;
   },
   worldId: string,
   anchorEventId: string,
+  branchId: string,
 ): Promise<number> {
-  return worldStore.markEventsPendingAfter(worldId, anchorEventId);
+  return worldStore.markEventsPendingAfter(worldId, anchorEventId, branchId);
 }

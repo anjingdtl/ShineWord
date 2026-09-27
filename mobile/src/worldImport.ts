@@ -5,6 +5,8 @@ import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 import { getDatabaseRuntime } from './database';
 import { nativeSha256 } from './nativeCrypto';
+import { mobileTextDecoder } from './textDecode';
+import { buildPackageFromCanon } from '../../src/application/worldPackage/buildPackageFromCanon';
 import type { ApiProfile } from '../../src/application/llm/types';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { KeychainSecretStore } from './secureKeyStore';
@@ -21,66 +23,13 @@ const bytesSha = {
   sha256Hex: nativeSha256.sha256Hex,
 };
 
-const decoder = {
-  decode(bytes: Uint8Array, encoding: string): string {
-    // The file bridge decodes nothing; Android novels are UTF-8 or GBK.
-    // Hermes lacks TextDecoder, so the bridge hands back raw bytes and we
-    // decode UTF-8 here; GBK novels must be converted before import on device.
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 1) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    if (encoding !== 'utf-8' && encoding !== 'utf-8-sig') {
-      throw new Error(
-        `此文件编码为 ${encoding}，当前设备版本仅支持 UTF-8。请先转换编码再导入。`,
-      );
-    }
-    return decodeUtf8(binary);
-  },
-};
-
-function decodeUtf8(binary: string): string {
-  // Manual UTF-8 decode over charcodes (Hermes has no TextDecoder).
-  const out: number[] = [];
-  let i = 0;
-  while (i < binary.length) {
-    const b1 = binary.charCodeAt(i);
-    if (b1 < 0x80) {
-      out.push(b1);
-      i += 1;
-    } else if (b1 >= 0xc2 && b1 <= 0xdf) {
-      out.push(((b1 & 0x1f) << 6) | (binary.charCodeAt(i + 1) & 0x3f));
-      i += 2;
-    } else if (b1 >= 0xe0 && b1 <= 0xef) {
-      out.push(
-        ((b1 & 0x0f) << 12) |
-          ((binary.charCodeAt(i + 1) & 0x3f) << 6) |
-          (binary.charCodeAt(i + 2) & 0x3f),
-      );
-      i += 3;
-    } else if (b1 >= 0xf0 && b1 <= 0xf4) {
-      out.push(
-        ((b1 & 0x07) << 18) |
-          ((binary.charCodeAt(i + 1) & 0x3f) << 12) |
-          ((binary.charCodeAt(i + 2) & 0x3f) << 6) |
-          (binary.charCodeAt(i + 3) & 0x3f),
-      );
-      i += 4;
-    } else {
-      out.push(0xfffd);
-      i += 1;
-    }
-  }
-  return String.fromCodePoint(...out);
-}
-
 export interface ImportPreview {
   parsed: ParsedTxtSource;
   title: string;
 }
 
 export async function previewNovel(bytes: Uint8Array, fallbackTitle: string): Promise<ImportPreview> {
-  const parsed = await importTxtSource(bytes, bytesSha, decoder);
+  const parsed = await importTxtSource(bytes, bytesSha, mobileTextDecoder);
   return { parsed, title: fallbackTitle };
 }
 
@@ -101,6 +50,33 @@ export interface BuiltWorldSummary {
   eventCount: number;
   failedChunks: number;
   rejected: number;
+  /** True when an existing world with the same source hash was resumed. */
+  resumed: boolean;
+  /** Published three-book package revision (0 = not published). */
+  packageRevision: number;
+  /** Open review issues generated during mapping. */
+  reviewIssues: number;
+}
+
+export interface WorldLibraryEntry {
+  worldId: string;
+  title: string;
+  sourceSha256: string;
+  buildStatus: string;
+  updatedAt: string;
+}
+
+/** Bookshelf: every imported novel on this device. */
+export async function listWorlds(): Promise<WorldLibraryEntry[]> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  return worldStore.listWorlds();
+}
+
+/** Finds an existing world built from the same source bytes (resume target). */
+async function findWorldBySourceHash(sourceSha256: string): Promise<WorldLibraryEntry | null> {
+  const worlds = await listWorlds();
+  return worlds.find(world => world.sourceSha256 === sourceSha256) ?? null;
 }
 
 function makeTitleFromText(parsed: ParsedTxtSource, fallback: string): string {
@@ -121,6 +97,13 @@ export async function buildWorldOnDevice(
   const preview = await previewNovel(bytes, fallbackTitle);
   const title = makeTitleFromText(preview.parsed, fallbackTitle);
 
+  // Resume: the same source bytes continue the existing world instead of
+  // cloning a new one. Successful chunk extractions are reused by content
+  // hash, so a killed process or a re-import never re-pays for finished work.
+  const existing = await findWorldBySourceHash(preview.parsed.sourceSha256Hex);
+  const worldId = existing?.worldId ?? `world-${Date.now().toString(36)}`;
+  const resumed = Boolean(existing);
+
   const provider = new OpenAICompatibleProvider(
     profile,
     new KeychainSecretStore(),
@@ -129,17 +112,34 @@ export async function buildWorldOnDevice(
   );
   const extractor = new LlmChunkExtractor(request => provider.complete(request));
 
-  const worldId = `world-${Date.now().toString(36)}`;
   const result = await buildWorldFromTxt({
     worldId,
     title,
     bytes,
     store: worldStore,
     sha: bytesSha,
-    decoder,
+    decoder: mobileTextDecoder,
     extractor,
     concurrency: 1,
     modelFingerprint: `${profile.endpoint}#${profile.model}`,
+  });
+
+  // Phase 2: after extraction, map canon facts into a world package and
+  // publish the three-book revision (P2-4). Conflicts surface as review
+  // issues; a blocking conflict stops publication with an explicit error.
+  onProgress({ phase: 'extracting', message: '事实抽取完成，正在映射三宝书…' });
+  const world = await worldStore.getWorld(worldId);
+  const pkg = await buildPackageFromCanon({
+    worldStore,
+    provider: {
+      // The mapper always speaks as WorldMapper; adapter aligns the role type.
+      complete: async request => provider.complete({ ...request, role: 'WorldMapper', maxOutputTokens: request.maxOutputTokens ?? 6000 }),
+    },
+    sha256Hex: nativeSha256.sha256Hex,
+    worldId,
+    sourceSha256: world?.sourceSha256 ?? preview.parsed.sourceSha256Hex,
+    mappingVersion: `mapper-1#${profile.model}`,
+    createdAt: new Date().toISOString(),
   });
 
   onProgress({ phase: 'done' });
@@ -149,9 +149,12 @@ export async function buildWorldOnDevice(
     chapterCount: result.parsed.chapters.length,
     chunkCount: result.parsed.chunks.length,
     entityCount: result.entityCount,
-    factCount: result.factCounts.inserted + result.factCounts.duplicate,
+    factCount: result.factCounts.total ?? result.factCounts.inserted + result.factCounts.duplicate,
     eventCount: result.eventCount,
     failedChunks: result.failedChunks.length,
     rejected: result.rejectedCount,
+    resumed,
+    packageRevision: pkg.manifest.revision,
+    reviewIssues: pkg.reviewIssues,
   };
 }

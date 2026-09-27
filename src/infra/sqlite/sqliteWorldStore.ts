@@ -3,6 +3,7 @@ import type {
   FactStatus,
   ParsedTxtSource,
 } from '../../domain/world/types';
+import type { BookSection, ContentEntry, WorldPackageManifest } from '../../domain/content/types';
 import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
 import type {
   FactSourceSpan,
@@ -221,6 +222,22 @@ export class SqliteWorldStore implements WorldStore {
       'UPDATE worlds SET build_status = ?, updated_at = ? WHERE world_id = ?',
       [status, updatedAt, worldId],
     );
+  }
+
+  /** Bookshelf listing: every imported world, newest update first. */
+  async listWorlds(): Promise<WorldRecord[]> {
+    const rows = await this.db.queryAll<WorldRow>('SELECT * FROM worlds ORDER BY updated_at DESC');
+    return rows.map(row => ({
+      worldId: row.world_id,
+      title: row.title,
+      sourceSha256: row.source_sha256,
+      sourceBytes: row.source_bytes,
+      normalizeVersion: row.normalize_version,
+      chapterSplitVersion: row.chapter_split_version,
+      buildStatus: row.build_status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   async saveImportedSource(worldId: string, parsed: ParsedTxtSource, createdAt: string): Promise<void> {
@@ -588,7 +605,7 @@ export class SqliteWorldStore implements WorldStore {
     });
   }
 
-  async listEvents(worldId: string): Promise<StoredEvent[]> {
+  async listEvents(worldId: string, branchId?: string): Promise<StoredEvent[]> {
     const rows = await this.db.queryAll<EventRow>(
       `SELECT event_id, title, summary, world_time_order, narrative_chapter_id,
               valid_from, valid_to, status
@@ -605,6 +622,15 @@ export class SqliteWorldStore implements WorldStore {
       list.push(row.depends_on_event_id);
       byEvent.set(row.event_id, list);
     }
+    // Branch divergence overlay: statuses for THIS branch sit on top of the
+    // shared canon; the shared canon_events rows are never rewritten.
+    const overrides = branchId
+      ? await this.db.queryAll<{ event_id: string; status: string }>(
+        'SELECT event_id, status FROM branch_canon_overrides WHERE world_id = ? AND branch_id = ?',
+        [worldId, branchId],
+      )
+      : [];
+    const overrideByEvent = new Map(overrides.map(row => [row.event_id, row.status as StoredEvent['status']]));
     return rows.map(row => ({
       worldId,
       eventId: row.event_id,
@@ -614,12 +640,18 @@ export class SqliteWorldStore implements WorldStore {
       narrativeChapterId: optionalString(row, 'narrative_chapter_id'),
       validFrom: optionalString(row, 'valid_from'),
       validTo: optionalString(row, 'valid_to'),
-      status: row.status as StoredEvent['status'],
+      status: overrideByEvent.get(row.event_id) ?? (row.status as StoredEvent['status']),
       dependsOnEventIds: byEvent.get(row.event_id) ?? [],
     }));
   }
 
-  async markEventsPendingAfter(worldId: string, anchorEventId: string): Promise<number> {
+  /**
+   * Marks canonical events after the anchor as pending FOR ONE BRANCH via the
+   * branch_canon_overrides overlay. The shared canon_events.status is left
+   * untouched, so a second campaign of the same novel never sees this
+   * branch's divergence.
+   */
+  async markEventsPendingAfter(worldId: string, anchorEventId: string, branchId: string): Promise<number> {
     return this.db.transaction(async tx => {
       const anchor = await tx.queryOne<EventRow>(
         'SELECT world_time_order FROM canon_events WHERE world_id = ? AND event_id = ?',
@@ -636,10 +668,13 @@ export class SqliteWorldStore implements WorldStore {
             AND world_time_order IS NOT NULL AND world_time_order > ?`,
         [worldId, anchorOrder],
       );
+      const createdAt = new Date().toISOString();
       for (const row of affected) {
         await tx.execute(
-          `UPDATE canon_events SET status = 'pending' WHERE world_id = ? AND event_id = ?`,
-          [worldId, row.event_id],
+          `INSERT INTO branch_canon_overrides (world_id, branch_id, event_id, status, reason, created_at)
+           VALUES (?, ?, ?, 'pending', 'divergence_after_anchor', ?)
+           ON CONFLICT(world_id, branch_id, event_id) DO NOTHING`,
+          [worldId, branchId, row.event_id, createdAt],
         );
       }
       return affected.length;
@@ -810,5 +845,207 @@ export class SqliteWorldStore implements WorldStore {
       createdAt: requireString(row, 'created_at'),
       updatedAt: requireString(row, 'updated_at'),
     };
+  }
+
+  // ---- world packages (Phase 2 three-book source of truth) ---------------
+
+  async saveWorldPackage(input: {
+    manifest: WorldPackageManifest;
+    entries: readonly ContentEntry[];
+    sections: readonly BookSection[];
+    validationJson: string;
+    createdAt: string;
+  }): Promise<void> {
+    await this.db.transaction(async tx => {
+      const existing = await tx.queryOne<SqliteRow>(
+        'SELECT status FROM world_packages WHERE world_id = ? AND revision = ?',
+        [input.manifest.worldId, input.manifest.revision],
+      );
+      if (existing) {
+        throw new Error(
+          `World package revision already exists: ${input.manifest.worldId} r${input.manifest.revision}; ` +
+            'published revisions are immutable - create a new revision instead.',
+        );
+      }
+      await tx.execute(
+        `INSERT INTO world_packages
+          (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
+           mapping_version, status, content_hash, validation_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.manifest.worldId,
+          input.manifest.revision,
+          input.manifest.schemaVersion,
+          input.manifest.sourceSha256,
+          input.manifest.ruleset.id,
+          input.manifest.ruleset.version,
+          input.manifest.mappingVersion,
+          input.manifest.status,
+          input.manifest.contentHash,
+          input.validationJson,
+          input.createdAt,
+        ],
+      );
+      for (const entry of input.entries) {
+        await tx.execute(
+          `INSERT INTO package_entries
+            (world_id, revision, entry_id, kind, definition_json, provenance_json,
+             field_provenance_json, visibility, dependency_ids_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            input.manifest.worldId,
+            input.manifest.revision,
+            entry.entryId,
+            entry.kind,
+            JSON.stringify(entry.definition),
+            JSON.stringify(entry.provenance),
+            JSON.stringify(entry.fieldProvenance),
+            entry.visibility,
+            JSON.stringify(entry.dependencyIds),
+            input.createdAt,
+          ],
+        );
+      }
+      for (const section of input.sections) {
+        await tx.execute(
+          `INSERT INTO book_sections
+            (world_id, revision, book, section_key, title, entry_ids_json, position)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            input.manifest.worldId,
+            input.manifest.revision,
+            section.book,
+            section.sectionKey,
+            section.title,
+            JSON.stringify(section.entryIds),
+            section.position,
+          ],
+        );
+      }
+    });
+  }
+
+  async getWorldPackage(
+    worldId: string,
+    revision: number,
+  ): Promise<{ manifest: WorldPackageManifest; entries: ContentEntry[]; sections: BookSection[] } | null> {
+    const row = await this.db.queryOne<SqliteRow>(
+      `SELECT revision, schema_version, source_sha256, ruleset_id, ruleset_version,
+              mapping_version, status, content_hash
+         FROM world_packages WHERE world_id = ? AND revision = ?`,
+      [worldId, revision],
+    );
+    if (!row) return null;
+    const entryRows = await this.db.queryAll<SqliteRow>(
+      `SELECT entry_id, kind, definition_json, provenance_json, field_provenance_json,
+              visibility, dependency_ids_json, revision
+         FROM package_entries WHERE world_id = ? AND revision = ? ORDER BY entry_id`,
+      [worldId, revision],
+    );
+    const sectionRows = await this.db.queryAll<SqliteRow>(
+      `SELECT book, section_key, title, entry_ids_json, position
+         FROM book_sections WHERE world_id = ? AND revision = ? ORDER BY book, position`,
+      [worldId, revision],
+    );
+    return {
+      manifest: {
+        worldId,
+        revision: Number(row.revision),
+        schemaVersion: 'world-package-2',
+        sourceSha256: String(row.source_sha256),
+        ruleset: { id: String(row.ruleset_id), version: String(row.ruleset_version) },
+        mappingVersion: String(row.mapping_version),
+        contentHash: String(row.content_hash),
+        status: String(row.status) as WorldPackageManifest['status'],
+      },
+      entries: entryRows.map(entryRow => ({
+        entryId: String(entryRow.entry_id),
+        kind: String(entryRow.kind) as ContentEntry['kind'],
+        revision: Number(entryRow.revision),
+        provenance: JSON.parse(String(entryRow.provenance_json)),
+        fieldProvenance: JSON.parse(String(entryRow.field_provenance_json ?? '{}')),
+        visibility: String(entryRow.visibility) as ContentEntry['visibility'],
+        dependencyIds: JSON.parse(String(entryRow.dependency_ids_json ?? '[]')),
+        definition: JSON.parse(String(entryRow.definition_json)),
+      })),
+      sections: sectionRows.map(sectionRow => ({
+        book: String(sectionRow.book) as BookSection['book'],
+        sectionKey: String(sectionRow.section_key),
+        title: String(sectionRow.title),
+        entryIds: JSON.parse(String(sectionRow.entry_ids_json ?? '[]')),
+        position: Number(sectionRow.position),
+      })),
+    };
+  }
+
+  async listWorldPackages(worldId: string): Promise<Array<{ revision: number; status: string; contentHash: string; createdAt: string }>> {
+    const rows = await this.db.queryAll<SqliteRow>(
+      'SELECT revision, status, content_hash, created_at FROM world_packages WHERE world_id = ? ORDER BY revision DESC',
+      [worldId],
+    );
+    return rows.map(row => ({
+      revision: Number(row.revision),
+      status: String(row.status),
+      contentHash: String(row.content_hash),
+      createdAt: String(row.created_at),
+    }));
+  }
+
+  async getPublishedPackageRevision(worldId: string): Promise<number | null> {
+    const row = await this.db.queryOne<SqliteRow>(
+      "SELECT revision FROM world_packages WHERE world_id = ? AND status = 'published' ORDER BY revision DESC LIMIT 1",
+      [worldId],
+    );
+    return row ? Number(row.revision) : null;
+  }
+
+  // ---- review issues (conflicts blocking publication) --------------------
+
+  async saveReviewIssue(input: {
+    worldId: string;
+    issueId: string;
+    kind: string;
+    severity: 'blocking' | 'major' | 'minor';
+    detailJson: string;
+    createdAt: string;
+  }): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'open', ?)
+       ON CONFLICT(world_id, issue_id) DO UPDATE SET detail_json = excluded.detail_json`,
+      [input.worldId, input.issueId, input.kind, input.severity, input.detailJson, input.createdAt],
+    );
+  }
+
+  async listReviewIssues(worldId: string, status: 'open' | 'resolved' | 'waived' | 'all' = 'open'): Promise<Array<{
+    issueId: string;
+    kind: string;
+    severity: string;
+    detailJson: string;
+    status: string;
+  }>> {
+    const rows = status === 'all'
+      ? await this.db.queryAll<SqliteRow>(
+        'SELECT issue_id, kind, severity, detail_json, status FROM review_issues WHERE world_id = ? ORDER BY created_at',
+        [worldId],
+      )
+      : await this.db.queryAll<SqliteRow>(
+        'SELECT issue_id, kind, severity, detail_json, status FROM review_issues WHERE world_id = ? AND status = ? ORDER BY created_at',
+        [worldId, status],
+      );
+    return rows.map(row => ({
+      issueId: String(row.issue_id),
+      kind: String(row.kind),
+      severity: String(row.severity),
+      detailJson: String(row.detail_json),
+      status: String(row.status),
+    }));
+  }
+
+  async resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived'): Promise<void> {
+    await this.db.execute(
+      'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
+      [resolution, new Date().toISOString(), worldId, issueId],
+    );
   }
 }

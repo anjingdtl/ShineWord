@@ -1,11 +1,18 @@
 import type { RollGrade } from '../../domain/rules/types';
-import { awardPractice, checkAdvancement, type SkillProgress } from '../../domain/progression/growth';
+import {
+  awardPractice,
+  isTrainable,
+  type RewardKind,
+  type SkillProgress,
+} from '../../domain/progression/growth';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 
 export interface SettlementInput {
   gameStore: SqliteGameStore;
   branchId: string;
   turnId: string;
+  /** Stable encounter/challenge id; the reward dedup dimension. */
+  encounterId: string;
   stateVersion: number;
   outcomeGrade: RollGrade;
   skillId?: string;
@@ -15,22 +22,23 @@ export interface SettlementInput {
 
 export interface SettlementOutcome {
   practiceAwarded: boolean;
-  advancedFrom: string | null;
-  advancedTo: string | null;
+  /** Threshold reached — the skill is now trainable via explicit training. */
+  trainable: boolean;
   /** Serious failure with a genuine attempt still counts as practice (plan §6.5). */
   practiceReason: 'risk_success' | 'honest_failure' | null;
 }
 
 /**
- * Post-commit settlement: the local engine — never the LLM contract — decides
- * growth. Risky turns award exactly one practice point per skill; failure
- * after an honest attempt counts the same; advancement consumes thresholds.
+ * Settlement award: the local engine — never the LLM contract — decides
+ * growth. Risky turns award exactly one practice point per skill per
+ * encounter; failure after an honest attempt counts the same. Reaching a
+ * threshold never auto-advances: advancement is an explicit, conditioned
+ * training action that consumes the threshold.
  */
 export async function settleTurnProgress(input: SettlementInput): Promise<SettlementOutcome> {
   const outcome: SettlementOutcome = {
     practiceAwarded: false,
-    advancedFrom: null,
-    advancedTo: null,
+    trainable: false,
     practiceReason: null,
   };
   if (!input.skillId) return outcome;
@@ -40,28 +48,19 @@ export async function settleTurnProgress(input: SettlementInput): Promise<Settle
     skillId: input.skillId,
     rank: 'untrained',
     practicePoints: 0,
-    awardedTurns: [],
+    awardedKeys: [],
   };
 
-  const awarded = awardPractice(progress, input.turnId);
+  const awarded = awardPractice(progress, input.encounterId, 'practice');
   if (awarded === progress) return outcome;
 
-  const advanced = checkAdvancement(awarded);
-  const next: SkillProgress = {
-    ...awarded,
-    practicePoints: advanced.pointsRemaining,
-    rank: advanced.advanced && advanced.nextRank ? advanced.nextRank : awarded.rank,
-  };
-  await input.gameStore.upsertSkillProgress(input.branchId, input.actorId, next, input.stateVersion);
+  await input.gameStore.upsertSkillProgress(input.branchId, input.actorId, awarded, input.stateVersion);
 
   outcome.practiceAwarded = true;
+  outcome.trainable = isTrainable(awarded);
   outcome.practiceReason = input.outcomeGrade === 'success' || input.outcomeGrade === 'full_success'
     ? 'risk_success'
     : 'honest_failure';
-  if (advanced.advanced && advanced.nextRank) {
-    outcome.advancedFrom = progress.rank;
-    outcome.advancedTo = advanced.nextRank;
-  }
   return outcome;
 }
 
@@ -76,8 +75,8 @@ const CLOSNESS_MIN = -100;
 const CLOSNESS_MAX = 100;
 
 /**
- * Relationship updates also run post-commit with bounded per-turn deltas; the
- * LLM proposes stance text but never writes authority directly.
+ * Relationship updates with bounded per-turn deltas; the LLM proposes stance
+ * text but never writes authority directly.
  */
 export async function settleRelationships(
   gameStore: SqliteGameStore,
@@ -110,3 +109,6 @@ export async function settleRelationships(
   }
   return updated;
 }
+
+/** Reward kind recorded in the ledger (kept in sync with the domain type). */
+export type { RewardKind };

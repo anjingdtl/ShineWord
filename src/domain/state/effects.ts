@@ -23,6 +23,11 @@ export function assertResourcePreconditions(
   }
 }
 
+/** Normalizes legacy snapshots that only carry clockMinutes (plan §10.3). */
+export function effectiveClockSeconds(state: GameStateSnapshot): number {
+  return state.clockSeconds ?? state.clockMinutes * 60;
+}
+
 export function applyEffects(
   current: GameStateSnapshot,
   effects: readonly EffectOperation[],
@@ -33,7 +38,7 @@ export function applyEffects(
   }
 
   const next = cloneGameState(current);
-  next.clockMinutes += baseTimeCostMinutes;
+  next.clockSeconds = effectiveClockSeconds(current) + baseTimeCostMinutes * 60;
 
   for (const effect of effects) {
     switch (effect.op) {
@@ -49,6 +54,15 @@ export function applyEffects(
         actor.resources[effect.resourceId] = newAmount;
         break;
       }
+      case 'restoreResource': {
+        const actor = requireActor(next, effect.actorId);
+        const currentAmount = actor.resources[effect.resourceId] ?? 0;
+        // Restores clamp at the declared cap (the card's effective maximum);
+        // resources never exceed their maximum through healing or rest.
+        const target = effect.cap !== undefined ? Math.min(effect.cap, currentAmount + effect.amount) : currentAmount + effect.amount;
+        actor.resources[effect.resourceId] = target;
+        break;
+      }
       case 'changeLocation': {
         requireActor(next, effect.actorId).locationId = effect.locationId;
         break;
@@ -60,8 +74,13 @@ export function applyEffects(
         }
         break;
       }
+      case 'removeCondition': {
+        const actor = requireActor(next, effect.actorId);
+        actor.conditions = actor.conditions.filter(condition => condition !== effect.conditionId);
+        break;
+      }
       case 'advanceClock':
-        next.clockMinutes += effect.minutes;
+        next.clockSeconds += effect.minutes * 60;
         break;
       case 'transferItem': {
         requireActor(next, effect.fromActorId);
@@ -76,9 +95,24 @@ export function applyEffects(
         next.itemOwners[effect.itemId] = effect.toActorId;
         break;
       }
+      case 'grantItem': {
+        // Engine-only loot op: creates ownership once; duplicate grants of a
+        // unique item are refused by the session layer's loot policy.
+        requireActor(next, effect.actorId);
+        const owner = next.itemOwners[effect.itemId];
+        if (owner !== undefined && owner !== effect.actorId) {
+          throw new Error(`Item ${effect.itemId} already owned by ${owner}.`);
+        }
+        next.itemOwners[effect.itemId] = effect.actorId;
+        break;
+      }
       case 'recordEvent':
         // Event persistence belongs to the transaction layer; this effect is state-neutral.
         break;
+      default: {
+        const exhaustive: never = effect;
+        throw new Error(`Unsupported effect: ${JSON.stringify(exhaustive)}.`);
+      }
     }
   }
 

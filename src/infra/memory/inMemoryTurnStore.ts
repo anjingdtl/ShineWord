@@ -5,14 +5,25 @@ import type {
 } from '../../application/ports/turnStore';
 import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
 
+interface StagedTurnMemory {
+  expectedStateVersion: number;
+  hasRoll: boolean;
+}
+
 export class InMemoryTurnStore implements TurnStore {
   private readonly states = new Map<string, GameStateSnapshot>();
   private readonly turns = new Map<string, CommittedTurn>();
+  private readonly staged = new Map<string, StagedTurnMemory>();
 
   constructor(initialStates: readonly GameStateSnapshot[]) {
     for (const state of initialStates) {
       this.states.set(state.branchId, cloneGameState(state));
     }
+  }
+
+  /** Test helper mirroring stageRollTurn; tracks roll existence for discard rules. */
+  stageTurnForTest(branchId: string, turnId: string, expectedStateVersion: number, hasRoll = false): void {
+    this.staged.set(`${branchId}:${turnId}`, { expectedStateVersion, hasRoll });
   }
 
   async getState(branchId: string): Promise<GameStateSnapshot | null> {
@@ -22,6 +33,18 @@ export class InMemoryTurnStore implements TurnStore {
 
   async getCommittedTurn(branchId: string, turnId: string): Promise<CommittedTurn | null> {
     return this.turns.get(`${branchId}:${turnId}`) ?? null;
+  }
+
+  async discardUnrolledTurn(branchId: string, turnId: string): Promise<boolean> {
+    const key = `${branchId}:${turnId}`;
+    if (this.turns.has(key)) throw new Error('Cannot discard a committed turn.');
+    const staged = this.staged.get(key);
+    if (!staged) return false;
+    if (staged.hasRoll) {
+      throw new Error('Cannot discard a turn with a persisted roll; resume it instead.');
+    }
+    this.staged.delete(key);
+    return true;
   }
 
   async commitAtomic(input: AtomicCommitInput): Promise<CommittedTurn> {

@@ -3,7 +3,7 @@ import { applyEffects, assertResourcePreconditions } from '../../domain/state/ef
 import { assertValidActionContract } from '../../domain/turns/contracts';
 import { serializeActionContract } from '../../domain/turns/canonical';
 import type { ActionContract } from '../../domain/turns/types';
-import type { CommittedTurn, TurnStore } from '../ports/turnStore';
+import type { CommittedTurn, TurnStore, TurnSettlementPlan } from '../ports/turnStore';
 
 export interface CommitResolvedTurnInput {
   store: TurnStore;
@@ -12,6 +12,14 @@ export interface CommitResolvedTurnInput {
   contractHash: string;
   outcomeGrade: RollGrade;
   rollRecord?: RollRecord;
+  /**
+   * Growth/relationship settlement committed in the same transaction. Must be
+   * computed from the CURRENT progress state before this call; the store
+   * enforces ledger dedup so a replayed encounter cannot double-award.
+   */
+  settlement?: TurnSettlementPlan;
+  /** 'engine' contracts are local-built (rest/training) and may carry caps. */
+  contractOrigin?: 'planner' | 'engine';
   committedAt?: string;
 }
 
@@ -27,9 +35,11 @@ export async function commitResolvedTurn({
   contractHash,
   outcomeGrade,
   rollRecord,
+  settlement,
+  contractOrigin = 'planner',
   committedAt = new Date().toISOString(),
 }: CommitResolvedTurnInput): Promise<CommitResolvedTurnResult> {
-  assertValidActionContract(contract);
+  assertValidActionContract(contract, contractOrigin);
 
   const existing = await store.getCommittedTurn(branchId, contract.turnId);
   if (existing) {
@@ -79,6 +89,7 @@ export async function commitResolvedTurn({
     actionContractJson: serializeActionContract(contract),
     actionContractHash: contractHash,
     committedTurn,
+    settlement,
   });
 
   return { committedTurn: stored, replayed: false };

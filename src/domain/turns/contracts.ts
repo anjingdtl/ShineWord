@@ -1,5 +1,5 @@
 import { DIFFICULTY_BANDS, ROLL_GRADES } from '../rules/types';
-import type { ActionContract, EffectOperation, OutcomeClause } from './types';
+import type { ActionContract, OutcomeClause, PlannerEffectOperation } from './types';
 
 const FORBIDDEN_PLANNER_FIELDS = new Set([
   'diceCount',
@@ -11,14 +11,20 @@ const FORBIDDEN_PLANNER_FIELDS = new Set([
   'grade',
   'balance',
   'newLevel',
+  // Engine-only fields: the planner never caps restores or grants loot.
+  'cap',
 ]);
 
+/** Ops an LLM action contract may contain (V0.2). Engine-only ops
+ * (removeCondition, grantItem) are rejected here — they belong to local
+ * settlement, never to model output. */
 const VALID_EFFECT_OPS = new Set([
   'consumeResource',
   'changeLocation',
   'applyCondition',
   'advanceClock',
   'transferItem',
+  'restoreResource',
   'recordEvent',
 ]);
 
@@ -36,7 +42,7 @@ function validateEffect(effect: unknown, path: string, errors: string[]): void {
     errors.push(`${path}: op must be one of ${[...VALID_EFFECT_OPS].join(', ')}; received ${String(op)}.`);
     return;
   }
-  const e = effect as EffectOperation;
+  const e = effect as PlannerEffectOperation;
   switch (e.op) {
     case 'consumeResource':
       if (!nonEmpty(e.actorId) || !nonEmpty(e.resourceId)) {
@@ -67,6 +73,14 @@ function validateEffect(effect: unknown, path: string, errors: string[]): void {
       }
       if (e.fromActorId === e.toActorId) {
         errors.push(`${path}: transferItem must change owner.`);
+      }
+      return;
+    case 'restoreResource':
+      if (!nonEmpty(e.actorId) || !nonEmpty(e.resourceId)) {
+        errors.push(`${path}: actorId and resourceId are required.`);
+      }
+      if (!Number.isFinite(e.amount) || e.amount <= 0) {
+        errors.push(`${path}: restoreResource amount must be > 0.`);
       }
       return;
     case 'recordEvent':
@@ -105,9 +119,15 @@ function findForbiddenKeys(value: unknown, path: string, errors: string[]): void
   }
 }
 
-export function validateActionContract(contract: ActionContract): string[] {
+export type ContractOrigin = 'planner' | 'engine';
+
+export function validateActionContract(contract: ActionContract, origin: ContractOrigin = 'planner'): string[] {
   const errors: string[] = [];
-  findForbiddenKeys(contract, 'contract', errors);
+  // Engine-generated contracts (rest, encounters, training) may carry
+  // engine-injected fields like `cap`; model output may never.
+  if (origin === 'planner') {
+    findForbiddenKeys(contract, 'contract', errors);
+  }
 
   if (contract.protocolVersion !== '1.0') errors.push('protocolVersion must be 1.0.');
   if (!nonEmpty(contract.turnId)) errors.push('turnId is required.');
@@ -159,8 +179,8 @@ export function validateActionContract(contract: ActionContract): string[] {
   return errors;
 }
 
-export function assertValidActionContract(contract: ActionContract): void {
-  const errors = validateActionContract(contract);
+export function assertValidActionContract(contract: ActionContract, origin: ContractOrigin = 'planner'): void {
+  const errors = validateActionContract(contract, origin);
   if (errors.length > 0) {
     throw new Error(`Invalid action contract:\n- ${errors.join('\n- ')}`);
   }

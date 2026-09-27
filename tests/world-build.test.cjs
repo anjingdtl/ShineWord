@@ -209,10 +209,21 @@ test('medium novel pipeline extracts 200+ annotated facts with evidence', async 
 
     // Event dependency invalidation: after the anchor event everything later pends.
     const anchor = events.find(e => e.eventId.includes('lunjian-announced'));
-    const pendingCount = await store.markEventsPendingAfter('world-medium', anchor.eventId);
+    // Divergence overlay is branch-scoped: the shared canon_events rows stay
+    // 'canon' and another branch/world view is unaffected.
+    const pendingCount = await store.markEventsPendingAfter('world-medium', anchor.eventId, 'branch-a');
     assert.equal(pendingCount, 1);
-    const after = await store.listEvents('world-medium');
+    const after = await store.listEvents('world-medium', 'branch-a');
     assert.equal(after.find(e => e.eventId.includes('lunjian-started')).status, 'pending');
+
+    const shared = await store.listEvents('world-medium');
+    assert.equal(shared.find(e => e.eventId.includes('lunjian-started')).status, 'canon',
+      'shared canon must not be rewritten by a branch divergence');
+    const otherBranch = await store.listEvents('world-medium', 'branch-b');
+    assert.equal(otherBranch.find(e => e.eventId.includes('lunjian-started')).status, 'canon',
+      'a second branch is not polluted by the first branch divergence');
+    const canonRow = db.prepare("SELECT status FROM canon_events WHERE event_id LIKE '%lunjian-started%'").get();
+    assert.equal(canonRow.status, 'canon', 'canon_events.status is never rewritten');
   } finally {
     db.close();
   }

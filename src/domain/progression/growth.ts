@@ -17,12 +17,24 @@ export const PRACTICE_THRESHOLDS: Readonly<Record<SkillRank, number>> = {
   master: Number.POSITIVE_INFINITY,
 };
 
+export type RewardKind = 'practice' | 'milestone';
+
+/** Reward dedup key inside one skill row: `encounterId:rewardKind`. */
+export function rewardKey(encounterId: string, kind: RewardKind = 'practice'): string {
+  return `${encounterId}:${kind}`;
+}
+
 export interface SkillProgress {
   skillId: string;
   rank: SkillRank;
   practicePoints: number;
-  /** Turn ids that already awarded practice for this skill (dedup per encounter). */
-  awardedTurns: readonly string[];
+  /**
+   * Dedup keys `encounterId:rewardKind`. One independent encounter awards the
+   * same skill at most once — replaying a turn or reopening a scene finds its
+   * own key and is refused. (Column remains `awarded_turns_json` for storage
+   * compatibility; the content is reward keys since Phase 2.)
+   */
+  awardedKeys: readonly string[];
 }
 
 export function rankIndex(rank: SkillRank): number {
@@ -30,21 +42,44 @@ export function rankIndex(rank: SkillRank): number {
 }
 
 /**
- * Awards one practice point for an independent risky encounter. The same turn
- * can never award the same skill twice, which also blocks rewind-replay
- * farming: a replayed turn id finds itself in awardedTurns.
+ * Awards one practice point for an independent risky encounter. The same
+ * encounter can never award the same skill twice, which also blocks
+ * rewind-replay farming: a replayed encounter id finds itself in awardedKeys.
  */
 export function awardPractice(
   progress: SkillProgress,
-  turnId: string,
+  encounterId: string,
+  kind: RewardKind = 'practice',
 ): SkillProgress {
-  if (progress.awardedTurns.includes(turnId)) return progress;
+  const key = rewardKey(encounterId, kind);
+  if (progress.awardedKeys.includes(key)) return progress;
   if (progress.rank === 'master') return progress;
   return {
     ...progress,
     practicePoints: progress.practicePoints + 1,
-    awardedTurns: [...progress.awardedTurns, turnId],
+    awardedKeys: [...progress.awardedKeys, key],
   };
+}
+
+export interface TrainingConditions {
+  /** Instructor, manual or environment requirement is satisfied. */
+  hasSource: boolean;
+  /** Required resources (time cost is settled by the caller's clock effects). */
+  hasResources: boolean;
+  /** World path prerequisites (realm, origin, prior skill) are satisfied. */
+  meetsPrerequisites: boolean;
+}
+
+export function assertTrainingAllowed(conditions: TrainingConditions): void {
+  if (!conditions.hasSource) {
+    throw new Error('Training requires an available instructor, manual or environment.');
+  }
+  if (!conditions.hasResources) {
+    throw new Error('Training requires the configured resources.');
+  }
+  if (!conditions.meetsPrerequisites) {
+    throw new Error('Training prerequisites for this path are not met.');
+  }
 }
 
 export interface AdvancementCheck {
@@ -55,11 +90,15 @@ export interface AdvancementCheck {
 }
 
 /**
- * Rank advancement consumes the full threshold and additionally requires the
- * world to allow the training conditions (checked by the caller); a single
- * roll can never unlock a rank by itself.
+ * Explicit rank advancement: reaching the threshold only makes a skill
+ * "trainable" — the caller checks training conditions first (assertTrainingAllowed),
+ * then consumes the full threshold. A single roll can never unlock a rank.
  */
-export function checkAdvancement(progress: SkillProgress): AdvancementCheck {
+export function trainSkill(
+  progress: SkillProgress,
+  conditions: TrainingConditions,
+): AdvancementCheck {
+  assertTrainingAllowed(conditions);
   const threshold = PRACTICE_THRESHOLDS[progress.rank];
   if (!Number.isFinite(threshold) || progress.practicePoints < threshold) {
     return { advanced: false, nextRank: null, pointsRemaining: progress.practicePoints, pointsSpent: 0 };
@@ -77,32 +116,34 @@ export function checkAdvancement(progress: SkillProgress): AdvancementCheck {
   };
 }
 
-export interface MilestoneRewardInput {
+/** True when the skill has reached its threshold and can be trained. */
+export function isTrainable(progress: SkillProgress): boolean {
+  const threshold = PRACTICE_THRESHOLDS[progress.rank];
+  return Number.isFinite(threshold) && progress.practicePoints >= threshold;
+}
+
+export interface MilestonePracticeInput {
   skillId: string;
   currentRank: SkillRank;
-  grantedRanks: number;
-  /** Milestones may add up to 2 ranks to already-unlocked (non-untrained) skills. */
-  maxRanks?: number;
+  /** Milestones add 1-2 practice points, never ranks. */
+  grantedPoints: number;
+  maxPoints?: number;
 }
 
 /**
- * Milestone rewards: 1-2 ranks onto an already unlocked skill, never onto
- * untrained (a milestone cannot grant brand-new competence by itself), and
- * never beyond master.
+ * Milestone rewards: 1-2 practice points onto an already unlocked
+ * (non-untrained) skill, never onto untrained (a milestone cannot grant
+ * brand-new competence by itself). Ranks only change through explicit
+ * training that consumes thresholds.
  */
-export function applyMilestoneReward(input: MilestoneRewardInput): SkillRank {
-  const maxRanks = input.maxRanks ?? 2;
-  if (input.grantedRanks < 1 || input.grantedRanks > maxRanks) {
-    throw new Error(`Milestone rank grant must be between 1 and ${maxRanks}.`);
+export function applyMilestonePractice(input: MilestonePracticeInput): number {
+  const maxPoints = input.maxPoints ?? 2;
+  if (!Number.isInteger(input.grantedPoints) || input.grantedPoints < 1 || input.grantedPoints > maxPoints) {
+    throw new Error(`Milestone grant must be between 1 and ${maxPoints} practice points.`);
   }
   if (input.currentRank === 'untrained') {
     throw new Error('Milestone rewards cannot unlock an untrained skill.');
   }
-  const nextIndex = Math.min(
-    rankIndex(input.currentRank) + input.grantedRanks,
-    rankIndex('master'),
-  );
-  const nextRank = SKILL_RANK_ORDER[nextIndex];
-  if (!nextRank) throw new Error('Rank order is broken; this is a ruleset bug.');
-  return nextRank;
+  if (input.currentRank === 'master') return 0;
+  return input.grantedPoints;
 }

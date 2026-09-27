@@ -8,6 +8,7 @@ const { FaultInjectionTransport, postWithRetry, withCancellation, CancellationTo
 const { probeCapabilities } = require('../dist/application/llm/capabilities');
 const { summarizeRange } = require('../dist/application/memory/summarizer');
 const { settleTurnProgress, settleRelationships } = require('../dist/application/game/turnSettlement');
+const { trainSkill, isTrainable } = require('../dist/domain/progression/growth');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
 const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
 
@@ -196,21 +197,36 @@ test('turn settlement awards practice for honest failures too, advances ranks lo
     const gameStore = new SqliteGameStore(adapter);
     db.prepare("INSERT INTO branches (branch_id, campaign_id, state_version, created_at) VALUES ('b-set', 'c', 0, 't')").run();
 
-    // Five honest failures -> novice.
+    // Five honest failures across five independent encounters. Thresholds
+    // no longer auto-advance: the skill becomes trainable instead.
     for (let i = 1; i <= 5; i += 1) {
       const outcome = await settleTurnProgress({
-        gameStore, branchId: 'b-set', turnId: `turn-${i}`, stateVersion: i,
+        gameStore, branchId: 'b-set', turnId: `turn-${i}`, encounterId: `enc-${i}`, stateVersion: i,
         outcomeGrade: 'failure', skillId: 'stealth', actorId: 'actor-player',
       });
       assert.equal(outcome.practiceAwarded, true);
       assert.equal(outcome.practiceReason, 'honest_failure');
     }
-    // A replayed turn id (double submit) adds nothing.
+    const afterFive = await gameStore.getSkillProgress('b-set', 'actor-player', 'stealth');
+    assert.equal(afterFive.rank, 'untrained');
+    assert.equal(afterFive.practicePoints, 5);
+    assert.equal(afterFive.trainable ?? isTrainable(afterFive), true, 'trainable via explicit training');
+    assert.equal(isTrainable(afterFive), true);
+
+    // Training consumes the threshold; a turn replay inside the SAME
+    // encounter adds nothing (double submit / rewind replay).
     const replay = await settleTurnProgress({
-      gameStore, branchId: 'b-set', turnId: 'turn-5', stateVersion: 5,
+      gameStore, branchId: 'b-set', turnId: 'turn-5', encounterId: 'enc-5', stateVersion: 5,
       outcomeGrade: 'failure', skillId: 'stealth', actorId: 'actor-player',
     });
     assert.equal(replay.practiceAwarded, false);
+
+    const trained = trainSkill(afterFive, { hasSource: true, hasResources: true, meetsPrerequisites: true });
+    assert.equal(trained.advanced, true);
+    assert.equal(trained.nextRank, 'novice');
+    await gameStore.upsertSkillProgress('b-set', 'actor-player', {
+      ...afterFive, rank: trained.nextRank, practicePoints: trained.pointsRemaining,
+    }, 5);
 
     const progress = await gameStore.getSkillProgress('b-set', 'actor-player', 'stealth');
     assert.equal(progress.rank, 'novice');
@@ -218,7 +234,7 @@ test('turn settlement awards practice for honest failures too, advances ranks lo
 
     // Non-risk turn (no skillId): no practice.
     const none = await settleTurnProgress({
-      gameStore, branchId: 'b-set', turnId: 'turn-9', stateVersion: 9,
+      gameStore, branchId: 'b-set', turnId: 'turn-9', encounterId: 'enc-9', stateVersion: 9,
       outcomeGrade: 'success', skillId: undefined, actorId: 'actor-player',
     });
     assert.equal(none.practiceAwarded, false);

@@ -1,0 +1,820 @@
+import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
+import type { StoredEntity, StoredEvent, StoredFact } from '../../application/ports/worldStore';
+import { parseStrictJsonObject } from '../llm/json';
+import type {
+  BookSection,
+  ContentEntry,
+  EntryKind,
+  EntryVisibility,
+  Provenance,
+  WorldPackageManifest,
+} from '../../domain/content/types';
+import { publishWorldPackage } from './publish';
+
+/**
+ * P2-4: builds a publishable three-book world package from the canon facts,
+ * events and entities extracted from a novel. The LLM proposes entries in one
+ * mapping call; local code then deterministically cleans every proposal,
+ * fills a conservative baseline catalog (design_fill) and publishes through
+ * the standard gate. The pipeline always produces a publishable package -
+ * unless canon conflicts block publication in the review queue.
+ */
+
+export interface MappingCompleteRequest {
+  role: string;
+  system: string;
+  user: string;
+  maxOutputTokens?: number;
+  jsonMode?: boolean;
+}
+
+export interface MappingProvider {
+  complete(request: MappingCompleteRequest): Promise<{ text: string; usage?: unknown }>;
+}
+
+export interface BuildPackageInput {
+  worldStore: SqliteWorldStore;
+  provider: MappingProvider;
+  sha256Hex(input: string): Promise<string> | string;
+  worldId: string;
+  sourceSha256: string;
+  mappingVersion: string;
+  createdAt: string;
+  onProgress?(info: { phase: string; message?: string }): void;
+}
+
+export interface BuildPackageResult {
+  manifest: WorldPackageManifest;
+  entries: ContentEntry[];
+  sections: BookSection[];
+  reviewIssues: number;
+  mappingUsage: unknown | null;
+}
+
+// ---------------------------------------------------------------------------
+// Prompt and enum whitelists. The prompt carries only novel-derived content;
+// provider credentials and user paths never enter it.
+// ---------------------------------------------------------------------------
+
+const ATTRIBUTES = ['physique', 'agility', 'insight', 'knowledge', 'willpower', 'social'];
+const POWER_TIERS = ['ordinary', 'enhanced', 'supernatural'];
+const PROVENANCE_KINDS = ['explicit', 'inferred', 'rule_mapping', 'design_fill'];
+const ACTOR_CATEGORIES = ['human', 'beast', 'spirit', 'undead', 'construct', 'faction'];
+const ITEM_CATEGORIES = ['weapon', 'armor', 'tool', 'consumable', 'valuables', 'key'];
+const ENFORCEMENTS = ['block_action', 'block_effect', 'audit'];
+const EFFECT_OPS = [
+  'damage', 'heal', 'apply_condition', 'remove_condition', 'move_self', 'move_target',
+  'consume_resource', 'restore_resource', 'reveal_information', 'grant_bonus_dice', 'change_distance',
+];
+const ATTACK_RANGES = ['touch', 'near', 'mid', 'far'];
+const MORALE = ['low', 'steady', 'fierce'];
+
+/** Facts per mapping call; truncation keeps the prompt bounded and evidence ids valid. */
+const MAX_PROMPT_FACTS = 800;
+const MAPPING_MAX_OUTPUT_TOKENS = 6000;
+export const CANON_MAPPER_ROLE = 'WorldMapper';
+
+const MAPPER_SYSTEM = [
+  'You are ShineWord WorldMapper. You map novel canon facts into a tabletop RPG world package and output exactly one JSON object, no prose.',
+  'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"allowUntrained":boolean,"requirements":string[],"powerTier":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"constraints":[{"id":string,"name":string,"description":string,"enforcement":"block_action|block_effect|audit","pattern":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}]}',
+  'Rules:',
+  '- attribute MUST be exactly one of: physique, agility, insight, knowledge, willpower, social.',
+  '- effect op MUST be exactly one of: damage, heal, apply_condition, remove_condition, move_self, move_target, consume_resource, restore_resource, reveal_information, grant_bonus_dice, change_distance.',
+  '- provenanceKind MUST be one of: explicit, inferred, rule_mapping, design_fill. Numeric hp/stamina/defense/threat values are rule_mapping (game rule values), never canon facts from the novel.',
+  '- Every entry MUST cite evidenceFactIds using only fact ids from the provided fact list, plus a one-sentence rationale.',
+  '- Every id must be a short stable english token (letters, digits, dash). attack skillId and weaponSkillId must reference a proposed skill id.',
+  '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
+].join('\n');
+
+// ---------------------------------------------------------------------------
+// Conservative local baseline (design_fill): the playable minimum catalog a
+// novel-derived package needs even when the LLM mapping returns nothing.
+// ---------------------------------------------------------------------------
+
+interface DefaultSkill {
+  id: string;
+  name: string;
+  description: string;
+  attribute: string;
+  allowUntrained: boolean;
+}
+
+const DEFAULT_SKILLS: readonly DefaultSkill[] = [
+  { id: 'stealth', name: '潜行', description: '隐蔽移动、藏匿身形与消声行动。', attribute: 'agility', allowUntrained: false },
+  { id: 'sword', name: '剑术', description: '刀剑类近战武器的攻防技艺。', attribute: 'agility', allowUntrained: false },
+  { id: 'medicine', name: '医术', description: '诊伤疗毒、正骨续命的医道修为。', attribute: 'knowledge', allowUntrained: false },
+  { id: 'diplomacy', name: '交涉', description: '谈判、劝说与斡旋的言辞之道。', attribute: 'social', allowUntrained: true },
+  { id: 'observation', name: '观察', description: '留意环境细节与察觉异常的功夫。', attribute: 'insight', allowUntrained: true },
+  { id: 'lore_skill', name: '学识', description: '典籍、掌故与秘闻的知识储备。', attribute: 'knowledge', allowUntrained: true },
+  { id: 'endurance', name: '坚韧', description: '忍耐伤痛、疲惫与酷刑的意志。', attribute: 'physique', allowUntrained: true },
+  { id: 'athletics', name: '运动', description: '奔跑、攀爬、跳跃与泅水的能力。', attribute: 'physique', allowUntrained: true },
+];
+
+const DESIGN_FILL_RATIONALE = '设计补全：可玩性所需的世界默认值。';
+
+// ---------------------------------------------------------------------------
+// Small strict-ish coercion helpers for LLM output cleaning.
+// ---------------------------------------------------------------------------
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Entry ids must be stable tokens; whitespace collapses to dashes. */
+function slugId(raw: unknown): string | null {
+  const text = asString(raw);
+  if (!text) return null;
+  const slug = text.trim().toLowerCase().replace(/\s+/g, '-').replace(/-+/g, '-');
+  return slug.length > 0 ? slug : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function makeEntry(params: {
+  entryId: string;
+  kind: EntryKind;
+  provenance: Provenance;
+  definition: unknown;
+  visibility?: EntryVisibility;
+  dependencyIds?: readonly string[];
+  fieldProvenance?: Record<string, Provenance>;
+}): ContentEntry {
+  return {
+    entryId: params.entryId,
+    kind: params.kind,
+    revision: 0,
+    provenance: params.provenance,
+    fieldProvenance: params.fieldProvenance ?? {},
+    visibility: params.visibility ?? 'public',
+    dependencyIds: params.dependencyIds ?? [],
+    definition: params.definition,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Proposal cleaning: unknown fields are dropped, invalid enums reject the
+// whole entry into the review queue, safe defaults fill optional fields.
+// ---------------------------------------------------------------------------
+
+interface CleanContext {
+  knownFactIds: Set<string>;
+  rejected: Array<{ kind: string; id: string; reasons: string[] }>;
+}
+
+interface CleanedProposals {
+  skills: ContentEntry[];
+  constraints: ContentEntry[];
+  lore: ContentEntry[];
+}
+
+interface RawActorTemplate {
+  entryId: string;
+  entry: ContentEntry;
+  attackSkillIds: string[];
+  weaponSkillIds: string[];
+}
+
+function rejectEntry(ctx: CleanContext, kind: string, id: string, reasons: string[]): void {
+  ctx.rejected.push({ kind, id, reasons });
+}
+
+function cleanProvenance(
+  ctx: CleanContext,
+  raw: Record<string, unknown>,
+  fallbackKind: Provenance['kind'],
+  fallbackRationale: string,
+): Provenance | null {
+  const kind = (asString(raw.provenanceKind) ?? fallbackKind) as Provenance['kind'];
+  if (!PROVENANCE_KINDS.includes(kind)) {
+    // The caller records the rejection with its own entry kind.
+    return null;
+  }
+  const evidenceFactIds = asStringArray(raw.evidenceFactIds).filter(id => ctx.knownFactIds.has(id));
+  return {
+    kind,
+    sourceFactIds: evidenceFactIds,
+    rationale: asString(raw.rationale) ?? fallbackRationale,
+  };
+}
+
+function skillEntryId(id: string): string {
+  return `skill-${id}`;
+}
+
+function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const name = asString(record.name);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  if (!name) reasons.push('missing name.');
+  const attribute = asString(record.attribute);
+  if (!attribute || !ATTRIBUTES.includes(attribute)) reasons.push(`unknown attribute ${String(record.attribute)}.`);
+  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
+  if (!provenance) reasons.push('invalid provenance.');
+  if (reasons.length > 0 || !id || !name || !attribute || !provenance) {
+    rejectEntry(ctx, 'skill', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+  const requirements = Array.isArray(record.requirements)
+    ? asStringArray(record.requirements)
+    : [];
+  const allowUntrained = typeof record.allowUntrained === 'boolean' ? record.allowUntrained : false;
+  const powerTier = asString(record.powerTier) ?? 'ordinary';
+  if (!POWER_TIERS.includes(powerTier)) {
+    rejectEntry(ctx, 'skill', id, [`unknown powerTier ${powerTier}.`]);
+    return null;
+  }
+  return makeEntry({
+    entryId: skillEntryId(id),
+    kind: 'skill',
+    provenance,
+    definition: {
+      name,
+      description: asString(record.description) ?? name,
+      attribute,
+      allowUntrained,
+      requirements,
+      powerTier,
+    },
+  });
+}
+
+function cleanConstraint(raw: unknown, ctx: CleanContext): ContentEntry | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const name = asString(record.name);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  if (!name) reasons.push('missing name.');
+  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
+  if (!provenance) reasons.push('invalid provenance.');
+  if (reasons.length > 0 || !id || !name || !provenance) {
+    rejectEntry(ctx, 'constraint', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+  const enforcement = asString(record.enforcement) ?? 'audit';
+  if (!ENFORCEMENTS.includes(enforcement)) {
+    rejectEntry(ctx, 'constraint', id, [`unknown enforcement ${enforcement}.`]);
+    return null;
+  }
+  const definition: Record<string, unknown> = {
+    name,
+    description: asString(record.description) ?? name,
+    enforcement,
+  };
+  const pattern = asString(record.pattern);
+  if (pattern) definition.pattern = pattern;
+  return makeEntry({ entryId: `constraint-${id}`, kind: 'constraint', provenance, definition });
+}
+
+function cleanItemEffects(raw: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw)) return [];
+  const effects: Array<Record<string, unknown>> = [];
+  for (const candidate of raw) {
+    const record = asRecord(candidate);
+    if (!record) continue;
+    const op = asString(record.op);
+    if (!op || !EFFECT_OPS.includes(op)) continue; // unknown ops are dropped, never published
+    const effect: Record<string, unknown> = { op };
+    const amount = asFiniteNumber(record.amount);
+    if (amount !== null) effect.amount = amount;
+    const conditionId = asString(record.conditionId);
+    if (conditionId) effect.conditionId = conditionId;
+    const resource = asString(record.resource);
+    if (resource) effect.resource = resource;
+    effects.push(effect);
+  }
+  return effects;
+}
+
+function cleanItem(raw: unknown, ctx: CleanContext): { entry: ContentEntry; weaponSkillId: string | null } | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const name = asString(record.name);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  if (!name) reasons.push('missing name.');
+  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
+  if (!provenance) reasons.push('invalid provenance.');
+  if (reasons.length > 0 || !id || !name || !provenance) {
+    rejectEntry(ctx, 'item', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+  const category = asString(record.category) ?? 'tool';
+  if (!ITEM_CATEGORIES.includes(category)) {
+    rejectEntry(ctx, 'item', id, [`unknown category ${category}.`]);
+    return null;
+  }
+  const weaponSkillId = slugId(record.weaponSkillId);
+  const definition: Record<string, unknown> = {
+    name,
+    description: asString(record.description) ?? name,
+    category,
+    effects: cleanItemEffects(record.effects),
+    unique: record.unique === true,
+  };
+  const armorReduction = asFiniteNumber(record.armorReduction);
+  if (armorReduction !== null) definition.armorReduction = armorReduction;
+  const weaponBonusDice = asFiniteNumber(record.weaponBonusDice);
+  if (weaponBonusDice !== null) definition.weaponBonusDice = weaponBonusDice;
+  if (weaponSkillId) definition.weaponSkillId = skillEntryId(weaponSkillId);
+  return {
+    entry: makeEntry({ entryId: `item-${id}`, kind: 'item', provenance, definition }),
+    weaponSkillId: weaponSkillId ? skillEntryId(weaponSkillId) : null,
+  };
+}
+
+function cleanLore(raw: unknown, ctx: CleanContext): ContentEntry | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const name = asString(record.name);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  if (!name) reasons.push('missing name.');
+  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
+  if (!provenance) reasons.push('invalid provenance.');
+  if (reasons.length > 0 || !id || !name || !provenance) {
+    rejectEntry(ctx, 'lore', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+  return makeEntry({
+    entryId: `lore-${id}`,
+    kind: 'lore',
+    provenance,
+    definition: {
+      name,
+      title: asString(record.title) ?? name,
+      text: typeof record.text === 'string' ? record.text : '',
+    },
+  });
+}
+
+function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const name = asString(record.name);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  if (!name) reasons.push('missing name.');
+  const hp = asFiniteNumber(record.hp);
+  const defense = asFiniteNumber(record.defense);
+  // Combat readiness (plan §7.2) requires positive hp and defense; the model
+  // must supply them, local code never invents combat stats for canon NPCs.
+  if (hp === null || hp <= 0) reasons.push('hp must be a positive number.');
+  if (defense === null || defense <= 0) reasons.push('defense must be a positive number.');
+  const provenance = cleanProvenance(ctx, record, 'rule_mapping', '映射自小说事实的模型提案；数值为规则映射值。');
+  if (!provenance) reasons.push('invalid provenance.');
+  if (reasons.length > 0 || !id || !name || hp === null || defense === null || !provenance) {
+    rejectEntry(ctx, 'actor_template', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+  const category = asString(record.category) ?? 'human';
+  if (!ACTOR_CATEGORIES.includes(category)) {
+    rejectEntry(ctx, 'actor_template', id, [`unknown category ${category}.`]);
+    return null;
+  }
+
+  const attackSkillIds: string[] = [];
+  const attacks: Array<Record<string, unknown>> = [];
+  if (Array.isArray(record.attacks)) {
+    for (const candidate of record.attacks) {
+      const attack = asRecord(candidate);
+      if (!attack) continue;
+      const skillId = slugId(attack.skillId);
+      if (!skillId) continue;
+      const damage = asFiniteNumber(attack.damage) ?? 1;
+      const range = asString(attack.range) ?? 'touch';
+      if (!ATTACK_RANGES.includes(range)) continue;
+      attackSkillIds.push(skillEntryId(skillId));
+      attacks.push({
+        name: asString(attack.name) ?? '攻击',
+        skillId: skillEntryId(skillId),
+        damage: damage > 0 ? damage : 1,
+        range,
+      });
+    }
+  }
+
+  const stamina = asFiniteNumber(record.stamina);
+  const threatRecord = asRecord(record.threat);
+  const behaviorRecord = asRecord(record.behavior);
+  const morale = asString(behaviorRecord?.morale) ?? 'steady';
+  const retreatThreshold = asFiniteNumber(behaviorRecord?.retreatThreshold) ?? 0.25;
+  const threatDamage = asFiniteNumber(threatRecord?.damage) ?? Math.max(1, ...attacks.map(a => Number(a.damage)));
+
+  const ruleMappingField: Provenance = {
+    kind: 'rule_mapping',
+    sourceFactIds: provenance.sourceFactIds,
+    rationale: '数值化为游戏规则值，非原著事实。',
+  };
+  const definition: Record<string, unknown> = {
+    name,
+    category,
+    description: asString(record.description) ?? name,
+    attributes: asRecord(record.attributes) ?? {},
+    skills: asRecord(record.skills) ?? {},
+    hp,
+    stamina: stamina !== null && stamina >= 0 ? stamina : 4,
+    defense,
+    attacks,
+    abilities: asStringArray(record.abilities),
+    behavior: {
+      goal: asString(behaviorRecord?.goal) ?? '依原著动机行动',
+      retreatThreshold: retreatThreshold >= 0 && retreatThreshold <= 1 ? retreatThreshold : 0.25,
+      morale: MORALE.includes(morale) ? morale : 'steady',
+    },
+    lootPolicy: asString(record.lootPolicy) ?? '无掉落',
+    threat: {
+      damage: threatDamage > 0 ? threatDamage : 1,
+      durability: asFiniteNumber(threatRecord?.durability) ?? 1,
+      actions: asFiniteNumber(threatRecord?.actions) ?? 1,
+      control: asFiniteNumber(threatRecord?.control) ?? 0,
+      environment: asFiniteNumber(threatRecord?.environment) ?? 0,
+    },
+  };
+  return {
+    entryId: `npc-${id}`,
+    entry: makeEntry({
+      entryId: `npc-${id}`,
+      kind: 'actor_template',
+      provenance,
+      definition,
+      visibility: 'gm',
+      fieldProvenance: {
+        hp: ruleMappingField,
+        stamina: ruleMappingField,
+        defense: ruleMappingField,
+        threat: ruleMappingField,
+      },
+    }),
+    attackSkillIds,
+    weaponSkillIds: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mapping call + degradation
+// ---------------------------------------------------------------------------
+
+interface MapperPromptPayload {
+  facts: Array<{ factId: string; subject: string; predicate: string; value: Record<string, unknown> }>;
+  entities: Array<{ entityId: string; type: string; name: string }>;
+  events: Array<{ eventId: string; title: string; summary: string }>;
+}
+
+function buildMapperUserPrompt(
+  facts: readonly StoredFact[],
+  entities: readonly StoredEntity[],
+  events: readonly StoredEvent[],
+): string {
+  const nameByEntity = new Map(entities.map(entity => [entity.entityId, entity.name]));
+  const payload: MapperPromptPayload = {
+    facts: facts.slice(0, MAX_PROMPT_FACTS).map(fact => ({
+      factId: fact.factId,
+      subject: nameByEntity.get(fact.subjectEntityId) ?? fact.subjectEntityId,
+      predicate: fact.predicate,
+      value: fact.value,
+    })),
+    entities: entities.map(entity => ({ entityId: entity.entityId, type: entity.type, name: entity.name })),
+    events: events.map(event => ({ eventId: event.eventId, title: event.title, summary: event.summary })),
+  };
+  return JSON.stringify(payload);
+}
+
+async function requestMappingProposals(
+  input: BuildPackageInput,
+  facts: readonly StoredFact[],
+  entities: readonly StoredEntity[],
+  events: readonly StoredEvent[],
+  knownFactIds: Set<string>,
+): Promise<{
+  proposals: CleanedProposals;
+  usage: unknown | null;
+  actorTemplates: RawActorTemplate[];
+  items: Array<{ entry: ContentEntry; weaponSkillId: string | null }>;
+  rejected: Array<{ kind: string; id: string; reasons: string[] }>;
+}> {
+  const response = await input.provider.complete({
+    role: CANON_MAPPER_ROLE,
+    system: MAPPER_SYSTEM,
+    user: buildMapperUserPrompt(facts, entities, events),
+    maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
+    jsonMode: true,
+  });
+  const raw = parseStrictJsonObject<Record<string, unknown>>(response.text, 'WorldMapper mapping output');
+  const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
+  if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
+    throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
+  }
+
+  const ctx: CleanContext = { knownFactIds, rejected: [] };
+  const skills = (Array.isArray(raw.skills) ? raw.skills : [])
+    .map(candidate => cleanSkill(candidate, ctx))
+    .filter((entry): entry is ContentEntry => entry !== null);
+  const constraints = (Array.isArray(raw.constraints) ? raw.constraints : [])
+    .map(candidate => cleanConstraint(candidate, ctx))
+    .filter((entry): entry is ContentEntry => entry !== null);
+  const actorTemplates = (Array.isArray(raw.actorTemplates) ? raw.actorTemplates : [])
+    .map(candidate => cleanActorTemplate(candidate, ctx))
+    .filter((cleaned): cleaned is RawActorTemplate => cleaned !== null);
+  const items = (Array.isArray(raw.items) ? raw.items : [])
+    .map(candidate => cleanItem(candidate, ctx))
+    .filter((cleaned): cleaned is { entry: ContentEntry; weaponSkillId: string | null } => cleaned !== null);
+  const lore = (Array.isArray(raw.lore) ? raw.lore : [])
+    .map(candidate => cleanLore(candidate, ctx))
+    .filter((entry): entry is ContentEntry => entry !== null);
+
+  return {
+    proposals: { skills, constraints, lore },
+    usage: response.usage ?? null,
+    actorTemplates,
+    items,
+    rejected: ctx.rejected,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
+
+function buildSections(entries: readonly ContentEntry[]): BookSection[] {
+  const byKind = (kind: EntryKind, visibility?: EntryVisibility): string[] =>
+    entries
+      .filter(entry => entry.kind === kind && (visibility === undefined || entry.visibility === visibility))
+      .map(entry => entry.entryId);
+
+  const worldLore = entries
+    .filter(entry => entry.kind === 'lore' && entry.entryId !== 'lore-review-summary')
+    .map(entry => entry.entryId);
+  const reviewLore = entries.filter(entry => entry.entryId === 'lore-review-summary').map(entry => entry.entryId);
+  const skills = byKind('skill');
+  const constraints = byKind('constraint');
+  const templates = byKind('actor_template');
+  const items = byKind('item');
+
+  let playerPosition = 0;
+  let gmPosition = 0;
+  let manualPosition = 0;
+  const sections: BookSection[] = [];
+  const push = (section: Omit<BookSection, 'position'>): void => {
+    if (section.entryIds.length === 0) return; // empty sections are noise, skip entirely
+    sections.push({ ...section, position: section.book === 'player_handbook' ? playerPosition++ : section.book === 'gm_guide' ? gmPosition++ : manualPosition++ });
+  };
+
+  push({ book: 'player_handbook', sectionKey: 'world', title: '世界设定', entryIds: worldLore });
+  push({ book: 'player_handbook', sectionKey: 'skills', title: '技能', entryIds: skills });
+  push({ book: 'player_handbook', sectionKey: 'constraints', title: '世界约束', entryIds: constraints });
+  push({ book: 'gm_guide', sectionKey: 'constraints', title: '世界约束', entryIds: constraints });
+  push({ book: 'gm_guide', sectionKey: 'review', title: '冲突与审核摘要', entryIds: reviewLore });
+  push({ book: 'gm_guide', sectionKey: 'npcs', title: '人物模板', entryIds: templates });
+  push({ book: 'gm_guide', sectionKey: 'items', title: '物品', entryIds: items });
+  push({ book: 'monster_manual', sectionKey: 'creatures', title: '对手图鉴', entryIds: templates });
+  return sections;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds and publishes a world package revision from canon facts. Never
+ * throws for LLM problems (parse failures degrade to local design_fill);
+ * only unresolved canon conflicts or unrecoverable validation failures throw.
+ */
+export async function buildPackageFromCanon(input: BuildPackageInput): Promise<BuildPackageResult> {
+  const { worldStore, worldId } = input;
+  const progress = (phase: string, message?: string): void => input.onProgress?.({ phase, message });
+
+  progress('load', '读取小说事实、事件与实体');
+  const [allFacts, events, entities] = await Promise.all([
+    worldStore.listFacts(worldId),
+    worldStore.listEvents(worldId),
+    worldStore.listEntities(worldId),
+  ]);
+  const mappableFacts = allFacts.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
+  const conflictFacts = allFacts.filter(fact => fact.status === 'conflict');
+  const knownFactIds = new Set(allFacts.map(fact => fact.factId));
+
+  let reviewIssueCount = 0;
+
+  // d. Conflict detection: conflicting canon facts block publication until a
+  // human resolves the review queue.
+  if (conflictFacts.length > 0) {
+    await worldStore.saveReviewIssue({
+      worldId,
+      issueId: 'canon-conflict',
+      kind: 'canon_conflict',
+      severity: 'blocking',
+      detailJson: JSON.stringify({
+        factIds: conflictFacts.map(fact => fact.factId),
+        count: conflictFacts.length,
+      }),
+      createdAt: input.createdAt,
+    });
+    reviewIssueCount += 1;
+  }
+
+  // b. One LLM mapping call. Any failure (network, parse, structure) degrades
+  // to the pure local baseline instead of aborting the pipeline.
+  progress('mapping', 'LLM 映射小说事实为世界包条目提案');
+  let mappingUsage: unknown | null = null;
+  let proposals: CleanedProposals = { skills: [], constraints: [], lore: [] };
+  let actorTemplates: RawActorTemplate[] = [];
+  let items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
+  try {
+    const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds);
+    proposals = mapped.proposals;
+    mappingUsage = mapped.usage;
+    actorTemplates = mapped.actorTemplates;
+    items = mapped.items;
+    // Rejected proposals (invalid enums, missing ids, unknown attributes) go
+    // to the review queue as major issues instead of entering the package.
+    for (const rejection of mapped.rejected) {
+      await worldStore.saveReviewIssue({
+        worldId,
+        issueId: `invalid-proposal-${rejection.kind}-${rejection.id}`,
+        kind: 'invalid_proposal',
+        severity: 'major',
+        detailJson: JSON.stringify(rejection),
+        createdAt: input.createdAt,
+      });
+      reviewIssueCount += 1;
+    }
+  } catch (error) {
+    await worldStore.saveReviewIssue({
+      worldId,
+      issueId: 'mapping-failed',
+      kind: 'mapping_failed',
+      severity: 'major',
+      detailJson: JSON.stringify({
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+      createdAt: input.createdAt,
+    });
+    reviewIssueCount += 1;
+  }
+
+  // c. Local deterministic cleaning results + design_fill baseline.
+  const entries: ContentEntry[] = [];
+
+  const acceptedSkillIds = new Set(proposals.skills.map(entry => entry.entryId));
+  for (const skill of proposals.skills) entries.push(skill);
+  for (const constraint of proposals.constraints) entries.push(constraint);
+  for (const lore of proposals.lore) entries.push(lore);
+
+  // Fill missing baseline skills with conservative design_fill defaults.
+  for (const defaults of DEFAULT_SKILLS) {
+    const entryId = skillEntryId(defaults.id);
+    if (acceptedSkillIds.has(entryId)) continue;
+    entries.push(makeEntry({
+      entryId,
+      kind: 'skill',
+      provenance: {
+        kind: 'design_fill',
+        sourceFactIds: [],
+        rationale: DESIGN_FILL_RATIONALE,
+      },
+      definition: {
+        name: defaults.name,
+        description: defaults.description,
+        attribute: defaults.attribute,
+        allowUntrained: defaults.allowUntrained,
+        requirements: [],
+        powerTier: 'ordinary',
+      },
+    }));
+    acceptedSkillIds.add(entryId);
+  }
+
+  // Encounter fallback template, always present (design_fill).
+  entries.push(makeEntry({
+    entryId: 'common-guard-template',
+    kind: 'actor_template',
+    provenance: {
+      kind: 'design_fill',
+      sourceFactIds: [],
+      rationale: '设计补全：遭遇兜底用的普通人守卫模板。',
+    },
+    visibility: 'gm',
+    dependencyIds: [skillEntryId('sword')],
+    fieldProvenance: {
+      hp: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      stamina: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      defense: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      threat: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+    },
+    definition: {
+      name: '普通人守卫',
+      category: 'human',
+      description: '集镇或门派里最普通的守卫，用于兜底遭遇。',
+      attributes: { physique: 1, agility: 1 },
+      skills: { [skillEntryId('sword')]: 'trained' },
+      hp: 6,
+      stamina: 4,
+      defense: 2,
+      attacks: [{ name: '棍棒', skillId: skillEntryId('sword'), damage: 1, range: 'touch' }],
+      abilities: [],
+      behavior: { goal: '守住岗位，驱散闹事者', retreatThreshold: 0.25, morale: 'steady' },
+      lootPolicy: '无掉落',
+      threat: { damage: 1, durability: 1, actions: 1, control: 0, environment: 0 },
+    },
+  }));
+
+  // LLM actor templates: keep attack skill references that resolve after the
+  // baseline fill; dangling ones are dropped instead of blocking publication.
+  for (const template of actorTemplates) {
+    const definition = template.entry.definition as Record<string, unknown>;
+    const attacks = (definition.attacks as Array<Record<string, unknown>>)
+      .filter(attack => acceptedSkillIds.has(String(attack.skillId)));
+    definition.attacks = attacks;
+    template.entry.dependencyIds = [...new Set(attacks.map(attack => String(attack.skillId)))];
+    entries.push(template.entry);
+  }
+
+  for (const item of items) {
+    item.entry.dependencyIds = item.weaponSkillId && acceptedSkillIds.has(item.weaponSkillId)
+      ? [item.weaponSkillId]
+      : [];
+    entries.push(item.entry);
+  }
+
+  // GM-facing review summary: conflict facts and open issues, always attached.
+  const openIssues = await worldStore.listReviewIssues(worldId, 'open');
+  const summaryParts = [
+    `本世界包基于 ${mappableFacts.length} 条已采纳事实构建。`,
+    conflictFacts.length > 0
+      ? `检测到 ${conflictFacts.length} 条冲突事实，发布被阻止，需 GM 仲裁。`
+      : '未检测到冲突事实。',
+    `当前开放审核问题 ${openIssues.length} 条。`,
+  ];
+  entries.push(makeEntry({
+    entryId: 'lore-review-summary',
+    kind: 'lore',
+    provenance: {
+      kind: 'inferred',
+      sourceFactIds: conflictFacts.map(fact => fact.factId),
+      rationale: '审核摘要：由本地冲突检测与审核队列状态生成。',
+    },
+    visibility: 'gm',
+    definition: {
+      name: '审核摘要',
+      title: '本包审核状态',
+      text: summaryParts.join(''),
+    },
+  }));
+
+  const sections = buildSections(entries);
+
+  // g. Publish; on validation failure retry once with local design_fill only.
+  progress('publish', '校验并发布世界包');
+  try {
+    const result = await publishWorldPackage({
+      worldStore,
+      sha256Hex: input.sha256Hex,
+      worldId,
+      sourceSha256: input.sourceSha256,
+      mappingVersion: input.mappingVersion,
+      entries,
+      sections,
+      createdAt: input.createdAt,
+    });
+    return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };
+  } catch {
+    const fallbackEntries = entries.filter(entry => entry.provenance.kind === 'design_fill');
+    const fallbackSections = buildSections(fallbackEntries);
+    const retry = await publishWorldPackage({
+      worldStore,
+      sha256Hex: input.sha256Hex,
+      worldId,
+      sourceSha256: input.sourceSha256,
+      mappingVersion: input.mappingVersion,
+      entries: fallbackEntries,
+      sections: fallbackSections,
+      createdAt: input.createdAt,
+    });
+    return { manifest: retry.manifest, entries: fallbackEntries, sections: fallbackSections, reviewIssues: reviewIssueCount, mappingUsage };
+  }
+}

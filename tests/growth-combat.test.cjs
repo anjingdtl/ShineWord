@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 
 const {
   awardPractice,
-  checkAdvancement,
-  applyMilestoneReward,
+  trainSkill,
+  isTrainable,
+  applyMilestonePractice,
+  assertTrainingAllowed,
   PRACTICE_THRESHOLDS,
 } = require('../dist/domain/progression/growth');
 const {
@@ -17,59 +19,86 @@ const {
 } = require('../dist/domain/combat/encounter');
 
 function skill(skillId, rank, points, awarded = []) {
-  return { skillId, rank, practicePoints: points, awardedTurns: awarded };
+  return { skillId, rank, practicePoints: points, awardedKeys: awarded };
 }
 
-test('practice: one point per independent encounter, turn-id dedup blocks replay farming', () => {
+test('practice: one point per independent encounter, encounter-key dedup blocks replay farming', () => {
   let progress = skill('sword', 'untrained', 0);
-  progress = awardPractice(progress, 'turn-0001');
+  progress = awardPractice(progress, 'enc-0001');
   assert.equal(progress.practicePoints, 1);
 
-  // Same turn replaying must not award again (double click / rewind replay).
-  const replayed = awardPractice(progress, 'turn-0001');
+  // The same encounter replaying must not award again (double click / rewind
+  // replay / reopening the scene). Reusing the same turnId inside a new
+  // encounter is equally refused: the key is the encounter, not the turn.
+  const replayed = awardPractice(progress, 'enc-0001');
   assert.equal(replayed, progress, 'replay returns the same progress');
   assert.equal(replayed.practicePoints, 1);
 
-  // A different turn is a new independent encounter.
-  progress = awardPractice(progress, 'turn-0002');
+  // A different encounter is an independent practice opportunity.
+  progress = awardPractice(progress, 'enc-0002');
   assert.equal(progress.practicePoints, 2);
+
+  // Milestone and practice rewards are independent dedup dimensions.
+  progress = awardPractice(progress, 'enc-0002', 'milestone');
+  assert.equal(progress.practicePoints, 3);
 
   // Master no longer accrues practice.
   const master = skill('sword', 'master', 0);
-  assert.equal(awardPractice(master, 'turn-x').practicePoints, 0);
+  assert.equal(awardPractice(master, 'enc-x').practicePoints, 0);
 });
 
-test('advancement consumes the full threshold: 5/10/20/40', () => {
-  // 4 points at untrained: not enough.
-  const almost = checkAdvancement(skill('sword', 'untrained', 4));
+test('training consumes the full threshold: 5/10/20/40 and requires conditions', () => {
+  const okConditions = { hasSource: true, hasResources: true, meetsPrerequisites: true };
+
+  // Threshold reached only makes the skill trainable, it never auto-advances.
+  assert.equal(isTrainable(skill('sword', 'untrained', 4)), false);
+  assert.equal(isTrainable(skill('sword', 'untrained', 5)), true);
+
+  // 4 points at untrained: not enough even with conditions met.
+  const almost = trainSkill(skill('sword', 'untrained', 4), okConditions);
   assert.equal(almost.advanced, false);
   assert.equal(almost.pointsRemaining, 4);
 
-  const first = checkAdvancement(skill('sword', 'untrained', 5));
+  const first = trainSkill(skill('sword', 'untrained', 5), okConditions);
   assert.equal(first.advanced, true);
   assert.equal(first.nextRank, 'novice');
   assert.equal(first.pointsRemaining, 0);
   assert.equal(first.pointsSpent, 5);
 
-  assert.equal(checkAdvancement(skill('sword', 'novice', 9)).advanced, false);
-  assert.equal(checkAdvancement(skill('sword', 'novice', 10)).nextRank, 'trained');
-  assert.equal(checkAdvancement(skill('sword', 'trained', 20)).nextRank, 'expert');
-  assert.equal(checkAdvancement(skill('sword', 'expert', 40)).nextRank, 'master');
-  assert.equal(checkAdvancement(skill('sword', 'master', 999)).advanced, false);
+  assert.equal(trainSkill(skill('sword', 'novice', 9), okConditions).advanced, false);
+  assert.equal(trainSkill(skill('sword', 'novice', 10), okConditions).nextRank, 'trained');
+  assert.equal(trainSkill(skill('sword', 'trained', 20), okConditions).nextRank, 'expert');
+  assert.equal(trainSkill(skill('sword', 'expert', 40), okConditions).nextRank, 'master');
+  assert.equal(trainSkill(skill('sword', 'master', 999), okConditions).advanced, false);
   assert.ok(PRACTICE_THRESHOLDS.untrained < PRACTICE_THRESHOLDS.novice);
+
+  // Missing instructor/resources/prerequisites blocks advancement explicitly.
+  assert.throws(
+    () => trainSkill(skill('sword', 'untrained', 5), { hasSource: false, hasResources: true, meetsPrerequisites: true }),
+    /instructor, manual or environment/,
+  );
+  assert.throws(
+    () => trainSkill(skill('sword', 'untrained', 5), { hasSource: true, hasResources: false, meetsPrerequisites: true }),
+    /requires the configured resources/,
+  );
+  assert.throws(
+    () => trainSkill(skill('sword', 'untrained', 5), { hasSource: true, hasResources: true, meetsPrerequisites: false }),
+    /prerequisites/,
+  );
+  assert.doesNotThrow(() => assertTrainingAllowed(okConditions));
 });
 
-test('milestone rewards add 1-2 ranks onto unlocked skills only', () => {
-  assert.equal(applyMilestoneReward({ skillId: 'sword', currentRank: 'trained', grantedRanks: 1 }), 'expert');
-  assert.equal(applyMilestoneReward({ skillId: 'sword', currentRank: 'trained', grantedRanks: 2 }), 'master');
-  // Cap at master even with absurd grants.
-  assert.equal(applyMilestoneReward({ skillId: 'sword', currentRank: 'expert', grantedRanks: 2 }), 'master');
+test('milestone rewards add 1-2 practice points onto unlocked skills only', () => {
+  assert.equal(applyMilestonePractice({ skillId: 'sword', currentRank: 'trained', grantedPoints: 1 }), 1);
+  assert.equal(applyMilestonePractice({ skillId: 'sword', currentRank: 'trained', grantedPoints: 2 }), 2);
+  // Master gains nothing further.
+  assert.equal(applyMilestonePractice({ skillId: 'sword', currentRank: 'master', grantedPoints: 2 }), 0);
   assert.throws(
-    () => applyMilestoneReward({ skillId: 'sword', currentRank: 'untrained', grantedRanks: 2 }),
+    () => applyMilestonePractice({ skillId: 'sword', currentRank: 'untrained', grantedPoints: 2 }),
     /cannot unlock/,
   );
   assert.throws(
-    () => applyMilestoneReward({ skillId: 'sword', currentRank: 'trained', grantedRanks: 3 }),
+    () => applyMilestonePractice({ skillId: 'sword', currentRank: 'trained', grantedPoints: 3 }),
     /between 1 and 2/,
   );
 });

@@ -12,7 +12,7 @@ import { parseStrictJsonObject } from '../llm/json';
 import { TurnRequestBudget } from '../llm/requestBudget';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
-import type { TurnStore } from '../ports/turnStore';
+import type { TurnSettlementPlan, TurnStore } from '../ports/turnStore';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { resolveOrReuseRoll } from '../turns/resolveOrReuseRoll';
 
@@ -34,6 +34,11 @@ export interface RunLlmTurnInput {
   hashProvider: Sha256HexProvider;
   random: RandomSource;
   resolveRollSpec(contract: ActionContract): RollSpec;
+  /**
+   * Growth/relationship settlement for this turn, committed in the SAME
+   * transaction (plan §13.3). Receives the frozen grade after the roll.
+   */
+  settlementFor?(grade: RollGrade, contract: ActionContract): Promise<TurnSettlementPlan>;
   now?: () => string;
   budget?: TurnRequestBudget;
   /** Optional usage persistence (llm_requests) wired by the platform layer. */
@@ -381,6 +386,7 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
     resumed = true;
   }
 
+  const settlement = input.settlementFor ? await input.settlementFor(grade, contract) : undefined;
   const result = await commitResolvedTurn({
     store: input.store,
     branchId: input.branchId,
@@ -388,6 +394,7 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
     contractHash,
     outcomeGrade: grade,
     rollRecord,
+    settlement,
     committedAt: now(),
   });
   await input.narratives.markCommitted(input.branchId, input.turnId);

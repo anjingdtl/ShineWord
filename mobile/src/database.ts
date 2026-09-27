@@ -5,6 +5,7 @@ import { ReactNativeSqliteAdapter, type ReactNativeSqliteDatabase } from '../../
 import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStore';
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
+import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 
 SQLite.enablePromise(true);
 
@@ -13,6 +14,7 @@ export interface MobileDatabaseRuntime {
   turns: SqliteTurnStore;
   narratives: SqliteNarrativeStore;
   game: SqliteGameStore;
+  worldStore: SqliteWorldStore;
 }
 
 let singleton: Promise<MobileDatabaseRuntime> | null = null;
@@ -27,56 +29,15 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   );
   await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
 
-  const branch = await db.queryOne<{ branch_id: string }>(
-    'SELECT branch_id FROM branches WHERE branch_id = ?',
-    ['demo-main'],
-  );
-  if (!branch) {
-    await db.transaction(async tx => {
-      const createdAt = new Date().toISOString();
-      await tx.execute(
-        `INSERT INTO branches
-          (branch_id, campaign_id, parent_branch_id, fork_turn_id, state_version, created_at)
-         VALUES (?, ?, NULL, NULL, 0, ?)`,
-        ['demo-main', 'demo-campaign', createdAt],
-      );
-      await tx.execute(
-        `INSERT INTO actor_states
-          (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)
-         VALUES (?, ?, 0, ?, ?, '[]')`,
-        ['demo-main', 'actor-player', 'rainy-courtyard', JSON.stringify({ stamina: 10, hp: 10 })],
-      );
-      await tx.execute(
-        `INSERT INTO snapshots
-          (branch_id, state_version, snapshot_json, state_hash, created_at)
-         VALUES (?, 0, ?, NULL, ?)`,
-        [
-          'demo-main',
-          JSON.stringify({
-            branchId: 'demo-main',
-            stateVersion: 0,
-            clockMinutes: 0,
-            actors: {
-              'actor-player': {
-                actorId: 'actor-player',
-                locationId: 'rainy-courtyard',
-                resources: { stamina: 10, hp: 10 },
-                conditions: [],
-              },
-            },
-            itemOwners: {},
-          }),
-          createdAt,
-        ],
-      );
-    });
-  }
-
+  // Phase 2: no implicit demo campaign. Every game is an explicit campaign
+  // with a locked world package; existing demo-main data stays readable
+  // through its campaign but is never auto-created or auto-selected.
   return {
     db,
     turns: new SqliteTurnStore(db),
     narratives: new SqliteNarrativeStore(db),
     game: new SqliteGameStore(db),
+    worldStore: new SqliteWorldStore(db),
   };
 }
 
