@@ -180,6 +180,16 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     clockMinutes: 0,
     actors: {},
     itemOwners: {},
+    // Complete v0 snapshot: cards and party membership belong to the branch
+    // timeline, so a historical fork restores them from snapshots instead of
+    // copying the source branch's current rows (P2 acceptance A03).
+    cards: cards.map(card => ({ actorId: card.actorId, card })),
+    party: cards.map(card => ({
+      actorId: card.actorId,
+      controller: card.controller,
+      role: card.controller === 'player' ? 'protagonist' : 'companion',
+      joinedAt: input.createdAt,
+    })),
   };
   for (const card of cards) {
     snapshot.actors[card.actorId] = {

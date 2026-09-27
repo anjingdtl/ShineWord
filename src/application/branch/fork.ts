@@ -37,9 +37,10 @@ export interface ForkBranchResult {
  * branch.
  *
  * Phase 2 correctness rules:
- * - Skills, relationships and every other authoritative projection are
- *   restored FROM THE FORK-POINT SNAPSHOT inside the branch-creation
- *   transaction — never copied from the source branch's current rows.
+ * - Skills, relationships, cards, party and every other authoritative
+ *   projection are restored FROM THE FORK-POINT SNAPSHOT inside the
+ *   branch-creation transaction — never copied from the source branch's
+ *   current rows (P2 acceptance A03).
  * - Phase-2 snapshots are complete. Legacy snapshots (no skills/relationships)
  *   can only be forked at their head (where current rows are correct); a
  *   historical legacy fork refuses instead of fabricating history.
@@ -77,10 +78,51 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
   const existing = await db.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [input.targetBranchId]);
   if (existing) throw new Error(`Target branch already exists: ${input.targetBranchId}.`);
 
+  // Cards and party come from the fork-point snapshot. A snapshot without
+  // card history may only take cards from CURRENT rows at the head (where
+  // current == head); a historical fork with card rows present but no card
+  // snapshot history refuses instead of fabricating (A03).
+  let cards: NonNullable<GameStateSnapshot['cards']> = snapshot.cards ? [...snapshot.cards] : [];
+  let party: NonNullable<GameStateSnapshot['party']> = snapshot.party ? [...snapshot.party] : [];
+  if (!snapshot.cards) {
+    const hasCardRows = await db.queryOne(
+      'SELECT actor_id FROM actor_cards WHERE branch_id = ? LIMIT 1',
+      [input.sourceBranchId],
+    );
+    if (hasCardRows && !atHead) {
+      throw new Error(
+        `Snapshot at version ${input.atStateVersion} lacks card history; ` +
+          'a historical fork would copy the CURRENT card into the past. Play the branch forward once (any committed action re-stamps complete snapshots) or fork at the head.',
+      );
+    }
+    if (hasCardRows && atHead) {
+      const cardRows = await db.queryAll<{ actor_id: string; card_json: string }>(
+        'SELECT actor_id, card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
+        [input.sourceBranchId],
+      );
+      cards = cardRows.map(row => ({
+        actorId: row.actor_id,
+        card: JSON.parse(row.card_json) as unknown,
+      }));
+      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
+        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+        [input.sourceBranchId],
+      );
+      party = partyRows.map(row => ({
+        actorId: row.actor_id,
+        controller: row.controller,
+        role: row.role,
+        joinedAt: row.joined_at,
+      }));
+    }
+  }
+
   snapshot.branchId = input.targetBranchId;
   const targetStateVersion = snapshot.stateVersion;
   const skills: SkillSnapshotEntry[] = snapshot.skills ?? [];
   const relationships: RelationshipSnapshotEntry[] = snapshot.relationships ?? [];
+  if (cards.length > 0) snapshot.cards = cards;
+  if (party.length > 0) snapshot.party = party;
 
   // Branch creation and ALL authoritative projections commit atomically.
   await db.transaction(async tx => {
@@ -114,6 +156,20 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         `INSERT INTO relationships (branch_id, rel_id, from_actor_id, to_actor_id, stance, closeness, updated_turn_id, state_version)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [input.targetBranchId, rel.relId, rel.fromActorId, rel.toActorId, rel.stance, rel.closeness, rel.updatedTurnId, targetStateVersion],
+      );
+    }
+    for (const card of cards) {
+      await tx.execute(
+        `INSERT INTO actor_cards (branch_id, actor_id, card_json, created_at, updated_at, updated_state_version)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [input.targetBranchId, card.actorId, JSON.stringify(card.card), input.createdAt, input.createdAt, targetStateVersion],
+      );
+    }
+    for (const member of party) {
+      await tx.execute(
+        `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [input.targetBranchId, member.actorId, member.controller, member.role, member.joinedAt],
       );
     }
     await tx.execute(

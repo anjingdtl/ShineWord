@@ -344,34 +344,27 @@ test('campaign creation locks the package and writes all state in one transactio
 // P2-2/P2-3: session loop with card-driven rolls + settlement + isolation
 // ---------------------------------------------------------------------------
 
+// V2 restricted-proposal provider: the planner proposes an action SHAPE only
+// (kind + skill + evidence); all numbers are compiled locally by the engine.
 class ScriptedPlannerProvider {
   constructor() { this.calls = 0; }
   async complete(request) {
     this.calls += 1;
     const payload = JSON.parse(request.user);
     if (request.role === 'Planner') {
-      const clause = summary => ({ achieved: true, publicSummary: summary, effects: [{ op: 'advanceClock', minutes: 1 }] });
-      const contract = {
-        protocolVersion: '1.0',
+      const proposal = {
+        proposalVersion: '2.0',
         turnId: payload.turnId,
         expectedStateVersion: payload.expectedStateVersion,
         actorId: 'actor-shen',
-        actionType: 'sneak',
-        evidenceIds: ['lore-rain'],
-        requiresRoll: true,
-        intent: payload.playerIntent,
-        timeCostMinutes: 1,
-        resourcePreconditions: [],
+        actionKind: 'skill_check',
         skillId: 'stealth',
         difficultyBand: 'challenging',
-        outcomes: {
-          full_success: clause('full'),
-          success: clause('ok'),
-          failure: { achieved: false, publicSummary: 'fail', effects: [] },
-          severe_failure: { achieved: false, publicSummary: 'bad', effects: [] },
-        },
+        evidenceIds: ['lore-rain'],
+        intent: payload.playerIntent,
+        narrativeHint: { successSummary: 'ok', failureSummary: 'fail' },
       };
-      return { text: JSON.stringify(contract), usage: { inputTokens: 100, outputTokens: 50, estimated: false } };
+      return { text: JSON.stringify(proposal), usage: { inputTokens: 100, outputTokens: 50, estimated: false } };
     }
     return {
       text: JSON.stringify({ turnId: payload.turnId, outcomeGrade: payload.outcomeGrade, text: `剧情 ${payload.turnId}` }),
@@ -416,9 +409,13 @@ test('session playTurn uses card-driven dice and settles growth atomically', asy
   assert.ok(result.text.length > 0);
 
   // Growth settled in the same transaction: skill row + ledger row exist.
+  // Challenge id is the STABLE open-challenge id (skill sequence 1) — a
+  // per-turn id would let re-typed input farm points (P2 A04).
   const skill = db.prepare("SELECT practice_points, awarded_turns_json FROM actor_skills WHERE branch_id = 'camp-s-main' AND actor_id = 'actor-shen' AND skill_id = 'stealth'").get();
   assert.equal(skill.practice_points, 1);
-  assert.ok(skill.awarded_turns_json.includes('challenge-camp-s-main-turn-0001:practice'));
+  assert.ok(skill.awarded_turns_json.includes('challenge-camp-s-main-actor-shen-stealth-1:practice'));
+  assert.ok(skill.awarded_turns_json.includes('challenge-camp-s-main-actor-shen-stealth-1:closed'),
+    'an achieved challenge is closed; the next attempt opens a new one');
   const ledger = db.prepare("SELECT COUNT(*) AS n FROM reward_ledger WHERE branch_id = 'camp-s-main'").get();
   assert.equal(ledger.n, 1);
 
@@ -430,7 +427,7 @@ test('session playTurn uses card-driven dice and settles growth atomically', asy
     'protagonist skill progress is stamped into the snapshot');
   assert.ok(snap.skills.some(skill => skill.actorId === 'actor-su' && skill.skillId === 'sword'),
     'companion template skills are part of the complete snapshot');
-  assert.equal(snap.clockSeconds, 120, 'clock advanced to seconds (1 contract min + 1 advanceClock min)');
+  assert.equal(snap.clockSeconds, 600, 'clock advanced by the engine-fixed skill-check cost (10 min)');
 
   // Replaying the same turn id (recovery) replays without re-awarding.
   const replay = await session.playTurn({
@@ -491,36 +488,53 @@ test('rest and training follow V0.2 policy: threshold only enables training', as
   const db = setupDb();
   const { session, adapter } = await makeSession(db);
 
-  // Training before the threshold is refused.
+  // Training before the threshold is refused. Conditions are no longer UI
+  // inputs — the engine queries real state (P2 acceptance A02).
   await assert.rejects(
     () => session.trainSkill({
       campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-shen',
-      skillId: 'stealth', conditions: { hasSource: true, hasResources: true, meetsPrerequisites: true },
+      skillId: 'stealth',
     }),
     /practice threshold/,
   );
 
-  // The initial skill starts at novice: 10 independent encounters to its
-  // threshold of 10. Milestone/turn awards never auto-advance.
+  // The initial skill starts at novice: 10 independent challenges to its
+  // threshold of 10 (each achieved challenge opens the next). Milestone/turn
+  // awards never auto-advance.
   for (let i = 0; i < 10; i += 1) {
     await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: `行动 ${i}` });
   }
+  const beforeTraining = await session.getSummary('camp-s', 'camp-s-main');
   const progress = await session.trainSkill({
     campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-shen',
-    skillId: 'stealth', conditions: { hasSource: true, hasResources: true, meetsPrerequisites: true },
+    skillId: 'stealth',
   });
   assert.equal(progress.advanced, true);
   assert.equal(progress.nextRank, 'trained');
   assert.equal(progress.pointsSpent, 10);
+  const afterTraining = await session.getSummary('camp-s', 'camp-s-main');
+  assert.ok(afterTraining.state.stateVersion > beforeTraining.state.stateVersion,
+    'training is a versioned action transaction');
+  assert.equal(afterTraining.state.clockSeconds, beforeTraining.state.clockSeconds + 240 * 60,
+    'training consumes real world time (4 hours)');
+  assert.equal(afterTraining.state.actors['actor-shen'].resources.stamina, 8,
+    'training consumes real resources (2 stamina)');
+  const trainedCard = await session.getCard('camp-s-main', 'actor-shen');
+  assert.equal(trainedCard.skills.stealth, 'trained', 'card projection updated in the same transaction');
+  const trainSnap = JSON.parse(db.prepare("SELECT snapshot_json FROM snapshots WHERE branch_id = 'camp-s-main' ORDER BY state_version DESC LIMIT 1").get().snapshot_json);
+  assert.equal(trainSnap.cards.find(c => c.actorId === 'actor-shen').card.skills.stealth, 'trained',
+    'the snapshot stamped by the training commit carries the trained card (A03)');
 
-  // Missing instructor blocks training immediately - conditions are checked
-  // before the threshold, and the card keeps its rank until real training.
+  // Insufficient REAL stamina blocks training — an engine-queried condition,
+  // checked before anything is spent.
+  db.prepare("UPDATE actor_states SET resources_json = ? WHERE branch_id = 'camp-s-main' AND actor_id = 'actor-shen'")
+    .run(JSON.stringify({ hp: 10, stamina: 1 }));
   await assert.rejects(
     () => session.trainSkill({
       campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-shen',
-      skillId: 'stealth', conditions: { hasSource: false, hasResources: true, meetsPrerequisites: true },
+      skillId: 'stealth',
     }),
-    /instructor, manual or environment/,
+    /Training requires the configured resources/,
   );
 
   // Rest advances the world clock and restores stamina, committed as a turn.
@@ -530,5 +544,5 @@ test('rest and training follow V0.2 policy: threshold only enables training', as
   const after = await session.getSummary('camp-s', 'camp-s-main');
   assert.equal(after.state.stateVersion, before.state.stateVersion + 1);
   assert.equal(after.state.clockSeconds, before.state.clockSeconds + 1800);
-  assert.equal(after.state.actors['actor-shen'].resources.stamina, 10, 'short rest restores 2 stamina');
+  assert.equal(after.state.actors['actor-shen'].resources.stamina, 3, 'short rest restores 2 stamina from 1');
 });

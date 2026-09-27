@@ -557,10 +557,26 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(branch_id, status);
 CREATE INDEX IF NOT EXISTS idx_review_open ON review_issues(world_id, status, severity);
 `;
 
+const P2_ACCEPTANCE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- P2 acceptance G06: raw-file-byte SHA-256. New imports store the true byte
+-- digest in source_sha256, while worlds hashed by the legacy re-encode scheme keep
+-- their old value here so resume matching and old save manifests never break
+-- silently. The column is never backfilled - legacy values are preserved as
+-- they were (plan 15.3 - no silent rewrites of existing data).
+ALTER TABLE worlds ADD COLUMN legacy_source_sha256 TEXT;
+
+-- G01: encounters.round was part of the domain model but never had a
+-- column (saveEncounter had no production caller). Stored rounds keep
+-- the default of 1 - existing rows never claimed a round number.
+ALTER TABLE encounters ADD COLUMN round INTEGER NOT NULL DEFAULT 1;
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
   { version: 3, name: 'world', sql: WORLD_SCHEMA_SQL },
   { version: 4, name: 'game', sql: GAME_SCHEMA_SQL },
   { version: 5, name: 'phase2', sql: PHASE2_SCHEMA_SQL },
+  { version: 6, name: 'p2_acceptance', sql: P2_ACCEPTANCE_SCHEMA_SQL },
 ];

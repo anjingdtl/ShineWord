@@ -122,6 +122,37 @@ export function isTrainable(progress: SkillProgress): boolean {
   return Number.isFinite(threshold) && progress.practicePoints >= threshold;
 }
 
+/** Suffix stamped onto a challenge id once that challenge is ACHIEVED. */
+export const CHALLENGE_CLOSED_SUFFIX = ':closed';
+
+/**
+ * Free-exploration challenge identity (plan §8.4: "客户端不得因玩家换措辞
+ * 或重新打开场景创建新的奖励机会").
+ *
+ * A challenge is one open pursuit of a skill goal. It closes when an attempt
+ * ACHIEVES its outcome (full_success/success); retrying an unachieved
+ * challenge — re-typing the same action, re-opening the scene, failing again
+ * — keeps the SAME challenge id, so the whole failed sequence is worth at
+ * most one practice point (成功或失败均可获点, 每独立挑战至多一次). A new
+ * challenge opens only after the previous one was achieved.
+ */
+export function openChallengeId(
+  branchId: string,
+  actorId: string,
+  skillId: string,
+  progress: SkillProgress | null,
+): string {
+  const closed = (progress?.awardedKeys ?? []).filter(
+    key => key.endsWith(CHALLENGE_CLOSED_SUFFIX),
+  ).length;
+  return `challenge-${branchId}-${actorId}-${skillId}-${closed + 1}`;
+}
+
+/** Key stamped when a challenge is achieved (closes it for that skill). */
+export function challengeClosedKey(challengeId: string): string {
+  return `${challengeId}${CHALLENGE_CLOSED_SUFFIX}`;
+}
+
 export interface MilestonePracticeInput {
   skillId: string;
   currentRank: SkillRank;

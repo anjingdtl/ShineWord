@@ -13,11 +13,14 @@ import { publishWorldPackage } from './publish';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
- * events and entities extracted from a novel. The LLM proposes entries in one
- * mapping call; local code then deterministically cleans every proposal,
- * fills a conservative baseline catalog (design_fill) and publishes through
- * the standard gate. The pipeline always produces a publishable package -
- * unless canon conflicts block publication in the review queue.
+ * events and entities extracted from a novel. The LLM proposes entries in
+ * BATCHED mapping calls covering EVERY mappable fact; local code then
+ * deterministically cleans every proposal, fills a conservative baseline
+ * catalog (design_fill) and publishes through the standard gate.
+ *
+ * G04 honesty gate: a mapping failure refuses publication entirely (the
+ * extracted facts stay persisted for resume) — a generic default package is
+ * never smuggled out as this novel's complete three books.
  */
 
 export interface MappingCompleteRequest {
@@ -480,7 +483,16 @@ function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate |
 // ---------------------------------------------------------------------------
 
 interface MapperPromptPayload {
-  facts: Array<{ factId: string; subject: string; predicate: string; value: Record<string, unknown> }>;
+  facts: Array<{
+    factId: string;
+    subject: string;
+    predicate: string;
+    value: Record<string, unknown>;
+    /** World-time window and reveal gating travel WITH the fact (G05). */
+    validFrom?: string | null;
+    validTo?: string | null;
+    revealAt?: string | null;
+  }>;
   entities: Array<{ entityId: string; type: string; name: string }>;
   events: Array<{ eventId: string; title: string; summary: string }>;
 }
@@ -492,11 +504,14 @@ function buildMapperUserPrompt(
 ): string {
   const nameByEntity = new Map(entities.map(entity => [entity.entityId, entity.name]));
   const payload: MapperPromptPayload = {
-    facts: facts.slice(0, MAX_PROMPT_FACTS).map(fact => ({
+    facts: facts.map(fact => ({
       factId: fact.factId,
       subject: nameByEntity.get(fact.subjectEntityId) ?? fact.subjectEntityId,
       predicate: fact.predicate,
       value: fact.value,
+      validFrom: fact.validFrom ?? null,
+      validTo: fact.validTo ?? null,
+      revealAt: fact.revealAt ?? null,
     })),
     entities: entities.map(entity => ({ entityId: entity.entityId, type: entity.type, name: entity.name })),
     events: events.map(event => ({ eventId: event.eventId, title: event.title, summary: event.summary })),
@@ -516,43 +531,86 @@ async function requestMappingProposals(
   actorTemplates: RawActorTemplate[];
   items: Array<{ entry: ContentEntry; weaponSkillId: string | null }>;
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
+  mappedFactCount: number;
+  batches: number;
 }> {
-  const response = await input.provider.complete({
-    role: CANON_MAPPER_ROLE,
-    system: MAPPER_SYSTEM,
-    user: buildMapperUserPrompt(facts, entities, events),
-    maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
-    jsonMode: true,
-  });
-  const raw = parseStrictJsonObject<Record<string, unknown>>(response.text, 'WorldMapper mapping output');
-  const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
-  if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
-    throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
+  // Batched mapping (P2 acceptance G04): EVERY mappable fact is offered to the
+  // mapper — a single 800-fact call used to silently drop the rest and still
+  // publish "complete" books. Batches run sequentially; each failure fails the
+  // whole mapping honestly instead of pretending coverage.
+  const batches: Array<readonly StoredFact[]> = [];
+  for (let offset = 0; offset < facts.length; offset += MAX_PROMPT_FACTS) {
+    batches.push(facts.slice(offset, offset + MAX_PROMPT_FACTS));
   }
 
-  const ctx: CleanContext = { knownFactIds, rejected: [] };
-  const skills = (Array.isArray(raw.skills) ? raw.skills : [])
-    .map(candidate => cleanSkill(candidate, ctx))
-    .filter((entry): entry is ContentEntry => entry !== null);
-  const constraints = (Array.isArray(raw.constraints) ? raw.constraints : [])
-    .map(candidate => cleanConstraint(candidate, ctx))
-    .filter((entry): entry is ContentEntry => entry !== null);
-  const actorTemplates = (Array.isArray(raw.actorTemplates) ? raw.actorTemplates : [])
-    .map(candidate => cleanActorTemplate(candidate, ctx))
-    .filter((cleaned): cleaned is RawActorTemplate => cleaned !== null);
-  const items = (Array.isArray(raw.items) ? raw.items : [])
-    .map(candidate => cleanItem(candidate, ctx))
-    .filter((cleaned): cleaned is { entry: ContentEntry; weaponSkillId: string | null } => cleaned !== null);
-  const lore = (Array.isArray(raw.lore) ? raw.lore : [])
-    .map(candidate => cleanLore(candidate, ctx))
-    .filter((entry): entry is ContentEntry => entry !== null);
+  const skills: ContentEntry[] = [];
+  const constraints: ContentEntry[] = [];
+  const lore: ContentEntry[] = [];
+  const actorTemplates: RawActorTemplate[] = [];
+  const items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
+  const allRejected: Array<{ kind: string; id: string; reasons: string[] }> = [];
+  let usage: unknown | null = null;
+  let mappedFactCount = 0;
+  const seenEntryIds = new Set<string>();
+
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index]!;
+    input.onProgress?.({
+      phase: 'mapping',
+      message: `LLM 映射事实批次 ${index + 1}/${batches.length}（每批至多 ${MAX_PROMPT_FACTS} 条）`,
+    });
+    const response = await input.provider.complete({
+      role: CANON_MAPPER_ROLE,
+      system: MAPPER_SYSTEM,
+      user: buildMapperUserPrompt(batch, entities, events),
+      maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
+      jsonMode: true,
+    });
+    const raw = parseStrictJsonObject<Record<string, unknown>>(response.text, 'WorldMapper mapping output');
+    const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
+    if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
+      throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
+    }
+    usage = response.usage ?? usage;
+
+    const ctx: CleanContext = { knownFactIds, rejected: [] };
+    const pushUnique = (entry: ContentEntry | null): void => {
+      if (!entry) return;
+      if (seenEntryIds.has(entry.entryId)) return; // later batches never overwrite earlier ones
+      seenEntryIds.add(entry.entryId);
+      if (entry.kind === 'skill') skills.push(entry);
+      else if (entry.kind === 'constraint') constraints.push(entry);
+      else if (entry.kind === 'lore') lore.push(entry);
+    };
+    for (const candidate of Array.isArray(raw.skills) ? raw.skills : []) pushUnique(cleanSkill(candidate, ctx));
+    for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) pushUnique(cleanConstraint(candidate, ctx));
+    for (const candidate of Array.isArray(raw.lore) ? raw.lore : []) pushUnique(cleanLore(candidate, ctx));
+    for (const candidate of Array.isArray(raw.actorTemplates) ? raw.actorTemplates : []) {
+      const cleaned = cleanActorTemplate(candidate, ctx);
+      if (cleaned && !seenEntryIds.has(cleaned.entryId)) {
+        seenEntryIds.add(cleaned.entryId);
+        actorTemplates.push(cleaned);
+      }
+    }
+    for (const candidate of Array.isArray(raw.items) ? raw.items : []) {
+      const cleaned = cleanItem(candidate, ctx);
+      if (cleaned && !seenEntryIds.has(cleaned.entry.entryId)) {
+        seenEntryIds.add(cleaned.entry.entryId);
+        items.push(cleaned);
+      }
+    }
+    mappedFactCount += batch.length;
+    allRejected.push(...ctx.rejected);
+  }
 
   return {
     proposals: { skills, constraints, lore },
-    usage: response.usage ?? null,
+    usage,
     actorTemplates,
     items,
-    rejected: ctx.rejected,
+    rejected: allRejected,
+    mappedFactCount,
+    batches: batches.length,
   };
 }
 
@@ -637,19 +695,36 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     reviewIssueCount += 1;
   }
 
-  // b. One LLM mapping call. Any failure (network, parse, structure) degrades
-  // to the pure local baseline instead of aborting the pipeline.
+  // A world with NOTHING mappable and no conflicts has no novel content at
+  // all - publishing a generic design_fill package for it would masquerade as
+  // this novel's three books (P2 acceptance G04).
+  if (mappableFacts.length === 0 && conflictFacts.length === 0) {
+    throw new Error(
+      '这个世界没有任何可映射的小说事实，未发布任何版本。请先完成抽取（或修复失败的文本块），再进入三宝书映射。',
+    );
+  }
+
+  // b. Batched LLM mapping over ALL mappable facts. Any failure (network,
+  // parse, structure) degrades to the pure local baseline — but the result is
+  // published as an explicitly labeled needs_review PREVIEW, never as the
+  // novel's complete three books (P2 acceptance G04).
   progress('mapping', 'LLM 映射小说事实为世界包条目提案');
   let mappingUsage: unknown | null = null;
   let proposals: CleanedProposals = { skills: [], constraints: [], lore: [] };
   let actorTemplates: RawActorTemplate[] = [];
   let items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
+  let mappingSucceeded = false;
+  let mappedFactCount = 0;
+  let mappingBatches = 0;
   try {
     const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds);
     proposals = mapped.proposals;
     mappingUsage = mapped.usage;
     actorTemplates = mapped.actorTemplates;
     items = mapped.items;
+    mappedFactCount = mapped.mappedFactCount;
+    mappingBatches = mapped.batches;
+    mappingSucceeded = true;
     // Rejected proposals (invalid enums, missing ids, unknown attributes) go
     // to the review queue as major issues instead of entering the package.
     for (const rejection of mapped.rejected) {
@@ -664,17 +739,25 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       reviewIssueCount += 1;
     }
   } catch (error) {
+    // Mapping failed: NO package revision is created. The extracted facts,
+    // entities and events are already persisted, so re-entering the build
+    // resumes from them; a generic default package must never masquerade as
+    // this novel's complete three books (P2 acceptance G04).
     await worldStore.saveReviewIssue({
       worldId,
       issueId: 'mapping-failed',
       kind: 'mapping_failed',
-      severity: 'major',
+      severity: 'blocking',
       detailJson: JSON.stringify({
         reason: error instanceof Error ? error.message : String(error),
+        note: '映射失败：未生成任何世界包。已完成的抽取成果已保存，重新进入构建可续建。',
       }),
       createdAt: input.createdAt,
     });
-    reviewIssueCount += 1;
+    throw new Error(
+      `小说→三宝书映射失败，未发布任何版本：${error instanceof Error ? error.message : String(error)}。` +
+        '抽取成果已保存，重新构建将从已完成的进度续建。',
+    );
   }
 
   // c. Local deterministic cleaning results + design_fill baseline.
@@ -764,7 +847,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   // GM-facing review summary: conflict facts and open issues, always attached.
   const openIssues = await worldStore.listReviewIssues(worldId, 'open');
   const summaryParts = [
-    `本世界包基于 ${mappableFacts.length} 条已采纳事实构建。`,
+    `本世界包基于 ${mappableFacts.length} 条已采纳事实构建（映射分 ${mappingBatches} 批全部覆盖）。`,
     conflictFacts.length > 0
       ? `检测到 ${conflictFacts.length} 条冲突事实，发布被阻止，需 GM 仲裁。`
       : '未检测到冲突事实。',
@@ -788,33 +871,27 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
 
   const sections = buildSections(entries);
 
-  // g. Publish; on validation failure retry once with local design_fill only.
+  // g. Publish with explicit coverage accounting. Validation failure FAILS —
+  // silently retrying with a stripped design_fill package used to smuggle a
+  // generic world out as the novel's books (P2 acceptance G04).
   progress('publish', '校验并发布世界包');
-  try {
-    const result = await publishWorldPackage({
-      worldStore,
-      sha256Hex: input.sha256Hex,
-      worldId,
-      sourceSha256: input.sourceSha256,
-      mappingVersion: input.mappingVersion,
-      entries,
-      sections,
-      createdAt: input.createdAt,
-    });
-    return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };
-  } catch {
-    const fallbackEntries = entries.filter(entry => entry.provenance.kind === 'design_fill');
-    const fallbackSections = buildSections(fallbackEntries);
-    const retry = await publishWorldPackage({
-      worldStore,
-      sha256Hex: input.sha256Hex,
-      worldId,
-      sourceSha256: input.sourceSha256,
-      mappingVersion: input.mappingVersion,
-      entries: fallbackEntries,
-      sections: fallbackSections,
-      createdAt: input.createdAt,
-    });
-    return { manifest: retry.manifest, entries: fallbackEntries, sections: fallbackSections, reviewIssues: reviewIssueCount, mappingUsage };
-  }
+  const result = await publishWorldPackage({
+    worldStore,
+    sha256Hex: input.sha256Hex,
+    worldId,
+    sourceSha256: input.sourceSha256,
+    mappingVersion: input.mappingVersion,
+    entries,
+    sections,
+    createdAt: input.createdAt,
+    coverage: {
+      mappableFacts: mappableFacts.length,
+      factsOfferedToMapper: mappedFactCount,
+      mappingBatches,
+      mappingSucceeded,
+      novelEntries: entries.filter(entry => entry.provenance.kind !== 'design_fill').length,
+      designFillEntries: entries.filter(entry => entry.provenance.kind === 'design_fill').length,
+    },
+  });
+  return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };
 }

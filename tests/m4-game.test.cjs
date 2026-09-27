@@ -237,9 +237,25 @@ test('save export contains no secrets and import validation rejects tampered fil
     db.prepare(`INSERT INTO worlds (world_id, title, source_sha256, source_bytes, normalize_version, chapter_split_version, build_status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run('world-1', 'w', 'a'.repeat(64), 1, 'n', 'c', 'ready', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z');
-    db.prepare(`INSERT INTO campaigns (campaign_id, world_id, title, ruleset_id, ruleset_version, world_mapping_version, opening_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    db.prepare(`INSERT INTO campaigns (campaign_id, world_id, title, ruleset_id, ruleset_version, world_mapping_version, opening_json, created_at, package_revision, anchor_json, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, '{}', 'active')`)
       .run('camp-1', 'world-1', '测试战役', 'shineword-core', '0.1.0', '1', '{}', '2026-09-27T00:00:00.000Z');
+    // A phase-2 campaign owns a locked package, cards and party (v3 saves
+    // carry them all — P2 acceptance A05).
+    db.prepare(`INSERT INTO world_packages (world_id, revision, source_sha256, ruleset_id, ruleset_version, mapping_version, status, content_hash, created_at)
+      VALUES ('world-1', 1, ?, 'shineword-core', '0.1.0', '1', 'published', ?, 't')`)
+      .run('a'.repeat(64), 'c'.repeat(64));
+    const card = {
+      actorId: 'actor-player', name: 'p', kind: 'original', controller: 'player',
+      attributes: { physique: 1, agility: 2, insight: 1, knowledge: 1, willpower: 1, social: 1 },
+      skills: {}, abilities: [], preparedAbilities: [], resourceMax: { hp: 10, stamina: 10 },
+      defense: 2, powerTier: 'ordinary', rulesetId: 'shineword-core', rulesetVersion: '0.1.0',
+      worldId: 'world-1', worldPackageRevision: 1, cardRevision: 1,
+    };
+    db.prepare(`INSERT INTO actor_cards (branch_id, actor_id, card_json, created_at, updated_at, updated_state_version)
+      VALUES ('main-b', 'actor-player', ?, 't', 't', 0)`).run(JSON.stringify(card));
+    db.prepare(`INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at)
+      VALUES ('main-b', 'actor-player', 'player', 'protagonist', 't')`).run();
 
     const adapter = new NodeSqliteAdapter(db);
     const { json } = await exportSave({

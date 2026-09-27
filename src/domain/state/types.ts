@@ -4,6 +4,8 @@ import type { SkillRank } from '../rules/types';
  * Snapshot-level skill projection. `awardedKeys` carries
  * `encounterId:rewardKind` entries so historical restores replay the exact
  * reward state of that version (a replayed encounter finds its own key).
+ * Free-exploration challenges also append `<challengeId>:closed` markers when
+ * a challenge is achieved (see progression/growth.ts).
  */
 export interface SkillSnapshotEntry {
   actorId: string;
@@ -11,6 +13,20 @@ export interface SkillSnapshotEntry {
   rank: SkillRank;
   practicePoints: number;
   awardedKeys: string[];
+}
+
+/** Card snapshot: the full ActorCard JSON at this version (plan §15.2). */
+export interface CardSnapshotEntry {
+  actorId: string;
+  card: unknown;
+}
+
+/** Party membership snapshot at this version. */
+export interface PartySnapshotEntry {
+  actorId: string;
+  controller: string;
+  role: string;
+  joinedAt: string;
 }
 
 export interface RelationshipSnapshotEntry {
@@ -45,6 +61,13 @@ export interface GameStateSnapshot {
    */
   skills?: SkillSnapshotEntry[];
   relationships?: RelationshipSnapshotEntry[];
+  /**
+   * Character cards and party membership at this version (P2 acceptance A03):
+   * a historical fork restores cards/party from the fork-point snapshot —
+   * never by copying the source branch's current rows.
+   */
+  cards?: CardSnapshotEntry[];
+  party?: PartySnapshotEntry[];
 }
 
 export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
@@ -74,6 +97,12 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
   }
   if (state.relationships) {
     cloned.relationships = state.relationships.map(rel => ({ ...rel }));
+  }
+  if (state.cards) {
+    cloned.cards = state.cards.map(card => ({ actorId: card.actorId, card: card.card }));
+  }
+  if (state.party) {
+    cloned.party = state.party.map(member => ({ ...member }));
   }
   return cloned;
 }

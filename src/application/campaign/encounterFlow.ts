@@ -26,6 +26,12 @@ export interface Combatant {
   side: 'party' | 'hostile' | 'neutral';
   zoneId: string;
   armor: number;
+  /**
+   * Skills this actor may legally attack with: template-declared attacks, or
+   * world skills explicitly marked usage='attack'. Medic/stealth/lore skills
+   * NEVER auto-become weapons (P2 acceptance A07).
+   */
+  attackSkillIds: readonly string[];
 }
 
 /**
@@ -33,7 +39,8 @@ export interface Combatant {
  * Ties break deterministically by stable actorId so replays match.
  */
 export function freezeInitiative(combatants: readonly Combatant[]): string[] {
-  return [...combatants]
+  const seen = new Set<string>();
+  const order = [...combatants]
     .sort((a, b) => {
       const agiA = a.card.attributes.agility ?? 1;
       const agiB = b.card.attributes.agility ?? 1;
@@ -43,24 +50,72 @@ export function freezeInitiative(combatants: readonly Combatant[]): string[] {
       if (insA !== insB) return insB - insA;
       return a.actorId < b.actorId ? -1 : 1;
     })
-    .map(combatant => combatant.actorId);
+    .filter(combatant => {
+      if (seen.has(combatant.actorId)) return false;
+      seen.add(combatant.actorId);
+      return true;
+    });
+  if (order.length === 0) {
+    throw new Error('An encounter requires at least one combatant.');
+  }
+  return order.map(combatant => combatant.actorId);
 }
 
-/** Distance between zones: same = near, adjacent = mid, further = far. */
+/**
+ * Attack ranges as distance ceilings: touch reaches only the same zone,
+ * near/mid/far reach up to that band (plan §12.3).
+ */
+const RANGE_MAX_HOPS: Record<'touch' | 'near' | 'mid' | 'far', number> = {
+  touch: 0,
+  near: 0,
+  mid: 1,
+  far: 2,
+};
+
+/**
+ * Graph distance between zones (P2 acceptance A07): same zone = near, one
+ * connection = mid, two connections = far. ANYTHING further — including
+ * completely disconnected zones — is out_of_range and can never be attacked
+ * or targeted. Breadth-first over the exits; no path means unreachable.
+ */
 export function distanceBetweenZones(
   zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>,
   fromZoneId: string,
   toZoneId: string,
 ): DistanceBand {
   if (fromZoneId === toZoneId) return 'near';
-  const from = zones.find(zone => zone.zoneId === fromZoneId);
-  if (from?.exits.includes(toZoneId)) return 'mid';
-  for (const exit of from?.exits ?? []) {
-    const neighbor = zones.find(zone => zone.zoneId === exit);
-    if (neighbor?.exits.includes(toZoneId)) return 'far';
+  const byId = new Map(zones.map(zone => [zone.zoneId, zone]));
+  const from = byId.get(fromZoneId);
+  if (!from) throw new Error(`Unknown zone: ${fromZoneId}.`);
+  if (!byId.has(toZoneId)) throw new Error(`Unknown zone: ${toZoneId}.`);
+  // BFS up to depth 2; deeper or unreachable => out_of_range.
+  const visited = new Set<string>([fromZoneId]);
+  let frontier = [fromZoneId];
+  for (let depth = 1; depth <= 2; depth += 1) {
+    const next: string[] = [];
+    for (const zoneId of frontier) {
+      for (const exit of byId.get(zoneId)?.exits ?? []) {
+        if (visited.has(exit)) continue;
+        visited.add(exit);
+        if (exit === toZoneId) {
+          return depth === 1 ? 'mid' : 'far';
+        }
+        next.push(exit);
+      }
+    }
+    frontier = next;
   }
-  if ((from?.exits.length ?? 0) > 0) return 'far';
-  throw new Error(`Zones are not connected: ${fromZoneId} -> ${toZoneId}.`);
+  return 'out_of_range';
+}
+
+/** True when an attack of `range` can legally reach `band`. */
+export function rangeCoversBand(
+  range: 'touch' | 'near' | 'mid' | 'far',
+  band: DistanceBand,
+): boolean {
+  if (band === 'out_of_range') return false;
+  const hops = band === 'near' ? 0 : band === 'mid' ? 1 : 2;
+  return hops <= RANGE_MAX_HOPS[range];
 }
 
 export interface AttackActionInput {
@@ -75,17 +130,58 @@ export interface AttackActionInput {
   /** Monotonic action counter inside the encounter; freezes the turn id. */
   actionSeq: number;
   stateVersion: number;
+  /** Scene zones; required for range validation. */
+  zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>;
+  /** Attack range of the weapon/ability used; defaults to touch. */
+  attackRange?: 'touch' | 'near' | 'mid' | 'far';
 }
 
 /**
  * Compiles an attack into a frozen contract: the damage numbers come from
  * the local damage template, never from model output. The target defense is
  * the preset difficulty - no post-hoc armor generation.
+ *
+ * Local eligibility gates (P2 acceptance A07): the attacker must be a
+ * conscious encounter participant with an UNUSED main action this round; the
+ * skill must be one of the attacker's declared attack skills; the target
+ * must be a conscious participant within the attack's range band.
  */
 export function compileAttack(input: AttackActionInput): {
   contract: ActionContract;
   expectedDamage: number;
 } {
+  const attackerState = input.encounter.actors[input.attacker.actorId];
+  if (!attackerState) {
+    throw new Error(`Attacker ${input.attacker.actorId} is not a participant in encounter ${input.encounterId}.`);
+  }
+  if ((attackerState.hp ?? 0) <= 0 || attackerState.conditions.includes('disabled')) {
+    throw new Error(`Attacker ${input.attacker.actorId} is disabled and cannot act.`);
+  }
+  if (attackerState.actedThisRound) {
+    throw new Error(
+      `Attacker ${input.attacker.actorId} has already used its main action this round.`,
+    );
+  }
+  if (!input.attacker.attackSkillIds.includes(input.skillId)) {
+    throw new Error(
+      `Skill ${input.skillId} is not an attack skill of ${input.attacker.actorId}; ` +
+        'medic/stealth/utility skills can never be compiled into attacks.',
+    );
+  }
+  const targetState = input.encounter.actors[input.target.actorId];
+  if (!targetState) {
+    throw new Error(`Target ${input.target.actorId} is not a participant in encounter ${input.encounterId}.`);
+  }
+  if ((targetState.hp ?? 0) <= 0) {
+    throw new Error(`Target ${input.target.actorId} is already disabled.`);
+  }
+  const band = distanceBetweenZones(input.zones, input.attacker.zoneId, input.target.zoneId);
+  if (!rangeCoversBand(input.attackRange ?? 'touch', band)) {
+    throw new Error(
+      `Target ${input.target.actorId} is at ${band} range; a ${input.attackRange ?? 'touch'} attack cannot reach it.`,
+    );
+  }
+
   const spec = rollSpecForSkill(input.attacker.card, input.catalog, input.skillId, input.difficultyBand);
   void spec;
   const turnId = `enc:${input.encounterId}:${input.attacker.actorId}:${input.actionSeq}`;
@@ -150,25 +246,30 @@ export const DEFAULT_REST_POLICY: RestOutcomePolicy = {
 
 /**
  * Deterministic companion/hostile policy for one action slot (plan §11):
- * chooses among LEGAL actions only - attack the weakest conscious hostile in
- * range, or move closer when out of range. No LLM call per mechanical turn.
+ * chooses among LEGAL actions only — attack the weakest conscious hostile IN
+ * RANGE using a declared attack skill, move closer when nothing is in range,
+ * retreat through a REAL scene exit when morale breaks. No LLM call per
+ * mechanical turn, and utility skills are never selected as weapons.
  */
 export function decideNpcAction(options: {
   actor: Combatant;
   encounter: EncounterState;
   combatants: readonly Combatant[];
   catalog: SkillCatalog;
+  zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>;
 }): { kind: 'attack'; targetId: string; skillId: string } | { kind: 'move'; towardActorId: string } | { kind: 'retreat'; exitId: string } {
-  const { actor, combatants, catalog } = options;
+  const { actor, combatants, catalog, zones } = options;
   const hpOf = (actorId: string): number => options.encounter.actors[actorId]?.hp ?? 0;
 
-  // Retreat check: behavior threshold on the template card.
-  const morale = actor.card.kind === 'creature' || actor.card.kind === 'npc';
-  if (morale) {
+  // Retreat check: behavior threshold on the template card, through an exit
+  // that actually exists in the scene (a cornered actor keeps fighting).
+  const hasMorale = actor.card.kind === 'creature' || actor.card.kind === 'npc';
+  if (hasMorale) {
     const maxHp = actor.card.resourceMax.hp ?? 10;
     const retreatThreshold = 0.25;
     if (hpOf(actor.actorId) > 0 && hpOf(actor.actorId) / maxHp < retreatThreshold) {
-      return { kind: 'retreat', exitId: 'scene-exit' };
+      const exit = options.encounter.scene.exitIds[0];
+      if (exit) return { kind: 'retreat', exitId: exit };
     }
   }
 
@@ -177,16 +278,42 @@ export function decideNpcAction(options: {
   );
   if (enemies.length === 0) {
     // No conscious enemies: the encounter ends instead of acting.
-    return { kind: 'retreat', exitId: 'scene-exit' };
+    const exit = options.encounter.scene.exitIds[0];
+    if (exit) return { kind: 'retreat', exitId: exit };
+    return { kind: 'move', towardActorId: actor.actorId };
   }
-  const target = [...enemies].sort((a, b) => hpOf(a.actorId) - hpOf(b.actorId))[0]!;
+  // Prefer the weakest enemy the actor can legally hit with its best attack
+  // skill (attack skills only, range respected).
   const attackSkill = Object.entries(actor.card.skills)
-    .filter(([skillId]) => catalog[skillId])
+    .filter(([skillId]) => actor.attackSkillIds.includes(skillId) && catalog[skillId])
     .sort((a, b) => SKILL_RANK_DIE[b[1] as SkillRank] - SKILL_RANK_DIE[a[1] as SkillRank])[0];
-  if (!attackSkill) {
-    return { kind: 'move', towardActorId: target.actorId };
+  const byAscendingHops = (a: Combatant, b: Combatant): number => {
+    const hopsOf = (candidate: Combatant): number => {
+      const band = distanceBetweenZones(zones, actor.zoneId, candidate.zoneId);
+      return band === 'near' ? 0 : band === 'mid' ? 1 : band === 'far' ? 2 : 99;
+    };
+    return hopsOf(a) - hopsOf(b);
+  };
+  if (attackSkill) {
+    const range = attackRangeFor(actor, attackSkill[0]);
+    const inRange = enemies
+      .filter(enemy => rangeCoversBand(range, distanceBetweenZones(zones, actor.zoneId, enemy.zoneId)))
+      .sort((a, b) => hpOf(a.actorId) - hpOf(b.actorId) || byAscendingHops(a, b));
+    if (inRange.length > 0 && inRange[0]) {
+      return { kind: 'attack', targetId: inRange[0].actorId, skillId: attackSkill[0] };
+    }
+    const nearest = [...enemies].sort(byAscendingHops)[0]!;
+    return { kind: 'move', towardActorId: nearest.actorId };
   }
-  return { kind: 'attack', targetId: target.actorId, skillId: attackSkill[0] };
+  const nearest = [...enemies].sort(byAscendingHops)[0]!;
+  return { kind: 'move', towardActorId: nearest.actorId };
+}
+
+/** Default attack range for a combatant's attack skill (templates declare their own). */
+function attackRangeFor(_actor: Combatant, _skillId: string): 'touch' | 'near' | 'mid' | 'far' {
+  // V0.2 default: melee (touch) unless a template attack declares otherwise;
+  // callers pass explicit ranges when the template declares them.
+  return 'touch';
 }
 
 /**

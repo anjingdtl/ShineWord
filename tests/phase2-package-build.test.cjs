@@ -204,6 +204,8 @@ test('P2-4: valid LLM mapping publishes; provenance, defaults and three books ar
 test('P2-4: LLM proposal with an invalid attribute is rejected as a major review issue', async () => {
   const { worldStore } = makeWorldStore();
   await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
   const provider = fakeProvider({
     skills: [
       { id: 'flying', name: '飞行', attribute: 'magic', allowUntrained: true, powerTier: 'supernatural', provenanceKind: 'explicit', evidenceFactIds: [], rationale: '越界提案。' },
@@ -228,44 +230,43 @@ test('P2-4: LLM proposal with an invalid attribute is rejected as a major review
 });
 
 // ---------------------------------------------------------------------------
-// Malformed LLM output degrades to the local design_fill baseline
+// Malformed LLM output refuses publication entirely (G04: a generic default
+// package must never masquerade as this novel's complete three books)
 // ---------------------------------------------------------------------------
 
-test('P2-4: malformed LLM JSON degrades to local baseline with a mapping_failed issue', async () => {
+test('P2-4/G04: malformed LLM JSON refuses publication and records a blocking issue', async () => {
   const { worldStore } = makeWorldStore();
   await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
   const provider = fakeProvider('这不是JSON，模型跑神了');
 
-  const { result } = await build(worldStore, provider);
-  assert.equal(result.manifest.status, 'published', 'pipeline still publishes');
-  assert.equal(result.reviewIssues, 1);
-  assert.equal(result.mappingUsage, null);
-
-  const byId = new Map(result.entries.map(entry => [entry.entryId, entry]));
-  for (const defaults of ['stealth', 'sword', 'medicine', 'diplomacy', 'observation', 'lore_skill', 'endurance', 'athletics']) {
-    const entry = byId.get(`skill-${defaults}`);
-    assert.ok(entry, `baseline skill ${defaults} present after degradation`);
-    assert.equal(entry.provenance.kind, 'design_fill');
-  }
-  assert.equal(result.entries.filter(entry => entry.kind === 'skill').length, 8, 'exactly the 8 baseline skills');
-  assert.ok(!byId.has('skill-swim'), 'no LLM skill entered the package');
-
+  await assert.rejects(
+    () => build(worldStore, provider),
+    /映射失败，未发布任何版本/,
+    'mapping failure never publishes a package',
+  );
   const issues = await worldStore.listReviewIssues('w-build', 'open');
   const failed = issues.filter(issue => issue.kind === 'mapping_failed');
   assert.equal(failed.length, 1);
-  assert.equal(failed[0].severity, 'major');
+  assert.equal(failed[0].severity, 'blocking', 'the failure blocks until resolved');
+  const packages = await worldStore.listWorldPackages('w-build');
+  assert.equal(packages.length, 0, 'no revision was created');
+  assert.equal(await worldStore.getPublishedPackageRevision('w-build'), null,
+    'nothing is openable as a published world');
 });
 
-test('P2-4: structurally wrong LLM object (no proposal arrays) also degrades', async () => {
+test('P2-4/G04: structurally wrong LLM object (no proposal arrays) also refuses', async () => {
   const { worldStore } = makeWorldStore();
   await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
   const provider = fakeProvider({ foo: 1, bar: 'not arrays' });
-  const { result } = await build(worldStore, provider);
 
-  assert.equal(result.manifest.status, 'published');
-  assert.equal(result.reviewIssues, 1);
+  await assert.rejects(() => build(worldStore, provider), /映射失败，未发布任何版本/);
   const issues = await worldStore.listReviewIssues('w-build', 'open');
-  assert.ok(issues.some(issue => issue.kind === 'mapping_failed' && issue.severity === 'major'));
+  assert.ok(issues.some(issue => issue.kind === 'mapping_failed' && issue.severity === 'blocking'));
+  assert.equal((await worldStore.listWorldPackages('w-build')).length, 0);
 });
 
 // ---------------------------------------------------------------------------

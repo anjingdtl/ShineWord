@@ -88,6 +88,12 @@ export interface SkillDefinition {
   /** Tools or prerequisites required before use. */
   requirements: string[];
   powerTier: 'ordinary' | 'enhanced' | 'supernatural';
+  /**
+   * What the skill is FOR. Only 'attack' skills may be compiled into attack
+   * actions; medic/stealth/lore skills never auto-become weapons (P2 A07).
+   * Defaults to 'utility' when a package omits it.
+   */
+  usage?: 'attack' | 'utility' | 'social' | 'knowledge';
 }
 
 // ---------------------------------------------------------------------------

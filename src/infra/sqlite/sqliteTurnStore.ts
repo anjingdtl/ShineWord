@@ -185,9 +185,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
   private async hasProjectionTables(): Promise<boolean> {
     if (this.projectionTablesAvailable === null) {
       const row = await this.db.queryOne<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('actor_skills', 'relationships')`,
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('actor_skills', 'relationships', 'actor_cards', 'party_members')`,
       );
-      this.projectionTablesAvailable = (row?.n ?? 0) === 2;
+      this.projectionTablesAvailable = (row?.n ?? 0) === 4;
     }
     return this.projectionTablesAvailable;
   }
@@ -485,6 +485,23 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         [branchId, rel.relId, rel.fromActorId, rel.toActorId, rel.stance, rel.closeness, rel.updatedTurnId, stateVersion],
       );
     }
+    // Card projections (training/equipment changes) land in the same
+    // transaction so the snapshot stamped below is consistent with the card
+    // table (P2 acceptance A02/A03).
+    if (await this.hasProjectionTables()) {
+      for (const upsert of settlement.cardUpserts ?? []) {
+        const committedAt = new Date().toISOString();
+        await tx.execute(
+          `INSERT INTO actor_cards (branch_id, actor_id, card_json, created_at, updated_at, updated_state_version)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(branch_id, actor_id) DO UPDATE SET
+             card_json = excluded.card_json,
+             updated_at = excluded.updated_at,
+             updated_state_version = excluded.updated_state_version`,
+          [branchId, upsert.actorId, JSON.stringify(upsert.card), committedAt, committedAt, stateVersion],
+        );
+      }
+    }
     // Engine-side loot: ownership lands in the state BEFORE persistState, so
     // the snapshot and the inventory table capture it atomically.
     if (settlement.loot) {
@@ -671,11 +688,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       );
     }
 
-    // Complete snapshot: stamp the authoritative skill and relationship rows
-    // (already settled, if this turn carried growth) into the snapshot so a
-    // historical fork restores THIS version's values, never the source
-    // branch's current rows. Legacy DBs without projection tables keep the
-    // pre-Phase-2 snapshot shape (historyComplete=false on fork).
+    // Complete snapshot: stamp the authoritative skill, relationship, card and
+    // party rows (already settled, if this turn carried growth) into the
+    // snapshot so a historical fork restores THIS version's values, never the
+    // source branch's current rows. Legacy DBs without projection tables keep
+    // the pre-Phase-2 snapshot shape (historyComplete=false on fork).
     let snapshotPayload: GameStateSnapshot = state;
     if (await this.hasProjectionTables()) {
       const skillRows = await tx.queryAll<SqliteRow>(
@@ -701,7 +718,31 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         closeness: requireNumber(row, 'closeness'),
         updatedTurnId: typeof row.updated_turn_id === 'string' ? row.updated_turn_id : null,
       }));
-      snapshotPayload = { ...state, skills: snapSkills, relationships: snapRelationships };
+      const cardRows = await tx.queryAll<{ actor_id: string; card_json: string }>(
+        'SELECT actor_id, card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
+        [state.branchId],
+      );
+      const snapCards = cardRows.map(row => ({
+        actorId: row.actor_id,
+        card: parseJson<SqliteRow>(row.card_json, 'actor_cards.card_json'),
+      }));
+      const partyRows = await tx.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
+        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+        [state.branchId],
+      );
+      const snapParty = partyRows.map(row => ({
+        actorId: row.actor_id,
+        controller: row.controller,
+        role: row.role,
+        joinedAt: row.joined_at,
+      }));
+      snapshotPayload = {
+        ...state,
+        skills: snapSkills,
+        relationships: snapRelationships,
+        cards: snapCards,
+        party: snapParty,
+      };
     }
     await tx.execute(
       `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)

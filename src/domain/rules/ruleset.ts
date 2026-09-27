@@ -6,7 +6,18 @@ import type {
 } from './types';
 
 export const SHINEWORD_RULESET_ID = 'shineword-core';
-export const SHINEWORD_RULESET_VERSION = '0.1.0';
+/**
+ * V0.2 (P2 acceptance G05): card-driven V2 proposals with local contract
+ * compilation, engine-capped restores, training/milestone action
+ * transactions, challenge-closure anti-farm and zone-graph ranges.
+ *
+ * Dispatch policy (plan §9): V0.2 mechanics apply to campaigns locked to a
+ * published world package (package_revision >= 1). Legacy V0.1 campaigns
+ * (pre-package demos without a lock) stay readable but cannot play forward -
+ * they are refused with an explicit upgrade message instead of silently
+ * mixing rule versions.
+ */
+export const SHINEWORD_RULESET_VERSION = '0.2.0';
 
 export const SKILL_DIE_BY_RANK: Readonly<Record<SkillRank, DieSides>> = {
   untrained: 4,

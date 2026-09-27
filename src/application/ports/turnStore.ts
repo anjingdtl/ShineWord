@@ -34,6 +34,12 @@ export interface TurnSettlementPlan {
     rewardKind: 'practice' | 'milestone';
   }>;
   relationships: RelationshipSnapshotEntry[];
+  /**
+   * Card projections updated in the SAME transaction (training, equipment,
+   * ability preparation). The card lands in actor_cards and in the snapshot
+   * stamped by this commit (P2 acceptance A02/A03).
+   */
+  cardUpserts?: Array<{ actorId: string; card: unknown }>;
   /** Engine-side loot grants (encounter end); applied before the snapshot. */
   loot?: Array<{ itemId: string; actorId: string }>;
 }

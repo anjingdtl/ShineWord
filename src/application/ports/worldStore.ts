@@ -9,6 +9,12 @@ export interface WorldRecord {
   worldId: string;
   title: string;
   sourceSha256: string;
+  /**
+   * Pre-G6 worlds were hashed over a re-encoded byte string, not the raw
+   * file bytes. The legacy digest is kept for resume matching and old save
+   * manifests; it is never silently rewritten.
+   */
+  legacySourceSha256?: string | null;
   sourceBytes: number;
   normalizeVersion: string;
   chapterSplitVersion: string;

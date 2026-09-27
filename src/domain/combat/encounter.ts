@@ -1,6 +1,12 @@
-export type DistanceBand = 'near' | 'mid' | 'far';
+/**
+ * Zone-graph distance bands (plan §12.3): same zone = near, one connection =
+ * mid, two connections = far, anything further (including disconnected
+ * zones) = out_of_range. Disconnected is NOT far: a target behind a wall or
+ * in another scene is unreachable, never "reachable at long range".
+ */
+export type DistanceBand = 'near' | 'mid' | 'far' | 'out_of_range';
 
-export const DISTANCE_BANDS: readonly DistanceBand[] = ['near', 'mid', 'far'];
+export const DISTANCE_BANDS: readonly DistanceBand[] = ['near', 'mid', 'far', 'out_of_range'];
 
 export interface EncounterActor {
   actorId: string;

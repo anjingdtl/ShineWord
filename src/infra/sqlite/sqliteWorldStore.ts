@@ -175,11 +175,13 @@ export class SqliteWorldStore implements WorldStore {
     // child table (jobs, chunks, facts), breaking resume; upsert instead.
     await this.db.execute(
       `INSERT INTO worlds
-        (world_id, title, source_sha256, source_bytes, normalize_version,
+        (world_id, title, source_sha256, legacy_source_sha256, source_bytes, normalize_version,
          chapter_split_version, build_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(world_id) DO UPDATE SET
          title = excluded.title,
+         source_sha256 = excluded.source_sha256,
+         legacy_source_sha256 = COALESCE(worlds.legacy_source_sha256, excluded.legacy_source_sha256),
          normalize_version = excluded.normalize_version,
          chapter_split_version = excluded.chapter_split_version,
          build_status = excluded.build_status,
@@ -188,6 +190,7 @@ export class SqliteWorldStore implements WorldStore {
         record.worldId,
         record.title,
         record.sourceSha256,
+        record.legacySourceSha256 ?? null,
         record.sourceBytes,
         record.normalizeVersion,
         record.chapterSplitVersion,
@@ -231,6 +234,7 @@ export class SqliteWorldStore implements WorldStore {
       worldId: row.world_id,
       title: row.title,
       sourceSha256: row.source_sha256,
+      legacySourceSha256: optionalString(row, 'legacy_source_sha256'),
       sourceBytes: row.source_bytes,
       normalizeVersion: row.normalize_version,
       chapterSplitVersion: row.chapter_split_version,
