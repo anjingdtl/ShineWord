@@ -18,28 +18,45 @@ class ShineWordFilesModule(
   companion object {
     private const val NAME = "ShineWordFiles"
     private const val REQUEST_PICK_TEXT = 48071
+    private const val REQUEST_CREATE_TEXT = 48072
     private const val MAX_READ_BYTES = 64 * 1024 * 1024
   }
 
   private var pendingPickPromise: Promise? = null
+  private var pendingCreatePromise: Promise? = null
 
   private val activityListener: ActivityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(activity: android.app.Activity, requestCode: Int, resultCode: Int, data: Intent?) {
-      if (requestCode != REQUEST_PICK_TEXT) return
-      val promise = pendingPickPromise
-      pendingPickPromise = null
-      if (promise == null) return
-      val uri: Uri? = data?.data
-      if (uri == null || resultCode != android.app.Activity.RESULT_OK) {
-        promise.resolve(null)
+      if (requestCode == REQUEST_PICK_TEXT) {
+        val promise = pendingPickPromise
+        pendingPickPromise = null
+        if (promise == null) return
+        val uri: Uri? = data?.data
+        if (uri == null || resultCode != android.app.Activity.RESULT_OK) {
+          promise.resolve(null)
+          return
+        }
+        val map = WritableNativeMap()
+        map.putString("uri", uri.toString())
+        val name = queryDisplayName(uri)
+        map.putString("name", name)
+        map.putDouble("size", (querySize(uri) ?: 0L).toDouble())
+        promise.resolve(map)
         return
       }
-      val map = WritableNativeMap()
-      map.putString("uri", uri.toString())
-      val name = queryDisplayName(uri)
-      map.putString("name", name)
-      map.putDouble("size", (querySize(uri) ?: 0L).toDouble())
-      promise.resolve(map)
+      if (requestCode == REQUEST_CREATE_TEXT) {
+        val promise = pendingCreatePromise
+        pendingCreatePromise = null
+        if (promise == null) return
+        val uri: Uri? = data?.data
+        if (uri == null || resultCode != android.app.Activity.RESULT_OK) {
+          promise.resolve(null)
+          return
+        }
+        val map = WritableNativeMap()
+        map.putString("uri", uri.toString())
+        promise.resolve(map)
+      }
     }
   }
 
@@ -52,6 +69,7 @@ class ShineWordFilesModule(
   override fun onCatalystInstanceDestroy() {
     reactApplicationContext.removeActivityEventListener(activityListener)
     pendingPickPromise = null
+    pendingCreatePromise = null
   }
 
   @ReactMethod
@@ -104,6 +122,51 @@ class ShineWordFilesModule(
       promise.resolve(encoded)
     } catch (error: Throwable) {
       promise.reject("READ_FAILED", error)
+    }
+  }
+
+  /**
+   * SAF "create document" picker for exports (P2-5): the user chooses where
+   * the save file lands; resolves with the target uri or null on cancel.
+   */
+  @ReactMethod
+  fun createTextFile(defaultName: String, promise: Promise) {
+    val activity = reactApplicationContext.currentActivity
+    if (activity == null) {
+      promise.reject("NO_ACTIVITY", "No foreground activity to host the file picker.")
+      return
+    }
+    if (pendingCreatePromise != null) {
+      promise.reject("CREATE_IN_PROGRESS", "A file creation is already in progress.")
+      return
+    }
+    pendingCreatePromise = promise
+    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      setType("application/json")
+      putExtra(Intent.EXTRA_TITLE, defaultName)
+    }
+    try {
+      activity.startActivityForResult(intent, REQUEST_CREATE_TEXT)
+    } catch (error: Throwable) {
+      pendingCreatePromise = null
+      promise.reject("CREATE_FAILED", error)
+    }
+  }
+
+  /** Writes base64-decoded bytes to a document uri (truncate + overwrite). */
+  @ReactMethod
+  fun writeFileBase64(uriString: String, base64Data: String, promise: Promise) {
+    try {
+      val uri = Uri.parse(uriString)
+      val bytes = Base64.decode(base64Data, Base64.NO_WRAP)
+      reactApplicationContext.contentResolver.openOutputStream(uri, "wt")?.use { output ->
+        output.write(bytes)
+        output.flush()
+      } ?: throw IllegalArgumentException("Cannot open the target document for writing.")
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("WRITE_FAILED", error)
     }
   }
 

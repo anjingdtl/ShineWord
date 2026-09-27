@@ -16,13 +16,19 @@ import { KeychainSecretStore } from './src/secureKeyStore';
 import {
   buildProvider,
   createSession,
+  exportCampaignSave,
   getCampaignState,
+  importCampaignSave,
   loadHistory,
+  listReviewIssues,
+  resolveReviewIssue,
   type CampaignListItem,
   type CampaignPlayState,
+  type EncounterView,
+  type ReviewIssueView,
   type TurnView,
 } from './src/runtime';
-import { pickNovelFile } from './src/fileBridge';
+import { pickNovelFile, createExportFile, writeExportFile } from './src/fileBridge';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -38,7 +44,8 @@ type Screen =
   | { name: 'library' }
   | { name: 'books'; worldId: string; title: string }
   | { name: 'opening'; worldId: string; title: string }
-  | { name: 'play'; campaignId: string; branchId: string };
+  | { name: 'play'; campaignId: string; branchId: string }
+  | { name: 'review'; worldId: string; title: string };
 
 interface BookView {
   book: string;
@@ -114,6 +121,7 @@ export default function App(): React.JSX.Element {
         onOpenBooks={(worldId, title) => setScreen({ name: 'books', worldId, title })}
         onOpenOpening={(worldId, title) => setScreen({ name: 'opening', worldId, title })}
         onOpenPlay={(campaignId, branchId) => setScreen({ name: 'play', campaignId, branchId })}
+        onOpenReview={(worldId, title) => setScreen({ name: 'review', worldId, title })}
         onOpenSettings={() => setScreen({ name: 'settings' })}
       />
     );
@@ -136,6 +144,15 @@ export default function App(): React.JSX.Element {
         title={screen.title}
         onBack={() => setScreen({ name: 'library' })}
         onCreated={(campaignId, branchId) => setScreen({ name: 'play', campaignId, branchId })}
+      />
+    );
+  }
+  if (screen.name === 'review') {
+    return (
+      <ReviewScreen
+        worldId={screen.worldId}
+        title={screen.title}
+        onBack={() => setScreen({ name: 'library' })}
       />
     );
   }
@@ -235,6 +252,7 @@ function LibraryScreen(props: {
   onOpenBooks: (worldId: string, title: string) => void;
   onOpenOpening: (worldId: string, title: string) => void;
   onOpenPlay: (campaignId: string, branchId: string) => void;
+  onOpenReview: (worldId: string, title: string) => void;
   onOpenSettings: () => void;
 }): React.JSX.Element {
   const { profile, busy, setBusy } = props;
@@ -285,8 +303,15 @@ function LibraryScreen(props: {
           setProgress(p);
           if (p.phase === 'extracting') setPreview(p.message ?? null);
         },
+        picked.base64,
       );
-      setBuilt(`${summary.title}：${summary.chapterCount} 章 · 实体 ${summary.entityCount} · 事实 ${summary.factCount}${summary.resumed ? '（续建完成）' : ''}`);
+      setBuilt(
+        summary.needsRetry
+          ? `${summary.title}：抽取未完成（失败 ${summary.failedChunks} 块），未发布三宝书；再次导入同文件可续建。`
+          : `${summary.title}：${summary.chapterCount} 章 · 实体 ${summary.entityCount} · 事实 ${summary.factCount}` +
+            ` · 三宝书 r${summary.packageRevision}${summary.resumed ? '（续建完成）' : ''}` +
+            (summary.reviewIssues > 0 ? ` · 待审核 ${summary.reviewIssues} 项` : ''),
+      );
       await refresh();
     } catch (e) {
       const detail = e instanceof Error
@@ -302,6 +327,24 @@ ${e.stack ?? ''}`
     }
   }
 
+  async function importSave() {
+    if (busy) return;
+    setBusy(true);
+    props.setError(null);
+    try {
+      const picked = await pickNovelFile();
+      if (!picked) return;
+      // Saves are UTF-8 JSON; decode the raw bytes before validation.
+      const restored = await importCampaignSave(decodeUtf8(picked.bytes));
+      setBuilt(`存档已导入为新的战役（${restored.campaignId}）。请先导入对应世界包后继续游戏。`);
+      await refresh();
+    } catch (e) {
+      props.setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.page}>
       <Header title="世界书架" subtitle="导入小说 → 三宝书 → 开局" onSettings={props.onOpenSettings} />
@@ -309,13 +352,16 @@ ${e.stack ?? ''}`
         <TouchableOpacity style={styles.primary} onPress={importAndBuild} disabled={busy}>
           <Text style={styles.primaryText}>{busy ? '构建中…' : '导入小说 TXT 并构建三宝书'}</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.secondary} onPress={importSave} disabled={busy}>
+          <Text style={styles.secondaryText}>导入存档（.shineword-save.json）</Text>
+        </TouchableOpacity>
         {progress ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>
               {progress.phase === 'importing' && '解析原文…'}
               {progress.phase === 'extracting' && '抽取与映射…'}
               {progress.phase === 'done' && '构建完成'}
-              {progress.phase === 'failed' && '构建失败'}
+              {progress.phase === 'failed' && '构建未完成'}
             </Text>
             {progress.message ? <Text style={styles.bodyText}>{progress.message}</Text> : null}
           </View>
@@ -335,6 +381,9 @@ ${e.stack ?? ''}`
               </TouchableOpacity>
               <TouchableOpacity style={styles.secondary} onPress={() => props.onOpenOpening(world.worldId, world.title)}>
                 <Text style={styles.secondaryText}>创建战役</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondary} onPress={() => props.onOpenReview(world.worldId, world.title)}>
+                <Text style={styles.secondaryText}>审核队列</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -357,8 +406,33 @@ ${e.stack ?? ''}`
   );
 }
 
+function decodeUtf8(bytes: Uint8Array): string {
+  let out = '';
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    if (b === undefined) break;
+    if (b < 0x80) {
+      out += String.fromCharCode(b);
+      i += 1;
+    } else if (b < 0xe0) {
+      out += String.fromCharCode(((b & 0x1f) << 6) | (bytes[i + 1] ?? 0 & 0x3f));
+      i += 2;
+    } else if (b < 0xf0) {
+      out += String.fromCharCode(((b & 0x0f) << 12) | (((bytes[i + 1] ?? 0) & 0x3f) << 6) | ((bytes[i + 2] ?? 0) & 0x3f));
+      i += 3;
+    } else {
+      const cp = ((b & 0x07) << 18) | (((bytes[i + 1] ?? 0) & 0x3f) << 12) | (((bytes[i + 2] ?? 0) & 0x3f) << 6) | ((bytes[i + 3] ?? 0) & 0x3f);
+      const offset = cp - 0x10000;
+      out += String.fromCharCode(0xd800 + (offset >> 10), 0xdc00 + (offset & 0x3ff));
+      i += 4;
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
-// Books (三宝书阅读)
+// Books (三宝书阅读)：玩家视图按知识过滤；编辑模式独立进入
 // ---------------------------------------------------------------------------
 
 function BooksScreen(props: {
@@ -370,6 +444,7 @@ function BooksScreen(props: {
   const [books, setBooks] = useState<BookView[]>([]);
   const [activeBook, setActiveBook] = useState<string>('player_handbook');
   const [error, setError] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -382,13 +457,19 @@ function BooksScreen(props: {
           return;
         }
         // Assemble all three books from the same revision (single source).
+        // The DEFAULT view is the player view: GM entries stay out and
+        // discoverable entries stay hidden until an in-play discovery record
+        // exists (A06). The full edit view is a separate explicit mode.
         const runtime = await getDatabaseRuntime();
         const pkg = await runtime.worldStore.getWorldPackage(props.worldId, setup.packageRevision);
         if (!pkg || cancelled) return;
         const views: BookView[] = (['player_handbook', 'gm_guide', 'monster_manual'] as const).map(book => ({
           book,
           bookTitle: BOOK_TITLES[book] ?? book,
-          groups: assembleBook(pkg, book, { includeGm: true }).map(group => ({
+          groups: assembleBook(pkg, book, {
+            includeGm: editMode,
+            ...(editMode ? {} : { knowledge: { discoveredEntryIds: new Set<string>() } }),
+          }).map(group => ({
             title: group.section.title,
             entries: group.entries.map(entry => {
               const def = entry.definition as { name?: string; text?: string; description?: string; title?: string };
@@ -410,7 +491,7 @@ function BooksScreen(props: {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.worldId]);
+  }, [props.worldId, editMode]);
 
   const current = books.find(book => book.book === activeBook);
   return (
@@ -425,7 +506,17 @@ function BooksScreen(props: {
             <Text style={styles.secondaryText}>{book.bookTitle}</Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity
+          style={[styles.secondary, editMode && styles.secondaryActive]}
+          onPress={() => setEditMode(previous => !previous)}>
+          <Text style={styles.secondaryText}>{editMode ? '编辑模式（含全部资料）' : '切换编辑模式'}</Text>
+        </TouchableOpacity>
       </View>
+      {!editMode ? (
+        <Text style={styles.muted}>玩家视图：未发现的内容与主持人资料已按知识状态过滤。</Text>
+      ) : (
+        <Text style={styles.danger}>编辑模式：显示完整资料（含秘密）。你的角色知识仍由游戏内记录决定。</Text>
+      )}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <ScrollView style={styles.scroll}>
         {current?.groups.map(group => (
@@ -447,7 +538,68 @@ function BooksScreen(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Opening wizard (开局向导)
+// Review queue (审核队列，P2-5 / G05)
+// ---------------------------------------------------------------------------
+
+function ReviewScreen(props: { worldId: string; title: string; onBack: () => void }): React.JSX.Element {
+  const [issues, setIssues] = useState<ReviewIssueView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setIssues(await listReviewIssues(props.worldId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [props.worldId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function resolve(issueId: string, resolution: 'resolved' | 'waived') {
+    setError(null);
+    try {
+      await resolveReviewIssue(props.worldId, issueId, resolution);
+      setNotice(`已${resolution === 'waived' ? '豁免' : '解决'} ${issueId}。重新构建/映射后将以新版本发布。`);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.page}>
+      <Header title={`${props.title} · 审核队列`} subtitle="冲突与映射问题在此裁定" onBack={props.onBack} />
+      <ScrollView style={styles.scroll}>
+        {issues.length === 0 ? <Text style={styles.muted}>没有待处理的审核问题。</Text> : null}
+        {issues.map(issue => (
+          <View key={issue.issueId} style={styles.card}>
+            <Text style={styles.cardTitle}>
+              {issue.severity === 'blocking' ? '⛔ ' : issue.severity === 'major' ? '⚠️ ' : '· '}
+              {issue.issueId}（{issue.kind}）
+            </Text>
+            <Text style={styles.bodyText}>{issue.detailJson.slice(0, 300)}</Text>
+            <View style={styles.row}>
+              <TouchableOpacity style={styles.secondary} onPress={() => resolve(issue.issueId, 'resolved')}>
+                <Text style={styles.secondaryText}>按事实解决</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondary} onPress={() => resolve(issue.issueId, 'waived')}>
+                <Text style={styles.secondaryText}>豁免并允许发布</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+        {notice ? <Text style={styles.resumed}>{notice}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Opening wizard (开局向导，G02)
 // ---------------------------------------------------------------------------
 
 const ATTRIBUTES: Array<{ key: string; label: string }> = [
@@ -459,6 +611,17 @@ const ATTRIBUTES: Array<{ key: string; label: string }> = [
   { key: 'social', label: '交涉' },
 ];
 
+interface WorldSetup {
+  packageRevision: number | null;
+  rulesetVersion: string;
+  skills: Array<{ entryId: string; name: string; attribute: string; allowUntrained: boolean }>;
+  lore: Array<{ name: string; text: string }>;
+  anchorEvents: Array<{ eventId: string; title: string; summary: string; worldTimeOrder: number }>;
+  locations: string[];
+  canonCharacters: Array<{ entityId: string; name: string }>;
+  companionTemplates: Array<{ entryId: string; name: string; description: string }>;
+}
+
 function OpeningScreen(props: {
   profile: ApiProfile;
   worldId: string;
@@ -466,14 +629,18 @@ function OpeningScreen(props: {
   onBack: () => void;
   onCreated: (campaignId: string, branchId: string) => void;
 }): React.JSX.Element {
-  const [skills, setSkills] = useState<Array<{ entryId: string; name: string; attribute: string; allowUntrained: boolean }>>([]);
-  const [lore, setLore] = useState<Array<{ name: string; text: string }>>([]);
+  const [setup, setSetup] = useState<WorldSetup | null>(null);
   const [name, setName] = useState('');
+  const [kind, setKind] = useState<'original' | 'canon'>('original');
+  const [canonEntityId, setCanonEntityId] = useState<string>('');
   const [points, setPoints] = useState<Record<string, number>>({
     physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1,
   });
   const [chosenSkills, setChosenSkills] = useState<string[]>([]);
-  const [goal, setGoal] = useState('在开局锚点处开始一段冒险');
+  const [anchorEventId, setAnchorEventId] = useState<string>('');
+  const [locationId, setLocationId] = useState<string>('');
+  const [companions, setCompanions] = useState<string[]>([]);
+  const [goal, setGoal] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [noPackage, setNoPackage] = useState(false);
@@ -483,14 +650,18 @@ function OpeningScreen(props: {
     (async () => {
       try {
         const session = await createSession(props.profile, await buildProvider(props.profile));
-        const setup = await session.getWorldSetup(props.worldId);
+        const worldSetup = await session.getWorldSetup(props.worldId);
         if (cancelled) return;
-        if (setup.packageRevision === null) {
+        if (worldSetup.packageRevision === null) {
           setNoPackage(true);
           return;
         }
-        setSkills(setup.skills);
-        setLore(setup.lore);
+        setSetup(worldSetup);
+        const firstAnchor = worldSetup.anchorEvents[0];
+        if (firstAnchor) setAnchorEventId(firstAnchor.eventId);
+        if (worldSetup.locations.length > 0) setLocationId(worldSetup.locations[0]);
+        const firstCanon = worldSetup.canonCharacters[0];
+        if (firstCanon) setCanonEntityId(firstCanon.entityId);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -522,13 +693,24 @@ function OpeningScreen(props: {
     });
   }
 
+  function toggleCompanion(entryId: string) {
+    setCompanions(previous => {
+      if (previous.includes(entryId)) return previous.filter(id => id !== entryId);
+      if (previous.length >= 2) return previous; // plan default: at most 2 companions
+      return [...previous, entryId];
+    });
+  }
+
   async function create() {
     setBusy(true);
     setError(null);
     try {
       const session = await createSession(props.profile, await buildProvider(props.profile));
-      const setup = await session.getWorldSetup(props.worldId);
-      if (setup.packageRevision === null) throw new Error('世界包尚未发布。');
+      const worldSetup = await session.getWorldSetup(props.worldId);
+      if (worldSetup.packageRevision === null) throw new Error('世界包尚未发布。');
+      if (worldSetup.locations.length === 0) throw new Error('这个世界没有可用的开局地点（场景条目缺失）。');
+      const chosenLocation = locationId || worldSetup.locations[0];
+      const anchorEvent = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
       const actorName = name.trim() || '无名旅人';
       const campaignId = `camp-${Date.now().toString(36)}`;
       const runtime = await getDatabaseRuntime();
@@ -538,23 +720,35 @@ function OpeningScreen(props: {
         campaignId,
         title: `${props.title} · ${actorName}`,
         worldId: props.worldId,
-        packageRevision: setup.packageRevision,
-        anchor: { worldTimeOrder: 1, locationId: 'opening-anchor' },
+        packageRevision: worldSetup.packageRevision,
+        anchor: {
+          // The anchor is a REAL point in the story (G02), not a placeholder.
+          worldTimeOrder: anchorEvent?.worldTimeOrder ?? 1,
+          anchorEventId: anchorEvent?.eventId,
+          locationId: chosenLocation,
+        },
         protagonist: {
           actorId: 'actor-player',
-          kind: 'original',
-          name: actorName,
-          attributes: {
-            physique: points.physique,
-            agility: points.agility,
-            insight: points.insight,
-            knowledge: points.knowledge,
-            willpower: points.willpower,
-            social: points.social,
-          },
-          initialSkills: chosenSkills,
+          kind,
+          name: kind === 'canon'
+            ? (worldSetup.canonCharacters.find(c => c.entityId === canonEntityId)?.name ?? actorName)
+            : actorName,
+          ...(kind === 'original'
+            ? {
+                attributes: {
+                  physique: points.physique,
+                  agility: points.agility,
+                  insight: points.insight,
+                  knowledge: points.knowledge,
+                  willpower: points.willpower,
+                  social: points.social,
+                },
+                initialSkills: chosenSkills,
+              }
+            : { canonEntityId }),
         },
-        goal: goal.trim(),
+        companions: companions.map((templateId, index) => ({ actorId: `actor-ally-${index + 1}`, templateId })),
+        goal: goal.trim() || '在开局锚点处开始一段冒险',
         createdAt: new Date().toISOString(),
       });
       props.onCreated(campaignId, `${campaignId}-main`);
@@ -565,69 +759,143 @@ function OpeningScreen(props: {
     }
   }
 
+  const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
   return (
     <SafeAreaView style={styles.page}>
-      <Header title={`开局 · ${props.title}`} subtitle="分配属性 → 选 3 项技能 → 确认开局" onBack={props.onBack} />
+      <Header title={`开局 · ${props.title}`} subtitle="时间地点 → 角色 → 同伴 → 确认开局" onBack={props.onBack} />
       {noPackage ? (
         <View style={styles.card}>
           <Text style={styles.bodyText}>这个世界还没有已发布的三宝书。请先在世界构建中完成映射与发布。</Text>
         </View>
       ) : (
         <ScrollView style={styles.scroll}>
-          {lore.length > 0 ? (
+          {setup ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>世界概览</Text>
-              {lore.slice(0, 5).map(item => (
-                <Text key={item.name} style={styles.bodyText}>· {item.name}: {item.text}</Text>
+              <Text style={styles.cardTitle}>开局时间点（原著走向）</Text>
+              {setup.anchorEvents.length === 0 ? (
+                <Text style={styles.muted}>这个世界没有原著事件锚点，将从时间原点开始。</Text>
+              ) : (
+                setup.anchorEvents.map(event => (
+                  <TouchableOpacity key={event.eventId} style={styles.row} onPress={() => setAnchorEventId(event.eventId)}>
+                    <Text style={anchorEventId === event.eventId ? styles.entryName : styles.bodyText}>
+                      {anchorEventId === event.eventId ? '☑' : '☐'} 序{event.worldTimeOrder} · {event.title}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              )}
+              {anchorEvent ? <Text style={styles.muted}>{anchorEvent.summary.slice(0, 120)}</Text> : null}
+              <Text style={styles.cardTitle}>开局地点</Text>
+              {setup.locations.length === 0 ? (
+                <Text style={styles.danger}>世界包缺少场景地点条目。</Text>
+              ) : (
+                setup.locations.slice(0, 12).map(location => (
+                  <TouchableOpacity key={location} style={styles.row} onPress={() => setLocationId(location)}>
+                    <Text style={locationId === location ? styles.entryName : styles.bodyText}>
+                      {locationId === location ? '☑' : '☐'} {location}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+          ) : (
+            <Text style={styles.muted}>加载世界资料…</Text>
+          )}
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>角色类型</Text>
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.secondary, kind === 'original' && styles.secondaryActive]}
+                onPress={() => setKind('original')}>
+                <Text style={styles.secondaryText}>原创角色</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.secondary, kind === 'canon' && styles.secondaryActive]}
+                onPress={() => setKind('canon')}>
+                <Text style={styles.secondaryText}>原著角色</Text>
+              </TouchableOpacity>
+            </View>
+            {kind === 'canon' ? (
+              setup && setup.canonCharacters.length > 0 ? (
+                setup.canonCharacters.slice(0, 20).map(character => (
+                  <TouchableOpacity key={character.entityId} style={styles.row} onPress={() => setCanonEntityId(character.entityId)}>
+                    <Text style={canonEntityId === character.entityId ? styles.entryName : styles.bodyText}>
+                      {canonEntityId === character.entityId ? '☑' : '☐'} {character.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.danger}>这个世界没有可扮演的原著人物记录。</Text>
+              )
+            ) : (
+              <View>
+                <Text style={styles.muted}>原著角色按锚点前的证据推导属性与技能；强角色可作为高难度开局。</Text>
+                <TextInput
+                  style={styles.input}
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="角色姓名（原创角色）"
+                  placeholderTextColor="#6f7b86"
+                />
+                <Text style={styles.muted}>自由属性点：已用 {spentTotal}/4（每项 1~3）</Text>
+                {ATTRIBUTES.map(attr => (
+                  <View key={attr.key} style={styles.row}>
+                    <Text style={styles.attrLabel}>{attr.label}</Text>
+                    <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, -1)}>
+                      <Text style={styles.secondaryText}>-</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.attrValue}>{points[attr.key]}</Text>
+                    <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, 1)}>
+                      <Text style={styles.secondaryText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <Text style={styles.cardTitle}>初始技能（选 3 项，入门 d6）</Text>
+                {setup?.skills.map(skill => (
+                  <TouchableOpacity key={skill.entryId} style={styles.row} onPress={() => toggleSkill(skill.entryId)}>
+                    <Text style={chosenSkills.includes(skill.entryId) ? styles.entryName : styles.bodyText}>
+                      {chosenSkills.includes(skill.entryId) ? '☑' : '☐'} {skill.name}
+                    </Text>
+                    <Text style={styles.muted}>（允许无训练尝试：{skill.allowUntrained ? '是' : '否'}）</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {setup && setup.companionTemplates.length > 0 ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>同伴（最多 2 名，来自怪物图鉴模板）</Text>
+              {setup.companionTemplates.map(template => (
+                <TouchableOpacity key={template.entryId} style={styles.row} onPress={() => toggleCompanion(template.entryId)}>
+                  <Text style={companions.includes(template.entryId) ? styles.entryName : styles.bodyText}>
+                    {companions.includes(template.entryId) ? '☑' : '☐'} {template.name}
+                  </Text>
+                </TouchableOpacity>
               ))}
             </View>
           ) : null}
 
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>角色卡</Text>
+            <Text style={styles.cardTitle}>主目标</Text>
             <TextInput
               style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="角色姓名（原创角色）"
+              value={goal}
+              onChangeText={setGoal}
+              multiline
+              placeholder="这次冒险要达成什么？"
               placeholderTextColor="#6f7b86"
             />
-            <Text style={styles.muted}>自由属性点：已用 {spentTotal}/4（每项 1~3）</Text>
-            {ATTRIBUTES.map(attr => (
-              <View key={attr.key} style={styles.row}>
-                <Text style={styles.attrLabel}>{attr.label}</Text>
-                <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, -1)}>
-                  <Text style={styles.secondaryText}>-</Text>
-                </TouchableOpacity>
-                <Text style={styles.attrValue}>{points[attr.key]}</Text>
-                <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, 1)}>
-                  <Text style={styles.secondaryText}>+</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>初始技能（选 3 项，入门 d6）</Text>
-            {skills.map(skill => (
-              <TouchableOpacity key={skill.entryId} style={styles.row} onPress={() => toggleSkill(skill.entryId)}>
-                <Text style={chosenSkills.includes(skill.entryId) ? styles.entryName : styles.bodyText}>
-                  {chosenSkills.includes(skill.entryId) ? '☑' : '☐'} {skill.name}
-                </Text>
-                <Text style={styles.muted}>（允许无训练尝试：{skill.allowUntrained ? '是' : '否'}）</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>主目标</Text>
-            <TextInput style={styles.input} value={goal} onChangeText={setGoal} multiline />
-          </View>
-
-          <TouchableOpacity style={styles.primary} onPress={create} disabled={busy || chosenSkills.length === 0}>
-            <Text style={styles.primaryText}>{busy ? '创建中…' : '确认开局（锁定世界包与规则版本）'}</Text>
+          <TouchableOpacity
+            style={styles.primary}
+            onPress={create}
+            disabled={busy || (kind === 'original' && chosenSkills.length === 0) || (kind === 'canon' && !canonEntityId)}>
+            <Text style={styles.primaryText}>
+              {busy ? '创建中…' : `确认开局（锁定世界包 r${setup?.packageRevision ?? '?'} · 规则 ${setup?.rulesetVersion || 'V0.2'}）`}
+            </Text>
           </TouchableOpacity>
-          {chosenSkills.length === 0 ? <Text style={styles.muted}>至少选择 1 项初始技能。</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
         </ScrollView>
       )}
@@ -636,7 +904,7 @@ function OpeningScreen(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Play (剧情页)
+// Play (剧情页 + 遭遇面板 + 存档导出)
 // ---------------------------------------------------------------------------
 
 function PlayScreen(props: {
@@ -651,6 +919,9 @@ function PlayScreen(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [encounter, setEncounter] = useState<EncounterView | null>(null);
+  const [encounterTemplates, setEncounterTemplates] = useState<Array<{ entryId: string; name: string }>>([]);
+  const [encounterTemplateId, setEncounterTemplateId] = useState<string>('');
 
   const refresh = useCallback(async () => {
     try {
@@ -664,6 +935,26 @@ function PlayScreen(props: {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await createSession(props.profile, await buildProvider(props.profile));
+        const setup = await session.getWorldSetup(state?.worldId ?? '');
+        if (!cancelled && setup.companionTemplates.length > 0) {
+          setEncounterTemplates(setup.companionTemplates.map(t => ({ entryId: t.entryId, name: t.name })));
+          setEncounterTemplateId(prev => prev || setup.companionTemplates[0].entryId);
+        }
+      } catch {
+        // Encounter templates are optional; ignore load failures here.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.worldId]);
 
   async function submit() {
     if (!intent.trim() || busy) return;
@@ -733,34 +1024,7 @@ function PlayScreen(props: {
         atStateVersion: target,
         newBranchId,
       });
-      setNotice(`已从版本 ${result.stateVersion} 创建分支 ${result.branchId}`);
-      props.onBack();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function trainStealth() {
-    if (!state?.playerCard) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const session = await createSession(props.profile, await buildProvider(props.profile));
-      const skillId = Object.keys(state.playerCard.skills)[0];
-      if (!skillId) {
-        setNotice('角色还没有可训练的技能。');
-        return;
-      }
-      const result = await session.trainSkill({
-        campaignId: props.campaignId,
-        branchId: props.branchId,
-        actorId: state.playerCard.actorId,
-        skillId,
-        conditions: { hasSource: true, hasResources: true, meetsPrerequisites: true },
-      });
-      setNotice(result.advanced ? `训练完成：${skillId} 提升至 ${result.nextRank}` : '未达到训练条件。');
+      setNotice(`已从版本 ${result.stateVersion} 创建分支 ${result.branchId}（回到书架后可继续游玩该分支）`);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -768,6 +1032,70 @@ function PlayScreen(props: {
       setBusy(false);
     }
   }
+
+  async function trainSkill(skillId: string) {
+    if (!state?.playerCard) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await createSession(props.profile, await buildProvider(props.profile));
+      // The engine queries REAL training conditions (stamina, rank, policy);
+      // the UI no longer asserts them (P2 acceptance A02).
+      const result = await session.trainSkill({
+        campaignId: props.campaignId,
+        branchId: props.branchId,
+        actorId: state.playerCard.actorId,
+        skillId,
+      });
+      setNotice(result.advanced
+        ? `训练完成：${skillId} 提升至 ${result.nextRank}（消耗 ${Math.round(result.trainingMinutes / 60)} 小时与 ${result.staminaSpent} 体力）`
+        : '未达到训练条件。');
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportSaveToFile() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { json } = await exportCampaignSave(props.campaignId, props.branchId);
+      const uri = await createExportFile(`shineword-${props.campaignId}-${props.branchId}.shineword-save.json`);
+      if (!uri) {
+        setNotice('已取消导出。');
+        return;
+      }
+      await writeExportFile(uri, json);
+      setNotice('存档已导出。可在干净设备导入继续游戏。');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---- encounter actions (G01) ----
+
+  async function encounterCall(work: (session: Awaited<ReturnType<typeof createSession>>) => Promise<EncounterView>) {
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await createSession(props.profile, await buildProvider(props.profile));
+      const view = await work(session);
+      setEncounter(view);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const encounterTarget = encounter?.actors.find(actor => actor.side === 'hostile' && actor.hp > 0);
+  const disabledAlly = encounter?.actors.find(actor => actor.side === 'party' && actor.conditions.includes('disabled'));
 
   return (
     <SafeAreaView style={styles.page}>
@@ -778,10 +1106,113 @@ function PlayScreen(props: {
         <View style={{ alignItems: 'flex-end' }}>
           <Text style={styles.titleSmall}>{state?.title ?? props.campaignId}</Text>
           <Text style={styles.muted}>
-            {state ? `v${state.stateVersion} · ${state.locationId} · 世界钟 ${state.clockMinutes} 分` : '加载中…'}
+            {state ? `v${state.stateVersion} · ${state.locationId} · 世界钟 ${Math.round(state.clockMinutes)} 分` : '加载中…'}
           </Text>
         </View>
       </View>
+
+      {encounter && encounter.status === 'active' ? (
+        <View style={styles.encounterCard}>
+          <Text style={styles.cardTitle}>
+            战斗 · 第 {encounter.round} 轮 · 行动者：{encounter.actors.find(a => a.actorId === encounter.currentActorId)?.name ?? '?'}
+            {encounter.currentActorIsPlayer ? '（你）' : '（自动）'}
+          </Text>
+          <View style={styles.row}>
+            {encounter.actors.map(actor => (
+              <Text key={actor.actorId} style={actor.side === 'party' ? styles.tag : styles.dice}>
+                {actor.name} {actor.hp}/{actor.maxHp}@{actor.zoneId}{actor.conditions.includes('disabled') ? ' 失能' : ''}
+              </Text>
+            ))}
+          </View>
+          {encounter.lastAction ? <Text style={styles.bodyText}>{encounter.lastAction}</Text> : null}
+          {encounter.lastDice ? <Text style={styles.dice}>{encounter.lastDice}</Text> : null}
+          <View style={styles.row}>
+            {encounter.currentActorIsPlayer ? (
+              <>
+                {encounterTarget ? (
+                  <TouchableOpacity
+                    style={styles.secondary}
+                    disabled={busy}
+                    onPress={() => encounterCall(s => s.encounterAttack({
+                      campaignId: props.campaignId, branchId: props.branchId,
+                      encounterId: encounter.encounterId, targetId: encounterTarget.actorId,
+                    }))}>
+                    <Text style={styles.secondaryText}>攻击 {encounterTarget.name}</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {disabledAlly ? (
+                  <TouchableOpacity
+                    style={styles.secondary}
+                    disabled={busy}
+                    onPress={() => encounterCall(s => s.encounterRescue({
+                      campaignId: props.campaignId, branchId: props.branchId,
+                      encounterId: encounter.encounterId, targetId: disabledAlly.actorId,
+                    }))}>
+                    <Text style={styles.secondaryText}>援救 {disabledAlly.name}</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {encounter.zones.map(zone => (
+                  <TouchableOpacity
+                    key={zone.zoneId}
+                    style={styles.secondary}
+                    disabled={busy}
+                    onPress={() => encounterCall(s => s.encounterMove({
+                      campaignId: props.campaignId, branchId: props.branchId,
+                      encounterId: encounter.encounterId, toZoneId: zone.zoneId,
+                    }))}>
+                    <Text style={styles.secondaryText}>移动→{zone.zoneId}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            ) : (
+              <TouchableOpacity
+                style={styles.secondary}
+                disabled={busy}
+                onPress={() => encounterCall(s => s.encounterNpcTurn({
+                  campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+                }))}>
+                <Text style={styles.secondaryText}>推进 NPC 行动</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.secondary}
+              disabled={busy}
+              onPress={() => encounterCall(s => s.encounterRetreat({
+                campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+              }))}>
+              <Text style={styles.secondaryText}>撤退</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : encounter ? (
+        <View style={styles.encounterCard}>
+          <Text style={styles.cardTitle}>战斗结束（{encounter.status === 'resolved' ? '胜利' : encounter.status === 'escaped' ? '撤离' : '溃败'}）</Text>
+          {encounter.lastAction ? <Text style={styles.bodyText}>{encounter.lastAction}</Text> : null}
+        </View>
+      ) : encounterTemplates.length > 0 ? (
+        <View style={styles.encounterCard}>
+          <Text style={styles.cardTitle}>遭遇（测试入口）</Text>
+          <View style={styles.row}>
+            {encounterTemplates.map(template => (
+              <TouchableOpacity
+                key={template.entryId}
+                style={[styles.secondary, encounterTemplateId === template.entryId && styles.secondaryActive]}
+                onPress={() => setEncounterTemplateId(template.entryId)}>
+                <Text style={styles.secondaryText}>{template.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity
+            style={styles.secondary}
+            disabled={busy}
+            onPress={() => encounterCall(s => s.beginEncounter({
+              campaignId: props.campaignId, branchId: props.branchId,
+              hostiles: [{ templateId: encounterTemplateId, count: 1 }],
+            }))}>
+            <Text style={styles.secondaryText}>进入遭遇</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <FlatList
         style={styles.story}
@@ -807,7 +1238,12 @@ function PlayScreen(props: {
       {state?.playerCard ? (
         <View style={styles.row}>
           {Object.entries(state.playerCard.skills).map(([skillId, rank]) => (
-            <Text key={skillId} style={styles.tag}>{skillId}·{rank}</Text>
+            <TouchableOpacity key={skillId} onPress={() => trainSkill(skillId)} disabled={busy}>
+              <Text style={styles.tag}>{skillId}·{rank}（训练）</Text>
+            </TouchableOpacity>
+          ))}
+          {state.cards.filter(card => card.controller === 'companion').map(card => (
+            <Text key={card.actorId} style={styles.dice}>同伴:{card.name}</Text>
           ))}
           <Text style={styles.tag}>
             HP {state.playerResources.hp ?? '?'} · 体力 {state.playerResources.stamina ?? '?'}
@@ -824,11 +1260,11 @@ function PlayScreen(props: {
         <TouchableOpacity style={styles.secondary} onPress={() => rest('long')} disabled={busy}>
           <Text style={styles.secondaryText}>长休</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.secondary} onPress={trainStealth} disabled={busy}>
-          <Text style={styles.secondaryText}>训练</Text>
-        </TouchableOpacity>
         <TouchableOpacity style={styles.secondary} onPress={rewind} disabled={busy}>
           <Text style={styles.secondaryText}>回退</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondary} onPress={exportSaveToFile} disabled={busy}>
+          <Text style={styles.secondaryText}>导出存档</Text>
         </TouchableOpacity>
       </View>
 
@@ -896,6 +1332,7 @@ const styles = StyleSheet.create({
   subtitle: { color: '#8ea1b2', fontSize: 13, marginTop: 4, marginBottom: 18 },
   sectionTitle: { color: '#d9a441', fontSize: 15, fontWeight: '700', marginTop: 16, marginBottom: 8 },
   muted: { color: '#8ea1b2', fontSize: 12, lineHeight: 19 },
+  danger: { color: '#ffce7a', fontSize: 12, lineHeight: 19, marginTop: 4 },
   input: {
     borderWidth: 1,
     borderColor: '#263a4d',
@@ -933,6 +1370,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
+  },
+  encounterCard: {
+    backgroundColor: '#13203a',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
   },
   cardTitle: { color: '#d9a441', fontSize: 13, fontWeight: '700', marginBottom: 6 },
   dice: { color: '#91b6d7', fontSize: 12, marginBottom: 8 },

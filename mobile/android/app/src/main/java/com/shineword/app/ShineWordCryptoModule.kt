@@ -1,5 +1,6 @@
 package com.shineword.app
 
+import android.util.Base64
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -25,6 +26,23 @@ class ShineWordCryptoModule(
       promise.resolve(digest.joinToString("") { "%02x".format(it) })
     } catch (error: Throwable) {
       promise.reject("SHA256_FAILED", error)
+    }
+  }
+
+  /**
+   * SHA-256 over the RAW file bytes (P2 acceptance G06). The bytes arrive as
+   * base64 from the file picker, so the digest matches any external
+   * `sha256sum` of the original file - including GBK/UTF-16 sources where the
+   * legacy string-roundtrip hash diverged.
+   */
+  @ReactMethod
+  fun sha256BytesHex(base64Input: String, promise: Promise) {
+    try {
+      val bytes = Base64.decode(base64Input, Base64.NO_WRAP)
+      val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+      promise.resolve(digest.joinToString("") { "%02x".format(it) })
+    } catch (error: Throwable) {
+      promise.reject("SHA256_BYTES_FAILED", error)
     }
   }
 }

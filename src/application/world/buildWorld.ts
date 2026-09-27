@@ -26,6 +26,11 @@ export interface BuildWorldInput {
   concurrency?: 1 | 2;
   importOptions?: TxtImportOptions;
   now?: () => string;
+  /**
+   * Pre-G6 re-encode digest of the same bytes, stored for resume matching on
+   * worlds imported before true byte hashing (P2 acceptance G06). Optional.
+   */
+  legacySourceSha256?: string;
 }
 
 export interface BuildWorldResult {
@@ -61,6 +66,7 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
     buildStatus: 'importing',
     createdAt,
     updatedAt: createdAt,
+    ...(input.legacySourceSha256 ? { legacySourceSha256: input.legacySourceSha256 } : {}),
   };
   await store.createWorld(world);
   await store.saveImportedSource(worldId, parsed, createdAt);
