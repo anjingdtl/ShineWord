@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS canon_facts (
   subject_entity_id TEXT NOT NULL,
   predicate TEXT NOT NULL,
   value_json TEXT NOT NULL,
+  value_key TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK(status IN ('explicit', 'inference', 'speculation', 'conflict', 'user_supplement')),
   confidence REAL NOT NULL DEFAULT 1.0,
   valid_from TEXT,
