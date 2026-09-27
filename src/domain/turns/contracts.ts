@@ -13,45 +13,64 @@ const FORBIDDEN_PLANNER_FIELDS = new Set([
   'newLevel',
 ]);
 
-function nonEmpty(value: string): boolean {
-  return value.trim().length > 0;
+const VALID_EFFECT_OPS = new Set([
+  'consumeResource',
+  'changeLocation',
+  'applyCondition',
+  'advanceClock',
+  'transferItem',
+  'recordEvent',
+]);
+
+function nonEmpty(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-function validateEffect(effect: EffectOperation, path: string, errors: string[]): void {
-  switch (effect.op) {
+function validateEffect(effect: unknown, path: string, errors: string[]): void {
+  if (typeof effect !== 'object' || effect === null) {
+    errors.push(`${path}: effect must be an object.`);
+    return;
+  }
+  const op = (effect as { op?: unknown }).op;
+  if (typeof op !== 'string' || !VALID_EFFECT_OPS.has(op)) {
+    errors.push(`${path}: op must be one of ${[...VALID_EFFECT_OPS].join(', ')}; received ${String(op)}.`);
+    return;
+  }
+  const e = effect as EffectOperation;
+  switch (e.op) {
     case 'consumeResource':
-      if (!nonEmpty(effect.actorId) || !nonEmpty(effect.resourceId)) {
+      if (!nonEmpty(e.actorId) || !nonEmpty(e.resourceId)) {
         errors.push(`${path}: actorId and resourceId are required.`);
       }
-      if (!Number.isFinite(effect.amount) || effect.amount <= 0) {
+      if (!Number.isFinite(e.amount) || e.amount <= 0) {
         errors.push(`${path}: consumeResource amount must be > 0.`);
       }
       return;
     case 'changeLocation':
-      if (!nonEmpty(effect.actorId) || !nonEmpty(effect.locationId)) {
+      if (!nonEmpty(e.actorId) || !nonEmpty(e.locationId)) {
         errors.push(`${path}: actorId and locationId are required.`);
       }
       return;
     case 'applyCondition':
-      if (!nonEmpty(effect.actorId) || !nonEmpty(effect.conditionId)) {
+      if (!nonEmpty(e.actorId) || !nonEmpty(e.conditionId)) {
         errors.push(`${path}: actorId and conditionId are required.`);
       }
       return;
     case 'advanceClock':
-      if (!Number.isFinite(effect.minutes) || effect.minutes <= 0) {
+      if (!Number.isFinite(e.minutes) || e.minutes <= 0) {
         errors.push(`${path}: advanceClock minutes must be > 0.`);
       }
       return;
     case 'transferItem':
-      if (!nonEmpty(effect.itemId) || !nonEmpty(effect.fromActorId) || !nonEmpty(effect.toActorId)) {
+      if (!nonEmpty(e.itemId) || !nonEmpty(e.fromActorId) || !nonEmpty(e.toActorId)) {
         errors.push(`${path}: itemId, fromActorId and toActorId are required.`);
       }
-      if (effect.fromActorId === effect.toActorId) {
+      if (e.fromActorId === e.toActorId) {
         errors.push(`${path}: transferItem must change owner.`);
       }
       return;
     case 'recordEvent':
-      if (!nonEmpty(effect.eventType) || !nonEmpty(effect.summary)) {
+      if (!nonEmpty(e.eventType) || !nonEmpty(e.summary)) {
         errors.push(`${path}: eventType and summary are required.`);
       }
       return;
@@ -59,6 +78,9 @@ function validateEffect(effect: EffectOperation, path: string, errors: string[])
 }
 
 function validateOutcome(outcome: OutcomeClause, path: string, errors: string[]): void {
+  if (typeof outcome.achieved !== 'boolean') {
+    errors.push(`${path}: achieved must be a boolean.`);
+  }
   if (!nonEmpty(outcome.publicSummary)) {
     errors.push(`${path}: publicSummary is required.`);
   }
@@ -117,14 +139,22 @@ export function validateActionContract(contract: ActionContract): string[] {
     }
   }
 
-  contract.resourcePreconditions?.forEach((item, index) => {
-    if (!nonEmpty(item.actorId) || !nonEmpty(item.resourceId)) {
-      errors.push(`resourcePreconditions[${index}]: actorId and resourceId are required.`);
-    }
-    if (!Number.isFinite(item.minimum) || item.minimum < 0) {
-      errors.push(`resourcePreconditions[${index}].minimum must be >= 0.`);
-    }
-  });
+  if (Array.isArray(contract.resourcePreconditions)) {
+    contract.resourcePreconditions.forEach((item, index) => {
+      if (typeof item !== 'object' || item === null) {
+        errors.push(`resourcePreconditions[${index}]: precondition must be an object.`);
+        return;
+      }
+      if (!nonEmpty(item.actorId) || !nonEmpty(item.resourceId)) {
+        errors.push(`resourcePreconditions[${index}]: actorId and resourceId are required.`);
+      }
+      if (!Number.isFinite(item.minimum) || item.minimum < 0) {
+        errors.push(`resourcePreconditions[${index}].minimum must be >= 0.`);
+      }
+    });
+  } else if (contract.resourcePreconditions !== undefined && contract.resourcePreconditions !== null) {
+    errors.push('resourcePreconditions must be an array when present.');
+  }
 
   return errors;
 }

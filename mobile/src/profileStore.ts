@@ -27,6 +27,9 @@ export async function saveApiProfile(input: {
     endpoint,
     model,
     keyRef: 'llm.default',
+    // Zhipu-hosted reasoning models return empty completions unless thinking
+    // is disabled at the request level.
+    thinkingDisabled: /bigmodel\.cn/i.test(endpoint) || /^glm/i.test(model),
     capabilities: {
       supportsJson: true,
       supportsStreaming: false,

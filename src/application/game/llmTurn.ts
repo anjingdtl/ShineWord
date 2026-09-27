@@ -61,8 +61,15 @@ function plannerSystem(): string {
     'Never include random values, dice rolls, diceCount, final result, balance changes, or invented authoritative state.',
     'The four outcome clauses must be frozen before any roll.',
     'Required keys: protocolVersion="1.0", turnId, expectedStateVersion, actorId, actionType, evidenceIds, requiresRoll, intent, timeCostMinutes, resourcePreconditions, outcomes.',
-    'outcomes must contain full_success, success, failure, severe_failure; each has achieved, publicSummary, effects.',
-    'Allowed effects: consumeResource, changeLocation, applyCondition, advanceClock, transferItem, recordEvent.',
+    'outcomes must contain full_success, success, failure, severe_failure; each has achieved (boolean), publicSummary (string), effects (array).',
+    'Each effect uses EXACTLY these field names:',
+    '{"op":"consumeResource","actorId":string,"resourceId":string,"amount":number>0}',
+    '{"op":"changeLocation","actorId":string,"locationId":string}',
+    '{"op":"applyCondition","actorId":string,"conditionId":string}',
+    '{"op":"advanceClock","minutes":number>0}',
+    '{"op":"transferItem","itemId":string,"fromActorId":string,"toActorId":string}',
+    '{"op":"recordEvent","eventType":string,"summary":string}',
+    'The key is "op" — never "type" or "effectType". Use only resource keys and locations that appear in the supplied state.',
     'For requiresRoll=true include skillId and difficultyBand in simple|normal|challenging|hard|extreme|peak.',
   ].join(' ');
 }
@@ -75,17 +82,106 @@ function narratorSystem(): string {
   ].join(' ');
 }
 
+// Single-actor campaign: models often answer with the story name (陈默/chenmo)
+// instead of the internal actor id; remap deterministically when unambiguous,
+// reject loudly otherwise.
+function remapToSoleActor(
+  actors: Record<string, { actorId: string }>,
+  proposed: string,
+): string {
+  const actorIds = Object.keys(actors);
+  if (actorIds.length !== 1 || actorIds[0] === undefined) {
+    throw new Error(`Planner proposed an unknown actorId: ${proposed}.`);
+  }
+  return actorIds[0];
+}
+
 function validateNarrative(
   candidate: NarrativeCandidate,
   turnId: string,
   grade: RollGrade,
 ): void {
-  if (candidate.turnId !== turnId) throw new Error('Narrator turnId mismatch.');
+  if (typeof candidate.turnId !== 'string' || candidate.turnId !== turnId) {
+    throw new Error('Narrator turnId mismatch.');
+  }
   if (candidate.outcomeGrade !== grade) {
     throw new Error('Narrator attempted to change the frozen outcome grade.');
   }
-  if (!candidate.text.trim()) throw new Error('Narrator returned empty story text.');
+  if (typeof candidate.text !== 'string' || !candidate.text.trim()) {
+    throw new Error('Narrator returned empty story text.');
+  }
   if (candidate.text.length > 12_000) throw new Error('Narrator story text exceeds safety limit.');
+}
+
+// Deterministic mapping of common LLM effect dialects (type/effectType for op,
+// `to`/`resource`/`condition`/`text` shorthands) onto canonical field names.
+// The strict contract validator stays the gate; this only renames fields and
+// fills the acting actorId, never adds authoritative state.
+export function normalizePlannerEffects(contract: ActionContract): ActionContract {
+  const normalized = JSON.parse(JSON.stringify(contract)) as ActionContract;
+  for (const grade of Object.keys(normalized.outcomes ?? {}) as RollGrade[]) {
+    const outcome = normalized.outcomes[grade];
+    if (!outcome || !Array.isArray(outcome.effects)) continue;
+    outcome.effects = outcome.effects.map(effect => {
+      if (typeof effect !== 'object' || effect === null) return effect;
+      const e = effect as Record<string, unknown>;
+      if (e.op === undefined) {
+        const alias = [e.effectType, e.type].find(v => typeof v === 'string');
+        if (alias !== undefined) {
+          e.op = alias;
+          delete e.effectType;
+          delete e.type;
+        }
+      }
+      if (typeof e.op !== 'string') return e as unknown as typeof effect;
+      if (e.op !== 'transferItem' && e.actorId === undefined && typeof contract.actorId === 'string') {
+        e.actorId = contract.actorId;
+      }
+      if (e.op === 'changeLocation' && e.locationId === undefined) {
+        const destination = [e.to, e.location].find(v => typeof v === 'string');
+        if (destination !== undefined) {
+          e.locationId = destination;
+          delete e.to;
+          delete e.from;
+          delete e.location;
+        }
+      }
+      if (e.op === 'consumeResource' && e.resourceId === undefined && typeof e.resource === 'string') {
+        e.resourceId = e.resource;
+        delete e.resource;
+      }
+      if (e.op === 'applyCondition' && e.conditionId === undefined && typeof e.condition === 'string') {
+        e.conditionId = e.condition;
+        delete e.condition;
+      }
+      if (e.op === 'recordEvent' && e.summary === undefined) {
+        const summary = [e.text, e.note, e.description].find(v => typeof v === 'string');
+        if (summary !== undefined) {
+          e.summary = summary;
+          delete e.text;
+          delete e.note;
+          delete e.description;
+        }
+        if (e.eventType === undefined) e.eventType = 'note';
+      }
+      return e as unknown as typeof effect;
+    });
+  }
+  if (Array.isArray(normalized.resourcePreconditions)) {
+    normalized.resourcePreconditions = normalized.resourcePreconditions.map(item => {
+      if (typeof item !== 'object' || item === null) return item;
+      const p = item as unknown as Record<string, unknown>;
+      if (p.actorId === undefined && typeof contract.actorId === 'string') {
+        p.actorId = contract.actorId;
+      }
+      if (p.resourceId === undefined && typeof p.resource === 'string') {
+        p.resourceId = p.resource;
+        delete p.resource;
+      }
+      return p as unknown as typeof item;
+    });
+  }
+  return normalized;
 }
 
 function recordUsage(
@@ -165,13 +261,38 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
       jsonMode: true,
     });
     recordUsage(input, 'Planner', planned);
-    contract = parseStrictJsonObject<ActionContract>(
-      planned.text,
-      'Planner ActionContract',
-    );
+    contract = parseStrictJsonObject<ActionContract>(planned.text, 'Planner ActionContract');
+    contract = normalizePlannerEffects(contract);
     if (contract.turnId !== input.turnId) throw new Error('Planner turnId mismatch.');
     if (contract.expectedStateVersion !== state.stateVersion) {
       throw new Error('Planner expectedStateVersion mismatch.');
+    }
+    // Single-actor campaign: models also stamp the story name onto per-effect
+    // actorIds; remap those too when unambiguous (transferItem endpoints are
+    // left untouched — they must refer to other actors and are validated by
+    // the engine during commit).
+    const reconciledActor = state.actors[contract.actorId]
+      ? contract.actorId
+      : remapToSoleActor(state.actors, contract.actorId);
+    contract.actorId = reconciledActor;
+    for (const grade of Object.keys(contract.outcomes ?? {}) as RollGrade[]) {
+      const effects = contract.outcomes[grade]?.effects;
+      if (!Array.isArray(effects)) continue;
+      for (const effect of effects) {
+        if (
+          effect && typeof effect === 'object' && 'actorId' in effect &&
+          typeof effect.actorId === 'string' && !state.actors[effect.actorId]
+        ) {
+          (effect as { actorId: string }).actorId = reconciledActor;
+        }
+      }
+    }
+    if (Array.isArray(contract.resourcePreconditions)) {
+      for (const precondition of contract.resourcePreconditions) {
+        if (typeof precondition.actorId === 'string' && !state.actors[precondition.actorId]) {
+          precondition.actorId = reconciledActor;
+        }
+      }
     }
     assertValidActionContract(contract);
     contractHash = await hashActionContract(contract, input.hashProvider);

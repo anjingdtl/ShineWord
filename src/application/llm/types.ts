@@ -50,6 +50,9 @@ export interface ApiProfile {
   model: string;
   keyRef: string;
   capabilities: LlmProviderCapabilities;
+  // Zhipu GLM reasoning models spend the whole output budget on thinking and
+  // return an empty content body unless thinking is explicitly disabled.
+  thinkingDisabled?: boolean;
   inputPricePerMillion?: number;
   outputPricePerMillion?: number;
 }

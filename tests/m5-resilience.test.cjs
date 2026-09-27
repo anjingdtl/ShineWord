@@ -254,3 +254,155 @@ test('relationship deltas are clamped per turn and persist', async () => {
     db.close();
   }
 });
+
+test('profile-level thinkingDisabled is applied to request bodies for GLM', async () => {
+  const { OpenAICompatibleProvider } = require('../dist/application/llm/openAICompatible');
+  const { MemorySecretStore } = require('../dist/application/llm/memorySecretStore');
+  const secrets = new MemorySecretStore();
+  await secrets.set('glm', 'test-key');
+  const bodies = [];
+  const capturingTransport = {
+    async post(request) {
+      bodies.push(JSON.parse(request.body));
+      return { status: 200, body: JSON.stringify({ id: 'r1', choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) };
+    },
+  };
+  const profile = {
+    id: 'glm', name: 'GLM', endpoint: 'https://open.bigmodel.cn/api/paas/v4', model: 'GLM-5.3-Flash',
+    keyRef: 'glm', thinkingDisabled: true,
+    capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 128000, maxOutputTokens: 8192 },
+  };
+  const provider = new OpenAICompatibleProvider(profile, secrets, capturingTransport, 1000);
+  await provider.complete({ system: 's', user: 'u', maxOutputTokens: 100, jsonMode: false });
+  assert.equal(bodies[0].thinking?.type, 'disabled');
+
+  // Non-GLM profile: no thinking field.
+  const plainProfile = { ...profile, thinkingDisabled: undefined };
+  bodies.length = 0;
+  const plainProvider = new OpenAICompatibleProvider(plainProfile, secrets, capturingTransport, 1000);
+  await plainProvider.complete({ system: 's', user: 'u', maxOutputTokens: 100, jsonMode: false });
+  assert.equal('thinking' in bodies[0], false);
+});
+
+test('malformed planner contracts are rejected cleanly, not with TypeErrors', async () => {
+  const { assertValidActionContract, validateActionContract } = require('../dist/domain/turns/contracts');
+  const base = {
+    protocolVersion: '1.0', turnId: 'turn-001', expectedStateVersion: 0,
+    actorId: 'actor-player', actionType: 'observe', intent: '观察',
+    evidenceIds: [], requiresRoll: false, timeCostMinutes: 5,
+    resourcePreconditions: [],
+  };
+  const outcomes = () => ({
+    full_success: { achieved: true, publicSummary: '成功', effects: [] },
+    success: { achieved: true, publicSummary: '成功', effects: [] },
+    failure: { achieved: false, publicSummary: '失败', effects: [] },
+    severe_failure: { achieved: false, publicSummary: '严重失败', effects: [] },
+  });
+
+  // Effect with missing op (real GLM failure observed in the 100-turn run):
+  // must produce a validation error, never an undefined reaching SQLite.
+  const missingOp = { ...base, outcomes: outcomes() };
+  missingOp.outcomes.success.effects.push({ actorId: 'actor-player', locationId: '回廊' });
+  assert.throws(() => assertValidActionContract(missingOp), /op must be one of/);
+
+  // Unknown op rejected.
+  const unknownOp = { ...base, outcomes: outcomes() };
+  unknownOp.outcomes.success.effects.push({ op: 'grantLevel', actorId: 'actor-player' });
+  assert.throws(() => assertValidActionContract(unknownOp), /op must be one of/);
+
+  // Missing publicSummary / non-boolean achieved produce validation errors, not TypeError.
+  const noSummary = { ...base, outcomes: outcomes() };
+  delete noSummary.outcomes.failure.publicSummary;
+  const errors1 = validateActionContract(noSummary);
+  assert.ok(errors1.some(e => /publicSummary is required/.test(e)), errors1.join(';'));
+
+  const badAchieved = { ...base, outcomes: outcomes() };
+  badAchieved.outcomes.failure.achieved = 'yes';
+  const errors2 = validateActionContract(badAchieved);
+  assert.ok(errors2.some(e => /achieved must be a boolean/.test(e)), errors2.join(';'));
+
+  // Null effect element and malformed resourcePreconditions are rejected cleanly.
+  const nullEffect = { ...base, outcomes: outcomes() };
+  nullEffect.outcomes.success.effects.push(null);
+  assert.throws(() => assertValidActionContract(nullEffect), /effect must be an object/);
+
+  const badPrecond = { ...base, resourcePreconditions: [null] };
+  const errors3 = validateActionContract(badPrecond);
+  assert.ok(errors3.some(e => /precondition must be an object/.test(e)), errors3.join(';'));
+});
+
+test('normalizePlannerEffects maps observed GLM effect dialects onto canonical names', async () => {
+  const { normalizePlannerEffects } = require('../dist/application/game/llmTurn');
+  const { assertValidActionContract } = require('../dist/domain/turns/contracts');
+  // Shape captured verbatim from a real GLM planner response (2026-09-27 probe).
+  const glmStyle = {
+    protocolVersion: '1.0', turnId: 'turn-001', expectedStateVersion: 0,
+    actorId: 'actor-player', actionType: 'move', evidenceIds: ['worldContext'],
+    requiresRoll: false, intent: '走向藏书阁', timeCostMinutes: 10,
+    resourcePreconditions: [],
+    outcomes: {
+      full_success: { achieved: true, publicSummary: '抵达', effects: [
+        { effectType: 'changeLocation', from: '前院', to: '藏书阁' },
+        { effectType: 'advanceClock', minutes: 10 },
+      ] },
+      success: { achieved: true, publicSummary: '抵达', effects: [
+        { type: 'changeLocation', to: '回廊' },
+        { type: 'consumeResource', resource: 'stamina', amount: 1 },
+        { type: 'recordEvent', text: '第2回合：移动' },
+      ] },
+      failure: { achieved: false, publicSummary: '受阻', effects: [
+        { type: 'applyCondition', condition: '滑倒受惊' },
+        { type: 'recordEvent', note: '未抵达' },
+      ] },
+      severe_failure: { achieved: false, publicSummary: '受阻', effects: [] },
+    },
+  };
+  const normalized = normalizePlannerEffects(glmStyle);
+  // Must now pass the strict validator without any mutation of authority fields.
+  assertValidActionContract(normalized);
+  const fx = normalized.outcomes.full_success.effects;
+  assert.equal(fx[0].op, 'changeLocation');
+  assert.equal(fx[0].actorId, 'actor-player');
+  assert.equal(fx[0].locationId, '藏书阁');
+  assert.equal(fx[1].op, 'advanceClock');
+  const sx = normalized.outcomes.success.effects;
+  assert.equal(sx[0].locationId, '回廊');
+  assert.equal(sx[1].resourceId, 'stamina');
+  assert.equal(sx[2].eventType, 'note');
+  assert.equal(sx[2].summary, '第2回合：移动');
+  const ffx = normalized.outcomes.failure.effects;
+  assert.equal(ffx[0].conditionId, '滑倒受惊');
+  assert.equal(ffx[0].actorId, 'actor-player');
+  assert.equal(ffx[1].summary, '未抵达');
+
+  // Unknown ops are untouched by normalization and still rejected by the validator.
+  const hostile = normalizePlannerEffects({
+    ...glmStyle,
+    outcomes: {
+      ...glmStyle.outcomes,
+      full_success: { achieved: true, publicSummary: 'x', effects: [{ type: 'grantLevel', level: 99 }] },
+    },
+  });
+  assert.throws(() => assertValidActionContract(hostile), /op must be one of/);
+});
+
+test('normalizePlannerEffects fills resourcePreconditions from observed GLM shape', async () => {
+  const { normalizePlannerEffects } = require('../dist/application/game/llmTurn');
+  const { assertValidActionContract } = require('../dist/domain/turns/contracts');
+  const base = {
+    protocolVersion: '1.0', turnId: 'turn-001', expectedStateVersion: 0,
+    actorId: 'actor-player', actionType: 'fight', evidenceIds: [],
+    requiresRoll: true, skillId: 'combat', difficultyBand: 'normal', intent: '搏斗', timeCostMinutes: 5,
+    resourcePreconditions: [{ resource: 'stamina', minimum: 3 }],
+    outcomes: {
+      full_success: { achieved: true, publicSummary: '胜', effects: [] },
+      success: { achieved: true, publicSummary: '胜', effects: [] },
+      failure: { achieved: false, publicSummary: '败', effects: [] },
+      severe_failure: { achieved: false, publicSummary: '败', effects: [] },
+    },
+  };
+  const normalized = normalizePlannerEffects(base);
+  assertValidActionContract(normalized);
+  assert.equal(normalized.resourcePreconditions[0].actorId, 'actor-player');
+  assert.equal(normalized.resourcePreconditions[0].resourceId, 'stamina');
+});
