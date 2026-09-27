@@ -104,9 +104,20 @@
 
 回归结果：Core tests 69/69、mobile typecheck PASS、`:app:assembleDebug` PASS、模拟器 smoke 通过（llm_requests 落库验证）。
 
-### M5 Alpha 验收 — 进行中
+### M5 Alpha 验收 — ✅ 完成
 
-目标：多 OpenAI-compatible Provider（GLM + MiniMax/DeepSeek）、能力探测、预算与重试/取消/超时、故障注入、20 万字基准 + 100 万字压力、真机/模拟器验收、APK 交付物。
+已落地（详见 `docs/reviews/M5_REVIEW.md`）：
+
+- [x] 多 Provider 能力探测（GLM ✓✓ / DeepSeek ✓✓ / MiniMax json✗ usage✓，两段式探测、如实报告失败）。
+- [x] 容错传输：FaultInjectionTransport 四类故障注入、postWithRetry（5xx/网络重试、timeout 不重试）、CancellationToken。
+- [x] `ApiProfile.thinkingDisabled` Profile 级开关（GLM 推理模型空 completion 修复）+ 移动端自动置位。
+- [x] Planner 合同门硬化：缺失/未知 op、非布尔 achieved、畸形 resourcePreconditions 显式拒绝；GLM 方言确定性归一化（`normalizePlannerEffects`）；单 actor 战役故事名 actorId 重映射；Narrator 字段类型检查。
+- [x] 摘要执行器 `summarizeRange` 与回合结算（练习点诚实失败、关系增量夹取）。
+- [x] 性能基线：20 万字（252,996 码点/94 章/257 块）导入 25ms + 全流水线 345ms；100 万字（965,458 码点/300 章/944 块）导入 108ms + 3,687ms、堆峰 37.1MB。
+- [x] 100 回合真实 GLM 一致性：93/100 committed、7 次干净拒绝、0 崩溃、finalStateVersion 与 committed 严格一致、193 次 LLM 请求用量落库（23.1 分钟）。
+- [x] Release APK 独立签名（SHINEWORD_RELEASE_* 环境变量注入、keystore 不入库）并交付 `dist/apk/{release,debug}/`；离线启动验证通过。
+
+回归结果：Core tests 82/82、core + mobile typecheck PASS。
 
 ## 本地验证命令
 
@@ -118,4 +129,4 @@ cd mobile && npm install && npm run typecheck
 gradle -p mobile/android :app:assembleDebug   # 或 CI 同版本 Gradle 9.3.1
 ```
 
-M1/M2 已具备：无 LLM 多回合内核 + LLM Planner/Narrator 安卓闭环 + 断网恢复。下一步进入 M3 原著世界构建。
+M1~M5 已具备：无 LLM 确定性内核 + 安卓 LLM 闭环 + 原著世界构建 + 完整游戏系统（成长/战斗/关系/记忆/分支/导出）+ Alpha 工程化（多 Provider/容错/性能基线/签名交付）。下一步进入最终回归与文档收口。
