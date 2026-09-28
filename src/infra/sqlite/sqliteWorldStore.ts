@@ -1118,12 +1118,50 @@ export class SqliteWorldStore implements WorldStore {
     detailJson: string;
     createdAt: string;
   }): Promise<void> {
+    // Recording an issue means "this condition holds NOW", so re-recording one
+    // reopens it. Without the status/resolved_at reset a single human waiver
+    // would permanently disarm the publication gate: a later build that fails
+    // the same way would silently leave the (waived) row in place, and
+    // publishWorldPackage - which blocks on OPEN blocking issues - would let a
+    // degraded package through. Kind/severity are refreshed too, so an issue
+    // that changed shape cannot keep a stale classification.
     await this.db.execute(
       `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at)
        VALUES (?, ?, ?, ?, ?, 'open', ?)
-       ON CONFLICT(world_id, issue_id) DO UPDATE SET detail_json = excluded.detail_json`,
+       ON CONFLICT(world_id, issue_id) DO UPDATE SET
+         kind = excluded.kind,
+         severity = excluded.severity,
+         detail_json = excluded.detail_json,
+         status = 'open',
+         resolved_at = NULL`,
       [input.worldId, input.issueId, input.kind, input.severity, input.detailJson, input.createdAt],
     );
+  }
+
+  /**
+   * Reopens or resolves a whole class of issues for one world in a single
+   * statement. Used by the world builder to retire the notices of a previous
+   * attempt (`mapping-failed`, `invalid-proposal-*`, `canon-conflict`) once the
+   * current attempt proves the condition no longer holds - otherwise the
+   * publication gate keeps citing a failure that has already been fixed.
+   */
+  async resolveReviewIssuesByPrefix(
+    worldId: string,
+    prefixes: readonly string[],
+    resolution: 'resolved' | 'waived' = 'resolved',
+  ): Promise<string[]> {
+    if (prefixes.length === 0) return [];
+    const open = await this.listReviewIssues(worldId, 'open');
+    const matched = open
+      .filter(issue => prefixes.some(prefix => issue.issueId === prefix || issue.issueId.startsWith(`${prefix}-`)))
+      .map(issue => issue.issueId);
+    for (const issueId of matched) {
+      await this.db.execute(
+        'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
+        [resolution, new Date().toISOString(), worldId, issueId],
+      );
+    }
+    return matched;
   }
 
   async listReviewIssues(worldId: string, status: 'open' | 'resolved' | 'waived' | 'all' = 'open'): Promise<Array<{

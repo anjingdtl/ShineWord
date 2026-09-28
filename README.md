@@ -1,17 +1,17 @@
 # ShineWord
 
-面向 Android 的 AI 互动小说跑团应用（**Alpha**）。
+面向 Android 的 AI 互动小说跑团应用（**Alpha；二阶段仍在验收**）。
 
 用户导入小说 TXT 后，ShineWord 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过固定选项或自由行动推进自己的故事。LLM 负责主持与叙事，本地规则引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前状态：**Alpha（M0～M5 全部完成）**。仅支持 Android；LLM 由用户自行配置（任何 OpenAI-compatible 端点）。
+> 当前状态：一期 M0～M5 已完成；二阶段 P2-0～P2-6 尚未全部达到出口，不能视作 Beta 或完整交付。最新逐项状态、设备/模型证据和剩余条件见 [R6 验收报告](docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R6.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
 ## 核心特性
 
 - **确定性骰点**：ShineWord Ruleset V0.1——六属性、d4～d12 技能骰、1～4 颗骰取最高、四档结果等级。骰点由本地引擎用 Android SecureRandom 拒绝采样完成，先持久化 RollRecord 再调用叙事模型；Narrator 失败或重启后复用同一骰点，永不重掷。
-- **TXT 原著导入**：编码探测（UTF-8/GBK）、标准分章、码点偏移体系；100 万字 300 章实测导入 114ms。LLM 只产出 verbatim 引文，本地解析偏移并强制证据校验——事实的原文定位 100% 可追溯。
+- **TXT 原著导入**：编码探测（UTF-8/GBK）、标准分章、码点偏移体系。历史桌面 Node 基准不代表 Android 端性能；二阶段的真实模型召回、独立人工标注和端上大文件性能仍待验。LLM 只产出 verbatim 引文，本地解析偏移并检查证据位置。
 - **LLM 权限边界**：Planner 只能提出行动合同（ActionContract JSON），本地校验器严格把关（禁止骰点/结果/数值等权威字段，畸形合同干净拒绝）；Narrator 不得更改冻结的结果等级。
-- **完整游戏系统**：技能成长（5/10/20/40 练习点阈值）、叙事战斗（距离带/先攻/伤害/结局枚举）、关系与知识、记忆检索（可见性→时间窗→状态有效性→分支→相关度的强制顺序）、分支 fork/rewind、`.shineword-save.json` 导出。
+- **战役引擎模块**：技能成长（5/10/20/40 练习点阈值）、叙事战斗（距离带/先攻/伤害）、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；完整 Android 冒险、同伴生命周期与 Beta 验收仍有未结项。
 - **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时确定性行动仍可结算，恢复后无缝衔接。
 
 ## 安全与隐私
@@ -30,20 +30,24 @@ npm install
 npm run verify:core
 
 # 移动端
-cd mobile && npm install
-npx tsc -p tsconfig.json --noEmit
+npm install --prefix mobile
+npm run typecheck --prefix mobile
 
-# APK（Gradle 9.3.1；wrapper 未入库时用本机 Gradle）
-gradle -p mobile/android :app:assembleDebug
-# Release 需本地 keystore + SHINEWORD_RELEASE_STORE_PASS / SHINEWORD_RELEASE_KEY_PASS
+# Debug APK
+npm run apk:debug --prefix mobile
+
+# 签名 Release；使用本机配置的签名变量和 keystore，不把签名材料放进仓库
+pwsh -File mobile/scripts/build-release-apk.ps1
 ```
 
-构建产物交付路径：`dist/apk/{debug|release}/ShineWord-V<ver>-{debug|release}.apk`（不入库）。
+APK 输出到 dist/apk/{debug|release}/，不入库。本地已构建并签名验证 p2.9；该包在 API 37.1 隔离模拟器上断网冷启动成功。此证据只覆盖 Release bundle 启动，未覆盖完整冒险或 API 24/真机矩阵。签名、哈希和源码对应信息见 R6 报告。
 
 ## 进度与评审
 
 - 开发进度：[docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md)
-- 建设基线：[docs/CONSTRUCTION_PLAN.md](docs/CONSTRUCTION_PLAN.md)
+- 二阶段建设基线：[docs/PHASE2_CONSTRUCTION_PLAN.md](docs/PHASE2_CONSTRUCTION_PLAN.md)
+- 最新二阶段验收：[docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R6.md](docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R6.md)
+- 一期建设基线：[docs/CONSTRUCTION_PLAN.md](docs/CONSTRUCTION_PLAN.md)
 - 各阶段评审：[docs/reviews/](docs/reviews/)（M1～M5 与最终回归）
 
 ## 参考底座

@@ -61,6 +61,57 @@ export interface BuildPackageResult {
 
 const ATTRIBUTES = ['physique', 'agility', 'insight', 'knowledge', 'willpower', 'social'];
 const POWER_TIERS = ['ordinary', 'enhanced', 'supernatural'];
+
+/**
+ * Closed-enum fields are validated strictly, but the model is free-form text on
+ * the way in and a single wording slip ("mundane" instead of "ordinary") used to
+ * throw the whole proposal away - in the field that silently removed every
+ * canonical skill of the novel from its three books. Known synonyms now fold
+ * onto the canonical value before validation; genuinely unknown values are
+ * still rejected and surfaced in the review queue.
+ */
+const ATTRIBUTE_SYNONYMS: Readonly<Record<string, string>> = {
+  physique: 'physique', strength: 'physique', body: 'physique', might: 'physique', power: 'physique',
+  agility: 'agility', dexterity: 'agility', speed: 'agility', reflex: 'agility', finesse: 'agility',
+  insight: 'insight', perception: 'insight', awareness: 'insight', senses: 'insight', observation: 'insight',
+  knowledge: 'knowledge', intellect: 'knowledge', intelligence: 'knowledge', lore: 'knowledge', learning: 'knowledge',
+  willpower: 'willpower', will: 'willpower', resolve: 'willpower', spirit: 'willpower', courage: 'willpower',
+  social: 'social', charisma: 'social', presence: 'social', persuasion: 'social', rapport: 'social',
+  // The novels are Chinese; a model may answer the enum in the source language.
+  体魄: 'physique', 力量: 'physique', 体质: 'physique',
+  敏捷: 'agility', 灵巧: 'agility', 速度: 'agility',
+  洞察: 'insight', 感知: 'insight', 观察: 'insight',
+  学识: 'knowledge', 智力: 'knowledge', 知识: 'knowledge',
+  意志: 'willpower', 心志: 'willpower', 定力: 'willpower',
+  交涉: 'social', 社交: 'social', 魅力: 'social',
+};
+
+const POWER_TIER_SYNONYMS: Readonly<Record<string, string>> = {
+  ordinary: 'ordinary', mundane: 'ordinary', normal: 'ordinary', common: 'ordinary', mortal: 'ordinary',
+  base: 'ordinary', none: 'ordinary', low: 'ordinary', basic: 'ordinary',
+  enhanced: 'enhanced', heroic: 'enhanced', elite: 'enhanced', trained: 'enhanced', magical: 'enhanced',
+  martial: 'enhanced', mid: 'enhanced', high: 'enhanced', advanced: 'enhanced',
+  supernatural: 'supernatural', divine: 'supernatural', legendary: 'supernatural', immortal: 'supernatural',
+  mythic: 'supernatural', superhuman: 'supernatural', transcendent: 'supernatural',
+  凡俗: 'ordinary', 普通: 'ordinary', 世俗: 'ordinary',
+  强化: 'enhanced', 精英: 'enhanced', 卓越: 'enhanced',
+  超凡: 'supernatural', 神话: 'supernatural', 仙: 'supernatural',
+};
+
+/** Lowercases and folds separators so `Super-Natural` reaches the synonym table. */
+function enumKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+/**
+ * Folds a free-form enum answer onto the canonical value. Unmapped answers are
+ * returned lowercased so the caller's allow-list check still rejects them (and
+ * reports the original text).
+ */
+function normalizeEnum(value: string, synonyms: Readonly<Record<string, string>>): string {
+  const key = enumKey(value);
+  return synonyms[key] ?? key;
+}
 const PROVENANCE_KINDS = ['explicit', 'inferred', 'rule_mapping', 'design_fill'];
 const ACTOR_CATEGORIES = ['human', 'beast', 'spirit', 'undead', 'construct', 'faction'];
 const ITEM_CATEGORIES = ['weapon', 'armor', 'tool', 'consumable', 'valuables', 'key'];
@@ -79,13 +130,14 @@ export const CANON_MAPPER_ROLE = 'WorldMapper';
 
 const MAPPER_SYSTEM = [
   'You are ShineWord WorldMapper. You map novel canon facts into a tabletop RPG world package and output exactly one JSON object, no prose.',
-  'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"allowUntrained":boolean,"requirements":string[],"powerTier":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"allowUntrained":boolean,"requirements":string[],"powerTier":"ordinary|enhanced|supernatural","provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"constraints":[{"id":string,"name":string,"description":string,"enforcement":"block_action|block_effect|audit","pattern":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"lootItemIds":string[],"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}]}',
   'Rules:',
   '- attribute MUST be exactly one of: physique, agility, insight, knowledge, willpower, social.',
+  '- powerTier MUST be exactly one of: ordinary, enhanced, supernatural. Use ordinary for anything a normal person can learn.',
   '- effect op MUST be exactly one of: damage, heal, apply_condition, remove_condition, move_self, move_target, consume_resource, restore_resource, reveal_information, grant_bonus_dice, change_distance.',
   '- provenanceKind MUST be one of: explicit, inferred, rule_mapping, design_fill. Numeric hp/stamina/defense/threat values are rule_mapping (game rule values), never canon facts from the novel.',
   '- Every entry MUST cite evidenceFactIds using only fact ids from the provided fact list, plus a one-sentence rationale.',
@@ -133,8 +185,23 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }
 
+/**
+ * Numeric fields tolerate a numeric string.
+ *
+ * Models routinely answer `"hp":"6"` inside an otherwise well-formed proposal.
+ * Rejecting that throws away the whole entry - in the live GLM run it silently
+ * dropped the novel's protagonist template from the monster manual over a
+ * quoting difference. Coercion only reads a value the model actually supplied;
+ * a genuinely missing or non-numeric value is still rejected, because local
+ * code must never invent combat stats for canon NPCs.
+ */
 function asFiniteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (text.length === 0) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** Entry ids must be stable tokens; whitespace collapses to dashes. */
@@ -234,7 +301,8 @@ function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
   const reasons: string[] = [];
   if (!id) reasons.push('missing or invalid id.');
   if (!name) reasons.push('missing name.');
-  const attribute = asString(record.attribute);
+  const rawAttribute = asString(record.attribute);
+  const attribute = rawAttribute ? normalizeEnum(rawAttribute, ATTRIBUTE_SYNONYMS) : null;
   if (!attribute || !ATTRIBUTES.includes(attribute)) reasons.push(`unknown attribute ${String(record.attribute)}.`);
   const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
   if (!provenance) reasons.push('invalid provenance.');
@@ -246,9 +314,10 @@ function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
     ? asStringArray(record.requirements)
     : [];
   const allowUntrained = typeof record.allowUntrained === 'boolean' ? record.allowUntrained : false;
-  const powerTier = asString(record.powerTier) ?? 'ordinary';
+  const rawPowerTier = asString(record.powerTier);
+  const powerTier = rawPowerTier ? normalizeEnum(rawPowerTier, POWER_TIER_SYNONYMS) : 'ordinary';
   if (!POWER_TIERS.includes(powerTier)) {
-    rejectEntry(ctx, 'skill', id, [`unknown powerTier ${powerTier}.`]);
+    rejectEntry(ctx, 'skill', id, [`unknown powerTier ${String(record.powerTier)}.`]);
     return null;
   }
   return makeEntry({
@@ -705,6 +774,12 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       createdAt: input.createdAt,
     });
     reviewIssueCount += 1;
+  } else {
+    // This attempt found no conflicting facts, so the notice recorded by an
+    // earlier one describes a condition that no longer holds. Leaving it open
+    // would block publication forever with a message the user cannot act on.
+    // (reviewIssueCount only counts issues this build *records*.)
+    await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
   }
 
   // A world with NOTHING mappable and no conflicts has no novel content at
@@ -737,6 +812,14 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     mappedFactCount = mapped.mappedFactCount;
     mappingBatches = mapped.batches;
     mappingSucceeded = true;
+    // The mapping produced a package, so the `mapping-failed` blocking notice of
+    // an earlier attempt (typically a transient network error) no longer
+    // describes reality. It used to stay open forever: the gate kept refusing
+    // publication with "映射失败：未生成任何世界包" even though the retry had just
+    // succeeded, and the only way out was a manual waive of a stale message.
+    // Previous rejection rows are retired here too and re-derived from THIS
+    // attempt below, so the queue always shows the current mapping's verdict.
+    await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed', 'invalid-proposal']);
     // Rejected proposals (invalid enums, missing ids, unknown attributes) go
     // to the review queue as major issues instead of entering the package.
     for (const rejection of mapped.rejected) {
