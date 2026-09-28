@@ -97,6 +97,10 @@ export interface WorldLibraryEntry {
   legacySourceSha256: string | null;
   buildStatus: string;
   updatedAt: string;
+  /** Latest published three-book revision; 0 = nothing published yet. */
+  packageRevision: number;
+  /** Review issues the mapping pass left open (real count, may be 0). */
+  openReviewIssues: number;
 }
 
 /** Bookshelf: every imported novel on this device. */
@@ -104,14 +108,27 @@ export async function listWorlds(): Promise<WorldLibraryEntry[]> {
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
   const worlds = await worldStore.listWorlds();
-  return worlds.map(world => ({
-    worldId: world.worldId,
-    title: world.title,
-    sourceSha256: world.sourceSha256,
-    legacySourceSha256: world.legacySourceSha256 ?? null,
-    buildStatus: world.buildStatus,
-    updatedAt: world.updatedAt,
-  }));
+  const entries: WorldLibraryEntry[] = [];
+  for (const world of worlds) {
+    // Read-only enrichment for the library card: which revision is published,
+    // and how many review issues are still open. Both queries already exist on
+    // the world store; nothing is written here.
+    const packages = await worldStore.listWorldPackages(world.worldId);
+    const published = packages.filter(item => item.status === 'published');
+    const packageRevision = published.reduce((max, item) => Math.max(max, item.revision), 0);
+    const issues = await worldStore.listReviewIssues(world.worldId, 'open');
+    entries.push({
+      worldId: world.worldId,
+      title: world.title,
+      sourceSha256: world.sourceSha256,
+      legacySourceSha256: world.legacySourceSha256 ?? null,
+      buildStatus: world.buildStatus,
+      updatedAt: world.updatedAt,
+      packageRevision,
+      openReviewIssues: issues.length,
+    });
+  }
+  return entries;
 }
 
 /**

@@ -1,17 +1,16 @@
 /**
  * 书库 Tab — world management: import a novel, build the three books, import a
- * portable world package, export it back out (plan §2).
+ * portable world package (plan §7).
  *
- * P2 port: the JSX and data flow are the ones that used to sit in the campaign
- * section of App.tsx's LibraryScreen; only the navigation calls changed (a
- * `useState<Screen>` setter became a route push) and the page frame/header now
- * come from the theme tokens.
+ * P3.2 keeps the P2 data flow unchanged (same bridge calls, same
+ * refresh-on-focus behaviour) and moves every piece of presentation into
+ * `features/library`; the screen only assembles data and routes. No
+ * `legacyStyles` import remains.
  */
-import React, { useCallback, useEffect, useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { BookOpen, Library as LibraryIcon } from 'lucide-react-native';
 import {
   buildProvider,
   createSession,
@@ -22,17 +21,22 @@ import { pickNovelFile } from '../../fileBridge';
 import {
   buildWorldOnDevice,
   listWorlds,
+  type BuiltWorldSummary,
   type WorldBuildProgress,
   type WorldLibraryEntry,
 } from '../../worldImport';
 import { Button } from '../components/Button';
-import { EmptyState } from '../components/EmptyState';
 import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
+import { SectionHeader } from '../components/SectionHeader';
+import { StatusBanner } from '../components/StatusBanner';
+import { typeStyle } from '../components/typography';
+import { BuildStatusCard } from '../features/library/BuildStatusCard';
+import { ImportNovelCard } from '../features/library/ImportNovelCard';
+import { WorldList } from '../features/library/WorldList';
 import { useTheme } from '../theme/ThemeContext';
 import { useAppSession } from '../state/AppSessionContext';
 import type { RootStackParamList } from '../navigation/types';
-import { styles } from './legacyStyles';
 
 export function LibraryScreen(): React.JSX.Element {
   const { theme } = useTheme();
@@ -42,16 +46,16 @@ export function LibraryScreen(): React.JSX.Element {
   const [campaigns, setCampaigns] = useState<CampaignListItem[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState<WorldBuildProgress | null>(null);
-  const [built, setBuilt] = useState<string | null>(null);
+  const [summary, setSummary] = useState<BuiltWorldSummary | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!profile) return;
     try {
       setWorlds(await listWorlds());
-      // The campaign list is still loaded here because the world card links to
-      // its books with the branch that filters discovered entries (the old
-      // LibraryScreen did exactly this before the split).
+      // The campaign list is still loaded here because a world card links to
+      // its books with the branch that filters discovered entries.
       const session = await createSession(profile, await buildProvider(profile));
       const campaignList = await session.listCampaigns();
       const withBranches: CampaignListItem[] = [];
@@ -76,15 +80,27 @@ export function LibraryScreen(): React.JSX.Element {
     }, [refresh]),
   );
 
+  /** Existing campaign for a world; a branch is always playable. */
+  const campaignFor = useCallback(
+    (worldId: string): { campaignId: string; branchId: string } | null => {
+      const found = campaigns.find(campaign => campaign.worldId === worldId);
+      if (!found?.branchId) return null;
+      return { campaignId: found.campaignId, branchId: found.branchId };
+    },
+    [campaigns],
+  );
+
   async function importAndBuild() {
     if (busy || !profile) return;
     setBusy(true);
     setError(null);
-    setBuilt(null);
+    setNotice(null);
+    setSummary(null);
+    setPreview(null);
     try {
       const picked = await pickNovelFile();
       if (!picked) return;
-      const summary = await buildWorldOnDevice(
+      const built = await buildWorldOnDevice(
         picked.bytes,
         picked.name.replace(/\.txt$/i, ''),
         profile,
@@ -94,13 +110,7 @@ export function LibraryScreen(): React.JSX.Element {
         },
         picked.base64,
       );
-      setBuilt(
-        summary.needsRetry
-          ? `${summary.title}：抽取未完成（失败 ${summary.failedChunks} 块），未发布三宝书；再次导入同文件可续建。`
-          : `${summary.title}：${summary.chapterCount} 章 · 实体 ${summary.entityCount} · 事实 ${summary.factCount}` +
-              ` · 三宝书 r${summary.packageRevision}${summary.resumed ? '（续建完成）' : ''}` +
-              (summary.reviewIssues > 0 ? ` · 待审核 ${summary.reviewIssues} 项` : ''),
-      );
+      setSummary(built);
       await refresh();
     } catch (e) {
       const detail = e instanceof Error
@@ -119,11 +129,12 @@ export function LibraryScreen(): React.JSX.Element {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const picked = await pickNovelFile();
       if (!picked) return;
       const imported = await importPortableWorldPackageFile(picked.bytes);
-      setBuilt(`已导入世界包「${imported.title}」r${imported.revision}。包内不含小说原文，已校验并创建独立世界。`);
+      setNotice(`已导入世界包「${imported.title}」r${imported.revision}。包内不含小说原文，已校验并创建独立世界。`);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -136,7 +147,7 @@ export function LibraryScreen(): React.JSX.Element {
     <ScreenShell>
       <Header
         title="书库"
-        subtitle="导入小说 → 三宝书 → 开局"
+        subtitle="把小说变成可以进入的世界"
         actions={
           <Button
             label="导入世界包"
@@ -146,78 +157,67 @@ export function LibraryScreen(): React.JSX.Element {
           />
         }
       />
-      <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg }}>
-        <Button label={busy ? '构建中…' : '导入小说 TXT 并构建三宝书'} onPress={importAndBuild} disabled={busy} block />
-        <View style={{ height: theme.space.md }} />
+      <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
+        <ImportNovelCard
+          busy={busy}
+          onImportNovel={importAndBuild}
+          onImportPackage={importWorldPackage}
+        />
+
+        {notice ? <StatusBanner tone="success" message={notice} /> : null}
+        {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
 
         {progress ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>
-              {progress.phase === 'importing' && '解析原文…'}
-              {progress.phase === 'extracting' && '抽取与映射…'}
-              {progress.phase === 'done' && '构建完成'}
-              {progress.phase === 'failed' && '构建未完成'}
-            </Text>
-            {progress.message ? <Text style={styles.bodyText}>{progress.message}</Text> : null}
-          </View>
+          <BuildStatusCard progress={progress} summary={summary} preview={preview} />
         ) : null}
-        {preview ? <View style={styles.card}><Text style={styles.bodyText}>{preview}</Text></View> : null}
-        {built ? <View style={styles.card}><Text style={styles.bodyText}>{built}</Text></View> : null}
 
-        <Text style={styles.sectionTitle}>已导入小说</Text>
-        {worlds.length === 0 ? (
-          <EmptyState
-            title="还没有导入小说"
-            description="点击上方按钮导入 TXT，系统会在本机构建三宝书与规则。"
-            icon={<LibraryIcon size={28} color={theme.text.secondary} strokeWidth={1.6} />}
+        <View>
+          <SectionHeader
+            title="我的世界"
+            subtitle={worlds.length > 0 ? `已导入 ${worlds.length} 部` : undefined}
           />
-        ) : null}
-        {worlds.map(world => (
-          <View key={world.worldId} style={styles.card}>
-            <Text style={styles.cardTitle}>{world.title}</Text>
-            <Text style={styles.muted}>构建状态 {world.buildStatus} · SHA {world.sourceSha256.slice(0, 10)}…</Text>
-            <View style={styles.row}>
-              <TouchableOpacity
-                style={styles.secondary}
-                onPress={() => {
-                  const activeBranch = campaigns.find(campaign => campaign.worldId === world.worldId);
-                  navigation.navigate('WorldDetail', {
-                    worldId: world.worldId,
-                    title: world.title,
-                    campaignId: activeBranch?.campaignId,
-                    branchId: activeBranch?.branchId,
-                  });
-                }}>
-                <Text style={styles.secondaryText}>详情</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.secondary}
-                onPress={() => navigation.navigate('Opening', { worldId: world.worldId, title: world.title })}>
-                <Text style={styles.secondaryText}>创建战役</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.secondary}
-                onPress={() =>
-                  navigation.navigate('WorldDetail', {
-                    worldId: world.worldId,
-                    title: world.title,
-                    initialTab: 'review',
-                  })
-                }>
-                <Text style={styles.secondaryText}>审核队列</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ))}
-
-        <View style={styles.row}>
-          <BookOpen size={14} color={theme.text.muted} strokeWidth={1.6} />
-          <Text style={[styles.muted, { marginLeft: theme.space.sm }]}>
-            三宝书与审核队列已并入「详情」的子页签；战役与存档在「战役」页。
-          </Text>
+          <WorldList
+            worlds={worlds}
+            busy={busy}
+            campaignFor={campaignFor}
+            onOpenDetail={world => {
+              const campaign = campaignFor(world.worldId);
+              navigation.navigate('WorldDetail', {
+                worldId: world.worldId,
+                title: world.title,
+                campaignId: campaign?.campaignId,
+                branchId: campaign?.branchId,
+              });
+            }}
+            onPrimary={world => {
+              const campaign = campaignFor(world.worldId);
+              if (campaign) {
+                navigation.navigate('Play', { campaignId: campaign.campaignId, branchId: campaign.branchId });
+                return;
+              }
+              navigation.navigate('Opening', { worldId: world.worldId, title: world.title });
+            }}
+            onOpenReview={world => {
+              const campaign = campaignFor(world.worldId);
+              navigation.navigate('WorldDetail', {
+                worldId: world.worldId,
+                title: world.title,
+                campaignId: campaign?.campaignId,
+                branchId: campaign?.branchId,
+                initialTab: 'review',
+              });
+            }}
+          />
         </View>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
+          三宝书与审核队列在世界详情内；战役、分支与存档在「战役」页。
+        </Text>
       </ScrollView>
     </ScreenShell>
   );
 }
+
+const styles = StyleSheet.create({
+  scroll: { flex: 1 },
+});

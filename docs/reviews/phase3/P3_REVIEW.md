@@ -73,3 +73,53 @@
 
 > 结论：P3.1 源码实现完成，静态审查问题全部关闭；所有运行期/构建期验证项均**未执行**，
 > 不得据此判定通过，需在线下开发机补齐。
+
+---
+
+## P3.2 书库 Library 产品化
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 只读数据补充 | `mobile/src/worldImport.ts` | `WorldLibraryEntry` 增加 `packageRevision`（最新**已发布** revision）与 `openReviewIssues`（待审核数），全部来自既有只读查询 `worldStore.listWorldPackages()` / `listReviewIssues()`；未新增写路径、未改 schema |
+| 页面组件（新增） | `features/library/ImportNovelCard.tsx` | 「＋ 导入小说 TXT / 构建人物、事件、规则与三宝书」+ 世界包导入 |
+| 页面组件（新增） | `features/library/BuildStatusCard.tsx` | 构建任务卡：真实 phase / message / 文本块进度 / 章节·实体·事实·revision·待审核数；失败时给续建提示 |
+| 页面组件（新增） | `features/library/WorldCard.tsx` | 世界卡：标题、`已发布 · r{n}` 或真实构建状态、更新时间、[开始冒险/继续冒险] + [世界详情] +（有真实待审核时）待审核 chip |
+| 页面组件（新增） | `features/library/WorldList.tsx` | 世界列表 + 空态 |
+| 页面重写 | `screens/LibraryScreen.tsx` | 只做数据装配与路由；数据流与 P2 完全一致（同样的 bridge 调用与 focus 刷新） |
+| 组件微调 | `components/Button.tsx` | `secondary` 变体改用 `bg.overlay` 填充，使次级按钮在 raised 卡片上仍有可见面 |
+
+`LibraryScreen` 已**不再 import `legacyStyles`**，页面内无 `styles.secondary/card/...` 旧样式。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | `WorldCard` 初版导出了仅本文件使用的 `worldStatusLine` | **已修复**：收回为模块内部函数 |
+| 2 | 次级按钮（`bg.raised` 填充）放在 raised 卡片上只剩细边框，可辨识度不足 | **已修复**：`secondary` 改为 `bg.overlay` 填充（token 驱动，四主题一致） |
+| 3 | 旧书库把「审核队列」入口常驻在每张世界卡上，与方案 §7.2 卡片层级不符 | **已修复**：仅当 `openReviewIssues > 0` 时显示「待审核 n」 |
+| 4 | 未发布三宝书的世界点「开始冒险」必然失败（`createCampaign` 要求已发布 revision） | **已修复**：按真实能力置灰，并在卡片正文说明「再次导入同一文件可继续构建三宝书」 |
+| 5 | 展示 revision 需要新查询 | **采用只读复用**：`listWorldPackages` + `listReviewIssues`，无新增写路径、无 schema 变更 |
+| 6 | 方案 §7.4 禁止假造章节数/进度百分比/质量分 | 已核对：进度条仅在 `chunksTotal` 真实存在时渲染，其余数字全部来自 `BuiltWorldSummary` |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| Library 四主题截图 | **未截图** |
+| Library 空态 / 构建中 / 构建失败 / 已发布 关键状态截图 | **未截图** |
+| 导入 TXT、导入世界包的真机流程 | **未验证** |
+
+### P3.2 出口对照（方案 §7.5）
+
+| 出口条件 | 状态 |
+|---|---|
+| Library 不再 import `legacyStyles` | 满足（静态确认） |
+| 不再直接使用旧 `styles.secondary/card/...` | 满足（静态确认） |
+| 世界卡信息层级清晰 | 源码就绪，**待截图验证** |
+| 空态一致 | 源码就绪（统一 `EmptyState`），**待截图验证** |
+| 四主题截图通过 | **未执行** |

@@ -73,9 +73,14 @@ export function Button(props: ButtonProps): React.JSX.Element {
       // that clears the 4.5:1 floor on this skin's surfaces.
       labelColor = theme.accentText;
     }
-  } else if (props.selected) {
-    borderColor = theme.accent.primary;
-    labelColor = theme.accentText;
+  } else if (variant === 'secondary') {
+    // Inset fill so a secondary control stays visible on a raised card, where
+    // `bg.raised` would have left only the hairline border.
+    backgroundColor = theme.bg.overlay;
+    if (props.selected) {
+      borderColor = theme.accent.primary;
+      labelColor = theme.accentText;
+    }
   }
 
   return (
