@@ -1,6 +1,6 @@
 {
   "name": "shineword-mobile",
-  "version": "0.3.0-closeout.2",
+  "version": "0.3.0-progressive.1",
   "private": true,
   "scripts": {
     "start": "react-native start",
