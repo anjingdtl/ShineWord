@@ -123,3 +123,51 @@
 | 世界卡信息层级清晰 | 源码就绪，**待截图验证** |
 | 空态一致 | 源码就绪（统一 `EmptyState`），**待截图验证** |
 | 四主题截图通过 | **未执行** |
+
+---
+
+## P3.3 战役 Campaigns 产品化
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 页面组件（新增） | `features/campaigns/BranchBadge.tsx` | 「主线 / 分支」角色徽记 + 真实 branchId + stateVersion |
+| 页面组件（新增） | `features/campaigns/BranchList.tsx` | 分支树：主线优先，分支显示父分支与创建日期，每行独立「继续冒险 / 继续」 |
+| 页面组件（新增） | `features/campaigns/CampaignCard.tsx` | 战役卡：标题、真实状态、创建日期、分支数量、分支树 |
+| 页面组件（新增） | `features/campaigns/ImportSaveAction.tsx` | 存档导入入口与说明（`.shineword-save.json`，旧版兼容） |
+| 页面重写 | `screens/CampaignsScreen.tsx` | 数据装配与路由；不再把分支摊平成独立战役行；不再 import `legacyStyles` |
+| 复用清理 | `screens/CampaignsScreen.tsx` | 删除文件内私有的 UTF-8 解码实现，改用 `textDecode.decodeUtf8`（同一逻辑去重） |
+
+`BranchList` 通过 `mainBranchIdOf(campaignId)` 复用规则域既有的 `${campaignId}-main` 约定判断主线，不新增分支命名规则。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | `BranchList` 初版用嵌套三元构造 `ordered`，主分支缺失时逻辑难验证 | **已修复**：改为「`-main` 命中优先，否则取最早一条」的显式写法 |
+| 2 | 旧战役页把「一个分支 = 一张战役卡」，多分支时战役身份丢失 | **已修复**：战役卡聚合，分支以树形呈现并标注父分支 |
+| 3 | 旧页面内的 `decodeUtf8` 与 `textDecode.decodeUtf8` 重复（且原实现有掩码缺省问题） | **已修复**：统一使用桥接层 `decodeUtf8` |
+| 4 | 方案 §8.3 要求「不为了丰富卡片新增数据库字段」 | 已核对：卡片仅使用 `campaigns` / `branches` 表的既有字段（title/status/createdAt/branchId/parentBranchId/stateVersion） |
+| 5 | 需保证「点击继续进入正确分支」 | 每行按钮以该行 `branchId` 直接导航 `Play`，不做默认分支推断 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| Campaigns 四主题截图 | **未截图** |
+| 空态 / 导入成功 / 导入失败状态截图 | **未截图** |
+| 多分支（rewind 产生 b*）在真机的区分与进入正确分支 | **未验证** |
+| 存档导入真机流程（含旧 `.shineword-save.json`） | **未验证** |
+
+### P3.3 出口对照（方案 §8.3）
+
+| 出口条件 | 状态 |
+|---|---|
+| Campaigns 不使用 `legacyStyles` | 满足（静态确认） |
+| 多 branch 可清楚区分 | 源码就绪，**待截图验证** |
+| 空态 / 导入存档 / 错误态完整 | 源码就绪，**待截图验证** |
+| 点击继续仍进入正确 branch | 逻辑静态确认，**待真机验证** |
