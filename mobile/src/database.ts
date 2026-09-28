@@ -6,6 +6,7 @@ import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStor
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
+import { probeFts5 } from '../../src/infra/sqlite/ftsCapability';
 
 SQLite.enablePromise(true);
 
@@ -15,6 +16,7 @@ export interface MobileDatabaseRuntime {
   narratives: SqliteNarrativeStore;
   game: SqliteGameStore;
   worldStore: SqliteWorldStore;
+  sqliteCapabilities: { fts5: boolean };
 }
 
 let singleton: Promise<MobileDatabaseRuntime> | null = null;
@@ -28,6 +30,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     nativeDb as unknown as ReactNativeSqliteDatabase,
   );
   await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
+  const fts5 = await probeFts5(db);
 
   // Phase 2: no implicit demo campaign. Every game is an explicit campaign
   // with a locked world package; existing demo-main data stays readable
@@ -38,6 +41,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     narratives: new SqliteNarrativeStore(db),
     game: new SqliteGameStore(db),
     worldStore: new SqliteWorldStore(db),
+    sqliteCapabilities: { fts5 },
   };
 }
 
