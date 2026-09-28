@@ -1,54 +1,47 @@
 /**
- * 开局向导 — full-screen stack page (plan §2: 沉浸流程, no tabs).
+ * 开局向导 — full-screen stack page (plan §11).
  *
- * Ported verbatim from App.tsx's `OpeningScreen`; the only changes are the
- * themed page frame/header and navigation (`onBack` → `goBack`, `onCreated` →
- * `replace('Play')` so the wizard leaves no dead entry in the back stack).
+ * P3.6 rebuilds the P2 single-scroll form into the four-step wizard:
+ *   01 世界起点 → 02 我的角色 → 03 同伴 → 04 确认开局
+ *
+ * Business behaviour is unchanged: the same `session.getWorldSetup` projection,
+ * the same anchor re-projection when the selected anchor changes, and the same
+ * `createCampaign` call with identical arguments. After creation the wizard is
+ * replaced by the play screen, so Back can never return to a finished wizard.
+ * No `legacyStyles` import remains.
  */
 import React, { useEffect, useState } from 'react';
-import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
+import { Button } from '../components/Button';
 import { Header } from '../components/Header';
+import { ProgressSteps } from '../components/ProgressSteps';
 import { ScreenShell } from '../components/ScreenShell';
+import { StatusBanner } from '../components/StatusBanner';
+import { StepCharacter } from '../features/opening/StepCharacter';
+import { StepCompanions } from '../features/opening/StepCompanions';
+import { StepConfirm } from '../features/opening/StepConfirm';
+import { StepWorldStart } from '../features/opening/StepWorldStart';
+import { WIZARD_STEPS, type OpeningWorldSetup } from '../features/opening/openingModel';
 import { useTheme } from '../theme/ThemeContext';
+import { THEMES } from '../theme/tokens';
 import { useAppSession } from '../state/AppSessionContext';
 import type { RootStackParamList } from '../navigation/types';
-import { styles } from './legacyStyles';
-
-const ATTRIBUTES: Array<{ key: string; label: string }> = [
-  { key: 'physique', label: '体魄' },
-  { key: 'agility', label: '敏捷' },
-  { key: 'insight', label: '洞察' },
-  { key: 'knowledge', label: '学识' },
-  { key: 'willpower', label: '意志' },
-  { key: 'social', label: '交涉' },
-];
-
-interface WorldSetup {
-  packageRevision: number | null;
-  rulesetVersion: string;
-  skills: Array<{ entryId: string; name: string; attribute: string; allowUntrained: boolean }>;
-  lore: Array<{ name: string; text: string }>;
-  anchorEvents: Array<{ eventId: string; title: string; summary: string; worldTimeOrder: number }>;
-  locations: string[];
-  canonCharacters: Array<{ entityId: string; name: string }>;
-  companionTemplates: Array<{ entryId: string; name: string; description: string }>;
-  encounterTemplates: Array<{ entryId: string; name: string }>;
-}
 
 export function OpeningScreen(): React.JSX.Element {
-  const { theme } = useTheme();
+  const { theme, themeId } = useTheme();
   const { profile } = useAppSession();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'Opening'>>();
   const { worldId, title } = route.params;
 
-  const [setup, setSetup] = useState<WorldSetup | null>(null);
+  const [step, setStep] = useState(0);
+  const [setup, setSetup] = useState<OpeningWorldSetup | null>(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<'original' | 'canon'>('original');
   const [canonEntityId, setCanonEntityId] = useState<string>('');
@@ -115,7 +108,7 @@ export function OpeningScreen(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldId, anchorEventId, profile]);
 
-  const spentTotal = ATTRIBUTES.reduce((sum, attr) => sum + (points[attr.key] - 1), 0);
+  const spentTotal = Object.values(points).reduce((sum, value) => sum + (value - 1), 0);
 
   function bump(key: string, delta: number) {
     setPoints(previous => {
@@ -144,6 +137,17 @@ export function OpeningScreen(): React.JSX.Element {
     });
   }
 
+  const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+  const characterReady = kind === 'canon' ? canonEntityId !== '' : chosenSkills.length > 0;
+  const startReady = characterReady && setup?.packageRevision != null;
+  const stepReady = [
+    setup !== null && (setup.anchorEvents.length === 0 || anchorEventId !== '') && locationId !== '',
+    characterReady,
+    true,
+    startReady,
+  ];
+  const canAdvance = stepReady[step] ?? false;
+
   async function create() {
     if (!profile) return;
     setBusy(true);
@@ -155,8 +159,8 @@ export function OpeningScreen(): React.JSX.Element {
       if (worldSetup.packageRevision === null) throw new Error('世界包尚未发布。');
       if (worldSetup.locations.length === 0) throw new Error('这个世界没有可用的开局地点（场景条目缺失）。');
       const chosenLocation = locationId || worldSetup.locations[0];
-      const anchorEvent = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
-      if (setup?.anchorEvents.length && !anchorEvent) throw new Error('开局锚点不在已发布原著事件中。');
+      const anchor = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
+      if (setup?.anchorEvents.length && !anchor) throw new Error('开局锚点不在已发布原著事件中。');
       const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
       if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
       const actorName = name.trim() || '无名旅人';
@@ -171,8 +175,8 @@ export function OpeningScreen(): React.JSX.Element {
         packageRevision: worldSetup.packageRevision,
         anchor: {
           // The anchor is a REAL point in the story (G02), not a placeholder.
-          worldTimeOrder: anchorEvent?.worldTimeOrder ?? 1,
-          anchorEventId: anchorEvent?.eventId,
+          worldTimeOrder: anchor?.worldTimeOrder ?? 1,
+          anchorEventId: anchor?.eventId,
           locationId: chosenLocation,
         },
         protagonist: {
@@ -203,6 +207,9 @@ export function OpeningScreen(): React.JSX.Element {
         goal: goal.trim() || '在开局锚点处开始一段冒险',
         createdAt: new Date().toISOString(),
       });
+      // replace() keeps the wizard out of the back stack: Back from 游玩页
+      // returns to the world/campaign context that started the wizard,
+      // never to a finished wizard (plan §11.6).
       navigation.replace('Play', { campaignId, branchId: `${campaignId}-main` });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -211,168 +218,135 @@ export function OpeningScreen(): React.JSX.Element {
     }
   }
 
-  const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+  if (noPackage) {
+    return (
+      <ScreenShell bottom>
+        <Header title={`开局 · ${title}`} onBack={() => navigation.goBack()} />
+        <View style={{ padding: theme.space.lg, gap: theme.space.md }}>
+          <StatusBanner
+            tone="warning"
+            title="还没有已发布的三宝书"
+            message="这个世界尚未完成构建与映射发布，无法创建战役。"
+          />
+          <Button label="返回" variant="secondary" onPress={() => navigation.goBack()} block />
+        </View>
+      </ScreenShell>
+    );
+  }
+
+  const actorName = kind === 'canon'
+    ? (setup?.canonCharacters.find(c => c.entityId === canonEntityId)?.name ?? (name.trim() || '无名旅人'))
+    : name.trim() || '无名旅人';
+
   return (
     <ScreenShell bottom>
       <Header
         title={`开局 · ${title}`}
-        subtitle="时间地点 → 角色 → 同伴 → 确认开局"
-        onBack={() => navigation.goBack()}
+        subtitle={`${step + 1} / ${WIZARD_STEPS.length} ${WIZARD_STEPS[step]}`}
+        onBack={() => (step > 0 ? setStep(step - 1) : navigation.goBack())}
       />
-      {noPackage ? (
-        <View style={{ padding: theme.space.lg }}>
-          <View style={styles.card}>
-            <Text style={styles.bodyText}>这个世界还没有已发布的三宝书。请先在世界构建中完成映射与发布。</Text>
-          </View>
+
+      <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
+        <ProgressSteps
+          steps={WIZARD_STEPS}
+          current={step}
+          onStepPress={index => setStep(index)}
+        />
+      </View>
+
+      <ScrollView
+        contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
+        {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
+
+        {step === 0 ? (
+          <StepWorldStart
+            setup={setup}
+            anchorEventId={anchorEventId}
+            locationId={locationId}
+            onSelectAnchor={setAnchorEventId}
+            onSelectLocation={setLocationId}
+          />
+        ) : null}
+
+        {step === 1 ? (
+          <StepCharacter
+            setup={setup}
+            kind={kind}
+            onKindChange={setKind}
+            name={name}
+            onNameChange={setName}
+            points={points}
+            onBump={bump}
+            spentTotal={spentTotal}
+            chosenSkills={chosenSkills}
+            onToggleSkill={toggleSkill}
+            canonEntityId={canonEntityId}
+            onSelectCanon={setCanonEntityId}
+          />
+        ) : null}
+
+        {step === 2 ? (
+          <StepCompanions
+            setup={setup}
+            companions={companions}
+            directives={companionDirectives}
+            onToggle={toggleCompanion}
+            onDirective={(entryId, directive) =>
+              setCompanionDirectives(previous => ({ ...previous, [entryId]: directive }))
+            }
+          />
+        ) : null}
+
+        {step === 3 ? (
+          <StepConfirm
+            worldTitle={title}
+            setup={setup}
+            anchorLabel={anchorEvent ? `序${anchorEvent.worldTimeOrder} · ${anchorEvent.title}` : '时间原点'}
+            location={locationId}
+            kind={kind}
+            actorName={actorName}
+            points={points}
+            chosenSkills={chosenSkills}
+            companions={companions}
+            directives={companionDirectives}
+            goal={goal}
+            onGoalChange={setGoal}
+            themeLabel={THEMES[themeId].label}
+            busy={busy}
+            canStart={startReady}
+            onStart={create}
+          />
+        ) : null}
+      </ScrollView>
+
+      {step < WIZARD_STEPS.length - 1 ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            gap: theme.space.sm,
+            paddingHorizontal: theme.space.lg,
+            paddingBottom: theme.space.md,
+            paddingTop: theme.space.sm,
+            borderTopWidth: theme.border.hairline,
+            borderTopColor: theme.border.color,
+            backgroundColor: theme.bg.base,
+          }}>
+          <Button
+            label="上一步"
+            variant="secondary"
+            onPress={() => setStep(current => Math.max(0, current - 1))}
+            disabled={step === 0}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="下一步"
+            onPress={() => setStep(current => Math.min(WIZARD_STEPS.length - 1, current + 1))}
+            disabled={!canAdvance}
+            style={{ flex: 1 }}
+            testID="opening-next"
+          />
         </View>
-      ) : (
-        <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg }}>
-          {setup ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>开局时间点（原著走向）</Text>
-              {setup.anchorEvents.length === 0 ? (
-                <Text style={styles.muted}>这个世界没有原著事件锚点，将从时间原点开始。</Text>
-              ) : (
-                setup.anchorEvents.map(event => (
-                  <TouchableOpacity key={event.eventId} style={styles.row} onPress={() => setAnchorEventId(event.eventId)}>
-                    <Text style={anchorEventId === event.eventId ? styles.entryName : styles.bodyText}>
-                      {anchorEventId === event.eventId ? '☑' : '☐'} 序{event.worldTimeOrder} · {event.title}
-                    </Text>
-                  </TouchableOpacity>
-                ))
-              )}
-              {anchorEvent ? <Text style={styles.muted}>{anchorEvent.summary.slice(0, 120)}</Text> : null}
-              <Text style={styles.cardTitle}>开局地点</Text>
-              {setup.locations.length === 0 ? (
-                <Text style={styles.danger}>世界包缺少场景地点条目。</Text>
-              ) : (
-                setup.locations.slice(0, 12).map(location => (
-                  <TouchableOpacity key={location} style={styles.row} onPress={() => setLocationId(location)}>
-                    <Text style={locationId === location ? styles.entryName : styles.bodyText}>
-                      {locationId === location ? '☑' : '☐'} {location}
-                    </Text>
-                  </TouchableOpacity>
-                ))
-              )}
-            </View>
-          ) : (
-            <Text style={styles.muted}>加载世界资料…</Text>
-          )}
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>角色类型</Text>
-            <View style={styles.row}>
-              <TouchableOpacity
-                style={[styles.secondary, kind === 'original' && styles.secondaryActive]}
-                onPress={() => setKind('original')}>
-                <Text style={styles.secondaryText}>原创角色</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.secondary, kind === 'canon' && styles.secondaryActive]}
-                onPress={() => setKind('canon')}>
-                <Text style={styles.secondaryText}>原著角色</Text>
-              </TouchableOpacity>
-            </View>
-            {kind === 'canon' ? (
-              setup && setup.canonCharacters.length > 0 ? (
-                setup.canonCharacters.slice(0, 20).map(character => (
-                  <TouchableOpacity key={character.entityId} style={styles.row} onPress={() => setCanonEntityId(character.entityId)}>
-                    <Text style={canonEntityId === character.entityId ? styles.entryName : styles.bodyText}>
-                      {canonEntityId === character.entityId ? '☑' : '☐'} {character.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))
-              ) : (
-                <Text style={styles.danger}>这个世界没有可扮演的原著人物记录。</Text>
-              )
-            ) : (
-              <View>
-                <Text style={styles.muted}>原著角色按锚点前的证据推导属性与技能；强角色可作为高难度开局。</Text>
-                <TextInput
-                  style={styles.input}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="角色姓名（原创角色）"
-                  placeholderTextColor="#6f7b86"
-                />
-                <Text style={styles.muted}>自由属性点：已用 {spentTotal}/4（每项 1~3）</Text>
-                {ATTRIBUTES.map(attr => (
-                  <View key={attr.key} style={styles.row}>
-                    <Text style={styles.attrLabel}>{attr.label}</Text>
-                    <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, -1)}>
-                      <Text style={styles.secondaryText}>-</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.attrValue}>{points[attr.key]}</Text>
-                    <TouchableOpacity style={styles.step} onPress={() => bump(attr.key, 1)}>
-                      <Text style={styles.secondaryText}>+</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-                <Text style={styles.cardTitle}>初始技能（选 3 项，入门 d6）</Text>
-                {setup?.skills.map(skill => (
-                  <TouchableOpacity key={skill.entryId} style={styles.row} onPress={() => toggleSkill(skill.entryId)}>
-                    <Text style={chosenSkills.includes(skill.entryId) ? styles.entryName : styles.bodyText}>
-                      {chosenSkills.includes(skill.entryId) ? '☑' : '☐'} {skill.name}
-                    </Text>
-                    <Text style={styles.muted}>（允许无训练尝试：{skill.allowUntrained ? '是' : '否'}）</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-
-          {setup && setup.companionTemplates.length > 0 ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>同伴（最多 2 名）</Text>
-              {setup.companionTemplates.map(template => (
-                <View key={template.entryId}>
-                  <TouchableOpacity style={styles.row} onPress={() => toggleCompanion(template.entryId)}>
-                    <Text style={companions.includes(template.entryId) ? styles.entryName : styles.bodyText}>
-                      {companions.includes(template.entryId) ? '☑' : '☐'} {template.name}
-                    </Text>
-                  </TouchableOpacity>
-                  {companions.includes(template.entryId) ? (
-                    <View style={styles.row}>
-                      {([
-                        ['follow', '跟随'], ['support', '支援'], ['protect', '保护'], ['conserve', '节省资源'], ['retreat', '撤退'],
-                      ] as Array<[CompanionDirective, string]>).map(([directive, label]) => (
-                        <TouchableOpacity key={directive} style={styles.step}
-                          onPress={() => setCompanionDirectives(previous => ({ ...previous, [template.entryId]: directive }))}>
-                          <Text style={(companionDirectives[template.entryId] ?? 'protect') === directive ? styles.entryName : styles.muted}>
-                            {label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  ) : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>主目标</Text>
-            <TextInput
-              style={styles.input}
-              value={goal}
-              onChangeText={setGoal}
-              multiline
-              placeholder="这次冒险要达成什么？"
-              placeholderTextColor="#6f7b86"
-            />
-          </View>
-
-          <TouchableOpacity
-            style={styles.primary}
-            onPress={create}
-            disabled={busy || (kind === 'original' && chosenSkills.length === 0) || (kind === 'canon' && !canonEntityId)}>
-            <Text style={styles.primaryText}>
-              {busy ? '创建中…' : `确认开局（锁定世界包 r${setup?.packageRevision ?? '?'} · 规则 ${setup?.rulesetVersion || 'V0.2'}）`}
-            </Text>
-          </TouchableOpacity>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-        </ScrollView>
-      )}
+      ) : null}
     </ScreenShell>
   );
 }

@@ -277,3 +277,55 @@
 | 四主题均正常 | **待截图验证** |
 | 玩家视图 / GM 编辑模式视觉上绝不混淆 | 源码就绪，**待截图验证** |
 | 主题覆盖实际生效 | 已实现 `ThemeScope` 接入，**待真机验证** |
+
+---
+
+## P3.6 Opening：真正的新游戏向导
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 向导模型（新增） | `features/opening/openingModel.ts` | 世界投影类型、六属性表、同伴指令表、`FREE_POINT_BUDGET = 4` / `MAX_SKILLS = 3` / `MAX_COMPANIONS = 2`、四步名称 |
+| 通用选择卡（新增） | `features/opening/ChoiceCard.tsx` | 卡片式单选：选中 = 强调边框 + ✓ + 加粗（非颜色单通道） |
+| 步骤 1（新增） | `features/opening/StepWorldStart.tsx` | 01 世界起点：原著事件锚点卡（含摘要）+ 地点卡；无锚点/无地点时给明确空态与错误态 |
+| 步骤 2（新增） | `features/opening/StepCharacter.tsx` | 02 我的角色：原创/原著二分；姓名、自由点剩余、六属性 `AttributePips` + 步进按钮、初始技能（关联属性 / d6 / 无训练尝试） |
+| 步骤 3（新增） | `features/opening/StepCompanions.tsx` | 03 同伴：最多 2 名，每名可设 5 种指令；可零同伴开局 |
+| 步骤 4（新增） | `features/opening/StepConfirm.tsx` | 04 确认开局：世界 / 起点 / 地点 / 角色 / 属性摘要 / 技能 / 同伴 / 目标 / 世界包 r / 规则版本 / 主题 + `开始冒险` |
+| 页面重写 | `screens/OpeningScreen.tsx` | `ProgressSteps` 四步 + 分步门禁 + 底部上一步/下一步；不再 import `legacyStyles` |
+
+业务行为未变：`session.getWorldSetup` 投影、锚点切换后的重投影、`createCampaign` 调用参数逐字保持 P2 版本。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 原实现用 `☑ / ☐` 文本前缀模拟选择（方案 §11.2 明确禁止） | **已修复**：全部改为 `ChoiceCard` 卡片单选 |
+| 2 | 角色名解析写成 `a ?? b \|\| c`，`??` 与 `\|\|` 混用会直接语法错误 | **已修复**：加括号 `a ?? (b \|\| c)`（静态审查发现，未运行编译器） |
+| 3 | 初版残留与 `StepWorldStart` 加载态重复的占位 Card 块与未使用导入 | **已修复**：删除重复块，移除 `Card` / `ChoiceCard` / `typeStyle` 未用导入 |
+| 4 | 技能卡同时显示 `d6` 文本与 `DieBadge`，信息重复 | **已修复**：保留 `DieBadge`，描述行承载关联属性与无训练标记 |
+| 5 | 步骤门禁缺失会导致空数据创建战役 | **已修复**：第 1 步要求锚点与地点有效；第 2 步要求角色有效（原创 ≥1 技能 / 原著已选人物）；第 4 步要求世界包已发布；按此置灰「下一步 / 开始冒险」 |
+| 6 | 涉及「Back 回到已创建向导」的导航语义 | **保持并明确**：`replace('Play')` 使向导不留在返回栈；Header Back 仅回退向导步骤 |
+| 7 | 原著角色是否可能泄漏 GM / 未来资料 | 已核对：仅使用 `getWorldSetup` 的玩家投影（`canonCharacters` 只有实体与名字），未读取角色卡 GM 字段 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| Opening 四步截图（含四主题） | **未截图** |
+| **真机完整创建一场战役**（方案 §11.6 出口） | **未验证** |
+| 四步来回切换与门禁（含无技能/无人物等边界） | **未验证** |
+| 创建后 Back 不回向导、Play 返回落在战役/世界上下文 | **未验证** |
+
+### P3.6 出口对照（方案 §11.6）
+
+| 出口条件 | 状态 |
+|---|---|
+| Opening 不使用 `legacyStyles` | 满足（静态确认） |
+| 4 步流程可来回 | 源码就绪，**待真机验证** |
+| 数据校验仍由原业务逻辑兜底 | 静态确认（`createCampaign` 原样） |
+| 不改变 `createCampaign` 规则 | 静态确认（参数与 P2 一致） |
+| 真机完整创建一场战役通过 | **未验证** |
