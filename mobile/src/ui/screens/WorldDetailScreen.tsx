@@ -1,40 +1,54 @@
 /**
- * 世界详情 — the sub-tab host that absorbs the old Books and Review screens
- * (plan §2: both stop being sibling "island" pages).
+ * 世界详情 — the sub-tab host (资料 / 三宝书 / 审查 / 世界包).
  *
- * P2 wires the tabs and ports the two bodies; the 资料 and 世界包 tabs are new
- * but thin — the overview only surfaces data the library card already showed,
- * and the package tab is the export action that used to live on that card.
+ * P3.5: the tab strip uses the phase-3 `SegmentedControl`, the four bodies live
+ * in `features/world-detail`, and the whole page is mounted inside a
+ * `ThemeScope` bound to the world's effective skin, so the per-world override
+ * stored since P1 finally takes effect here. No `legacyStyles` import remains.
  */
 import React, { useEffect, useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { buildProvider, createSession } from '../../runtime';
-import { Button } from '../components/Button';
+import { getWorldEntry, type WorldLibraryEntry } from '../../worldImport';
 import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
-import { useTheme } from '../theme/ThemeContext';
-import { typeStyle } from '../components/typography';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { StatusBanner } from '../components/StatusBanner';
+import { useTheme, ThemeScope } from '../theme/ThemeContext';
+import { ReviewPanel } from '../features/world-detail/ReviewPanel';
+import { WorldBooksPanel } from '../features/world-detail/WorldBooksPanel';
+import { WorldOverviewPanel, type WorldSetupSummary } from '../features/world-detail/WorldOverviewPanel';
+import { WorldPackagePanel } from '../features/world-detail/WorldPackagePanel';
 import { useAppSession } from '../state/AppSessionContext';
-import type { RootStackParamList, WorldTab } from '../navigation/types';
-import { WORLD_TABS } from '../navigation/types';
-import { styles } from './legacyStyles';
-import { WorldDetailBooks } from './WorldDetailBooks';
-import { WorldDetailReview } from './WorldDetailReview';
-import { exportWorldPackageZip } from './worldPackageExport';
+import { WORLD_TABS, type RootStackParamList, type WorldTab } from '../navigation/types';
+
+const TAB_OPTIONS: ReadonlyArray<{ value: WorldTab; label: string }> = WORLD_TABS.map(entry => ({
+  value: entry.key,
+  label: entry.label,
+}));
 
 export function WorldDetailScreen(): React.JSX.Element {
+  const route = useRoute<RouteProp<RootStackParamList, 'WorldDetail'>>();
+  const { themeIdForWorld } = useTheme();
+  return (
+    <ThemeScope themeId={themeIdForWorld(route.params.worldId)}>
+      <WorldDetailContent />
+    </ThemeScope>
+  );
+}
+
+function WorldDetailContent(): React.JSX.Element {
   const { theme } = useTheme();
   const { profile } = useAppSession();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'WorldDetail'>>();
   const { worldId, title, campaignId, branchId } = route.params;
   const [tab, setTab] = useState<WorldTab>(route.params.initialTab ?? 'overview');
-  const [setup, setSetup] = useState<{ packageRevision: number | null; rulesetVersion: string } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [setup, setSetup] = useState<WorldSetupSummary | null>(null);
+  const [entry, setEntry] = useState<WorldLibraryEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -43,12 +57,13 @@ export function WorldDetailScreen(): React.JSX.Element {
       try {
         const session = await createSession(profile, await buildProvider(profile));
         const worldSetup = await session.getWorldSetup(worldId);
-        if (!cancelled) {
-          setSetup({
-            packageRevision: worldSetup.packageRevision,
-            rulesetVersion: worldSetup.rulesetVersion,
-          });
-        }
+        const worldEntry = await getWorldEntry(worldId);
+        if (cancelled) return;
+        setSetup({
+          packageRevision: worldSetup.packageRevision,
+          rulesetVersion: worldSetup.rulesetVersion,
+        });
+        setEntry(worldEntry);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -58,101 +73,55 @@ export function WorldDetailScreen(): React.JSX.Element {
     };
   }, [profile, worldId]);
 
-  async function exportPackage() {
-    setBusy(true);
-    setError(null);
-    try {
-      setNotice(await exportWorldPackageZip(worldId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <ScreenShell bottom>
       <Header
         title={title}
-        subtitle={`三宝书 r${setup?.packageRevision ?? '?'} · 规则 ${setup?.rulesetVersion ?? 'V0.2'}`}
+        subtitle={`三宝书 r${setup?.packageRevision ?? '?'} · 规则 ${setup?.rulesetVersion || '未知'}`}
         onBack={() => navigation.goBack()}
       />
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
-        {WORLD_TABS.map(entry => (
-          <TouchableOpacity
-            key={entry.key}
-            style={[
-              styles.secondary,
-              tab === entry.key && styles.secondaryActive,
-              { paddingVertical: theme.space.sm },
-            ]}
-            onPress={() => setTab(entry.key)}>
-            <Text style={[styles.secondaryText, tab === entry.key ? { color: theme.accentText } : null]}>
-              {entry.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
+        <SegmentedControl
+          options={TAB_OPTIONS}
+          value={tab}
+          onChange={setTab}
+          compact
+          testID="world-tab"
+        />
       </View>
 
-      <View style={{ flex: 1, paddingHorizontal: theme.space.lg }}>
+      <View style={{ flex: 1, paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
+        {error ? (
+          <StatusBanner tone="error" title="世界资料读取失败" message={error} />
+        ) : null}
+
         {tab === 'overview' ? (
-          <ScrollView style={styles.scroll} contentContainerStyle={{ paddingBottom: 24 }}>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>{title}</Text>
-              <Text style={styles.muted}>
-                已发布三宝书 r{setup?.packageRevision ?? '?'} · 规则 {setup?.rulesetVersion ?? 'V0.2'}
-              </Text>
-              <Text style={styles.muted}>
-                {campaignId
-                  ? `关联战役 ${campaignId}${branchId ? ` · 分支 ${branchId}` : ''}（三宝书按该战役已发现内容过滤）`
-                  : '暂无关联战役：三宝书按「未发现即隐藏」显示。'}
-              </Text>
-              <View style={styles.row}>
-                <TouchableOpacity
-                  style={styles.primary}
-                  onPress={() => navigation.navigate('Opening', { worldId, title })}>
-                  <Text style={styles.primaryText}>创建战役</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>这个世界的四个视图</Text>
-              <Text style={styles.muted}>
-                资料 = 概览；三宝书 = 玩家手册 / 城主指南 / 怪物图鉴（含编辑模式）；审查 = 冲突与映射裁定；
-                世界包 = 导出可移植世界包 ZIP（不含小说原文）。
-              </Text>
-            </View>
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+          <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl }}>
+            <WorldOverviewPanel
+              worldId={worldId}
+              title={title}
+              campaignId={campaignId}
+              branchId={branchId}
+              setup={setup}
+              entry={entry}
+              onCreateCampaign={() => navigation.navigate('Opening', { worldId, title })}
+            />
           </ScrollView>
         ) : null}
 
         {tab === 'books' ? (
-          <WorldDetailBooks worldId={worldId} campaignId={campaignId} branchId={branchId} />
+          <WorldBooksPanel worldId={worldId} campaignId={campaignId} branchId={branchId} />
         ) : null}
 
-        {tab === 'review' ? <WorldDetailReview worldId={worldId} /> : null}
+        {tab === 'review' ? (
+          <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl }}>
+            <ReviewPanel worldId={worldId} />
+          </ScrollView>
+        ) : null}
 
         {tab === 'package' ? (
-          <ScrollView style={styles.scroll} contentContainerStyle={{ paddingBottom: 24 }}>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>世界包管理</Text>
-              <Text style={styles.muted}>
-                导出的是当前已发布的三宝书与规则（不可变版本），不含小说原文。收到该 ZIP 的设备可直接导入并创建独立世界。
-              </Text>
-            </View>
-            <Button
-              label={busy ? '导出中…' : '导出世界包 ZIP'}
-              onPress={exportPackage}
-              disabled={busy}
-              block
-            />
-            <View style={{ height: theme.space.md }} />
-            {notice ? (
-              <View style={styles.card}>
-                <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.primary }]}>{notice}</Text>
-              </View>
-            ) : null}
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+          <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl }}>
+            <WorldPackagePanel worldId={worldId} />
           </ScrollView>
         ) : null}
       </View>

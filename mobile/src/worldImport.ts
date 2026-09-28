@@ -1,4 +1,5 @@
 import type { ParsedTxtSource } from '../../src/domain/world/types';
+import type { WorldRecord } from '../../src/application/ports/worldStore';
 
 declare const btoa: (data: string) => string;
 import { importTxtSource } from '../../src/application/import/txtImport';
@@ -110,25 +111,41 @@ export async function listWorlds(): Promise<WorldLibraryEntry[]> {
   const worlds = await worldStore.listWorlds();
   const entries: WorldLibraryEntry[] = [];
   for (const world of worlds) {
-    // Read-only enrichment for the library card: which revision is published,
-    // and how many review issues are still open. Both queries already exist on
-    // the world store; nothing is written here.
-    const packages = await worldStore.listWorldPackages(world.worldId);
-    const published = packages.filter(item => item.status === 'published');
-    const packageRevision = published.reduce((max, item) => Math.max(max, item.revision), 0);
-    const issues = await worldStore.listReviewIssues(world.worldId, 'open');
-    entries.push({
-      worldId: world.worldId,
-      title: world.title,
-      sourceSha256: world.sourceSha256,
-      legacySourceSha256: world.legacySourceSha256 ?? null,
-      buildStatus: world.buildStatus,
-      updatedAt: world.updatedAt,
-      packageRevision,
-      openReviewIssues: issues.length,
-    });
+    entries.push(await toLibraryEntry(worldStore, world));
   }
   return entries;
+}
+
+/** One world row with the same read-only enrichment as the library list. */
+export async function getWorldEntry(worldId: string): Promise<WorldLibraryEntry | null> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  const world = await worldStore.getWorld(worldId);
+  if (!world) return null;
+  return toLibraryEntry(worldStore, world);
+}
+
+async function toLibraryEntry(
+  worldStore: SqliteWorldStore,
+  world: WorldRecord,
+): Promise<WorldLibraryEntry> {
+  // Read-only enrichment for the library card and the world overview: which
+  // revision is published, and how many review issues are still open. Both
+  // queries already exist on the world store; nothing is written here.
+  const packages = await worldStore.listWorldPackages(world.worldId);
+  const published = packages.filter(item => item.status === 'published');
+  const packageRevision = published.reduce((max, item) => Math.max(max, item.revision), 0);
+  const issues = await worldStore.listReviewIssues(world.worldId, 'open');
+  return {
+    worldId: world.worldId,
+    title: world.title,
+    sourceSha256: world.sourceSha256,
+    legacySourceSha256: world.legacySourceSha256 ?? null,
+    buildStatus: world.buildStatus,
+    updatedAt: world.updatedAt,
+    packageRevision,
+    openReviewIssues: issues.length,
+  };
 }
 
 /**

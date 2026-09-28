@@ -13,20 +13,7 @@ import { Card } from '../../components/Card';
 import { useTheme } from '../../theme/ThemeContext';
 import { typeStyle } from '../../components/typography';
 import type { WorldLibraryEntry } from '../../../worldImport';
-
-/** `buildStatus` values written by the world builder, in product language. */
-const STATUS_LABEL: Record<string, string> = {
-  importing: '解析原文中',
-  extracting: '抽取中',
-  merging: '整合中',
-  ready: '资料就绪（未发布三宝书）',
-  failed: '构建未完成',
-};
-
-function worldStatusLine(world: WorldLibraryEntry): string {
-  if (world.packageRevision >= 1) return `已发布 · r${world.packageRevision}`;
-  return STATUS_LABEL[world.buildStatus] ?? world.buildStatus;
-}
+import { worldStatusLine } from '../worldStatus';
 
 export function WorldCard(props: {
   world: WorldLibraryEntry;

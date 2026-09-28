@@ -1,5 +1,5 @@
 /**
- * ShineWord design tokens — one component tree, four skins.
+ * Shine-TRPG design tokens — one component tree, four skins.
  *
  * This file is the ONLY place in `src/ui` where literal colour values are
  * allowed. Every component reads a named token through `useTheme()`, so adding

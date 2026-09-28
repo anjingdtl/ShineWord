@@ -15,6 +15,7 @@ export {
   THEME_STORAGE_KEY,
   WORLD_THEME_STORAGE_KEY,
   ThemeProvider,
+  ThemeScope,
   useTheme,
   useThemedStyles,
   type ThemeContextValue,

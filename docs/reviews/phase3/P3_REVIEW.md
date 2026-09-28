@@ -218,3 +218,62 @@
 | 无 legacy input | 满足（静态确认，`legacyInput` 已删除） |
 | 品牌一致 | 源码就绪，**待截图验证** |
 | 保存端点行为不变 | 静态确认（hook 逻辑逐行对照 P2 版本） |
+
+---
+
+## P3.5 世界详情 WorldDetail 产品化
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 主题能力（新增） | `theme/ThemeContext.tsx` `ThemeScope` | 把子树钉在指定皮肤上（只覆盖 `theme`/`themeId`，不写全局偏好），使 P1 起就存在的 `worldId → themeId` 覆盖**真正生效** |
+| 页面组件（新增） | `features/world-detail/WorldOverviewPanel.tsx` | 资料页：世界名、已发布 revision、规则版本、构建状态、关联战役/分支、待审核数、[创建战役] |
+| 页面组件（新增） | `features/world-detail/WorldThemeOverrideCard.tsx` | 世界主题：跟随全局 / 墨 / 烛 / 漫 / 梭，复用既有写入路径 |
+| 页面组件（新增） | `features/world-detail/WorldBooksPanel.tsx` | 三宝书：玩家视图 / 编辑模式二分切换 + 三本书 Tab + 条目阅读 |
+| 页面组件（新增） | `features/world-detail/WorldBooksEditor.tsx` | 编辑模式：条目选择、`TextField multiline` JSON、可见性 `SegmentedControl`、差异面板、发布风险提示、草稿/验证/发布动作 |
+| 页面组件（新增） | `features/world-detail/ReviewPanel.tsx`、`ReviewIssueCard.tsx` | 审查页改为 Review Issue Card：严重级别 + 可读摘要 + 处理动作；原始 JSON 折叠在「技术详情」 |
+| 页面组件（新增） | `features/world-detail/WorldPackagePanel.tsx` | 世界包：当前版本、content hash 摘要、规则版本、导出、说明不含小说原文 |
+| 页面重写 | `screens/WorldDetailScreen.tsx` | 四 Tab 使用 `SegmentedControl`，整页包在 `ThemeScope` 中 |
+| 文件迁移/删除 | `screens/WorldDetailBooks.tsx`、`WorldDetailReview.tsx`、`screens/worldPackageExport.ts` | 逻辑迁入 `features/world-detail`；旧文件删除，`WorldDetail*` 不再引用 `legacyStyles` |
+| 品牌（补做） | `features/world-detail/worldPackageExport.ts`、`screens/PlayScreen.tsx` | 新导出文件名前缀改为 `shine-trpg-*`，兼容扩展名 `.shineword-world.zip` / `.shineword-save.json` 保持不变 |
+| 只读补充 | `worldImport.ts` | 新增 `getWorldEntry(worldId)`（复用同一 `toLibraryEntry` 只读映射）；资料页取构建状态与待审核数 |
+| 共享助手 | `features/worldStatus.ts` | 世界状态文案统一，书库卡与资料页共用 |
+
+守卫要点：编辑模式与玩家视图是两个互斥模式，编辑模式上方常驻 `⚠ 世界编辑模式` 警告条；玩家视图默认过滤 `gm` 条目并按战役发现集过滤 `discoverable` 条目（`assembleBook` 原有投影规则未改）。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 世界主题覆盖此前只存储、不生效（P2 注释亦承认「入口在后续阶段接入」） | **已修复**：新增 `ThemeScope`，世界详情整页按该世界有效皮肤渲染；游玩页接入留到 P4（已在 UI 文案中说明） |
+| 2 | 编辑模式与玩家视图此前的区别仅是若干 `styles.danger` 文本，模式边界弱 | **已修复**：改为 `SegmentedControl` 二选一 + 常驻警告条 + 发布风险提示，模式切换不可能被忽略 |
+| 3 | 审查页主视图直接铺 `detailJson.slice(0,300)` | **已修复**：优先展示 `message/summary/title/reason/detail` 字段的可读摘要，原始 JSON 折叠在「技术详情」 |
+| 4 | 旧编辑器用原始 `TextInput` + 硬编码 `placeholderTextColor: '#6f7b86'`（四主题下对比度不成立） | **已修复**：改用 `TextField multiline monospace`，颜色全部来自 Token |
+| 5 | 旧编辑器的 status 文案用 `includes('失败')` 判断颜色，无图形提示 | **已修复**：改为 `{tone, message}` 结构化状态 + `StatusBanner`（含图形提示） |
+| 6 | 编辑器重置时机：草稿保存后 `entries` 更新会重建 `selectedEntry` 对象，若按对象身份重置会清空状态提示 | **已修复**：重置只依赖 `selectedEntryId`，保存状态不会被自己抹掉 |
+| 7 | 导出文件名仍是 `shineword-*` 前缀 | **已修复**：世界包与存档导出改 `shine-trpg-*`；扩展名与导入兼容性不变 |
+| 8 | 资料页展示「构建状态」需要世界行数据 | **采用只读复用**：`worldImport.getWorldEntry`，无新增写路径 |
+| 9 | `WorldOverviewPanel` 初版残留未使用的 `StyleSheet` 与占位样式 | **已修复**：删除 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| WorldDetail / 三宝书 / 审查 / 世界包 四主题截图 | **未截图** |
+| 玩家视图与编辑模式的视觉区分（含 GM 秘密不泄漏） | **未验证**（需真机 + 真实世界包） |
+| 世界主题覆盖实际生效（切到某世界看皮肤变化） | **未验证** |
+| 草稿保存 / 验证 / 发布新版本的真机流程 | **未验证** |
+| 世界包导出文件名前缀 `shine-trpg-*` | **未验证**（需真机导出） |
+
+### P3.5 出口对照（方案 §10.4）
+
+| 出口条件 | 状态 |
+|---|---|
+| WorldDetail、Books、Review 不再引用 `legacyStyles` | 满足（静态确认，`grep legacyStyles` 仅剩 PlayScreen / OpeningScreen） |
+| 四主题均正常 | **待截图验证** |
+| 玩家视图 / GM 编辑模式视觉上绝不混淆 | 源码就绪，**待截图验证** |
+| 主题覆盖实际生效 | 已实现 `ThemeScope` 接入，**待真机验证** |

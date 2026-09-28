@@ -247,7 +247,7 @@ export function PlayScreen(): React.JSX.Element {
     setError(null);
     try {
       const { json } = await exportCampaignSave(campaignId, branchId);
-      const uri = await createExportFile(`shineword-${campaignId}-${branchId}.shineword-save.json`);
+      const uri = await createExportFile(`shine-trpg-${campaignId}-${branchId}.shineword-save.json`);
       if (!uri) {
         setNotice('已取消导出。');
         return;

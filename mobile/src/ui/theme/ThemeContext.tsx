@@ -178,6 +178,23 @@ export function useTheme(): ThemeContextValue {
 }
 
 /**
+ * ThemeScope — pins a subtree to one skin without touching the app-level
+ * preference (plan §10.1: a world's own skin must actually take effect).
+ *
+ * Everything except `theme` / `themeId` is inherited, so preferences, storage
+ * and the world map keep working inside the scope; the scope is a rendering
+ * override only and never writes the app skin.
+ */
+export function ThemeScope(props: { themeId: ThemeId; children: React.ReactNode }): React.JSX.Element {
+  const parent = useTheme();
+  const value = useMemo<ThemeContextValue>(
+    () => ({ ...parent, theme: getTheme(props.themeId), themeId: props.themeId }),
+    [parent, props.themeId],
+  );
+  return <ThemeContext.Provider value={value}>{props.children}</ThemeContext.Provider>;
+}
+
+/**
  * Memoised StyleSheet factory. `factory` must be defined at module scope so it
  * keeps a stable identity across renders; it is then re-run only when the skin
  * actually changes.
