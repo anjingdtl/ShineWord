@@ -18,6 +18,7 @@ import {
   buildProvider,
   createSession,
   getCampaignState,
+  getWorldBookProjection,
   loadWorldPackageDraft,
 } from '../../../runtime';
 import { getDatabaseRuntime } from '../../../database';
@@ -111,6 +112,7 @@ export function WorldBooksPanel(props: {
   const [packageSections, setPackageSections] = useState<BookSection[]>([]);
   const [packageRevision, setPackageRevision] = useState<number | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const [contentInfo, setContentInfo] = useState<string | null>(null);
 
   const editMode = mode === 'gm';
 
@@ -143,6 +145,22 @@ export function WorldBooksPanel(props: {
         if (!pkg || cancelled) return;
         let nextEntries = pkg.entries;
         let nextSections = pkg.sections;
+        if (!editMode) {
+          const projection = await getWorldBookProjection({
+            worldId: props.worldId,
+            packageRevision: revision,
+            ...(props.campaignId && props.branchId
+              ? { campaignId: props.campaignId, branchId: props.branchId }
+              : {}),
+          });
+          nextEntries = projection.entries;
+          nextSections = projection.sections;
+          setContentInfo(props.branchId
+            ? `战役锁定 r${revision} · 内容增量 ${projection.contentVersion} 版 · ${projection.deltaCount} 包；仅显示当前时间锚点可见资料。`
+            : '当前没有战役时间锚点；只显示无时间限制的公开资料。');
+        } else {
+          setContentInfo(null);
+        }
         if (editMode) {
           const draft = await loadWorldPackageDraft(props.worldId);
           if (draft && draft.baseRevision === revision) {
@@ -198,9 +216,9 @@ export function WorldBooksPanel(props: {
         <StatusBanner
           tone="info"
           message={
-            props.branchId
+            `${props.branchId
               ? `玩家视图：已按当前战役知识过滤（已发现 ${discoveredEntryIds.size} 项）。`
-              : '玩家视图：当前没有关联战役，未发现内容与主持人资料已隐藏。'
+              : '玩家视图：没有关联战役时，未发现内容与主持人资料保持隐藏。'}${contentInfo ? ` ${contentInfo}` : ''} “未发现”只表示当前可见范围没有匹配，不据此断言原著不存在相关内容。`
           }
         />
       ) : (

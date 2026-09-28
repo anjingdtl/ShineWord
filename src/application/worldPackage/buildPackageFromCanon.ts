@@ -7,9 +7,11 @@ import type {
   EntryKind,
   EntryVisibility,
   Provenance,
+  WorldPackageBuildScope,
   WorldPackageManifest,
 } from '../../domain/content/types';
 import { publishWorldPackage } from './publish';
+import { sourceRangesCoverWholeText } from './preparationStatus';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -43,6 +45,10 @@ export interface BuildPackageInput {
   sourceSha256: string;
   mappingVersion: string;
   createdAt: string;
+  /** Exact normalized source chunks, supplied only after every chunk extracted. */
+  sourceRanges?: WorldPackageBuildScope['sourceRanges'];
+  sourceCodePointCount?: number;
+  signal?: { aborted: boolean };
   onProgress?(info: { phase: string; message?: string }): void;
 }
 
@@ -725,6 +731,7 @@ async function requestMappingProposals(
   const entityNameIndex = new Map(entities.map(entity => [entity.name, entity.entityId]));
 
   for (let index = 0; index < batches.length; index += 1) {
+    if (input.signal?.aborted) throw new Error('World package mapping canceled.');
     const batch = batches[index]!;
     input.onProgress?.({
       phase: 'mapping',
@@ -768,6 +775,7 @@ async function requestMappingProposals(
       maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
       jsonMode: true,
     });
+    if (input.signal?.aborted) throw new Error('World package mapping canceled.');
     const raw = parseStrictJsonObject<Record<string, unknown>>(response.text, 'WorldMapper mapping output');
     const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
     if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
@@ -893,6 +901,12 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   const { worldStore, worldId } = input;
   const progress = (phase: string, message?: string): void => input.onProgress?.({ phase, message });
 
+  if (input.sourceRanges?.length
+    && !sourceRangesCoverWholeText(input.sourceRanges, input.sourceCodePointCount ?? 0)) {
+    throw new Error('无法证明已抽取的来源范围连续覆盖全文，因此不会发布全量精编包。');
+  }
+  if (input.signal?.aborted) throw new Error('World package mapping canceled.');
+
   progress('load', '读取小说事实、事件与实体');
   const [allFacts, events, entities] = await Promise.all([
     worldStore.listFacts(worldId),
@@ -1002,6 +1016,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       reviewIssueCount += 1;
     }
   } catch (error) {
+    if (input.signal?.aborted) throw new Error('World package mapping canceled.');
     // Mapping failed: NO package revision is created. The extracted facts,
     // entities and events are already persisted, so re-entering the build
     // resumes from them; a generic default package must never masquerade as
@@ -1097,6 +1112,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   // silently retrying with a stripped design_fill package used to smuggle a
   // generic world out as the novel's books (P2 acceptance G04).
   progress('publish', '校验并发布世界包');
+  if (input.signal?.aborted) throw new Error('World package mapping canceled.');
   const result = await publishWorldPackage({
     worldStore,
     sha256Hex: input.sha256Hex,
@@ -1106,6 +1122,14 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     entries,
     sections,
     createdAt: input.createdAt,
+    ...(input.sourceRanges?.length ? {
+      buildScope: {
+        strategy: 'full' as const,
+        scope: 'whole_source' as const,
+        completeness: 'complete' as const,
+        sourceRanges: input.sourceRanges.map(range => ({ ...range })),
+      },
+    } : {}),
     coverage: {
       mappableFacts: mappableFacts.length,
       factsOfferedToMapper: mappedFactCount,
@@ -1115,5 +1139,6 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       designFillEntries: entries.filter(entry => entry.provenance.kind === 'design_fill').length,
     },
   });
+  progress('published', '全量精编三宝书已通过发布校验');
   return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };
 }

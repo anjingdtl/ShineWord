@@ -6,7 +6,9 @@ import type { ApiProfile } from '../../src/application/llm/types';
 import { CampaignSession, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
 import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
-import type { BookSection, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
+import type { BookSection, BranchContentManifest, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
+import { entriesVisibleAtAnchor } from '../../src/application/campaign/recruitment';
+import { createBaseContentManifest, loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
 import { FetchHttpTransport } from './fetchTransport';
 import { getDatabaseRuntime } from './database';
 import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
@@ -225,7 +227,6 @@ import { validatePackage } from '../../src/application/worldPackage/validate';
 import { publishWorldPackage } from '../../src/application/worldPackage/publish';
 import { encodeWorldPackageArchive, importPortableWorldPackage, importProgressiveBranchContentArchive } from '../../src/application/export/worldPackageArchive';
 import { ensureBaseBranchContentManifest } from '../../src/application/worldPackage/branchContentStore';
-import { loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
 
 export { SAVE_SCHEMA_VERSION };
 export type { SaveFile, EncounterView };
@@ -389,6 +390,81 @@ export async function importPortableWorldPackageFile(archive: Uint8Array): Promi
     createdAt: new Date().toISOString(),
   });
   return { worldId: imported.worldId, title: imported.title, revision: imported.revision };
+}
+
+export interface WorldBookProjection {
+  entries: ContentEntry[];
+  sections: BookSection[];
+  stateVersion: number | null;
+  contentVersion: number;
+  deltaCount: number;
+  anchorWorldTimeOrder: number | null;
+}
+
+/** Exact locked base + active branch deltas, filtered through the branch time anchor. */
+export async function getWorldBookProjection(input: {
+  worldId: string;
+  packageRevision: number;
+  campaignId?: string;
+  branchId?: string;
+}): Promise<WorldBookProjection> {
+  const runtime = await getDatabaseRuntime();
+  const worldPackage = await runtime.worldStore.getWorldPackage(input.worldId, input.packageRevision);
+  if (!worldPackage || worldPackage.manifest.status !== 'published') {
+    throw new Error('无法读取战役锁定的已发布世界包。');
+  }
+  let entries = [...worldPackage.entries];
+  let sections = worldPackage.sections.map(section => ({ ...section, entryIds: [...section.entryIds] }));
+  let stateVersion: number | null = null;
+  let contentManifest: BranchContentManifest | null = null;
+  let anchorWorldTimeOrder: number | null = null;
+  if (input.campaignId && input.branchId) {
+    const session = await createReadOnlySession();
+    const summary = await session.getSummary(input.campaignId, input.branchId);
+    if (summary.worldId !== input.worldId || summary.packageRevision !== input.packageRevision) {
+      throw new Error('战役分支与当前世界包版本不匹配。');
+    }
+    stateVersion = summary.state.stateVersion;
+    anchorWorldTimeOrder = summary.anchorWorldTimeOrder;
+    contentManifest = summary.state.contentManifest ?? createBaseContentManifest({
+      worldId: input.worldId,
+      branchId: input.branchId,
+      stateVersion,
+      basePackage: { revision: input.packageRevision, contentHash: worldPackage.manifest.contentHash },
+    });
+    const deltas = await loadBranchDeltaEntries({
+      manifest: contentManifest,
+      worldId: input.worldId,
+      branchId: input.branchId,
+      stateVersion,
+      baseRevision: input.packageRevision,
+      baseContentHash: worldPackage.manifest.contentHash,
+      getDelta: deltaId => runtime.worldStore.getProgressiveDeltaPackage(deltaId),
+      sha256Hex: nativeSha256.sha256Hex,
+    });
+    entries.push(...deltas.flatMap(delta => delta.entries));
+    for (const delta of deltas) {
+      for (const section of delta.sections) {
+        const current = sections.find(item => item.book === section.book && item.sectionKey === section.sectionKey);
+        if (!current) sections.push({ ...section, entryIds: [...section.entryIds] });
+        else current.entryIds = [...current.entryIds, ...section.entryIds];
+      }
+    }
+  }
+  const facts = await runtime.worldStore.listFacts(input.worldId);
+  const visibleAtAnchor = entriesVisibleAtAnchor(entries, facts,
+    anchorWorldTimeOrder === null ? undefined : anchorWorldTimeOrder);
+  if (new Set(visibleAtAnchor.map(entry => entry.entryId)).size !== visibleAtAnchor.length) {
+    throw new Error('当前世界书投影含有冲突的不可变条目 ID。');
+  }
+  return {
+    entries: visibleAtAnchor,
+    sections,
+    stateVersion,
+    contentVersion: contentManifest?.contentVersion ?? 0,
+    deltaCount: contentManifest?.deltas.length ?? 0,
+    anchorWorldTimeOrder,
+  };
 }
 
 /** Branch-bound world archive for moving immutable progressive expansions.

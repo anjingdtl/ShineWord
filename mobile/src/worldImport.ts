@@ -1,5 +1,6 @@
 import type { ParsedTxtSource } from '../../src/domain/world/types';
 import type { WorldRecord } from '../../src/application/ports/worldStore';
+import type { WorldPreparationStatus } from '../../src/application/worldPackage/preparationStatus';
 
 import { importTxtSource } from '../../src/application/import/txtImport';
 import { makeBase64NativeByteSha } from '../../src/application/import/byteShaAdapter';
@@ -14,6 +15,13 @@ import type { ApiProfile } from '../../src/application/llm/types';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { KeychainSecretStore } from './secureKeyStore';
 import { FetchHttpTransport } from './fetchTransport';
+import { loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
+import { entriesVisibleAtAnchor } from '../../src/application/campaign/recruitment';
+import { isFactVisibleAtAnchor } from '../../src/application/world/opening';
+import { summarizeWorldPreparation } from '../../src/application/worldPackage/preparationStatus';
+import { buildWholeSourceRanges } from '../../src/application/worldPackage/sourceScope';
+import { CodePointOffsetIndex } from '../../src/domain/world/textOffsets';
+import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 
 /**
  * The import pipeline's byte-hash provider (closeout C1). Every call hashes
@@ -106,6 +114,128 @@ export async function getWorldEntry(worldId: string): Promise<WorldLibraryEntry 
   const world = await worldStore.getWorld(worldId);
   if (!world) return null;
   return toLibraryEntry(worldStore, world);
+}
+
+export type WorldPreparationView = WorldPreparationStatus & {
+  sourceAvailable: boolean;
+  latestPackageRevision: number | null;
+  latestFullSourceComplete: boolean;
+};
+
+/** Read-only preparation summary for the exact package locked by a campaign. */
+export async function getWorldPreparationStatus(
+  input: {
+    worldId: string;
+    packageRevision?: number | null;
+    campaignId?: string;
+    branchId?: string;
+  },
+): Promise<WorldPreparationView | null> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  const world = await worldStore.getWorld(input.worldId);
+  if (!world) return null;
+  let revision = input.packageRevision ?? await worldStore.getPublishedPackageRevision(input.worldId);
+  let anchorWorldTimeOrder: number | undefined;
+  let discoveredIds = new Set<string>();
+  if (input.branchId) {
+    const binding = await runtime.db.queryOne<{
+      campaign_id: string;
+      world_id: string;
+      package_revision: number;
+      anchor_json: string;
+    }>(
+      `SELECT c.campaign_id, c.world_id, c.package_revision, c.anchor_json FROM branches b
+         JOIN campaigns c ON c.campaign_id = b.campaign_id WHERE b.branch_id = ?`, [input.branchId],
+    );
+    if (!binding || binding.world_id !== input.worldId
+      || (input.campaignId && binding.campaign_id !== input.campaignId)) {
+      throw new Error('战役分支与当前世界不匹配。');
+    }
+    revision = Number(binding.package_revision);
+    if (input.packageRevision != null && input.packageRevision !== revision) {
+      throw new Error('战役锁定的世界包版本与资料页不匹配。');
+    }
+    try {
+      const anchor = JSON.parse(binding.anchor_json) as { worldTimeOrder?: number };
+      if (Number.isFinite(anchor.worldTimeOrder)) anchorWorldTimeOrder = anchor.worldTimeOrder;
+    } catch {
+      throw new Error('战役时间锚点无法读取，资料准备状态暂不可用。');
+    }
+    const branchState = await runtime.turns.getState(input.branchId);
+    discoveredIds = new Set((branchState?.discoveries ?? []).map(discovery => discovery.entryId));
+  }
+  if (revision === null || revision === undefined) return null;
+  const pkg = await worldStore.getWorldPackage(input.worldId, revision);
+  if (!pkg || pkg.manifest.status !== 'published') return null;
+  let entries = [...pkg.entries];
+  let sections = [...pkg.sections];
+  if (input.branchId) {
+    const state = await runtime.turns.getState(input.branchId);
+    const manifest = state?.contentManifest;
+    if (state && manifest) {
+      const deltas = await loadBranchDeltaEntries({
+        manifest,
+        worldId: input.worldId,
+        branchId: input.branchId,
+        stateVersion: state.stateVersion,
+        baseRevision: revision,
+        baseContentHash: pkg.manifest.contentHash,
+        getDelta: deltaId => worldStore.getProgressiveDeltaPackage(deltaId),
+        sha256Hex: nativeSha256.sha256Hex,
+      });
+      entries.push(...deltas.flatMap(delta => delta.entries));
+      for (const delta of deltas) {
+        for (const section of delta.sections) {
+          const current = sections.find(item => item.book === section.book && item.sectionKey === section.sectionKey);
+          if (!current) sections.push({ ...section, entryIds: [...section.entryIds] });
+          else current.entryIds = [...current.entryIds, ...section.entryIds];
+        }
+      }
+    }
+  }
+  const [facts, chunks] = await Promise.all([
+    worldStore.listFacts(input.worldId),
+    worldStore.getChunks(input.worldId),
+  ]);
+  const playerVisibleFacts = facts.filter(fact => (fact.status === 'explicit' || fact.status === 'inference')
+    && (anchorWorldTimeOrder === undefined
+      ? fact.validFrom === null && fact.validTo === null && fact.revealAt === null
+      : isFactVisibleAtAnchor(fact, anchorWorldTimeOrder)));
+  const visibleEntries = entriesVisibleAtAnchor(entries, playerVisibleFacts, anchorWorldTimeOrder)
+    .filter(entry => entry.visibility !== 'gm'
+      && (entry.visibility !== 'discoverable' || discoveredIds.has(entry.entryId)));
+  const visibleIds = new Set(visibleEntries.map(entry => entry.entryId));
+  const visibleSections = sections.map(section => ({
+    ...section,
+    entryIds: section.entryIds.filter(id => visibleIds.has(id)),
+  }));
+  const source = await new SqliteSourceStore(runtime.db).findActiveByRawHash(world.sourceSha256);
+  const latestRevision = await worldStore.getPublishedPackageRevision(input.worldId);
+  const latestPackage = latestRevision === null
+    ? null
+    : await worldStore.getWorldPackage(input.worldId, latestRevision);
+  const latestFullSourceComplete = Boolean(source && latestPackage && summarizeWorldPreparation({
+    manifest: latestPackage.manifest,
+    entries: latestPackage.entries,
+    sections: latestPackage.sections,
+    facts,
+    chunks,
+    sourceCodePointCount: source.codePointCount,
+  }).fullSourceComplete);
+  return {
+    ...summarizeWorldPreparation({
+      manifest: pkg.manifest,
+      entries: visibleEntries,
+      sections: visibleSections,
+      facts: playerVisibleFacts,
+      chunks,
+      ...(source ? { sourceCodePointCount: source.codePointCount } : {}),
+    }),
+    sourceAvailable: Boolean(source),
+    latestPackageRevision: latestRevision,
+    latestFullSourceComplete,
+  };
 }
 
 async function toLibraryEntry(
@@ -219,6 +349,13 @@ export async function buildWorldOnDevice(
   // conflict or a mapping failure stops publication with an explicit error.
   onProgress({ phase: 'extracting', message: '事实抽取完成，正在映射三宝书…' });
   const world = await worldStore.getWorld(worldId);
+  const sourceIndex = new CodePointOffsetIndex(result.parsed.text);
+  const sourceRanges = await buildWholeSourceRanges({
+    chunks: result.parsed.chunks,
+    sourceCodePointCount: result.parsed.codePointCount,
+    readRange: (start, end) => sourceIndex.slice(start, end),
+    sha256Hex: nativeSha256.sha256Hex,
+  });
   const pkg = await buildPackageFromCanon({
     worldStore,
     provider: {
@@ -230,6 +367,8 @@ export async function buildWorldOnDevice(
     sourceSha256: world?.sourceSha256 ?? parsed.sourceSha256Hex,
     mappingVersion: `mapper-1#${profile.model}`,
     createdAt: new Date().toISOString(),
+    sourceRanges,
+    sourceCodePointCount: result.parsed.codePointCount,
     onProgress: info => onProgress({ phase: 'extracting', message: info.message }),
   });
 

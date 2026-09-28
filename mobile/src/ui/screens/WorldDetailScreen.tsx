@@ -6,12 +6,14 @@
  * `ThemeScope` bound to the world's effective skin, so the per-world override
  * stored since P1 finally takes effect here. No `legacyStyles` import remains.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { buildProvider, createSession } from '../../runtime';
-import { getWorldEntry, type WorldLibraryEntry } from '../../worldImport';
+import { getWorldEntry, getWorldPreparationStatus, type WorldLibraryEntry, type WorldPreparationView } from '../../worldImport';
+import { getBuildRunProgress, runExtraction, startFullWorldRefinement } from '../../sourceImport';
+import { startBuildService } from '../../buildServiceBridge';
 import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -48,30 +50,113 @@ function WorldDetailContent(): React.JSX.Element {
   const [tab, setTab] = useState<WorldTab>(route.params.initialTab ?? 'overview');
   const [setup, setSetup] = useState<WorldSetupSummary | null>(null);
   const [entry, setEntry] = useState<WorldLibraryEntry | null>(null);
+  const [preparation, setPreparation] = useState<WorldPreparationView | null>(null);
+  const [refinementRunId, setRefinementRunId] = useState<string | null>(null);
+  const [refinementMessage, setRefinementMessage] = useState<string | null>(null);
+  const [refinementBusy, setRefinementBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refreshWorld = useCallback(async () => {
     if (!profile) return;
+    const session = await createSession(profile, await buildProvider(profile));
+    const worldSetup = await session.getWorldSetup(worldId);
+    const worldEntry = await getWorldEntry(worldId);
+    const worldPreparation = await getWorldPreparationStatus({
+      worldId,
+      ...(campaignId && branchId ? { campaignId, branchId } : {}),
+    });
+    setSetup({
+      packageRevision: worldSetup.packageRevision,
+      rulesetVersion: worldSetup.rulesetVersion,
+    });
+    setEntry(worldEntry);
+    setPreparation(worldPreparation);
+    setError(null);
+  }, [profile, worldId, campaignId, branchId]);
+
+  useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const session = await createSession(profile, await buildProvider(profile));
-        const worldSetup = await session.getWorldSetup(worldId);
-        const worldEntry = await getWorldEntry(worldId);
-        if (cancelled) return;
-        setSetup({
-          packageRevision: worldSetup.packageRevision,
-          rulesetVersion: worldSetup.rulesetVersion,
-        });
-        setEntry(worldEntry);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+    refreshWorld().catch(e => {
+      if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+    });
     return () => {
       cancelled = true;
     };
-  }, [profile, worldId]);
+  }, [refreshWorld]);
+
+  useEffect(() => {
+    if (!refinementRunId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async (): Promise<void> => {
+      try {
+        const progress = await getBuildRunProgress(refinementRunId);
+        if (cancelled || !progress) return;
+        const phaseLabels: Record<string, string> = {
+          extracting: '抽取原著', merging: '整理事实', mapping: '映射三宝书',
+          validating: '校验三宝书', publishing: '发布三宝书',
+        };
+        setRefinementMessage(
+          `${phaseLabels[progress.phase] ?? progress.phase} ${progress.unitsDone}/${progress.unitsTotal} 组` +
+          (progress.unitsFailed > 0 ? ` · ${progress.unitsFailed} 组失败` : ''),
+        );
+        if (progress.status === 'completed') {
+          setRefinementBusy(false);
+          setRefinementMessage('全文抽取与三宝书发布完成。');
+          await refreshWorld();
+          return;
+        }
+        if (['failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'paused_user', 'paused_system'].includes(progress.status)) {
+          setRefinementBusy(false);
+          setRefinementMessage(progress.status === 'needs_review'
+            ? '全量精编遇到需要人工审查的内容；原开局包仍可继续使用。'
+            : `全量精编暂未完成（${progress.lastErrorCode ?? progress.status}）；已保存进度，可稍后重试。`);
+          await refreshWorld();
+          return;
+        }
+        timer = setTimeout(() => { void poll(); }, 1500);
+      } catch (e) {
+        if (!cancelled) {
+          setRefinementBusy(false);
+          setRefinementMessage(e instanceof Error ? e.message : String(e));
+        }
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [refinementRunId, refreshWorld]);
+
+  const startFullRefinement = useCallback(async () => {
+    if (!profile || refinementBusy) return;
+    setRefinementBusy(true);
+    setRefinementMessage('正在准备全量精编…');
+    try {
+      const started = await startFullWorldRefinement(worldId, profile);
+      setRefinementRunId(started.runId);
+      const serviceStarted = await startBuildService(started.runId);
+      if (serviceStarted) {
+        setRefinementMessage(started.resumed
+          ? '正在恢复已保存的全文整理任务…'
+          : '全量精编已在后台启动；本页会显示实际任务进度。');
+        return;
+      }
+      setRefinementMessage('后台服务不可用，正在前台处理；请保持应用运行。');
+      const result = await runExtraction(started.runId, profile, progress => {
+        if (progress.message) setRefinementMessage(progress.message);
+      });
+      await refreshWorld();
+      setRefinementBusy(false);
+      setRefinementMessage(result.completed
+        ? '全文抽取与三宝书发布完成。'
+        : '全量精编暂未完成；已保存进度，可稍后重试。');
+    } catch (e) {
+      setRefinementBusy(false);
+      setRefinementMessage(e instanceof Error ? e.message : String(e));
+    }
+  }, [profile, refinementBusy, worldId, refreshWorld]);
 
   return (
     <ScreenShell bottom>
@@ -104,6 +189,10 @@ function WorldDetailContent(): React.JSX.Element {
               branchId={branchId}
               setup={setup}
               entry={entry}
+              preparation={preparation}
+              refinementBusy={refinementBusy}
+              refinementMessage={refinementMessage}
+              onFullRefine={startFullRefinement}
               onCreateCampaign={() => navigation.navigate('Opening', { worldId, title })}
             />
           </ScrollView>

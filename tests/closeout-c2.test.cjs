@@ -361,6 +361,72 @@ test('C2 coordinator executes a run to completion over persisted shards', async 
   }
 });
 
+test('full-package finalization holds and renews the extraction lease until publish work finishes', async () => {
+  const db = setupDb();
+  try {
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
+    const { store: sourceStore } = await prepareActiveSqliteSource(db, bytes, 'src-finalize-lease');
+    const adapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(adapter);
+    const worldStore = new SqliteWorldStore(adapter);
+    const extractor = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore },
+      { runId: 'run-finalize-lease', worldId: 'world-finalize-lease', sourceId: 'src-finalize-lease',
+        modelFingerprint: 'ep#model', title: 't', extractorVersion: extractor.version },
+    );
+
+    const result = await executeRun({
+      sourceStore, runStore, worldStore, extractor, sha256Hex: sha.sha256Hex, leaseTtlMs: 120,
+      onFinalize: async ({ setPhase }) => {
+        await setPhase('mapping');
+        await new Promise(resolve => setTimeout(resolve, 240));
+        const competingToken = await runStore.acquireLease(
+          'run-finalize-lease', 'second-owner', 120, new Date().toISOString(),
+        );
+        assert.equal(competingToken, null, 'the final mapping request must keep extending the same lease');
+      },
+    }, 'run-finalize-lease');
+
+    assert.equal(result.completed, true);
+    const run = await runStore.getRun('run-finalize-lease');
+    assert.equal(run.status, 'completed');
+    assert.equal(run.phase, 'merging');
+  } finally {
+    db.close();
+  }
+});
+
+test('a canceled late finalization response pauses before package completion', async () => {
+  const db = setupDb();
+  try {
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
+    const { store: sourceStore } = await prepareActiveSqliteSource(db, bytes, 'src-finalize-cancel');
+    const adapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(adapter);
+    const worldStore = new SqliteWorldStore(adapter);
+    const extractor = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore },
+      { runId: 'run-finalize-cancel', worldId: 'world-finalize-cancel', sourceId: 'src-finalize-cancel',
+        modelFingerprint: 'ep#model', title: 't', extractorVersion: extractor.version },
+    );
+    const signal = { aborted: false };
+    const result = await executeRun({
+      sourceStore, runStore, worldStore, extractor, sha256Hex: sha.sha256Hex, signal,
+      onFinalize: async () => {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        signal.aborted = true;
+        throw new Error('late response discarded');
+      },
+    }, 'run-finalize-cancel');
+    assert.equal(result.completed, false);
+    assert.equal((await runStore.getRun('run-finalize-cancel')).status, 'paused_user');
+  } finally {
+    db.close();
+  }
+});
+
 test('C2 crash mid-run recovers without re-paying finished units', async () => {
   const db = setupDb();
   try {

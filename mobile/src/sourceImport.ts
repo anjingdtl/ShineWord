@@ -32,6 +32,9 @@ import {
   OPENING_DOSSIER_VERSION,
   OpeningPreparationError,
 } from '../../src/application/worldPackage/progressiveOpening';
+import { buildPackageFromCanon } from '../../src/application/worldPackage/buildPackageFromCanon';
+import { sourceRangesCoverWholeText, summarizeWorldPreparation } from '../../src/application/worldPackage/preparationStatus';
+import { buildWholeSourceRanges } from '../../src/application/worldPackage/sourceScope';
 
 export interface StreamedImportSummary {
   sourceId: string;
@@ -516,6 +519,91 @@ export function isRunActive(runId: string): boolean {
   return activeRuns.has(runId);
 }
 
+/** Start or resume the explicitly requested full-source refinement. */
+export async function startFullWorldRefinement(
+  worldId: string,
+  profile: ApiProfile,
+): Promise<{ runId: string; resumed: boolean }> {
+  const runtime = await getDatabaseRuntime();
+  const sourceStore = new SqliteSourceStore(runtime.db);
+  const runStore = new SqliteBuildRunStore(runtime.db);
+  const world = await runtime.worldStore.getWorld(worldId);
+  if (!world) throw new Error('找不到这个世界。');
+  const source = await sourceStore.findActiveByRawHash(world.sourceSha256);
+  if (!source) throw new Error('本机未找到此世界的流式原文；请从书库重新导入同一文件，再启动全量精编。');
+  const latestRevision = await runtime.worldStore.getPublishedPackageRevision(worldId);
+  if (latestRevision !== null) {
+    const latestPackage = await runtime.worldStore.getWorldPackage(worldId, latestRevision);
+    const [facts, chunks] = await Promise.all([
+      runtime.worldStore.listFacts(worldId),
+      runtime.worldStore.getChunks(worldId),
+    ]);
+    if (latestPackage && summarizeWorldPreparation({
+      manifest: latestPackage.manifest,
+      entries: latestPackage.entries,
+      sections: latestPackage.sections,
+      facts,
+      chunks,
+      sourceCodePointCount: source.codePointCount,
+    }).fullSourceComplete) {
+      throw new Error(`全文已整理并发布至 r${latestRevision}。`);
+    }
+  }
+
+  const modelFingerprint = `${profile.endpoint}#${profile.model}`;
+  const relatedRuns = (await runStore.listResumableRuns())
+    .filter(run => run.worldId === worldId && run.sourceId === source.sourceId);
+  const active = relatedRuns.find(run => ['queued', 'running', 'waiting_network', 'waiting_unlock', 'paused_system'].includes(run.status));
+  if (active && active.modelFingerprint !== modelFingerprint) {
+    throw new Error('已有全文任务正使用另一模型配置；请先从书库任务卡完成或暂停该任务。');
+  }
+  if (active) return { runId: active.runId, resumed: true };
+  const resumable = relatedRuns.find(run => run.status === 'failed_retryable'
+    && run.modelFingerprint === modelFingerprint);
+  if (resumable) return { runId: resumable.runId, resumed: true };
+
+  const runId = `run-full-${worldId}-${Date.now().toString(36)}`;
+  const extractor = coordinatorExtractor(profile);
+  await createExtractionRun(
+    { sourceStore, runStore, worldStore: runtime.worldStore, sha256Hex: async input => nativeSha256.sha256Hex(input) },
+    {
+      runId,
+      worldId,
+      sourceId: source.sourceId,
+      modelFingerprint,
+      title: world.title,
+      extractorVersion: extractor.version,
+      mode: 'group',
+      budget: modelBudgetFromProfile(profile),
+    },
+  );
+  return { runId, resumed: false };
+}
+
+/** Minimal persisted progress for a world detail screen polling a background run. */
+export async function getBuildRunProgress(runId: string): Promise<{
+  status: string;
+  phase: string;
+  unitsDone: number;
+  unitsTotal: number;
+  unitsFailed: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+} | null> {
+  const runtime = await getDatabaseRuntime();
+  const run = await new SqliteBuildRunStore(runtime.db).getRun(runId);
+  if (!run) return null;
+  return {
+    status: run.status,
+    phase: run.phase,
+    unitsDone: run.unitsDone,
+    unitsTotal: run.unitsTotal,
+    unitsFailed: run.unitsFailed,
+    lastErrorCode: run.lastErrorCode,
+    lastErrorMessage: run.lastErrorMessage,
+  };
+}
+
 /** Drives an existing run to completion (used by the UI now, C5 runner later). */
 export async function runExtraction(
   runId: string,
@@ -553,6 +641,78 @@ export async function runExtraction(
           chunksTotal: info.unitsTotal,
           message: `抽取中 ${info.unitsDone}/${info.unitsTotal} 组`,
         });
+      },
+      onFinalize: async ({ run, setPhase }) => {
+        const sourceManifest = await sourceStore.getManifest(run.sourceId);
+        if (!sourceManifest || sourceManifest.status !== 'active') {
+          throw new Error('原文源已不可用，全文映射暂未发布。');
+        }
+        const [sourceChunks, worldChunks] = await Promise.all([
+          sourceStore.getChunks(run.sourceId),
+          runtime.worldStore.getChunks(run.worldId),
+        ]);
+        const worldChunksById = new Map(worldChunks.map(chunk => [chunk.chunkId, chunk]));
+        const everyChunkExtracted = sourceChunks.length > 0
+          && worldChunks.length === sourceChunks.length
+          && sourceChunks.every(chunk => {
+            const extracted = worldChunksById.get(chunk.chunkId);
+            return extracted?.extractionStatus === 'extracted'
+              && extracted.startOffset === chunk.startOffset
+              && extracted.endOffset === chunk.endOffset
+              && extracted.contentHash === chunk.contentHash;
+          });
+        if (!everyChunkExtracted) {
+          throw new Error('文本块没有连续覆盖全文且全部完成抽取；保留现有开局包，不发布全量精编包。');
+        }
+        const sourceRanges = await buildWholeSourceRanges({
+          chunks: sourceChunks,
+          sourceCodePointCount: sourceManifest.codePointCount,
+          readRange: (start, end) => sourceStore.readRange(run.sourceId, start, end),
+          sha256Hex: nativeSha256.sha256Hex,
+        });
+        if (!sourceRangesCoverWholeText(sourceRanges, sourceManifest.codePointCount)) {
+          throw new Error('全文来源范围无法连续覆盖原文；保留现有开局包，不发布全量精编包。');
+        }
+
+        const provider = new OpenAICompatibleProvider(
+          profile,
+          new KeychainSecretStore(),
+          new FetchHttpTransport(),
+          300_000,
+        );
+        const world = await runtime.worldStore.getWorld(run.worldId);
+        if (!world) throw new Error('世界记录已不可用，全文映射暂未发布。');
+        let phaseWrites = Promise.resolve();
+        await setPhase('mapping');
+        await buildPackageFromCanon({
+          worldStore: runtime.worldStore,
+          provider: {
+            complete: async request => provider.complete({
+              ...request,
+              role: 'WorldMapper',
+              maxOutputTokens: request.maxOutputTokens ?? 6000,
+            }),
+          },
+          sha256Hex: nativeSha256.sha256Hex,
+          worldId: run.worldId,
+          sourceSha256: world.sourceSha256,
+          mappingVersion: `mapper-1#${profile.model}`,
+          createdAt: new Date().toISOString(),
+          sourceRanges,
+          sourceCodePointCount: sourceManifest.codePointCount,
+          signal,
+          onProgress: info => {
+            onProgress({ phase: 'extracting', message: info.message ?? '正在全量精编三宝书…' });
+            if (info.phase === 'mapping') {
+              phaseWrites = phaseWrites.then(() => setPhase('mapping'));
+            } else if (info.phase === 'publish') {
+              phaseWrites = phaseWrites.then(() => setPhase('validating'));
+            } else if (info.phase === 'published') {
+              phaseWrites = phaseWrites.then(() => setPhase('publishing'));
+            }
+          },
+        });
+        await phaseWrites;
       },
     },
     runId,

@@ -11,7 +11,7 @@
  */
 import type { SourceChunk, SourceChapter } from '../../domain/world/types';
 import type { SourceStore } from '../ports/sourceStore';
-import type { BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/worldBuildStore';
+import type { BuildRunPhase, BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/worldBuildStore';
 import type { WorldStore, WorldRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
@@ -47,6 +47,11 @@ export interface CoordinatorDeps {
   leaseTtlMs?: number;
   owner?: string;
   onUnitDone?: (info: { unitsDone: number; unitsTotal: number }) => void;
+  /** Optional final publication runs under the same renewable build lease. */
+  onFinalize?: (input: {
+    run: BuildRunRecord;
+    setPhase: (phase: BuildRunPhase) => Promise<void>;
+  }) => Promise<void>;
   signal?: { aborted: boolean };
 }
 
@@ -469,6 +474,33 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     if (!lostLease && pending === 0 && blocked === 0) {
       // Final event resolution replays from the persisted proposals (C1).
       await resolveEventProposals(deps, run.worldId);
+      if (deps.onFinalize) {
+        try {
+          await deps.onFinalize({
+            run: fresh,
+            setPhase: phase => deps.runStore.setRunPhase(runId, phase, now()),
+          });
+        } catch (error) {
+          if (deps.signal?.aborted) return await pauseResultAfterRequest();
+          const reason = error instanceof Error ? error.message : String(error);
+          const errorCode = reason.includes('连续覆盖全文')
+            ? 'source_coverage_incomplete'
+            : reason.includes('原文源')
+              ? 'source_missing'
+              : 'package_finalize_failed';
+          await deps.runStore.setRunStatus(
+            runId,
+            'failed_retryable',
+            now(),
+            errorCode,
+            'Full-source finalization failed; the existing published package remains available.',
+          );
+          return {
+            runId, completed: false, unitsDone: fresh.unitsDone,
+            unitsTotal: fresh.unitsTotal, unitsFailed: fresh.unitsFailed, lostLease: false,
+          };
+        }
+      }
       await deps.worldStore.setWorldStatus(run.worldId, 'ready', now());
       await deps.runStore.setRunStatus(runId, 'completed', now());
       await deps.runStore.setRunPhase(runId, 'merging', now());

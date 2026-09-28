@@ -43,6 +43,24 @@ export function isEntryVisibleAtAnchor(
   worldTimeOrder?: number,
 ): boolean {
   const factsById = new Map(facts.map(fact => [fact.factId, fact]));
+  return isEntryVisibleWithFactIndex(entry, factsById, worldTimeOrder);
+}
+
+/** Efficiently project a package-sized entry list through one story-time index. */
+export function entriesVisibleAtAnchor(
+  entries: readonly ContentEntry[],
+  facts: readonly StoredFact[],
+  worldTimeOrder?: number,
+): ContentEntry[] {
+  const factsById = new Map(facts.map(fact => [fact.factId, fact]));
+  return entries.filter(entry => isEntryVisibleWithFactIndex(entry, factsById, worldTimeOrder));
+}
+
+function isEntryVisibleWithFactIndex(
+  entry: ContentEntry,
+  factsById: ReadonlyMap<string, StoredFact>,
+  worldTimeOrder?: number,
+): boolean {
   if (!evidenceVisible(provenanceIds(entry.provenance), factsById, worldTimeOrder)) return false;
   return Object.values(entry.fieldProvenance ?? {}).every(provenance =>
     evidenceVisible(provenanceIds(provenance), factsById, worldTimeOrder));
