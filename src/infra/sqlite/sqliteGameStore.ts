@@ -218,7 +218,18 @@ export class SqliteGameStore {
           state.encounterId,
           state.status,
           state.scene.sceneId,
-          JSON.stringify(distanceBands),
+          // Closeout C6: structured envelope so the scene (with its fate
+          // contract), fate states and any ending marker survive reloads.
+          JSON.stringify({
+            bands: distanceBands,
+            zones: {},
+            sceneZones: [],
+            exits: state.scene.exitIds,
+            scene: state.scene,
+            pendingActorIds: state.pendingActorIds ?? [],
+            fates: state.fates ?? {},
+            endingTriggered: state.endingTriggered ?? null,
+          }),
           JSON.stringify(state.initiative),
           state.turnCursor,
           round,
@@ -298,6 +309,12 @@ export class SqliteGameStore {
       pendingActorIds: Array.isArray(envelope.pendingActorIds)
         ? envelope.pendingActorIds.filter((id): id is string => typeof id === 'string')
         : [],
+      ...(envelope.fates && typeof envelope.fates === 'object'
+        ? { fates: envelope.fates as EncounterState['fates'] }
+        : {}),
+      ...(typeof envelope.endingTriggered === 'string' && envelope.endingTriggered
+        ? { endingTriggered: envelope.endingTriggered }
+        : {}),
       turnCursor: row.turn_cursor,
       round: row.round,
     };

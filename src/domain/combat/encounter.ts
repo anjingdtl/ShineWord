@@ -27,6 +27,12 @@ export interface EncounterScene {
   /** Cover spots and exits as scene-level facts for the Narrator. */
   coverSpotIds: string[];
   exitIds: string[];
+  /**
+   * Closeout C6: the scene's disabled-fate contract. When present, disabled
+   * actors' fates are selected by these rules at round boundaries instead of
+   * any ad-hoc decision.
+   */
+  fateContract?: import('./disabledFate').SceneFateContract;
 }
 
 export interface EncounterState {
@@ -46,6 +52,8 @@ export interface EncounterState {
    * rewind and save/restore reproduce fate progress exactly.
    */
   fates?: Record<string, import('./disabledFate').DisabledFateState>;
+  /** Set when the fate contract triggered a campaign ending (endingId). */
+  endingTriggered?: string;
 }
 
 export interface EncounterStartInput {
@@ -92,6 +100,8 @@ export function startEncounter(input: EncounterStartInput): EncounterStartResult
       sceneId: input.scene.sceneId,
       coverSpotIds: [...input.scene.coverSpotIds],
       exitIds: [...input.scene.exitIds],
+      // Closeout C6: the scene's fate contract rides the state verbatim.
+      ...(input.scene.fateContract ? { fateContract: input.scene.fateContract } : {}),
     },
     actors,
     initiative: [...input.initiative],

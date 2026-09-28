@@ -18,6 +18,7 @@ import {
   startEncounter,
   type EncounterState,
 } from '../../domain/combat/encounter';
+import { applyFateTransitions, type FateEvent } from '../../domain/combat/disabledFate';
 import {
   compileAttack,
   buildEncounterRewards,
@@ -84,6 +85,10 @@ export interface EncounterView {
   exitIds: string[];
   lastAction: string | null;
   lastDice: string | null;
+  /** Closeout C6: per-actor fate states selected by the scene contract. */
+  fates: Record<string, import('../../domain/combat/disabledFate').DisabledFateState>;
+  /** Ending id when the fate contract ended the campaign, else null. */
+  endingTriggered: string | null;
 }
 
 /** Persisted alongside the encounter in distance_bands_json. */
@@ -126,6 +131,11 @@ export interface BeginEncounterInput {
   hostiles: Array<{ templateId: string; count?: number }>;
   /** Optional neutral actors; they receive initiative but are not auto-targets. */
   neutrals?: Array<{ templateId: string; count?: number }>;
+  /**
+   * Closeout C6: disabled-fate contract for this scene. Stamp it at begin
+   * time; it rides the encounter snapshot through clone/persist/rewind.
+   */
+  fateContract?: import('../../domain/combat/disabledFate').SceneFateContract;
 }
 
 const DEFAULT_ZONES: ZoneNode[] = [
@@ -261,6 +271,7 @@ export class EncounterService {
         sceneId: scene?.locationId ?? 'improvised',
         coverSpotIds: scene?.zones.filter(zone => zone.cover).map(zone => zone.zoneId) ?? [],
         exitIds,
+        ...(input.fateContract ? { fateContract: input.fateContract } : {}),
       },
       actors: combatants.map(combatant => ({
         actorId: combatant.actorId,
@@ -1072,6 +1083,30 @@ export class EncounterService {
         }
         nextEncounter.pendingActorIds = [];
       }
+      // Closeout C6: the scene's fate contract runs at every round boundary.
+      const fateContract = nextEncounter.scene.fateContract;
+      if (fateContract) {
+        nextEncounter.fates = nextEncounter.fates ?? {};
+        const fateActors = Object.values(nextEncounter.actors).map(actor => {
+          const card = ctx.cards.find(candidate => candidate.actorId === actor.actorId);
+          return {
+            actorId: actor.actorId,
+            side: actor.side === 'player' ? ('player' as const) : ('npc' as const),
+            isCompanion: card?.kind === 'companion',
+            disabled: actor.hp <= 0 || actor.conditions.includes('disabled'),
+          };
+        });
+        const transition = applyFateTransitions(nextEncounter.round, fateActors, nextEncounter.fates, fateContract);
+        if (transition.encounterOutcome) terminalStatus = transition.encounterOutcome;
+        if (transition.endingId) nextEncounter.endingTriggered = transition.endingId;
+        if (transition.events.length > 0) {
+          projected = applyEffects(projected, transition.events.map(event => ({
+            op: 'recordEvent' as const,
+            eventType: `fate_${event.kind}`,
+            summary: describeFateEvent(event),
+          })), 0);
+        }
+      }
     }
     if (economy.retreatActorId) {
       const retreatingIndex = nextEncounter.initiative.indexOf(economy.retreatActorId);
@@ -1202,6 +1237,8 @@ export class EncounterService {
       stateVersion,
       status: encounter.status,
       round: encounter.round,
+      fates: encounter.fates ?? {},
+      endingTriggered: encounter.endingTriggered ?? null,
       currentActorId,
       currentActorIsPlayer: currentCard?.controller === 'player',
       initiative: [...encounter.initiative],
@@ -1281,6 +1318,25 @@ function engineActionContract(input: {
   };
 }
 
+
+/** Deterministic, GM-free narration lines for fate authority events (C6). */
+function describeFateEvent(event: FateEvent): string {
+  switch (event.kind) {
+    case 'fate_assigned':
+      return `命运降临：${event.actorId} 进入 ${event.fate} 状态（第 ${event.round} 回合）。`;
+    case 'death_risk_escalated':
+      return `${event.actorId} 濒危加深（已失能 ${event.roundsDisabled} 回合）。`;
+    case 'fate_resolved':
+      return `${event.actorId} 的 ${event.fate} 命运以 ${event.resolution} 收场（第 ${event.round} 回合）。`;
+    case 'ending_triggered':
+      return `结局触发：${event.actorId} 引发结局 ${event.endingId}（第 ${event.round} 回合）。`;
+    case 'encounter_end_by_fate':
+      return `遭遇因 ${event.actorId} 的 ${event.fate} 以 ${event.outcome} 结束（第 ${event.round} 回合）。`;
+    default:
+      return `命运事件：${JSON.stringify(event)}`;
+  }
+}
+
 function cloneEncounter(encounter: EncounterState): EncounterState {
   return {
     encounterId: encounter.encounterId,
@@ -1289,6 +1345,7 @@ function cloneEncounter(encounter: EncounterState): EncounterState {
       sceneId: encounter.scene.sceneId,
       coverSpotIds: [...encounter.scene.coverSpotIds],
       exitIds: [...encounter.scene.exitIds],
+      ...(encounter.scene.fateContract ? { fateContract: encounter.scene.fateContract } : {}),
     },
     actors: Object.fromEntries(Object.entries(encounter.actors).map(([actorId, actor]) => [actorId, {
       ...actor,
@@ -1298,6 +1355,8 @@ function cloneEncounter(encounter: EncounterState): EncounterState {
     pendingActorIds: [...(encounter.pendingActorIds ?? [])],
     turnCursor: encounter.turnCursor,
     round: encounter.round,
+    ...(encounter.fates ? { fates: encounter.fates } : {}),
+    ...(encounter.endingTriggered ? { endingTriggered: encounter.endingTriggered } : {}),
   };
 }
 

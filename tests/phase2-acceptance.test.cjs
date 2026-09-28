@@ -2280,3 +2280,70 @@ test('G04: mapping runs in batches and every fact is offered to the mapper', asy
 async function getDatabaseRuntimeForTest(adapter) {
   return { db: adapter };
 }
+
+// ---------------------------------------------------------------------------
+// Closeout C6: scene fate contract drives disabled fates end to end.
+// ---------------------------------------------------------------------------
+
+test('closeout C6: scene fate contract assigns death_risk when a hostile drops', async () => {
+  const db = setupDb();
+  const { session } = await makeSession(db, { initialSkills: ['sword'] });
+  let view = await session.beginEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: 'fate-scene',
+    hostiles: [{ templateId: 'guard-template' }],
+    fateContract: {
+      encounterId: 'fate-scene',
+      rules: [
+        { fate: 'death_risk', appliesTo: 'npc', minDisabledRounds: 0, priority: 1, outcome: { kind: 'death_risk', lethalAfterRounds: 3 } },
+        { fate: 'awaits_rescue', appliesTo: 'companion', minDisabledRounds: 0, priority: 2, outcome: { kind: 'awaits_rescue' } },
+      ],
+    },
+  });
+  // Drive the encounter: max rolls mean the guard drops quickly; the loop
+  // keeps turns moving until the encounter ends or the fate lands.
+  let steps = 0;
+  while (view.status === 'active' && steps < 40) {
+    const npc = view.actors.find(actor => actor.side === 'npc' && actor.hp > 0);
+    if (view.currentActorIsPlayer) {
+      view = npc
+        ? await session.encounterAttack({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `fate-atk-${steps}`, targetId: npc.actorId, skillId: 'sword' })
+        : await session.encounterPassTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `fate-pass-${steps}` });
+    } else {
+      view = await session.encounterNpcTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `fate-npc-${steps}` });
+    }
+    steps += 1;
+  }
+  const dropped = Object.values(view.fates ?? {});
+  assert.ok(dropped.length > 0, `fate states must exist after a hostile drops (steps=${steps})`);
+  const guardFate = dropped.find(state => state.fate === 'death_risk');
+  assert.ok(guardFate, 'the contract assigns death_risk to a disabled hostile');
+  assert.ok(guardFate.phase === 'active' || guardFate.phase === 'concluded');
+  // Reload from persistence: fate states and the contract survive.
+  const reloaded = await session.getEncounterView('camp-s', 'camp-s-main', 'fate-scene');
+  assert.deepEqual(reloaded.fates[Object.keys(reloaded.fates)[0]], view.fates[Object.keys(view.fates)[0]]);
+  db.close();
+});
+
+test('closeout C6: no contract means no automatic fate (explicit, not guessed)', async () => {
+  const db = setupDb();
+  const { session } = await makeSession(db, { initialSkills: ['sword'] });
+  let view = await session.beginEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: 'nofate-scene',
+    hostiles: [{ templateId: 'guard-template' }],
+  });
+  let steps = 0;
+  while (view.status === 'active' && steps < 40) {
+    const npc = view.actors.find(actor => actor.side === 'npc' && actor.hp > 0);
+    if (view.currentActorIsPlayer) {
+      view = npc
+        ? await session.encounterAttack({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `nf-atk-${steps}`, targetId: npc.actorId, skillId: 'sword' })
+        : await session.encounterPassTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `nf-pass-${steps}` });
+    } else {
+      view = await session.encounterNpcTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: `nf-npc-${steps}` });
+    }
+    steps += 1;
+  }
+  assert.equal(Object.keys(view.fates ?? {}).length, 0, 'without a contract no fate is invented');
+  assert.equal(view.endingTriggered, null);
+  db.close();
+});

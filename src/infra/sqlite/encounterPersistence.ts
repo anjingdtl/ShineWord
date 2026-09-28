@@ -20,6 +20,10 @@ export async function replaceEncounterSnapshots(
       exits: entry.exits,
       scene: encounter.scene,
       pendingActorIds: encounter.pendingActorIds ?? [],
+      // Closeout C6: fate states and any ending marker ride the envelope so
+      // reloads, rewind and save/restore reproduce fate progress exactly.
+      fates: encounter.fates ?? {},
+      endingTriggered: encounter.endingTriggered ?? null,
     };
     await tx.execute(
       `INSERT INTO encounters (branch_id, encounter_id, status, scene_id, distance_bands_json,
