@@ -379,3 +379,139 @@ test('P2-4: conflict facts produce a blocking canon_conflict issue that stops pu
   const detail = JSON.parse(conflicts[0].detailJson);
   assert.ok(detail.factIds.includes('fact-home-2'), 'detail lists the conflicting fact id');
 });
+
+// ---------------------------------------------------------------------------
+// Review-gate regressions: a build notice must never outlive the condition it
+// describes, and re-recording one must reopen it (found in the live GLM run:
+// a transient network failure blocked every later successful retry forever).
+// ---------------------------------------------------------------------------
+
+test('review gate: re-recording an issue reopens it, so a waiver cannot disarm the gate permanently', async () => {
+  const { worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  const issue = {
+    worldId: 'w-build', issueId: 'mapping-failed', kind: 'mapping_failed',
+    severity: 'blocking', detailJson: '{"reason":"第一次失败"}', createdAt: 't',
+  };
+  await worldStore.saveReviewIssue(issue);
+  assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 1);
+
+  await worldStore.resolveReviewIssue('w-build', 'mapping-failed', 'waived');
+  assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 0,
+    'a waived issue leaves the open set');
+
+  await worldStore.saveReviewIssue({ ...issue, detailJson: '{"reason":"第二次失败"}' });
+  const reopened = await worldStore.listReviewIssues('w-build', 'open');
+  assert.equal(reopened.length, 1, 'recording the same condition again reopens it');
+  assert.equal(reopened[0].severity, 'blocking');
+  assert.equal(JSON.parse(reopened[0].detailJson).reason, '第二次失败', 'detail is refreshed');
+});
+
+test('review gate: a successful retry retires the stale mapping-failed blocker and publishes', async () => {
+  const { worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
+
+  // Attempt 1: the model returns garbage (or the network dies).
+  await assert.rejects(() => build(worldStore, fakeProvider('这不是JSON，模型跑神了')), /映射失败，未发布任何版本/);
+  const afterFailure = await worldStore.listReviewIssues('w-build', 'open');
+  assert.ok(afterFailure.some(issue => issue.issueId === 'mapping-failed' && issue.severity === 'blocking'));
+
+  // Attempt 2: the same retry that the UI offers ("重新构建将从已完成的进度续建").
+  // The old notice describes a condition that no longer holds, so it must not
+  // keep refusing publication with a message the user cannot act on.
+  const { result } = await build(worldStore, fakeProvider(VALID_PROPOSAL));
+  assert.equal(result.manifest.status, 'published', 'the retry publishes instead of dead-ending');
+  const afterSuccess = await worldStore.listReviewIssues('w-build', 'open');
+  assert.ok(!afterSuccess.some(issue => issue.issueId === 'mapping-failed'), 'stale blocker retired');
+});
+
+test('review gate: a build that finds no conflicts retires a stale canon-conflict notice', async () => {
+  const { worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
+  await worldStore.saveReviewIssue({
+    worldId: 'w-build', issueId: 'canon-conflict', kind: 'canon_conflict',
+    severity: 'blocking', detailJson: '{"count":1}', createdAt: 't',
+  });
+
+  const { result } = await build(worldStore, fakeProvider(VALID_PROPOSAL));
+  assert.equal(result.manifest.status, 'published');
+  const open = await worldStore.listReviewIssues('w-build', 'open');
+  assert.ok(!open.some(issue => issue.issueId === 'canon-conflict'), 'stale conflict notice retired');
+});
+
+test('P2-4-fix: closed-enum synonyms are folded before validation, unknown values still rejected', async () => {
+  const { worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
+
+  // Live GLM run: the model answered "mundane" (and would answer 体魄/超凡 in
+  // Chinese). Those are the same concepts, so they must map, not be dropped.
+  const provider = fakeProvider({
+    skills: [
+      { id: 'swordsmanship', name: '剑术', attribute: 'physique', allowUntrained: false, powerTier: 'mundane', provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '原著剑术。' },
+      { id: 'qinggong', name: '轻功', attribute: '敏捷', allowUntrained: true, powerTier: '超凡', provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '原著轻功。' },
+      { id: 'broken', name: '错值', attribute: 'agility', allowUntrained: true, powerTier: 'banana', provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '未知档次。' },
+    ],
+  });
+  const { result } = await build(worldStore, provider);
+  const byId = new Map(result.entries.map(entry => [entry.entryId, entry]));
+
+  assert.ok(byId.has('skill-swordsmanship'), 'mundane is folded onto ordinary instead of dropping the skill');
+  assert.equal(byId.get('skill-swordsmanship').definition.powerTier, 'ordinary');
+  assert.ok(byId.has('skill-qinggong'), 'a Chinese enum answer is folded too');
+  assert.equal(byId.get('skill-qinggong').definition.attribute, 'agility');
+  assert.equal(byId.get('skill-qinggong').definition.powerTier, 'supernatural');
+
+  assert.ok(!byId.has('skill-broken'), 'a genuinely unknown powerTier is still rejected');
+  const issues = await worldStore.listReviewIssues('w-build', 'open');
+  const invalid = issues.filter(issue => issue.kind === 'invalid_proposal');
+  assert.equal(invalid.length, 1, 'only the unknown value reaches the review queue');
+  assert.equal(JSON.parse(invalid[0].detailJson).id, 'broken');
+});
+
+test('P2-4-fix: actor template numeric strings are coerced, missing numbers still rejected', async () => {
+  const { worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
+
+  // Live GLM run: a canon NPC template arrived with hp/defense as strings.
+  // Rejecting it would silently drop the novel's protagonist from the books.
+  const provider = fakeProvider({
+    actorTemplates: [
+      {
+        id: 'chen-qingyun', name: '陈青云', category: 'human', description: '外门弟子。',
+        attributes: { physique: 2 }, skills: { swordsmanship: 'novice' }, hp: '6', stamina: '4', defense: '2',
+        attacks: [{ name: '青锋剑', skillId: 'swordsmanship', damage: 2, range: 'touch' }], abilities: [],
+        behavior: { goal: '守住客栈', retreatThreshold: 0.3, morale: 'steady' },
+        lootPolicy: '无', lootItemIds: [],
+        threat: { damage: 2, durability: 1, actions: 1, control: 0, environment: 0 },
+        provenanceKind: 'rule_mapping', evidenceFactIds: ['fact-0'], rationale: '由原著角色事实映射。',
+      },
+      {
+        id: 'statless', name: '无据之人', category: 'human', description: '缺少战斗数值。',
+        attributes: {}, skills: {}, abilities: [],
+        behavior: { goal: '无', retreatThreshold: 0.2, morale: 'low' },
+        lootPolicy: '无', lootItemIds: [],
+        threat: {}, provenanceKind: 'rule_mapping', evidenceFactIds: ['fact-0'], rationale: '无效提案。',
+      },
+    ],
+  });
+  const { result } = await build(worldStore, provider);
+  const byId = new Map(result.entries.map(entry => [entry.entryId, entry]));
+
+  assert.ok([...byId.keys()].some(key => key.includes('chen-qingyun')), 'the numeric-string template survives');
+  const template = [...byId.entries()].find(([key]) => key.includes('chen-qingyun'))[1];
+  assert.equal(template.definition.hp, 6, 'hp string coerced to a number');
+  assert.equal(template.definition.defense, 2);
+
+  const issues = await worldStore.listReviewIssues('w-build', 'open');
+  const rejected = issues.filter(issue => issue.kind === 'invalid_proposal');
+  assert.equal(rejected.length, 1, 'only the template without numbers is rejected');
+  assert.equal(JSON.parse(rejected[0].detailJson).id, 'statless');
+});
