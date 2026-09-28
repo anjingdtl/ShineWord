@@ -786,6 +786,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_world_build_units_unique_input
   ON world_build_units(run_id, kind, input_hash, config_fingerprint);
 `;
 
+const PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL = `
+ALTER TABLE world_packages ADD COLUMN build_scope_json TEXT NOT NULL DEFAULT '{}';
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -800,4 +804,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 11, name: 'event_proposal_checkpoint', sql: EVENT_PROPOSAL_CHECKPOINT_SCHEMA_SQL },
   { version: 12, name: 'imported_sources', sql: IMPORTED_SOURCES_SCHEMA_SQL },
   { version: 13, name: 'world_build_runs', sql: WORLD_BUILD_RUNS_SCHEMA_SQL },
+  { version: 14, name: 'progressive_package_scope', sql: PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL },
 ];

@@ -14,6 +14,8 @@ const ENDPOINT = 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions';
 const MAX_ATTEMPTS_PER_SAMPLE = 1;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_TOTAL_DEADLINE_MS = 360_000;
+const OPENING_REQUEST_TIMEOUT_MS = 120_000;
+const OPENING_TOTAL_DEADLINE_MS = 300_000;
 
 function argsOf(argv) {
   const values = {};
@@ -114,43 +116,60 @@ function requestSample(apiKey, sample, timeoutMs, deadlineAt) {
       if (text.trim()) {
         try { parsed = JSON.parse(text); } catch { /* response content is never emitted */ }
       }
-      const evidence = Array.isArray(parsed?.facts)
+      const dossierEvidence = sample.kind === 'opening-dossier'
+        ? ['locationQuote', 'settingQuote', 'situationQuote', 'goalQuote']
+          .map(key => parsed?.[key]).filter(value => typeof value === 'string')
+        : null;
+      const evidence = dossierEvidence ?? (Array.isArray(parsed?.facts)
         ? parsed.facts.filter(f => typeof f?.evidence === 'string')
+        : []);
+      const openingQuotes = sample.kind === 'opening-dossier'
+        ? ['locationQuote', 'settingQuote', 'situationQuote', 'goalQuote']
+          .map(key => parsed?.[key]).filter(value => typeof value === 'string')
         : [];
-      const quoteHits = evidence.filter(f => sample.source && sample.source.includes(f.evidence)).length;
-      resolve({
-        sample: sample.label,
-        inputCodePoints: sample.inputCodePoints,
-        requestBodyBytes: Buffer.byteLength(JSON.stringify(payload)),
-        physicalRequests: 1,
-        status: state.status,
-        connectionReused: state.connectionReused,
-        failureCategory: result.failureCategory ?? null,
-        timingsMs: {
-          localQueue: state.queueMs,
-          dns: state.dnsMs,
-          tcp: state.tcpMs,
-          tls: state.tlsMs,
-          responseHeaders: state.headersMs,
-          firstReasoningDelta: state.firstReasoningMs,
-          firstTextToken: state.firstTextMs,
-          completeResponse: elapsed(),
-          providerQueue: state.serverQueueMs,
-        },
-        finishReason: state.finishReason,
-        usage: state.usage,
-        outputChars: state.outputChars,
-        reasoningChars: state.reasoningChars,
-        jsonParsed: parsed !== null,
-        simpleJsonValid: sample.label === 'micro-json' ? parsed?.ok === true : null,
-        schemaShapeValid: sample.label === 'micro-json' ? null : parsed !== null
-          && Array.isArray(parsed.entities) && Array.isArray(parsed.facts) && Array.isArray(parsed.unknowns),
-        evidenceQuoteCount: evidence.length,
-        evidenceExactHits: quoteHits,
-        protocolErrors: state.protocolErrors,
-        businessTextBytes: Buffer.byteLength(text),
-        ...result,
-      });
+      const firstScene = sample.kind === 'opening-dossier'
+        ? Array.from(sample.source).slice(0, 1600).join('') : sample.source;
+      const quoteHits = sample.kind === 'opening-dossier'
+        ? openingQuotes.filter(value => firstScene.includes(value)).length
+        : evidence.filter(f => sample.source && sample.source.includes(f.evidence)).length;
+      const dossierShapeValid = sample.kind !== 'opening-dossier' || parsed !== null
+        && ['locationName', 'locationQuote', 'setting', 'settingQuote', 'situation', 'situationQuote',
+          'initialGoal', 'goalQuote'].every(key => typeof parsed[key] === 'string');
+      const summary = {
+          sample: sample.label,
+          inputCodePoints: sample.inputCodePoints,
+          requestBodyBytes: Buffer.byteLength(JSON.stringify(payload)),
+          physicalRequests: 1,
+          status: state.status,
+          connectionReused: state.connectionReused,
+          failureCategory: result.failureCategory ?? null,
+          timingsMs: {
+            localQueue: state.queueMs,
+            dns: state.dnsMs,
+            tcp: state.tcpMs,
+            tls: state.tlsMs,
+            responseHeaders: state.headersMs,
+            firstReasoningDelta: state.firstReasoningMs,
+            firstTextToken: state.firstTextMs,
+            completeResponse: elapsed(),
+            providerQueue: state.serverQueueMs,
+          },
+          finishReason: state.finishReason,
+          usage: state.usage,
+          outputChars: state.outputChars,
+          reasoningChars: state.reasoningChars,
+          jsonParsed: parsed !== null,
+          simpleJsonValid: sample.label === 'micro-json' ? parsed?.ok === true : null,
+          schemaShapeValid: sample.kind === 'opening-dossier' ? dossierShapeValid
+            : sample.label === 'micro-json' ? null : parsed !== null
+              && Array.isArray(parsed.entities) && Array.isArray(parsed.facts) && Array.isArray(parsed.unknowns),
+          evidenceQuoteCount: sample.kind === 'opening-dossier' ? openingQuotes.length : evidence.length,
+          evidenceExactHits: quoteHits,
+          protocolErrors: state.protocolErrors,
+          businessTextBytes: Buffer.byteLength(text),
+          ...result,
+        };
+      resolve({ summary, internal: { responseText: text } });
     };
     const payload = {
       model: MODEL,
@@ -256,6 +275,109 @@ async function main() {
   const args = argsOf(process.argv);
   if (!args.config || !args.source || !args.out) throw new Error('usage');
   const key = readKey(args.config);
+  if (args['opening-dossier'] === 'true') {
+    const { extractOpeningDossier } = require('../dist/application/worldPackage/progressiveOpening');
+    const { importTxtSource, sliceByCodePoints } = require('../dist/application/import/txtImport');
+    const bytes = fs.readFileSync(args.source);
+    const sha = { sha256BytesHex: async value => require('node:crypto').createHash('sha256').update(value).digest('hex') };
+    const decoder = { decode: (value, encoding) => new TextDecoder(encoding === 'utf-8-sig' ? 'utf-8' : encoding).decode(value) };
+    const parsed = await importTxtSource(bytes, sha, decoder);
+    const inputCodePoints = Math.min(parsed.codePointCount, 8_000);
+    const outputTokens = Number(args['dossier-output-tokens'] || 8_000);
+    if (!Number.isInteger(outputTokens) || outputTokens < 1 || outputTokens > 8_000) throw new Error('usage');
+    const sourceExcerpt = sliceByCodePoints(parsed.text, 0, inputCodePoints);
+    const startedAt = new Date().toISOString();
+    const runStarted = Date.now();
+    const deadlineAt = runStarted + OPENING_TOTAL_DEADLINE_MS;
+    const samples = [];
+    let physicalRequests = 0;
+    let dossierValid = false;
+    let safeError = null;
+    try {
+      await extractOpeningDossier({
+        sourceExcerpt,
+        maxOutputTokens: outputTokens,
+        provider: {
+          complete: async request => {
+            if (physicalRequests >= 2) throw new Error('physical_request_cap');
+            physicalRequests += 1;
+            const sample = {
+              label: `opening-dossier-${physicalRequests}`,
+              kind: 'opening-dossier',
+              inputCodePoints,
+              maxOutputTokens: request.maxOutputTokens,
+              messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.user }],
+              source: sourceExcerpt,
+            };
+            const live = await requestSample(key, sample, OPENING_REQUEST_TIMEOUT_MS, deadlineAt);
+            samples.push(live.summary);
+            const metric = live.summary;
+            const outcome = metric.status !== null && (metric.status < 200 || metric.status >= 300)
+              ? 'http_error'
+              : metric.failureCategory ? 'transport_error'
+                : live.internal.responseText.trim() ? 'completed'
+                  : metric.reasoningChars > 0 ? 'reasoning_only' : 'invalid_response';
+            const completionState = metric.finishReason === 'length' && !live.internal.responseText.trim()
+              ? 'reasoning_only'
+              : metric.finishReason === 'content_filter' ? 'content_filter' : undefined;
+            return {
+              text: live.internal.responseText,
+              usage: {
+                ...(typeof metric.usage.inputTokens === 'number' ? { inputTokens: metric.usage.inputTokens } : {}),
+                ...(typeof metric.usage.outputTokens === 'number' ? { outputTokens: metric.usage.outputTokens } : {}),
+                ...(typeof metric.usage.reasoningTokens === 'number' ? { reasoningTokens: metric.usage.reasoningTokens } : {}),
+                estimated: false,
+              },
+              requestMetrics: [{
+                attempt: physicalRequests,
+                durationMs: metric.timingsMs.completeResponse ?? 0,
+                httpStatus: metric.status,
+                outcome,
+                ...(completionState ? { completionState } : {}),
+                ...(metric.failureCategory ? { errorCategory: metric.failureCategory.includes('timeout') ? 'timeout'
+                  : metric.failureCategory.includes('connection') || metric.failureCategory.includes('dns') ? 'network'
+                    : metric.status !== null ? 'provider_http' : 'network' } : {}),
+                timings: {
+                  responseHeadersMs: metric.timingsMs.responseHeaders,
+                  firstBodyByteMs: null,
+                  completeResponseMs: metric.timingsMs.completeResponse,
+                  providerQueueMs: metric.timingsMs.providerQueue,
+                },
+              }],
+            };
+          },
+        },
+      });
+      dossierValid = true;
+    } catch (error) {
+      const category = error && typeof error.category === 'string' ? error.category : 'probe_failed';
+      safeError = /^[a-z_]+$/.test(category) ? category : 'probe_failed';
+    }
+    const summary = {
+      schemaVersion: 1,
+      mode: 'opening-dossier',
+      startedAt,
+      model: MODEL,
+      reasoningPolicy: 'enabled; no thinking opt-out sent',
+      inputCodePoints,
+      sourceBudgetCodePoints: 8_000,
+      maxOutputTokens: outputTokens,
+      dossierValid,
+      failureCategory: safeError,
+      physicalRequests,
+      requestCap: 2,
+      requestTimeoutMs: OPENING_REQUEST_TIMEOUT_MS,
+      totalDeadlineMs: OPENING_TOTAL_DEADLINE_MS,
+      totalElapsedMs: Date.now() - runStarted,
+      samples,
+      redaction: 'Only redacted timing/usage/schema checks persisted; no source, prompt, key, response text, or Authorization.',
+    };
+    const outPath = path.resolve(args.out);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return;
+  }
   const decoded = fs.readFileSync(args.source, 'utf8').replace(/^\uFEFF/, '');
   const points = Array.from(decoded);
   const startedAt = new Date().toISOString();
@@ -287,8 +409,7 @@ async function main() {
     }
     // Keep evidence validation in memory and discard it with the prompt.
     const result = await requestSample(key, sample, DEFAULT_REQUEST_TIMEOUT_MS, deadlineAt);
-    delete result.evidenceExactHitsSource;
-    samples.push(result);
+    samples.push(result.summary);
     sample.source = '';
   }
   const summary = safeSummary(samples, startedAt, Date.now() - runStarted);

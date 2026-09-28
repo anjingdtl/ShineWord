@@ -3,6 +3,7 @@ import {
   validateDefinition,
   type BookSection,
   type ContentEntry,
+  type WorldPackageBuildScope,
   type WorldPackageManifest,
 } from '../../domain/content/types';
 
@@ -187,8 +188,9 @@ export async function computePackageContentHash(
   entries: readonly ContentEntry[],
   sections: readonly BookSection[],
   sha256Hex: Sha256HexProvider['sha256Hex'],
+  buildScope?: WorldPackageBuildScope,
 ): Promise<string> {
-  const payload: CanonicalJson = {
+  const payload: Record<string, CanonicalJson> = {
     entries: [...entries]
       .map(entry => ({
         entryId: entry.entryId,
@@ -212,6 +214,7 @@ export async function computePackageContentHash(
       }))
       .sort((a, b) => (a.book + a.sectionKey < b.book + b.sectionKey ? -1 : 1)) as unknown as CanonicalJson,
   };
+  if (buildScope) payload.buildScope = buildScope as unknown as CanonicalJson;
   const hash = await sha256Hex(canonicalStringify(payload));
   return hash.toLowerCase();
 }

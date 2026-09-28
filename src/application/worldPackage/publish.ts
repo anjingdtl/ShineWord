@@ -2,6 +2,7 @@ import { SHINEWORD_RULESET_ID, SHINEWORD_RULESET_VERSION } from '../../domain/ru
 import type {
   BookSection,
   ContentEntry,
+  WorldPackageBuildScope,
   WorldPackageManifest,
 } from '../../domain/content/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
@@ -28,6 +29,8 @@ export interface PublishPackageInput {
   status?: 'published' | 'needs_review';
   /** Extra coverage facts recorded into the validation report. */
   coverage?: Record<string, unknown>;
+  /** When set, publishes a versioned, content-hashed partial/full source scope. */
+  buildScope?: WorldPackageBuildScope;
 }
 
 export interface PublishPackageResult {
@@ -63,19 +66,23 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
     );
   }
 
-  const contentHash = await computePackageContentHash(input.entries, input.sections, input.sha256Hex);
+  if (input.buildScope) validateBuildScope(input.buildScope);
+  const contentHash = await computePackageContentHash(
+    input.entries, input.sections, input.sha256Hex, input.buildScope,
+  );
   const existing = await input.worldStore.listWorldPackages(input.worldId);
   const revision = existing.length > 0 ? Math.max(...existing.map(pkg => pkg.revision)) + 1 : 1;
 
   const manifest: WorldPackageManifest = {
     worldId: input.worldId,
     revision,
-    schemaVersion: 'world-package-2',
+    schemaVersion: input.buildScope ? 'world-package-3' : 'world-package-2',
     sourceSha256: input.sourceSha256,
     ruleset: { id: SHINEWORD_RULESET_ID, version: SHINEWORD_RULESET_VERSION },
     mappingVersion: input.mappingVersion,
     contentHash,
     status,
+    ...(input.buildScope ? { buildScope: input.buildScope } : {}),
   };
 
   await input.worldStore.saveWorldPackage({
@@ -87,12 +94,37 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
       warnings: report.warnings,
       entryCount: report.entryCount,
       countsByKind: report.countsByKind,
+      ...(input.buildScope ? { buildScope: input.buildScope } : {}),
       ...(input.coverage ?? {}),
     }),
     createdAt: input.createdAt,
   });
 
   return { manifest, report };
+}
+
+function validateBuildScope(scope: WorldPackageBuildScope): void {
+  if (!['progressive', 'full'].includes(scope.strategy)
+    || !['opening', 'incremental', 'whole_source'].includes(scope.scope)
+    || !['partial', 'complete'].includes(scope.completeness)
+    || !Array.isArray(scope.sourceRanges) || scope.sourceRanges.length === 0) {
+    throw new Error('World package build scope is invalid.');
+  }
+  for (const range of scope.sourceRanges) {
+    if (!Number.isSafeInteger(range.startCodePoint) || !Number.isSafeInteger(range.endCodePoint)
+      || range.startCodePoint < 0 || range.endCodePoint <= range.startCodePoint
+      || !/^[a-f0-9]{64}$/i.test(range.contentSha256)) {
+      throw new Error('World package source coverage range is invalid.');
+    }
+  }
+  const lineage = scope.packageLineage;
+  if (lineage?.kind === 'delta' && (!Number.isSafeInteger(lineage.baseRevision) || (lineage.baseRevision ?? 0) < 1
+    || !lineage.branchId?.trim() || !Number.isSafeInteger(lineage.stateVersion) || (lineage.stateVersion ?? -1) < 0)) {
+    throw new Error('World package delta lineage must bind a base revision, branch and state version.');
+  }
+  if (lineage?.kind === 'base' && (lineage.baseRevision !== undefined || lineage.branchId !== undefined || lineage.stateVersion !== undefined)) {
+    throw new Error('World package base lineage cannot bind a delta target.');
+  }
 }
 
 /**

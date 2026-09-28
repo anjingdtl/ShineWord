@@ -18,7 +18,7 @@ import {
   type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelStreaming, runExtraction, pauseRun } from '../../sourceImport';
+import { importNovelForOpeningStreaming, runExtraction, pauseRun } from '../../sourceImport';
 import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import { startBuildService } from '../../buildServiceBridge';
 import {
@@ -129,7 +129,7 @@ export function LibraryScreen(): React.JSX.Element {
       // bridge as one base64 payload and builds read from persisted shards.
       const picked = await pickTextRef();
       if (!picked) return;
-      const imported = await importNovelStreaming(
+      const imported = await importNovelForOpeningStreaming(
         picked.uri,
         picked.name,
         profile,
@@ -138,17 +138,7 @@ export function LibraryScreen(): React.JSX.Element {
           if (p.phase === 'importing') setPreview(p.message ?? null);
         },
       );
-      setPreview(
-        `已解析 ${imported.chapterCount} 章 / ${imported.chunkCount} 块`
-        + `${imported.reusedSource ? '（复用已有源）' : ''}，开始抽取…`,
-      );
-      await startBuildService(imported.runId).catch(() => undefined);
-      const built = await runExtraction(imported.runId, profile, p => {
-        setProgress(p);
-        if (p.chunksTotal && p.chunksDone !== undefined && p.chunksTotal > 0) {
-          setPreview(`抽取 ${p.chunksDone}/${p.chunksTotal} 组`);
-        }
-      });
+      setPreview(`已整理开局范围并发布三宝书 r${imported.packageRevision}；${imported.chapterCount} 章、${imported.chunkCount} 块已保存在本地，完整小说尚未整理。`);
       setSummary({
         worldId: imported.worldId,
         title: picked.name.replace(/\.txt$/i, ''),
@@ -157,14 +147,18 @@ export function LibraryScreen(): React.JSX.Element {
         entityCount: 0,
         factCount: 0,
         eventCount: 0,
-        failedChunks: built.unitsFailed,
+        failedChunks: 0,
         rejected: 0,
-        resumed: imported.reusedSource,
-        packageRevision: 0,
+        resumed: imported.alreadyPlayable,
+        packageRevision: imported.packageRevision,
         reviewIssues: 0,
-        needsRetry: !built.completed,
+        needsRetry: false,
       });
       await refresh();
+      navigation.navigate('Opening', {
+        worldId: imported.worldId,
+        title: picked.name.replace(/\.txt$/i, ''),
+      });
     } catch (e) {
       const detail = e instanceof Error
         ? `${e.message}\n${e.stack ?? ''}`

@@ -42,13 +42,37 @@ export type BookName = 'player_handbook' | 'gm_guide' | 'monster_manual';
 export interface WorldPackageManifest {
   worldId: string;
   revision: number;
-  schemaVersion: 'world-package-2';
+  schemaVersion: 'world-package-2' | 'world-package-3';
   sourceSha256: string;
   ruleset: { id: string; version: string };
   mappingVersion: string;
   /** SHA-256 over the canonical JSON of all entries + sections. */
   contentHash: string;
   status: 'draft' | 'validating' | 'needs_review' | 'published' | 'retired';
+  /**
+   * Version 3 packages declare exactly what source scope they cover. A
+   * published opening package is playable within this scope while remaining
+   * explicitly incomplete for the full novel.
+   */
+  buildScope?: WorldPackageBuildScope;
+}
+
+export interface WorldPackageBuildScope {
+  strategy: 'progressive' | 'full';
+  scope: 'opening' | 'incremental' | 'whole_source';
+  completeness: 'partial' | 'complete';
+  sourceRanges: ReadonlyArray<{
+    startCodePoint: number;
+    endCodePoint: number;
+    contentSha256: string;
+  }>;
+  /** Delta packages bind immutable additions to one branch snapshot. */
+  packageLineage?: {
+    kind: 'base' | 'delta';
+    baseRevision?: number;
+    branchId?: string;
+    stateVersion?: number;
+  };
 }
 
 export interface ContentEntry {

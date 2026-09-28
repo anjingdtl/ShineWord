@@ -1011,8 +1011,8 @@ export class SqliteWorldStore implements WorldStore {
       await tx.execute(
         `INSERT INTO world_packages
           (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-           mapping_version, status, content_hash, validation_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mapping_version, status, content_hash, validation_json, build_scope_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.manifest.worldId,
           input.manifest.revision,
@@ -1024,6 +1024,7 @@ export class SqliteWorldStore implements WorldStore {
           input.manifest.status,
           input.manifest.contentHash,
           input.validationJson,
+          JSON.stringify(input.manifest.buildScope ?? {}),
           input.createdAt,
         ],
       );
@@ -1090,11 +1091,12 @@ export class SqliteWorldStore implements WorldStore {
       await tx.execute(
         `INSERT INTO world_packages
           (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-           mapping_version, status, content_hash, validation_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mapping_version, status, content_hash, validation_json, build_scope_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [input.manifest.worldId, input.manifest.revision, input.manifest.schemaVersion, input.manifest.sourceSha256,
           input.manifest.ruleset.id, input.manifest.ruleset.version, input.manifest.mappingVersion,
-          input.manifest.status, input.manifest.contentHash, input.validationJson, input.createdAt],
+          input.manifest.status, input.manifest.contentHash, input.validationJson,
+          JSON.stringify(input.manifest.buildScope ?? {}), input.createdAt],
       );
       for (const entry of input.entries) {
         await tx.execute(
@@ -1125,7 +1127,7 @@ export class SqliteWorldStore implements WorldStore {
   ): Promise<{ manifest: WorldPackageManifest; entries: ContentEntry[]; sections: BookSection[] } | null> {
     const row = await this.db.queryOne<SqliteRow>(
       `SELECT revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-              mapping_version, status, content_hash
+              mapping_version, status, content_hash, build_scope_json
          FROM world_packages WHERE world_id = ? AND revision = ?`,
       [worldId, revision],
     );
@@ -1141,16 +1143,31 @@ export class SqliteWorldStore implements WorldStore {
          FROM book_sections WHERE world_id = ? AND revision = ? ORDER BY book, position`,
       [worldId, revision],
     );
+    const schemaVersion = String(row.schema_version);
+    let buildScope: WorldPackageManifest['buildScope'];
+    if (schemaVersion === 'world-package-3') {
+      try {
+        const parsed = JSON.parse(String(row.build_scope_json ?? '{}')) as WorldPackageManifest['buildScope'];
+        if (!parsed || !Array.isArray(parsed.sourceRanges)) throw new Error('missing scope');
+        buildScope = parsed;
+      } catch {
+        throw new Error(`World package ${worldId} r${revision} has invalid progressive scope metadata.`);
+      }
+    }
+    if (schemaVersion !== 'world-package-2' && schemaVersion !== 'world-package-3') {
+      throw new Error(`Unsupported world package schema: ${schemaVersion}.`);
+    }
     return {
       manifest: {
         worldId,
         revision: Number(row.revision),
-        schemaVersion: 'world-package-2',
+        schemaVersion,
         sourceSha256: String(row.source_sha256),
         ruleset: { id: String(row.ruleset_id), version: String(row.ruleset_version) },
         mappingVersion: String(row.mapping_version),
         contentHash: String(row.content_hash),
         status: String(row.status) as WorldPackageManifest['status'],
+        ...(buildScope ? { buildScope } : {}),
       },
       entries: entryRows.map(entryRow => ({
         entryId: String(entryRow.entry_id),

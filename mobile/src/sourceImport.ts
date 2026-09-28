@@ -22,8 +22,16 @@ import { getDatabaseRuntime } from './database';
 import { nativeSha256 } from './nativeCrypto';
 import { stageUri, stagedTextSource, deleteStaged } from './textSource';
 import type { SourceManifest } from '../../src/application/ports/sourceStore';
+import type { WorldRecord, WorldJobRecord } from '../../src/application/ports/worldStore';
 import { bytesSha } from './worldImport';
 import type { WorldBuildProgress } from './worldImport';
+import {
+  compileProgressiveOpeningPackage,
+  extractOpeningDossier,
+  openingSourceBudgetForProfile,
+  OPENING_DOSSIER_VERSION,
+  OpeningPreparationError,
+} from '../../src/application/worldPackage/progressiveOpening';
 
 export interface StreamedImportSummary {
   sourceId: string;
@@ -36,6 +44,21 @@ export interface StreamedImportSummary {
   reusedSource: boolean;
 }
 
+export interface ProgressiveOpeningSummary {
+  sourceId: string;
+  worldId: string;
+  packageRevision: number;
+  byteLength: number;
+  codePointCount: number;
+  chapterCount: number;
+  chunkCount: number;
+  reusedSource: boolean;
+  alreadyPlayable: boolean;
+  physicalRequests: number;
+  totalMs: number;
+  extractionMs: number;
+}
+
 function makeSourceId(rawSha256: string): string {
   return `src-${rawSha256.slice(0, 16)}-${Date.now().toString(36)}`;
 }
@@ -45,12 +68,14 @@ function makeSourceId(rawSha256: string): string {
  * Extraction itself is driven separately (`executeRun`) so background runners
  * (closeout C5) own the long LLM phase.
  */
-export async function importNovelStreaming(
+async function importNovelInternal(
   uri: string,
   fileName: string,
   profile: ApiProfile,
   onProgress: (progress: WorldBuildProgress) => void,
-): Promise<StreamedImportSummary> {
+  mode: 'full' | 'opening',
+): Promise<StreamedImportSummary | ProgressiveOpeningSummary> {
+  const importStartedAt = Date.now();
   onProgress({ phase: 'importing', message: '正在读取并解析小说…' });
   const runtime = await getDatabaseRuntime();
   const sourceStore = new SqliteSourceStore(runtime.db);
@@ -134,6 +159,18 @@ export async function importNovelStreaming(
     await deleteStaged(staged.path);
   }
 
+  if (mode === 'opening') {
+    return prepareProgressiveOpening({
+      sourceId,
+      sourceManifest: manifest,
+      reusedSource,
+      fileName,
+      profile,
+      onProgress,
+      totalStartedAt: importStartedAt,
+    });
+  }
+
   // World + run: continue the existing world for this source if there is one.
   const worldId = `world-${sourceId}`;
   const runId = `run-${sourceId}-${Date.now().toString(36)}`;
@@ -171,6 +208,263 @@ export async function importNovelStreaming(
     chunkCount: (await sourceStore.getChunks(sourceId)).length,
     reusedSource,
   };
+}
+
+/** Full novel extraction is retained as an explicit refinement path. */
+export async function importNovelStreaming(
+  uri: string,
+  fileName: string,
+  profile: ApiProfile,
+  onProgress: (progress: WorldBuildProgress) => void,
+): Promise<StreamedImportSummary> {
+  return await importNovelInternal(uri, fileName, profile, onProgress, 'full') as StreamedImportSummary;
+}
+
+/** Default import path: build and publish a bounded playable opening only. */
+export async function importNovelForOpeningStreaming(
+  uri: string,
+  fileName: string,
+  profile: ApiProfile,
+  onProgress: (progress: WorldBuildProgress) => void,
+): Promise<ProgressiveOpeningSummary> {
+  return await importNovelInternal(uri, fileName, profile, onProgress, 'opening') as ProgressiveOpeningSummary;
+}
+
+async function prepareProgressiveOpening(input: {
+  sourceId: string;
+  sourceManifest: SourceManifest;
+  reusedSource: boolean;
+  fileName: string;
+  profile: ApiProfile;
+  onProgress: (progress: WorldBuildProgress) => void;
+  totalStartedAt: number;
+}): Promise<ProgressiveOpeningSummary> {
+  const runtime = await getDatabaseRuntime();
+  const sourceStore = new SqliteSourceStore(runtime.db);
+  const worldStore = runtime.worldStore;
+  const worldId = `world-${input.sourceId}`;
+  const createdAt = new Date().toISOString();
+  const chapters = await sourceStore.getChapters(input.sourceId);
+  const chunks = await sourceStore.getChunks(input.sourceId);
+  let world = await worldStore.getWorld(worldId);
+  if (!world) {
+    world = {
+      worldId,
+      title: input.sourceManifest.title ?? input.fileName.replace(/\.txt$/i, '') ?? '未命名小说',
+      sourceSha256: input.sourceManifest.rawSha256Hex,
+      sourceBytes: input.sourceManifest.byteLength,
+      normalizeVersion: input.sourceManifest.normalizeVersion,
+      chapterSplitVersion: input.sourceManifest.chapterSplitVersion,
+      buildStatus: 'extracting',
+      createdAt,
+      updatedAt: createdAt,
+    } satisfies WorldRecord;
+    await worldStore.createWorld(world);
+  }
+  await worldStore.saveImportedSource(worldId, {
+    encoding: input.sourceManifest.encoding,
+    sourceSha256Hex: input.sourceManifest.rawSha256Hex,
+    sourceByteLength: input.sourceManifest.byteLength,
+    normalizeVersion: input.sourceManifest.normalizeVersion,
+    chapterSplitVersion: input.sourceManifest.chapterSplitVersion,
+    splitStrategy: input.sourceManifest.splitStrategy,
+    text: '',
+    codePointCount: input.sourceManifest.codePointCount,
+    chapters,
+    chunks,
+  }, createdAt);
+
+  // A completed world already has an immutable playable revision; importing
+  // the same bytes must not replace it or spend another model request.
+  const publishedRevision = await worldStore.getPublishedPackageRevision(worldId);
+  if (publishedRevision !== null) {
+    await worldStore.setWorldStatus(worldId, 'ready', createdAt);
+    return {
+      sourceId: input.sourceId,
+      worldId,
+      packageRevision: publishedRevision,
+      byteLength: input.sourceManifest.byteLength,
+      codePointCount: input.sourceManifest.codePointCount,
+      chapterCount: chapters.length,
+      chunkCount: chunks.length,
+      reusedSource: input.reusedSource,
+      alreadyPlayable: true,
+      physicalRequests: 0,
+      totalMs: Date.now() - input.totalStartedAt,
+      extractionMs: 0,
+    };
+  }
+
+  const sourceExcerptCodePoints = Math.min(
+    input.sourceManifest.codePointCount,
+    8_000,
+  );
+  const sourceExcerpt = await sourceStore.readRange(input.sourceId, 0, sourceExcerptCodePoints);
+  let requestBudget: ReturnType<typeof openingSourceBudgetForProfile>;
+  try {
+    requestBudget = openingSourceBudgetForProfile(input.profile, input.sourceManifest.codePointCount);
+  } catch (error) {
+    const category = error instanceof OpeningPreparationError ? error.category : 'profile_budget';
+    await recordOpeningJob({
+      worldStore,
+      worldId,
+      sourceExcerpt,
+      model: input.profile.model,
+      status: 'failed',
+      requestMetrics: [],
+      usage: null,
+      errorCode: category,
+      resultJson: { schema: OPENING_DOSSIER_VERSION, sourceCodePoints: sourceExcerptCodePoints, physicalRequests: 0 },
+      createdAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await worldStore.setWorldStatus(worldId, 'failed', new Date().toISOString()).catch(() => undefined);
+    if (error instanceof OpeningPreparationError) throw error;
+    throw new OpeningPreparationError('profile_budget');
+  }
+  const sourceEndCodePoint = requestBudget.sourceCodePoints;
+  if (sourceEndCodePoint <= 0) throw new Error('小说没有可用于开局的文本。');
+  if (!sourceExcerpt.trim()) throw new Error('小说开头没有可用于开局的文本。');
+  const localChapters = await worldStore.getChapters(worldId);
+  const extractionStartedAt = Date.now();
+  const requestMetrics: import('../../src/application/llm/types').LlmPhysicalRequestMetric[] = [];
+  let physicalRequests = 0;
+  let usage: import('../../src/application/llm/types').LlmUsage | null = null;
+  let dossierResult: Awaited<ReturnType<typeof extractOpeningDossier>> | null = null;
+  const provider = new OpenAICompatibleProvider(
+    input.profile,
+    new KeychainSecretStore(),
+    new FetchHttpTransport(),
+    180_000,
+    { maxPhysicalRequests: 1 },
+  );
+  try {
+    input.onProgress({
+      phase: 'extracting',
+      message: `整理开局资料：只向模型提交小说开头 ${sourceEndCodePoint.toLocaleString()} 个码点…`,
+    });
+    dossierResult = await extractOpeningDossier({
+      provider,
+      sourceExcerpt,
+      maxOutputTokens: requestBudget.maxOutputTokens,
+    });
+    requestMetrics.push(...dossierResult.requestMetrics);
+    physicalRequests = dossierResult.physicalRequests;
+    usage = dossierResult.usage;
+    const extractionMs = Date.now() - extractionStartedAt;
+    input.onProgress({ phase: 'extracting', message: '原文引文校验通过，正在本地编译并校验开局范围包…' });
+    const compileStartedAt = Date.now();
+    const packageResult = await compileProgressiveOpeningPackage({
+      worldStore,
+      sha256Hex: async value => nativeSha256.sha256Hex(value),
+      worldId,
+      sourceSha256: input.sourceManifest.rawSha256Hex,
+      sourceExcerpt,
+      sourceEndCodePoint,
+      chapters: localChapters,
+      dossier: dossierResult.dossier,
+      requestMetrics,
+      usage,
+      extractionMs,
+      createdAt: new Date().toISOString(),
+    });
+    const compileAndPublishMs = Date.now() - compileStartedAt;
+    await recordOpeningJob({
+      worldStore,
+      worldId,
+      sourceExcerpt,
+      model: input.profile.model,
+      status: 'done',
+      requestMetrics,
+      usage,
+      resultJson: {
+        schema: OPENING_DOSSIER_VERSION,
+        packageRevision: packageResult.manifest.revision,
+        packageHash: packageResult.manifest.contentHash,
+        sourceCodePoints: sourceEndCodePoint,
+        physicalRequests,
+        repairUsed: dossierResult.repairUsed,
+        extractionMs,
+        compileAndPublishMs,
+        totalMs: Date.now() - input.totalStartedAt,
+      },
+      createdAt: new Date().toISOString(),
+    });
+    await worldStore.setWorldStatus(worldId, 'ready', new Date().toISOString());
+    input.onProgress({ phase: 'done', message: '开局范围包已发布，可创建角色并开始第一回合。' });
+    return {
+      sourceId: input.sourceId,
+      worldId,
+      packageRevision: packageResult.manifest.revision,
+      byteLength: input.sourceManifest.byteLength,
+      codePointCount: input.sourceManifest.codePointCount,
+      chapterCount: chapters.length,
+      chunkCount: chunks.length,
+      reusedSource: input.reusedSource,
+      alreadyPlayable: false,
+      physicalRequests,
+      totalMs: Date.now() - input.totalStartedAt,
+      extractionMs,
+    };
+  } catch (error) {
+    const safeMetrics = requestMetrics.length > 0
+      ? requestMetrics
+      : error instanceof OpeningPreparationError ? [...error.requestMetrics] : [];
+    const category = error instanceof OpeningPreparationError ? error.category : 'preparation_failed';
+    await recordOpeningJob({
+      worldStore,
+      worldId,
+      sourceExcerpt,
+      model: input.profile.model,
+      status: 'failed',
+      requestMetrics: safeMetrics,
+      usage,
+      errorCode: category,
+      resultJson: {
+        schema: OPENING_DOSSIER_VERSION,
+        sourceCodePoints: sourceEndCodePoint,
+        physicalRequests: safeMetrics.length,
+        elapsedMs: Date.now() - extractionStartedAt,
+      },
+      createdAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await worldStore.setWorldStatus(worldId, 'failed', new Date().toISOString()).catch(() => undefined);
+    if (error instanceof OpeningPreparationError) throw error;
+    throw new OpeningPreparationError('provider_failure', safeMetrics);
+  }
+}
+
+async function recordOpeningJob(input: {
+  worldStore: import('../../src/infra/sqlite/sqliteWorldStore').SqliteWorldStore;
+  worldId: string;
+  sourceExcerpt: string;
+  model: string;
+  status: 'done' | 'failed';
+  requestMetrics: readonly import('../../src/application/llm/types').LlmPhysicalRequestMetric[];
+  usage: import('../../src/application/llm/types').LlmUsage | null;
+  errorCode?: string;
+  resultJson: Record<string, unknown>;
+  createdAt: string;
+}): Promise<void> {
+  const contentHash = await nativeSha256.sha256Hex(input.sourceExcerpt);
+  const jobId = `job-progressive-opening-${input.worldId}`;
+  const existing = await input.worldStore.getJob(input.worldId, jobId);
+  const job: WorldJobRecord = {
+    worldId: input.worldId,
+    jobId,
+    kind: 'rule_mapping',
+    targetId: 'progressive-opening-dossier',
+    status: input.status,
+    attempts: (existing?.attempts ?? 0) + input.requestMetrics.length,
+    contentHash,
+    extractorVersion: OPENING_DOSSIER_VERSION,
+    modelFingerprint: input.model,
+    usageJson: JSON.stringify({ usage: input.usage, requestMetrics: input.requestMetrics }),
+    resultJson: JSON.stringify(input.resultJson),
+    error: input.errorCode ?? null,
+    createdAt: existing?.createdAt ?? input.createdAt,
+    updatedAt: input.createdAt,
+  };
+  await input.worldStore.upsertJob(job, input.createdAt);
 }
 
 /** Adapter from the chunk extractor to the run coordinator's unit contract. */

@@ -341,6 +341,7 @@ export async function publishWorldPackageDraft(input: {
     mappingVersion: base.manifest.mappingVersion,
     entries: input.entries,
     sections: input.sections,
+    buildScope: base.manifest.buildScope,
     createdAt: new Date().toISOString(),
   });
   await worldStore.clearWorldPackageDraft(input.worldId, input.baseRevision);

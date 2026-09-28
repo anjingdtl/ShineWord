@@ -195,13 +195,27 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
-  if (!input.manifest || input.manifest.schemaVersion !== 'world-package-2' ||
+  if (!input.manifest || !['world-package-2', 'world-package-3'].includes(input.manifest.schemaVersion) ||
       typeof input.manifest.worldId !== 'string' || !input.manifest.worldId.trim() || input.manifest.worldId.length > 120 ||
       !Number.isSafeInteger(input.manifest.revision) || input.manifest.revision < 1) {
     throw new Error('World package manifest is invalid.');
   }
   if (!/^[a-f0-9]{64}$/i.test(input.manifest.contentHash) || !/^[a-f0-9]{64}$/i.test(input.manifest.sourceSha256)) {
     throw new Error('World package hashes must be SHA-256 hex strings.');
+  }
+  if (input.manifest.schemaVersion === 'world-package-3') {
+    const scope = input.manifest.buildScope;
+    if (!scope || !['progressive', 'full'].includes(scope.strategy)
+      || !['opening', 'incremental', 'whole_source'].includes(scope.scope)
+      || !['partial', 'complete'].includes(scope.completeness)
+      || !Array.isArray(scope.sourceRanges) || scope.sourceRanges.length === 0
+      || scope.sourceRanges.some(range => !Number.isSafeInteger(range.startCodePoint)
+        || !Number.isSafeInteger(range.endCodePoint) || range.startCodePoint < 0
+        || range.endCodePoint <= range.startCodePoint || !/^[a-f0-9]{64}$/i.test(range.contentSha256))) {
+      throw new Error('World package scope metadata is invalid.');
+    }
+  } else if (input.manifest.buildScope) {
+    throw new Error('Legacy world packages cannot carry version 3 scope metadata.');
   }
   if (!Array.isArray(input.entries) || input.entries.length === 0 || input.entries.length > 5000 ||
       !Array.isArray(input.sections) || input.sections.length > 500) {
@@ -210,7 +224,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
 }
 
 async function findContentHashBasisRevision(
-  manifest: Pick<WorldPackageManifest, 'contentHash' | 'revision'>,
+  manifest: Pick<WorldPackageManifest, 'contentHash' | 'revision' | 'buildScope'>,
   entries: readonly ContentEntry[],
   sections: readonly BookSection[],
   sha256Hex: Sha256HexProvider['sha256Hex'],
@@ -227,7 +241,12 @@ async function findContentHashBasisRevision(
   for (const revision of candidates) {
     if (!Number.isSafeInteger(revision) || revision < 0) continue;
     const candidateEntries = entries.map(entry => ({ ...entry, revision }));
-    if (await computePackageContentHash(candidateEntries, sections, sha256Hex) === manifest.contentHash) {
+    if (await computePackageContentHash(
+      candidateEntries,
+      sections,
+      sha256Hex,
+      manifest.buildScope,
+    ) === manifest.contentHash) {
       return revision;
     }
   }

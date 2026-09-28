@@ -289,6 +289,56 @@ function skillEntryId(id: string): string {
   return `skill-${id}`;
 }
 
+/** Shared rule-system floor used for progressive openings and complete builds. */
+export function createProgressiveBaselineEntries(): ContentEntry[] {
+  const entries = DEFAULT_SKILLS.map(defaults => makeEntry({
+    entryId: skillEntryId(defaults.id),
+    kind: 'skill',
+    provenance: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+    definition: {
+      name: defaults.name,
+      description: defaults.description,
+      attribute: defaults.attribute,
+      allowUntrained: defaults.allowUntrained,
+      requirements: [],
+      powerTier: 'ordinary',
+    },
+  }));
+  entries.push(makeEntry({
+    entryId: 'common-guard-template',
+    kind: 'actor_template',
+    provenance: {
+      kind: 'design_fill',
+      sourceFactIds: [],
+      rationale: '设计补全：遭遇兜底用的普通人守卫模板。',
+    },
+    visibility: 'gm',
+    dependencyIds: [skillEntryId('sword')],
+    fieldProvenance: {
+      hp: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      stamina: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      defense: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+      threat: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
+    },
+    definition: {
+      name: '普通人守卫',
+      category: 'human',
+      description: '集镇或门派里最普通的守卫，用于兜底遭遇。',
+      attributes: { physique: 1, agility: 1 },
+      skills: { [skillEntryId('sword')]: 'trained' },
+      hp: 6,
+      stamina: 4,
+      defense: 2,
+      attacks: [{ name: '棍棒', skillId: skillEntryId('sword'), damage: 1, range: 'touch' }],
+      abilities: [],
+      behavior: { goal: '守住岗位，驱散闹事者', retreatThreshold: 0.25, morale: 'steady' },
+      lootPolicy: '无掉落',
+      threat: { damage: 1, durability: 1, actions: 1, control: 0, environment: 0 },
+    },
+  }));
+  return entries;
+}
+
 function itemEntryId(id: string): string {
   return id.startsWith('item-') ? id : `item-${id}`;
 }
@@ -795,7 +845,7 @@ async function requestMappingProposals(
 // Sections
 // ---------------------------------------------------------------------------
 
-function buildSections(entries: readonly ContentEntry[]): BookSection[] {
+export function buildSections(entries: readonly ContentEntry[]): BookSection[] {
   const byKind = (kind: EntryKind, visibility?: EntryVisibility): string[] =>
     entries
       .filter(entry => entry.kind === kind && (visibility === undefined || entry.visibility === visibility))
@@ -982,62 +1032,15 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   for (const lore of proposals.lore) entries.push(lore);
 
   // Fill missing baseline skills with conservative design_fill defaults.
-  for (const defaults of DEFAULT_SKILLS) {
-    const entryId = skillEntryId(defaults.id);
-    if (acceptedSkillIds.has(entryId)) continue;
-    entries.push(makeEntry({
-      entryId,
-      kind: 'skill',
-      provenance: {
-        kind: 'design_fill',
-        sourceFactIds: [],
-        rationale: DESIGN_FILL_RATIONALE,
-      },
-      definition: {
-        name: defaults.name,
-        description: defaults.description,
-        attribute: defaults.attribute,
-        allowUntrained: defaults.allowUntrained,
-        requirements: [],
-        powerTier: 'ordinary',
-      },
-    }));
-    acceptedSkillIds.add(entryId);
+  const baselineEntries = createProgressiveBaselineEntries();
+  for (const entry of baselineEntries.filter(candidate => candidate.kind === 'skill')) {
+    if (acceptedSkillIds.has(entry.entryId)) continue;
+    entries.push(entry);
+    acceptedSkillIds.add(entry.entryId);
   }
 
   // Encounter fallback template, always present (design_fill).
-  entries.push(makeEntry({
-    entryId: 'common-guard-template',
-    kind: 'actor_template',
-    provenance: {
-      kind: 'design_fill',
-      sourceFactIds: [],
-      rationale: '设计补全：遭遇兜底用的普通人守卫模板。',
-    },
-    visibility: 'gm',
-    dependencyIds: [skillEntryId('sword')],
-    fieldProvenance: {
-      hp: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
-      stamina: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
-      defense: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
-      threat: { kind: 'design_fill', sourceFactIds: [], rationale: DESIGN_FILL_RATIONALE },
-    },
-    definition: {
-      name: '普通人守卫',
-      category: 'human',
-      description: '集镇或门派里最普通的守卫，用于兜底遭遇。',
-      attributes: { physique: 1, agility: 1 },
-      skills: { [skillEntryId('sword')]: 'trained' },
-      hp: 6,
-      stamina: 4,
-      defense: 2,
-      attacks: [{ name: '棍棒', skillId: skillEntryId('sword'), damage: 1, range: 'touch' }],
-      abilities: [],
-      behavior: { goal: '守住岗位，驱散闹事者', retreatThreshold: 0.25, morale: 'steady' },
-      lootPolicy: '无掉落',
-      threat: { damage: 1, durability: 1, actions: 1, control: 0, environment: 0 },
-    },
-  }));
+  entries.push(baselineEntries.find(entry => entry.entryId === 'common-guard-template')!);
 
   // LLM actor templates: keep attack skill references that resolve after the
   // baseline fill; dangling ones are dropped instead of blocking publication.

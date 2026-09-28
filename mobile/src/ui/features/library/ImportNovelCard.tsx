@@ -2,8 +2,8 @@
  * ImportNovelCard — 书库 primary action: pick a TXT and start the on-device
  * build, plus the portable world-package import (plan §7.2/§7.3).
  *
- * Copy is limited to what the build actually does: extraction, mapping and the
- * three books. No chapter counts, ETA or quality score are shown here.
+ * The default path builds an explicitly partial playable opening. Full-novel
+ * refinement is an optional later action; import does not silently queue it.
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -39,13 +39,13 @@ export function ImportNovelCard(props: {
             导入小说 TXT
           </Text>
           <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>
-            构建人物、事件、规则与三宝书
+            先整理开局，完整小说随探索补齐
           </Text>
         </View>
       </View>
       <View style={{ height: theme.space.md }} />
       <Button
-        label={props.busy ? '构建中…' : '选择 TXT 并开始构建'}
+        label={props.busy ? '准备开局中…' : '选择 TXT 并快速开局'}
         onPress={props.onImportNovel}
         disabled={props.busy}
         block
