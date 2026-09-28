@@ -57,7 +57,12 @@ export function PlayPanel(props: {
         <Animated.View
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: '#000000', opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] }) },
+            {
+              // Scrim from the skin's deepest surface token — no literal colour
+              // outside the token files (plan §27).
+              backgroundColor: theme.bg.sunken,
+              opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.72] }),
+            },
           ]}>
           <Pressable
             style={StyleSheet.absoluteFill}

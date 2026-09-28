@@ -391,3 +391,33 @@
 | 四主题 Play 完整截图（叙事/骰点/遭遇/角色卡/面板/菜单） | **未截图** |
 | 四主题对比度实测（尤其漫的白卡与墨的泥金） | **未验证** |
 | 漫的对白尾与爆炸徽记观感 | **未验证** |
+
+---
+
+## P4 收口：删除 legacyStyles
+
+### 实现内容
+
+| 项 | 结果 |
+|---|---|
+| `mobile/src/ui/screens/legacyStyles.ts` | **已删除**（全仓已无引用；剩余提及仅在注释里） |
+| 旧硬编码 Hex 扫描（`#08141f` / `#d9a441` / `#263a4d` / `#0e2030` / `#f1f5f9`） | 0 处（`mobile/src/ui` + `App.tsx`，排除 Token 文件） |
+| 其他字面量 Hex 扫描（`#[0-9a-f]{6}`） | 仅剩 Token 文件（`theme/tokens.ts`、`brand/brand.ts`）与 Android 原生资源；**弹层遮罩**已改用 `bg.sunken` Token，不再写死 `#000000` |
+| UI 层业务规则复制 | 0 处（所有检定/成长/战斗/队伍判定仍来自 Session 与规则域） |
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | `PlayPanel` 的遮罩写死 `#000000` | **已修复**：改用 `theme.bg.sunken`（Token 派生） |
+| 2 | 删除后是否仍有引用 | 已核对：`grep legacyStyles mobile/src` 只剩注释文字，无 import |
+| 3 | 删除后页面是否仍能编译（静态层面） | 逐文件复核：PlayScreen 已改用主题组件；其余屏幕在 P3 已迁移 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 删除后全页面真机回归 | **未验证** |
