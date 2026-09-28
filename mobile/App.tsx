@@ -22,13 +22,19 @@ import {
   loadHistory,
   listReviewIssues,
   resolveReviewIssue,
+  loadWorldPackageDraft,
+  saveWorldPackageDraft,
+  validateWorldPackageDraft,
+  publishWorldPackageDraft,
+  exportPortableWorldPackage,
+  importPortableWorldPackageFile,
   type CampaignListItem,
   type CampaignPlayState,
   type EncounterView,
   type ReviewIssueView,
   type TurnView,
 } from './src/runtime';
-import { pickNovelFile, createExportFile, writeExportFile } from './src/fileBridge';
+import { pickNovelFile, createExportFile, createExportBytesFile, writeExportFile, writeExportBytes } from './src/fileBridge';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -36,13 +42,15 @@ import {
   type WorldLibraryEntry,
 } from './src/worldImport';
 import { assembleBook } from '../src/application/worldPackage/publish';
+import type { BookSection, ContentEntry } from '../src/domain/content/types';
+import type { CompanionDirective } from '../src/domain/characters/card';
 import { createCampaign } from '../src/application/campaign/createCampaign';
 import { getDatabaseRuntime } from './src/database';
 
 type Screen =
   | { name: 'settings' }
   | { name: 'library' }
-  | { name: 'books'; worldId: string; title: string }
+  | { name: 'books'; worldId: string; title: string; campaignId?: string; branchId?: string }
   | { name: 'opening'; worldId: string; title: string }
   | { name: 'play'; campaignId: string; branchId: string }
   | { name: 'review'; worldId: string; title: string };
@@ -66,6 +74,33 @@ const PROVENANCE_LABELS: Record<string, string> = {
   design_fill: '设计补全',
   user_override: '用户设定',
 };
+
+function assembleBookViews(
+  entries: ContentEntry[],
+  sections: BookSection[],
+  includeGm: boolean,
+  discoveredEntryIds: Set<string>,
+): BookView[] {
+  return (['player_handbook', 'gm_guide', 'monster_manual'] as const).map(book => ({
+    book,
+    bookTitle: BOOK_TITLES[book] ?? book,
+    groups: assembleBook({ entries, sections }, book, {
+      includeGm,
+      ...(includeGm ? {} : { knowledge: { discoveredEntryIds } }),
+    }).map(group => ({
+      title: group.section.title,
+      entries: group.entries.map(entry => {
+        const definition = entry.definition as { name?: string; text?: string; description?: string; title?: string };
+        return {
+          id: entry.entryId,
+          name: definition.name ?? definition.title ?? entry.entryId,
+          text: definition.text ?? definition.description ?? '',
+          provenance: PROVENANCE_LABELS[entry.provenance.kind] ?? entry.provenance.kind,
+        };
+      }),
+    })),
+  }));
+}
 
 export default function App(): React.JSX.Element {
   const [profile, setProfile] = useState<ApiProfile | null>(null);
@@ -118,7 +153,7 @@ export default function App(): React.JSX.Element {
         setError={setError}
         busy={busy}
         setBusy={setBusy}
-        onOpenBooks={(worldId, title) => setScreen({ name: 'books', worldId, title })}
+        onOpenBooks={(worldId, title, campaignId, branchId) => setScreen({ name: 'books', worldId, title, campaignId, branchId })}
         onOpenOpening={(worldId, title) => setScreen({ name: 'opening', worldId, title })}
         onOpenPlay={(campaignId, branchId) => setScreen({ name: 'play', campaignId, branchId })}
         onOpenReview={(worldId, title) => setScreen({ name: 'review', worldId, title })}
@@ -132,6 +167,8 @@ export default function App(): React.JSX.Element {
         profile={profile}
         worldId={screen.worldId}
         title={screen.title}
+        campaignId={screen.campaignId}
+        branchId={screen.branchId}
         onBack={() => setScreen({ name: 'library' })}
       />
     );
@@ -249,7 +286,7 @@ function LibraryScreen(props: {
   setError: (e: string | null) => void;
   busy: boolean;
   setBusy: (b: boolean) => void;
-  onOpenBooks: (worldId: string, title: string) => void;
+  onOpenBooks: (worldId: string, title: string, campaignId?: string, branchId?: string) => void;
   onOpenOpening: (worldId: string, title: string) => void;
   onOpenPlay: (campaignId: string, branchId: string) => void;
   onOpenReview: (worldId: string, title: string) => void;
@@ -336,8 +373,45 @@ ${e.stack ?? ''}`
       if (!picked) return;
       // Saves are UTF-8 JSON; decode the raw bytes before validation.
       const restored = await importCampaignSave(decodeUtf8(picked.bytes));
-      setBuilt(`存档已导入为新的战役（${restored.campaignId}）。请先导入对应世界包后继续游戏。`);
+      setBuilt(`存档已导入为新的战役（${restored.campaignId}）。从「我的战役」中选择它继续游戏。`);
       await refresh();
+    } catch (e) {
+      props.setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importWorldPackage() {
+    if (busy) return;
+    setBusy(true);
+    props.setError(null);
+    try {
+      const picked = await pickNovelFile();
+      if (!picked) return;
+      const imported = await importPortableWorldPackageFile(picked.bytes);
+      setBuilt(`已导入世界包「${imported.title}」r${imported.revision}。包内不含小说原文，已校验并创建独立世界。`);
+      await refresh();
+    } catch (e) {
+      props.setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportWorldPackage(worldId: string) {
+    if (busy) return;
+    setBusy(true);
+    props.setError(null);
+    try {
+      const archive = await exportPortableWorldPackage(worldId);
+      const uri = await createExportBytesFile(
+        `shineword-${worldId}-r${archive.revision}.shineword-world.zip`,
+        'application/zip',
+      );
+      if (!uri) return;
+      await writeExportBytes(uri, archive.bytes);
+      setBuilt(`已导出「${archive.title}」r${archive.revision} 世界包 ZIP。这个包包含三宝书与规则，不包含小说原文。`);
     } catch (e) {
       props.setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -354,6 +428,9 @@ ${e.stack ?? ''}`
         </TouchableOpacity>
         <TouchableOpacity style={styles.secondary} onPress={importSave} disabled={busy}>
           <Text style={styles.secondaryText}>导入存档（.shineword-save.json）</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondary} onPress={importWorldPackage} disabled={busy}>
+          <Text style={styles.secondaryText}>导入世界包（.shineword-world.zip）</Text>
         </TouchableOpacity>
         {progress ? (
           <View style={styles.card}>
@@ -376,7 +453,10 @@ ${e.stack ?? ''}`
             <Text style={styles.cardTitle}>{world.title}</Text>
             <Text style={styles.muted}>构建状态 {world.buildStatus} · SHA {world.sourceSha256.slice(0, 10)}…</Text>
             <View style={styles.row}>
-              <TouchableOpacity style={styles.secondary} onPress={() => props.onOpenBooks(world.worldId, world.title)}>
+              <TouchableOpacity style={styles.secondary} onPress={() => {
+                const activeBranch = campaigns.find(campaign => campaign.worldId === world.worldId);
+                props.onOpenBooks(world.worldId, world.title, activeBranch?.campaignId, activeBranch?.branchId);
+              }}>
                 <Text style={styles.secondaryText}>三宝书</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.secondary} onPress={() => props.onOpenOpening(world.worldId, world.title)}>
@@ -384,6 +464,9 @@ ${e.stack ?? ''}`
               </TouchableOpacity>
               <TouchableOpacity style={styles.secondary} onPress={() => props.onOpenReview(world.worldId, world.title)}>
                 <Text style={styles.secondaryText}>审核队列</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondary} onPress={() => exportWorldPackage(world.worldId)} disabled={busy}>
+                <Text style={styles.secondaryText}>导出世界包 ZIP</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -439,12 +522,25 @@ function BooksScreen(props: {
   profile: ApiProfile;
   worldId: string;
   title: string;
+  campaignId?: string;
+  branchId?: string;
   onBack: () => void;
 }): React.JSX.Element {
   const [books, setBooks] = useState<BookView[]>([]);
   const [activeBook, setActiveBook] = useState<string>('player_handbook');
   const [error, setError] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [discoveredEntryIds, setDiscoveredEntryIds] = useState<Set<string>>(new Set());
+  const [packageEntries, setPackageEntries] = useState<ContentEntry[]>([]);
+  const [baseEntries, setBaseEntries] = useState<ContentEntry[]>([]);
+  const [packageSections, setPackageSections] = useState<BookSection[]>([]);
+  const [packageRevision, setPackageRevision] = useState<number | null>(null);
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const [editorDefinition, setEditorDefinition] = useState('');
+  const [editorVisibility, setEditorVisibility] = useState<ContentEntry['visibility']>('public');
+  const [editorDiff, setEditorDiff] = useState<string | null>(null);
+  const [editorStatus, setEditorStatus] = useState<string | null>(null);
+  const [editorBusy, setEditorBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -452,37 +548,53 @@ function BooksScreen(props: {
       try {
         const session = await createSession(props.profile, await buildProvider(props.profile));
         const setup = await session.getWorldSetup(props.worldId);
-        if (setup.packageRevision === null) {
+        const campaignState = props.campaignId && props.branchId
+          ? await getCampaignState(props.campaignId, props.branchId)
+          : null;
+        const packageRevision = editMode ? setup.packageRevision : campaignState?.packageRevision ?? setup.packageRevision;
+        const discoveries = new Set(campaignState?.discoveredEntryIds ?? []);
+        if (packageRevision === null) {
           setError('这个世界还没有已发布的三宝书。请先完成世界构建与映射。');
           return;
         }
+        if (cancelled) return;
+        setDiscoveredEntryIds(discoveries);
         // Assemble all three books from the same revision (single source).
         // The DEFAULT view is the player view: GM entries stay out and
         // discoverable entries stay hidden until an in-play discovery record
         // exists (A06). The full edit view is a separate explicit mode.
         const runtime = await getDatabaseRuntime();
-        const pkg = await runtime.worldStore.getWorldPackage(props.worldId, setup.packageRevision);
+        const pkg = await runtime.worldStore.getWorldPackage(props.worldId, packageRevision);
         if (!pkg || cancelled) return;
-        const views: BookView[] = (['player_handbook', 'gm_guide', 'monster_manual'] as const).map(book => ({
-          book,
-          bookTitle: BOOK_TITLES[book] ?? book,
-          groups: assembleBook(pkg, book, {
-            includeGm: editMode,
-            ...(editMode ? {} : { knowledge: { discoveredEntryIds: new Set<string>() } }),
-          }).map(group => ({
-            title: group.section.title,
-            entries: group.entries.map(entry => {
-              const def = entry.definition as { name?: string; text?: string; description?: string; title?: string };
-              return {
-                id: entry.entryId,
-                name: def.name ?? def.title ?? entry.entryId,
-                text: def.text ?? def.description ?? '',
-                provenance: PROVENANCE_LABELS[entry.provenance.kind] ?? entry.provenance.kind,
-              };
-            }),
-          })),
-        }));
-        setBooks(views);
+        let nextEntries = pkg.entries;
+        let nextSections = pkg.sections;
+        if (editMode) {
+          const draft = await loadWorldPackageDraft(props.worldId);
+          if (draft && draft.baseRevision === packageRevision) {
+            try {
+              const parsed = JSON.parse(draft.draftJson) as { entries?: ContentEntry[]; sections?: BookSection[] };
+              if (Array.isArray(parsed.entries) && Array.isArray(parsed.sections)) {
+                nextEntries = parsed.entries;
+                nextSections = parsed.sections;
+              }
+            } catch {
+              setEditorStatus('已保存的草稿无法读取，原发布版本仍安全保留。');
+            }
+          } else if (draft) {
+            setEditorStatus(`发现基于 r${draft.baseRevision} 的旧草稿；当前发布版本是 r${packageRevision}，需要人工核对后再编辑。`);
+          }
+        }
+        setPackageEntries(nextEntries);
+        setBaseEntries(pkg.entries);
+        setPackageSections(nextSections);
+        setPackageRevision(packageRevision);
+        const nextSelected = nextEntries.find(entry => entry.entryId === selectedEntryId) ?? nextEntries[0] ?? null;
+        setSelectedEntryId(nextSelected?.entryId ?? null);
+        if (nextSelected) {
+          setEditorDefinition(JSON.stringify(nextSelected.definition, null, 2));
+          setEditorVisibility(nextSelected.visibility);
+        }
+        setBooks(assembleBookViews(nextEntries, nextSections, editMode, discoveries));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -491,9 +603,87 @@ function BooksScreen(props: {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.worldId, editMode]);
+  }, [props.worldId, props.campaignId, props.branchId, editMode]);
 
   const current = books.find(book => book.book === activeBook);
+  const selectedEntry = packageEntries.find(entry => entry.entryId === selectedEntryId) ?? null;
+
+  function selectDraftEntry(entry: ContentEntry) {
+    setSelectedEntryId(entry.entryId);
+    setEditorDefinition(JSON.stringify(entry.definition, null, 2));
+    setEditorVisibility(entry.visibility);
+    setEditorDiff(null);
+    setEditorStatus(null);
+  }
+
+  async function saveEntryDraft(publishAfterSave = false) {
+    if (!selectedEntry || packageRevision === null) return;
+    setEditorBusy(true);
+    setEditorStatus(null);
+    try {
+      const definition = JSON.parse(editorDefinition) as unknown;
+      if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
+        throw new Error('条目定义必须是 JSON 对象。');
+      }
+      const nextEntries = packageEntries.map(entry => entry.entryId === selectedEntry.entryId
+        ? { ...entry, definition, visibility: editorVisibility }
+        : entry);
+      const draft = { worldId: props.worldId, baseRevision: packageRevision, entries: nextEntries, sections: packageSections };
+      await saveWorldPackageDraft(draft);
+      setPackageEntries(nextEntries);
+      setBooks(assembleBookViews(nextEntries, packageSections, editMode, discoveredEntryIds));
+      const validation = validateWorldPackageDraft({ worldId: props.worldId, revision: packageRevision, entries: nextEntries, sections: packageSections });
+      if (!publishAfterSave) {
+        setEditorStatus(validation.ok
+          ? `草稿已保存（基于 r${packageRevision}）；已通过结构验证，可检查差异或继续编辑。`
+          : `草稿已保存；发现 ${validation.errors.length} 个验证错误，修复后才能发布。`);
+        return;
+      }
+      if (!validation.ok) {
+        setEditorStatus(`验证未通过，不能发布：\n${validation.errors.map(message => `• ${message}`).join('\n')}`);
+        return;
+      }
+      const result = await publishWorldPackageDraft({ ...draft });
+      setEditorStatus(`已发布不可变新版本 r${result.manifest.revision}（${result.manifest.contentHash.slice(0, 12)}…）。现有战役继续锁定原版本。`);
+      setEditMode(false);
+    } catch (e) {
+      setEditorStatus(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditorBusy(false);
+    }
+  }
+
+  function showEntryDiff() {
+    if (!selectedEntry) return;
+    const before = baseEntries.find(entry => entry.entryId === selectedEntry.entryId);
+    const after = packageEntries.find(entry => entry.entryId === selectedEntry.entryId);
+    try {
+      setEditorDiff(JSON.stringify({
+        entryId: selectedEntry.entryId,
+        before: before ? { visibility: before.visibility, definition: before.definition } : null,
+        draft: after ? { visibility: editorVisibility, definition: JSON.parse(editorDefinition) } : null,
+      }, null, 2));
+    } catch (e) {
+      setEditorStatus(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function validateDraft() {
+    if (packageRevision === null || !selectedEntry) return;
+    try {
+      const definition = JSON.parse(editorDefinition) as unknown;
+      const entries = packageEntries.map(entry => entry.entryId === selectedEntry.entryId
+        ? { ...entry, definition, visibility: editorVisibility }
+        : entry);
+      const validation = validateWorldPackageDraft({ worldId: props.worldId, revision: packageRevision, entries, sections: packageSections });
+      setEditorStatus(validation.ok
+        ? `验证通过：${validation.entryCount} 个条目，${validation.warnings.length} 条提示。`
+        : `验证失败：\n${validation.errors.map(message => `• ${message}`).join('\n')}`);
+    } catch (e) {
+      setEditorStatus(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <SafeAreaView style={styles.page}>
       <Header title={`${props.title} · 三宝书`} subtitle="同一世界包的三个视图" onBack={props.onBack} />
@@ -513,12 +703,73 @@ function BooksScreen(props: {
         </TouchableOpacity>
       </View>
       {!editMode ? (
-        <Text style={styles.muted}>玩家视图：未发现的内容与主持人资料已按知识状态过滤。</Text>
+        <Text style={styles.muted}>
+          {props.branchId
+            ? `玩家视图：已按当前战役知识过滤（已发现 ${discoveredEntryIds.size} 项）。`
+            : '玩家视图：当前没有关联战役，未发现内容与主持人资料已隐藏。'}
+        </Text>
       ) : (
         <Text style={styles.danger}>编辑模式：显示完整资料（含秘密）。你的角色知识仍由游戏内记录决定。</Text>
       )}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <ScrollView style={styles.scroll}>
+        {editMode ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>世界编辑草稿 · 基于 r{packageRevision ?? '?'}</Text>
+            <Text style={styles.muted}>修改只写入草稿。验证通过后发布不可变新版本；已运行战役继续使用锁定版本。</Text>
+            <View style={styles.row}>
+              {packageEntries.map(entry => (
+                <TouchableOpacity
+                  key={entry.entryId}
+                  style={[styles.secondary, selectedEntryId === entry.entryId && styles.secondaryActive]}
+                  onPress={() => selectDraftEntry(entry)}>
+                  <Text style={styles.secondaryText}>{entry.entryId}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {selectedEntry ? (
+              <>
+                <Text style={styles.tag}>{selectedEntry.kind} · {selectedEntry.entryId}</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 170, textAlignVertical: 'top' }]}
+                  value={editorDefinition}
+                  onChangeText={setEditorDefinition}
+                  editable={!editorBusy}
+                  autoCapitalize="none"
+                  multiline
+                  placeholder="条目定义 JSON"
+                  placeholderTextColor="#6f7b86"
+                />
+                <View style={styles.row}>
+                  {(['public', 'discoverable', 'gm'] as const).map(visibility => (
+                    <TouchableOpacity
+                      key={visibility}
+                      style={[styles.secondary, editorVisibility === visibility && styles.secondaryActive]}
+                      onPress={() => setEditorVisibility(visibility)}>
+                      <Text style={styles.secondaryText}>{visibility}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={styles.row}>
+                  <TouchableOpacity style={styles.secondary} onPress={showEntryDiff} disabled={editorBusy}>
+                    <Text style={styles.secondaryText}>检查差异</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondary} onPress={() => saveEntryDraft(false)} disabled={editorBusy}>
+                    <Text style={styles.secondaryText}>{editorBusy ? '保存中…' : '保存草稿并验证'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondary} onPress={validateDraft} disabled={editorBusy}>
+                    <Text style={styles.secondaryText}>验证当前草稿</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.primary} onPress={() => saveEntryDraft(true)} disabled={editorBusy}>
+                    <Text style={styles.primaryText}>验证并发布新版本</Text>
+                  </TouchableOpacity>
+                </View>
+                {editorStatus ? <Text style={editorStatus.includes('失败') || editorStatus.includes('错误') ? styles.error : styles.resumed}>{editorStatus}</Text> : null}
+                {editorDiff ? <Text style={styles.bodyText}>{editorDiff}</Text> : null}
+              </>
+            ) : <Text style={styles.muted}>当前世界包没有可编辑条目。</Text>}
+          </View>
+        ) : null}
         {current?.groups.map(group => (
           <View key={group.title} style={styles.card}>
             <Text style={styles.cardTitle}>{group.title}</Text>
@@ -640,6 +891,7 @@ function OpeningScreen(props: {
   const [anchorEventId, setAnchorEventId] = useState<string>('');
   const [locationId, setLocationId] = useState<string>('');
   const [companions, setCompanions] = useState<string[]>([]);
+  const [companionDirectives, setCompanionDirectives] = useState<Record<string, CompanionDirective>>({});
   const [goal, setGoal] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -747,7 +999,11 @@ function OpeningScreen(props: {
               }
             : { canonEntityId }),
         },
-        companions: companions.map((templateId, index) => ({ actorId: `actor-ally-${index + 1}`, templateId })),
+        companions: companions.map((templateId, index) => ({
+          actorId: `actor-ally-${index + 1}`,
+          templateId,
+          directive: companionDirectives[templateId] ?? 'protect',
+        })),
         goal: goal.trim() || '在开局锚点处开始一段冒险',
         createdAt: new Date().toISOString(),
       });
@@ -865,13 +1121,29 @@ function OpeningScreen(props: {
 
           {setup && setup.companionTemplates.length > 0 ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>同伴（最多 2 名，来自怪物图鉴模板）</Text>
+              <Text style={styles.cardTitle}>同伴（最多 2 名）</Text>
               {setup.companionTemplates.map(template => (
-                <TouchableOpacity key={template.entryId} style={styles.row} onPress={() => toggleCompanion(template.entryId)}>
-                  <Text style={companions.includes(template.entryId) ? styles.entryName : styles.bodyText}>
-                    {companions.includes(template.entryId) ? '☑' : '☐'} {template.name}
-                  </Text>
-                </TouchableOpacity>
+                <View key={template.entryId}>
+                  <TouchableOpacity style={styles.row} onPress={() => toggleCompanion(template.entryId)}>
+                    <Text style={companions.includes(template.entryId) ? styles.entryName : styles.bodyText}>
+                      {companions.includes(template.entryId) ? '☑' : '☐'} {template.name}
+                    </Text>
+                  </TouchableOpacity>
+                  {companions.includes(template.entryId) ? (
+                    <View style={styles.row}>
+                      {([
+                        ['follow', '跟随'], ['support', '支援'], ['protect', '保护'], ['conserve', '节省资源'], ['retreat', '撤退'],
+                      ] as Array<[CompanionDirective, string]>).map(([directive, label]) => (
+                        <TouchableOpacity key={directive} style={styles.step}
+                          onPress={() => setCompanionDirectives(previous => ({ ...previous, [template.entryId]: directive }))}>
+                          <Text style={(companionDirectives[template.entryId] ?? 'protect') === directive ? styles.entryName : styles.muted}>
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
               ))}
             </View>
           ) : null}
@@ -1115,6 +1387,29 @@ function PlayScreen(props: {
   const encounterTarget = encounter?.actors.find(actor => actor.side === 'hostile' && actor.hp > 0);
   const disabledAlly = encounter?.actors.find(actor => actor.side === 'party' && actor.conditions.includes('disabled'));
 
+  function combatRequestId(action: string, subject = '', actorId = encounter?.currentActorId ?? 'start'): string {
+    const version = encounter?.stateVersion ?? state?.stateVersion ?? 0;
+    return `${props.branchId.slice(-16)}:${version}:${actorId.slice(-16)}:${action}:${subject.slice(-16)}`;
+  }
+
+  const movablePartyActors = encounter?.actors.filter(actor =>
+    actor.side === 'party' && actor.hp > 0 && !actor.conditions.includes('disabled') &&
+    !actor.movedThisRound && (actor.actorId === encounter.currentActorId || actor.actedThisRound),
+  ) ?? [];
+  const movementOptions = movablePartyActors.flatMap(actor => encounter!.zones
+    .filter(zone => zone.zoneId !== actor.zoneId && zone.exits.includes(actor.zoneId))
+    .map(zone => ({ actor, zone })));
+  const currentCombatActor = encounter?.actors.find(actor => actor.actorId === encounter.currentActorId) ?? null;
+  const availableCompanions = encounter && state
+    ? state.cards.filter(card => card.controller === 'companion'
+      && !encounter.actors.some(actor => actor.actorId === card.actorId)
+      && !encounter.pendingActorIds.includes(card.actorId))
+    : [];
+  const dashZones = encounter?.currentActorIsPlayer && currentCombatActor && currentCombatActor.hp > 0 &&
+    !currentCombatActor.conditions.includes('disabled') && !currentCombatActor.actedThisRound
+    ? encounter.zones.filter(zone => zone.zoneId !== currentCombatActor.zoneId && zone.exits.includes(currentCombatActor.zoneId))
+    : [];
+
   return (
     <SafeAreaView style={styles.page}>
       <View style={styles.header}>
@@ -1142,6 +1437,11 @@ function PlayScreen(props: {
               </Text>
             ))}
           </View>
+          {encounter.pendingActorIds.length > 0 ? (
+            <Text style={styles.muted}>
+              等待下一轮加入：{encounter.pendingActorIds.map(id => state?.cards.find(card => card.actorId === id)?.name ?? id).join('、')}
+            </Text>
+          ) : null}
           {encounter.lastAction ? <Text style={styles.bodyText}>{encounter.lastAction}</Text> : null}
           {encounter.lastDice ? <Text style={styles.dice}>{encounter.lastDice}</Text> : null}
           <View style={styles.row}>
@@ -1154,6 +1454,7 @@ function PlayScreen(props: {
                     onPress={() => encounterCall(s => s.encounterAttack({
                       campaignId: props.campaignId, branchId: props.branchId,
                       encounterId: encounter.encounterId, targetId: encounterTarget.actorId,
+                      requestId: combatRequestId('attack', encounterTarget.actorId),
                     }))}>
                     <Text style={styles.secondaryText}>攻击 {encounterTarget.name}</Text>
                   </TouchableOpacity>
@@ -1165,6 +1466,7 @@ function PlayScreen(props: {
                     onPress={() => encounterCall(s => s.encounterRescue({
                       campaignId: props.campaignId, branchId: props.branchId,
                       encounterId: encounter.encounterId, targetId: disabledAlly.actorId,
+                      requestId: combatRequestId('rescue', disabledAlly.actorId),
                     }))}>
                     <Text style={styles.secondaryText}>援救 {disabledAlly.name}</Text>
                   </TouchableOpacity>
@@ -1174,19 +1476,21 @@ function PlayScreen(props: {
                   disabled={busy}
                   onPress={() => encounterCall(s => s.encounterPassTurn({
                     campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+                    requestId: combatRequestId('pass'),
                   }))}>
                   <Text style={styles.secondaryText}>跳过（戒备）</Text>
                 </TouchableOpacity>
-                {encounter.zones.map(zone => (
+                {dashZones.map(zone => (
                   <TouchableOpacity
-                    key={zone.zoneId}
+                    key={`dash-${zone.zoneId}`}
                     style={styles.secondary}
                     disabled={busy}
-                    onPress={() => encounterCall(s => s.encounterMove({
+                    onPress={() => encounterCall(s => s.encounterDash({
                       campaignId: props.campaignId, branchId: props.branchId,
                       encounterId: encounter.encounterId, toZoneId: zone.zoneId,
+                      requestId: combatRequestId('dash', zone.zoneId),
                     }))}>
-                    <Text style={styles.secondaryText}>移动→{zone.zoneId}</Text>
+                    <Text style={styles.secondaryText}>疾行→{zone.zoneId}（消耗主要行动）</Text>
                   </TouchableOpacity>
                 ))}
               </>
@@ -1196,15 +1500,43 @@ function PlayScreen(props: {
                 disabled={busy}
                 onPress={() => encounterCall(s => s.encounterNpcTurn({
                   campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+                  requestId: combatRequestId('npc'),
                 }))}>
-                <Text style={styles.secondaryText}>推进 NPC 行动</Text>
+                <Text style={styles.secondaryText}>推进自动角色行动</Text>
               </TouchableOpacity>
             )}
+            {movementOptions.map(({ actor, zone }) => (
+              <TouchableOpacity
+                key={`move-${actor.actorId}-${zone.zoneId}`}
+                style={styles.secondary}
+                disabled={busy}
+                onPress={() => encounterCall(s => s.encounterMove({
+                  campaignId: props.campaignId, branchId: props.branchId,
+                  encounterId: encounter.encounterId, actorId: actor.actorId, toZoneId: zone.zoneId,
+                  requestId: combatRequestId('move', `${actor.actorId}:${zone.zoneId}`, actor.actorId),
+                }))}>
+                <Text style={styles.secondaryText}>{actor.name} 移动→{zone.zoneId}（本轮标准移动）</Text>
+              </TouchableOpacity>
+            ))}
+            {availableCompanions.map(companion => (
+              <TouchableOpacity
+                key={`join-${companion.actorId}`}
+                style={styles.secondary}
+                disabled={busy}
+                onPress={() => encounterCall(s => s.encounterQueueJoin({
+                  campaignId: props.campaignId, branchId: props.branchId,
+                  encounterId: encounter.encounterId, actorId: companion.actorId,
+                  requestId: combatRequestId('join', companion.actorId, companion.actorId),
+                }))}>
+                <Text style={styles.secondaryText}>{companion.name} 下一轮加入</Text>
+              </TouchableOpacity>
+            ))}
             <TouchableOpacity
               style={styles.secondary}
               disabled={busy}
               onPress={() => encounterCall(s => s.encounterRetreat({
                 campaignId: props.campaignId, branchId: props.branchId, encounterId: encounter.encounterId,
+                requestId: combatRequestId('retreat'),
               }))}>
               <Text style={styles.secondaryText}>撤退</Text>
             </TouchableOpacity>
@@ -1234,6 +1566,7 @@ function PlayScreen(props: {
             onPress={() => encounterCall(s => s.beginEncounter({
               campaignId: props.campaignId, branchId: props.branchId,
               hostiles: [{ templateId: encounterTemplateId, count: 1 }],
+              requestId: combatRequestId('begin', encounterTemplateId),
             }))}>
             <Text style={styles.secondaryText}>进入遭遇</Text>
           </TouchableOpacity>

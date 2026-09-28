@@ -81,7 +81,7 @@ const MAPPER_SYSTEM = [
   'You are ShineWord WorldMapper. You map novel canon facts into a tabletop RPG world package and output exactly one JSON object, no prose.',
   'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"allowUntrained":boolean,"requirements":string[],"powerTier":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"constraints":[{"id":string,"name":string,"description":string,"enforcement":"block_action|block_effect|audit","pattern":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
-  '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"lootItemIds":string[],"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}]}',
   'Rules:',
@@ -90,6 +90,7 @@ const MAPPER_SYSTEM = [
   '- provenanceKind MUST be one of: explicit, inferred, rule_mapping, design_fill. Numeric hp/stamina/defense/threat values are rule_mapping (game rule values), never canon facts from the novel.',
   '- Every entry MUST cite evidenceFactIds using only fact ids from the provided fact list, plus a one-sentence rationale.',
   '- Every id must be a short stable english token (letters, digits, dash). attack skillId and weaponSkillId must reference a proposed skill id.',
+  '- lootItemIds may list only ids of items proposed in this same package; leave it empty when the evidence does not define loot.',
   '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
 ].join('\n');
 
@@ -219,6 +220,10 @@ function cleanProvenance(
 
 function skillEntryId(id: string): string {
   return `skill-${id}`;
+}
+
+function itemEntryId(id: string): string {
+  return id.startsWith('item-') ? id : `item-${id}`;
 }
 
 function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
@@ -458,6 +463,11 @@ function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate |
       environment: asFiniteNumber(threatRecord?.environment) ?? 0,
     },
   };
+  const lootItemIds = [...new Set(asStringArray(record.lootItemIds)
+    .map(slugId)
+    .filter((id): id is string => id !== null)
+    .map(itemEntryId))];
+  if (lootItemIds.length > 0) definition.lootItemIds = lootItemIds;
   return {
     entryId: `npc-${id}`,
     entry: makeEntry({
@@ -466,11 +476,13 @@ function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate |
       provenance,
       definition,
       visibility: 'gm',
+      dependencyIds: lootItemIds,
       fieldProvenance: {
         hp: ruleMappingField,
         stamina: ruleMappingField,
         defense: ruleMappingField,
         threat: ruleMappingField,
+        ...(lootItemIds.length > 0 ? { lootItemIds: ruleMappingField } : {}),
       },
     }),
     attackSkillIds,
@@ -833,7 +845,13 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     const attacks = (definition.attacks as Array<Record<string, unknown>>)
       .filter(attack => acceptedSkillIds.has(String(attack.skillId)));
     definition.attacks = attacks;
-    template.entry.dependencyIds = [...new Set(attacks.map(attack => String(attack.skillId)))];
+    const lootItemIds = Array.isArray(definition.lootItemIds)
+      ? definition.lootItemIds.filter((itemId): itemId is string => typeof itemId === 'string')
+      : [];
+    template.entry.dependencyIds = [...new Set([
+      ...attacks.map(attack => String(attack.skillId)),
+      ...lootItemIds,
+    ])];
     entries.push(template.entry);
   }
 

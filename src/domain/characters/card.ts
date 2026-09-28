@@ -7,6 +7,9 @@ import { FREE_ATTRIBUTE_POINTS, BASE_ATTRIBUTE_POINTS } from '../../application/
 export const INITIAL_SKILL_BUDGET = 3;
 export const PREPARED_ABILITY_SLOTS = 4;
 
+/** Persisted player instruction for a companion's deterministic combat AI. */
+export type CompanionDirective = 'follow' | 'support' | 'protect' | 'conserve' | 'retreat';
+
 export const SKILL_RANK_DIE: Readonly<Record<SkillRank, number>> = {
   untrained: 4,
   novice: 6,
@@ -26,6 +29,14 @@ export interface ActorCard {
   name: string;
   kind: 'canon' | 'original' | 'companion' | 'npc' | 'creature';
   controller: 'player' | 'companion' | 'gm';
+  /** Optional per-actor policy; only read for companion-controlled actors. */
+  companionDirective?: CompanionDirective;
+  /** Actor a follow/protect policy is anchored to; normally the protagonist. */
+  companionLeaderActorId?: string;
+  /** Template-authored morale values used by deterministic combat policy. */
+  combatBehavior?: { retreatThreshold: number; morale: 'low' | 'steady' | 'fierce' };
+  /** Template-declared attacks keep range policy available to deterministic AI. */
+  combatAttacks?: Array<{ skillId: string; range: 'touch' | 'near' | 'mid' | 'far' }>;
   /** Canon character entity in the world (canon kind). */
   entityId?: string;
   /** Actor template entry this instance came from (npc/creature). */
@@ -167,6 +178,11 @@ export function createTemplateCard(input: TemplateCardInput): ActorCard {
     kind: input.kind ?? (input.controller === 'gm' ? 'creature' : 'companion'),
     controller: input.controller,
     templateId: input.templateId,
+    combatBehavior: {
+      retreatThreshold: input.definition.behavior.retreatThreshold,
+      morale: input.definition.behavior.morale,
+    },
+    combatAttacks: input.definition.attacks.map(attack => ({ skillId: attack.skillId, range: attack.range })),
     attributes,
     skills: { ...input.definition.skills },
     abilities: [...input.definition.abilities],

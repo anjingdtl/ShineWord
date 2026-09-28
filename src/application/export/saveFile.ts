@@ -5,19 +5,27 @@ import {
   type Sha256HexProvider,
 } from '../../domain/turns/canonical';
 import type { SqliteDatabase } from '../ports/sqlite';
+import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
+import { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
 
-export const SAVE_SCHEMA_VERSION = 'shineword-save-3';
+export const SAVE_SCHEMA_VERSION = 'shineword-save-5';
 export const SAVE_FILE_EXTENSION = '.shineword-save.json';
+/** Previous full-save schema; it contains the current encounter but not its rewind history. */
+export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-4';
+/** Earlier full-save schema; it predates encounter snapshots. */
+export const OLDER_SAVE_SCHEMA_VERSION = 'shineword-save-3';
 /** Legacy schema that predates complete card/contract/roll round-trips. */
 export const LEGACY_SAVE_SCHEMA_VERSION = 'shineword-save-2';
 
 export interface SaveManifest {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION;
+  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
   worldRef: {
     worldId: string;
     sourceSha256: string;
+    /** Exact immutable package content locked by the campaign (portable across local world-id remapping). */
+    packageContentHash?: string;
     /** World packages are referenced by hash; worlds are not embedded. */
   };
   /**
@@ -65,9 +73,17 @@ export interface SavedRoll {
   createdAt: string;
 }
 
+export interface SavedSnapshot {
+  stateVersion: number;
+  snapshot: GameStateSnapshot;
+  createdAt: string;
+}
+
 export interface SaveFile {
   manifest: SaveManifest;
   state: GameStateSnapshot;
+  /** Full branch snapshot history, including battlefield state at every rewind point. */
+  snapshotHistory?: SavedSnapshot[];
   turns: SavedTurn[];
   skills: Array<{ actorId: string; skillId: string; rank: string; practicePoints: number; awardedKeys: string[] }>;
   relationships: Array<{ relId: string; fromActorId: string; toActorId: string; stance: string; closeness: number }>;
@@ -118,7 +134,7 @@ export function utf8ByteLength(text: string): number {
 }
 
 function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
-  return {
+  const payload: Record<string, CanonicalJson> = {
     state: save.state as unknown as CanonicalJson,
     turns: save.turns as unknown as CanonicalJson,
     skills: save.skills as unknown as CanonicalJson,
@@ -129,6 +145,10 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
     rewardLedger: save.rewardLedger as unknown as CanonicalJson,
     branchEvents: save.branchEvents as unknown as CanonicalJson,
   };
+  if (save.snapshotHistory !== undefined) {
+    payload.snapshotHistory = save.snapshotHistory as unknown as CanonicalJson;
+  }
+  return payload;
 }
 
 export interface ExportSaveInput {
@@ -159,11 +179,50 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     [campaign.world_id],
   );
   if (!world) throw new Error(`Campaign world is missing: ${campaign.world_id}.`);
-  const state = await db.queryOne<{ snapshot_json: string; state_version: number }>(
+  const stateHead = await db.queryOne<{ snapshot_json: string; state_version: number }>(
     'SELECT snapshot_json, state_version FROM snapshots WHERE branch_id = ? ORDER BY state_version DESC LIMIT 1',
     [input.branchId],
   );
-  if (!state) throw new Error(`Branch has no snapshot: ${input.branchId}.`);
+  if (!stateHead) throw new Error(`Branch has no snapshot: ${input.branchId}.`);
+  const state = await new SqliteTurnStore(db).getState(input.branchId);
+  if (!state) throw new Error(`Branch has no state: ${input.branchId}.`);
+  if (state.stateVersion !== stateHead.state_version) {
+    throw new Error(`Branch state version ${state.stateVersion} does not match its latest snapshot ${stateHead.state_version}.`);
+  }
+  const snapshotRows = await db.queryAll<{ state_version: number; snapshot_json: string; created_at: string }>(
+    'SELECT state_version, snapshot_json, created_at FROM snapshots WHERE branch_id = ? ORDER BY state_version',
+    [input.branchId],
+  );
+  const encounterRows = await db.queryOne<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM encounters WHERE branch_id = ?', [input.branchId]);
+  const firstEncounter = await db.queryOne<{ state_version: number | null }>(
+    `SELECT MIN(state_version) AS state_version FROM branch_events
+      WHERE branch_id = ? AND event_type = 'encounter_started'`, [input.branchId]);
+  const snapshotHistory: SavedSnapshot[] = snapshotRows.map(row => {
+    const snapshot = JSON.parse(row.snapshot_json) as GameStateSnapshot;
+    if (!Array.isArray(snapshot.encounters)) {
+      const isKnownPreEncounter = (encounterRows?.count ?? 0) === 0 ||
+        (firstEncounter?.state_version !== null && firstEncounter?.state_version !== undefined &&
+          row.state_version < firstEncounter.state_version);
+      if (!isKnownPreEncounter) {
+        throw new Error(`Snapshot at stateVersion ${row.state_version} is missing encounter history; refusing to export an incomplete combat save.`);
+      }
+      snapshot.encounters = [];
+    }
+    return { stateVersion: row.state_version, snapshot, createdAt: row.created_at };
+  });
+  if (snapshotHistory.length === 0 || snapshotHistory[snapshotHistory.length - 1]?.stateVersion !== state.stateVersion) {
+    throw new Error(`Branch snapshot history does not contain its current state: ${input.branchId}.`);
+  }
+  const lockedPackage = campaign.package_revision === null
+    ? null
+    : await db.queryOne<{ content_hash: string; status: string }>(
+        'SELECT content_hash, status FROM world_packages WHERE world_id = ? AND revision = ?',
+        [campaign.world_id, campaign.package_revision],
+      );
+  if (campaign.package_revision !== null && (!lockedPackage || lockedPackage.status !== 'published')) {
+    throw new Error(`Campaign package dependency ${campaign.world_id} r${campaign.package_revision} is missing or unpublished.`);
+  }
 
   const turnRows = await db.queryAll<{
     turn_id: string;
@@ -258,7 +317,8 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
   );
 
   const payload = {
-    state: JSON.parse(state.snapshot_json) as GameStateSnapshot,
+    state,
+    snapshotHistory,
     turns,
     skills: skills.map(skill => ({
       actorId: skill.actor_id,
@@ -310,13 +370,17 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     schemaVersion: SAVE_SCHEMA_VERSION,
     createdAt: input.createdAt,
     campaignId: input.campaignId,
-    worldRef: { worldId: campaign.world_id, sourceSha256: world.source_sha256 },
+    worldRef: {
+      worldId: campaign.world_id,
+      sourceSha256: world.source_sha256,
+      ...(lockedPackage ? { packageContentHash: lockedPackage.content_hash } : {}),
+    },
     packageRevision: campaign.package_revision ?? 0,
     rulesetId: campaign.ruleset_id,
     rulesetVersion: campaign.ruleset_version,
     goal: readCampaignGoal(campaign.opening_json),
     branchId: input.branchId,
-    stateVersion: state.state_version,
+    stateVersion: stateHead.state_version,
     anchorJson: campaign.anchor_json ? JSON.parse(campaign.anchor_json) : {},
     payloadSha256,
   };
@@ -365,7 +429,8 @@ export async function validateSaveJsonBytes(
     return { ok: false, errors: ['Save file is not valid JSON.'] };
   }
   const schemaVersion = parsed.manifest?.schemaVersion;
-  if (schemaVersion !== SAVE_SCHEMA_VERSION) {
+  if (schemaVersion !== SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
+      schemaVersion !== OLDER_SAVE_SCHEMA_VERSION) {
     if (schemaVersion === LEGACY_SAVE_SCHEMA_VERSION) {
       return {
         ok: false,
@@ -384,8 +449,19 @@ export async function validateSaveJsonBytes(
   if (!Number.isInteger(parsed.manifest?.packageRevision) || (parsed.manifest?.packageRevision ?? 0) < 1) {
     errors.push('Manifest requires a positive packageRevision dependency lock.');
   }
+  const packageContentHash = parsed.manifest?.worldRef?.packageContentHash;
+  if (packageContentHash !== undefined && (typeof packageContentHash !== 'string' || !/^[a-f0-9]{64}$/i.test(packageContentHash))) {
+    errors.push('Manifest worldRef.packageContentHash must be a SHA-256 hex digest when present.');
+  }
   if (!parsed.state?.branchId || typeof parsed.state.stateVersion !== 'number') {
     errors.push('Save state snapshot is malformed.');
+  }
+  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+      !Array.isArray(parsed.state?.encounters)) {
+    errors.push('Save is missing complete encounter and battlefield snapshots.');
+  }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
+    errors.push('Save is missing the full branch snapshot history required for rewind and combat recovery.');
   }
   if (!Array.isArray(parsed.turns)) errors.push('turns must be an array.');
   if (!Array.isArray(parsed.skills)) errors.push('skills must be an array.');
@@ -399,6 +475,19 @@ export async function validateSaveJsonBytes(
   }
   if (!Array.isArray(parsed.rewardLedger)) errors.push('rewardLedger must be an array.');
   if (!Array.isArray(parsed.branchEvents)) errors.push('branchEvents must be an array.');
+  if (schemaVersion === OLDER_SAVE_SCHEMA_VERSION && !Array.isArray(parsed.state?.encounters)) {
+    const containsTemporaryActor = Array.isArray(parsed.cards) && parsed.cards.some(card => {
+      try {
+        const value = JSON.parse(card.cardJson) as { controller?: string };
+        return value.controller === 'gm';
+      } catch {
+        return false;
+      }
+    });
+    if (containsTemporaryActor) {
+      errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a v5 save.');
+    }
+  }
   if (errors.length > 0) {
     try {
       assertNoSecrets(parsed, 'save');
@@ -413,6 +502,35 @@ export async function validateSaveJsonBytes(
   }
   if (parsed.state.stateVersion !== parsed.manifest.stateVersion) {
     errors.push('Snapshot stateVersion does not match the manifest.');
+  }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.snapshotHistory)) {
+    let previousVersion = -1;
+    for (const [index, item] of parsed.snapshotHistory.entries()) {
+      if (!Number.isInteger(item.stateVersion) || item.stateVersion < 0 || item.stateVersion <= previousVersion) {
+        errors.push(`Snapshot history entry ${index} has an invalid or out-of-order stateVersion.`);
+        continue;
+      }
+      previousVersion = item.stateVersion;
+      if (typeof item.createdAt !== 'string' || !item.snapshot || typeof item.snapshot !== 'object') {
+        errors.push(`Snapshot history entry ${index} is malformed.`);
+        continue;
+      }
+      if (item.snapshot.branchId !== parsed.manifest.branchId || item.snapshot.stateVersion !== item.stateVersion) {
+        errors.push(`Snapshot history entry ${index} does not match the source branch and version.`);
+      }
+      if (!Array.isArray(item.snapshot.encounters)) {
+        errors.push(`Snapshot history entry ${index} is missing complete encounter and battlefield state.`);
+      }
+      try {
+        assertNoSecrets(item.snapshot, `save.snapshotHistory[${index}]`);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const head = parsed.snapshotHistory.find(item => item.stateVersion === parsed.manifest.stateVersion);
+    if (!head) {
+      errors.push('Snapshot history does not include the manifest stateVersion.');
+    }
   }
   const committed = parsed.turns
     .map(turn => turn.committedStateVersion)
@@ -483,34 +601,105 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
   const { db, save } = input;
   const { manifest } = save;
 
+  const originalWorldId = manifest.worldRef.worldId;
+  const originalRevision = manifest.packageRevision;
+  const expectedSourceHash = manifest.worldRef.sourceSha256;
+  const expectedPackageHash = manifest.worldRef.packageContentHash;
   const world = await db.queryOne<{ source_sha256: string }>(
     'SELECT source_sha256 FROM worlds WHERE world_id = ?',
-    [manifest.worldRef.worldId],
+    [originalWorldId],
   );
-  if (!world) {
-    throw new Error(
-      `Missing dependency: world ${manifest.worldRef.worldId} is not present on this device. ` +
-        'Import the world package first; the save cannot be restored without it.',
+  let resolvedWorldId = originalWorldId;
+  let resolvedRevision = originalRevision;
+  let pkg = world?.source_sha256 === expectedSourceHash
+    ? await db.queryOne<{ status: string; content_hash: string }>(
+      'SELECT status, content_hash FROM world_packages WHERE world_id = ? AND revision = ?',
+      [originalWorldId, originalRevision],
+    )
+    : null;
+
+  const exactPackageMatches = world?.source_sha256 === expectedSourceHash && pkg?.status === 'published' &&
+    (expectedPackageHash === undefined || pkg.content_hash === expectedPackageHash);
+  if (!exactPackageMatches) {
+    const portableRows = await db.queryAll<{
+      world_id: string;
+      revision: number;
+      status: string;
+      content_hash: string;
+      validation_json: string;
+    }>(
+      `SELECT w.world_id, p.revision, p.status, p.content_hash, p.validation_json
+         FROM worlds w JOIN world_packages p ON p.world_id = w.world_id
+        WHERE w.source_sha256 = ? AND p.revision = ? AND p.status = 'published'
+        ORDER BY w.world_id`,
+      [expectedSourceHash, originalRevision],
     );
+    const portableCandidates = portableRows.flatMap(row => {
+      try {
+        const validation = JSON.parse(row.validation_json) as {
+          importedFromWorldId?: unknown;
+          importedFromRevision?: unknown;
+          importedFromContentHash?: unknown;
+        };
+        if (validation.importedFromRevision !== originalRevision) return [];
+        if (expectedPackageHash !== undefined) {
+          // A save may be exported from a world that was itself imported from
+          // a portable package. Its local world id then differs from the
+          // package's original source id, while the immutable content hash is
+          // still the exact dependency lock across every import hop.
+          if (validation.importedFromContentHash !== expectedPackageHash || row.content_hash !== expectedPackageHash) return [];
+        } else if (validation.importedFromWorldId !== originalWorldId) {
+          // Older saves without a package content lock can only use a direct
+          // lineage match; never guess between same-source revisions.
+          return [];
+        }
+        return [{ row, sourceContentHash: validation.importedFromContentHash }];
+      } catch {
+        return [];
+      }
+    });
+    const lineageHashes = new Set(portableCandidates.map(candidate =>
+      typeof candidate.sourceContentHash === 'string' ? candidate.sourceContentHash : candidate.row.content_hash));
+    const portableMatches = expectedPackageHash === undefined && lineageHashes.size > 1
+      ? []
+      : portableCandidates.map(candidate => candidate.row);
+    const portableMatch = portableMatches[0];
+    if (portableMatch) {
+      resolvedWorldId = portableMatch.world_id;
+      resolvedRevision = portableMatch.revision;
+      pkg = portableMatch;
+    }
   }
-  if (world.source_sha256 !== manifest.worldRef.sourceSha256) {
-    throw new Error(
-      `World ${manifest.worldRef.worldId} exists but its source hash differs from the save manifest; refusing to mix versions.`,
-    );
-  }
-  const pkg = await db.queryOne<{ status: string; content_hash: string }>(
-    'SELECT status, content_hash FROM world_packages WHERE world_id = ? AND revision = ?',
-    [manifest.worldRef.worldId, manifest.packageRevision],
-  );
+
   if (!pkg) {
+    if (!world) {
+      throw new Error(
+        `Missing dependency: world ${originalWorldId} is not present on this device. ` +
+          'Import the matching world package first; the save cannot be restored without it.',
+      );
+    }
+    if (world.source_sha256 !== expectedSourceHash) {
+      throw new Error(
+        `World ${originalWorldId} exists but its source hash differs from the save manifest; refusing to mix versions.`,
+      );
+    }
     throw new Error(
-      `Missing dependency: world package ${manifest.worldRef.worldId} r${manifest.packageRevision} ` +
-        '(the revision this campaign locked) is not present on this device. Import the world package first.',
+      `Missing dependency: world package ${originalWorldId} r${originalRevision} is not present on this device. Import the matching world package first.`,
     );
   }
   if (pkg.status !== 'published') {
     throw new Error(
-      `Locked world package r${manifest.packageRevision} is ${pkg.status}, not published; refusing to continue on it.`,
+      `Locked world package r${originalRevision} is ${pkg.status}, not published; refusing to continue on it.`,
+    );
+  }
+  if (expectedPackageHash !== undefined && pkg.content_hash !== expectedPackageHash) {
+    throw new Error(
+      `World package ${originalWorldId} r${originalRevision} has a different content hash from the save; refusing to mix versions.`,
+    );
+  }
+  if (expectedPackageHash !== undefined && pkg.content_hash !== expectedPackageHash) {
+    throw new Error(
+      `World package ${originalWorldId} r${originalRevision} has a different content hash from the save; refusing to mix versions.`,
     );
   }
 
@@ -527,7 +716,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
        VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, 'active')`,
       [
         input.newCampaignId,
-        manifest.worldRef.worldId,
+        resolvedWorldId,
         `${manifest.campaignId} (imported)`,
         manifest.rulesetId,
         manifest.rulesetVersion,
@@ -538,7 +727,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
           payloadSha256: manifest.payloadSha256,
         }),
         input.createdAt,
-        manifest.packageRevision,
+        resolvedRevision,
         JSON.stringify(manifest.anchorJson ?? {}),
       ],
     );
@@ -548,7 +737,11 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       [input.newBranchId, input.newCampaignId, manifest.stateVersion, input.createdAt],
     );
 
-    const state = save.state;
+    const state: GameStateSnapshot = {
+      ...save.state,
+      branchId: input.newBranchId,
+      encounters: save.state.encounters ?? [],
+    };
     for (const actor of Object.values(state.actors)) {
       await tx.execute(
         `INSERT INTO actor_states (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)
@@ -562,11 +755,19 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
         [input.newBranchId, itemId, owner, state.stateVersion],
       );
     }
-    await tx.execute(
-      `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
-       VALUES (?, ?, ?, NULL, ?)`,
-      [input.newBranchId, state.stateVersion, JSON.stringify(state), input.createdAt],
-    );
+    const history = save.snapshotHistory?.length
+      ? save.snapshotHistory
+      : [{ stateVersion: state.stateVersion, snapshot: state, createdAt: input.createdAt }];
+    for (const item of history) {
+      const restoredSnapshot: GameStateSnapshot = item.stateVersion === state.stateVersion
+        ? state
+        : { ...item.snapshot, branchId: input.newBranchId };
+      await tx.execute(
+        `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
+         VALUES (?, ?, ?, NULL, ?)`,
+        [input.newBranchId, item.stateVersion, JSON.stringify(restoredSnapshot), item.createdAt || input.createdAt],
+      );
+    }
 
     for (const skill of save.skills) {
       await tx.execute(
@@ -603,6 +804,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
         [input.newBranchId, member.actorId, member.controller, member.role, member.joinedAt],
       );
     }
+    await replaceEncounterSnapshots(tx, input.newBranchId, state.encounters ?? []);
     for (const row of save.rewardLedger) {
       await tx.execute(
         `INSERT OR IGNORE INTO reward_ledger (branch_id, encounter_id, actor_id, skill_id, reward_kind, granted_at)

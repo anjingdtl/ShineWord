@@ -6,7 +6,9 @@ import type {
 } from '../../application/ports/turnStore';
 import type { TurnRollJournal, StageRollTurnInput, StagedTurnRecord } from '../../application/ports/turnRollJournal';
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
-import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
+import { cloneGameState, type EncounterSnapshotEntry, type GameStateSnapshot } from '../../domain/state/types';
+import type { EncounterState } from '../../domain/combat/encounter';
+import { replaceEncounterSnapshots } from './encounterPersistence';
 import type { EffectOperation } from '../../domain/turns/types';
 import type { RollGrade, RollRecord, SkillRank } from '../../domain/rules/types';
 
@@ -179,6 +181,8 @@ function rollFromRow(row: RollRow): RollRecord {
 export class SqliteTurnStore implements TurnStore, TurnRollJournal {
   /** Null until probed: legacy DBs may predate the game projection tables. */
   private projectionTablesAvailable: boolean | null = null;
+  private encounterTablesAvailable: boolean | null = null;
+  private knowledgeTablesAvailable: boolean | null = null;
 
   constructor(private readonly db: SqliteDatabase) {}
 
@@ -190,6 +194,26 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       this.projectionTablesAvailable = (row?.n ?? 0) === 4;
     }
     return this.projectionTablesAvailable;
+  }
+
+  private async hasEncounterTables(): Promise<boolean> {
+    if (this.encounterTablesAvailable === null) {
+      const row = await this.db.queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('encounters', 'encounter_actors')`,
+      );
+      this.encounterTablesAvailable = (row?.n ?? 0) === 2;
+    }
+    return this.encounterTablesAvailable;
+  }
+
+  private async hasKnowledgeTables(): Promise<boolean> {
+    if (this.knowledgeTablesAvailable === null) {
+      const row = await this.db.queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('branch_knowledge', 'quest_states', 'quest_reward_ledger')`,
+      );
+      this.knowledgeTablesAvailable = (row?.n ?? 0) === 3;
+    }
+    return this.knowledgeTablesAvailable;
   }
 
   async getState(branchId: string): Promise<GameStateSnapshot | null> {
@@ -489,6 +513,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // transaction so the snapshot stamped below is consistent with the card
     // table (P2 acceptance A02/A03).
     if (await this.hasProjectionTables()) {
+      for (const actorId of settlement.cardDeletes ?? []) {
+        await tx.execute('DELETE FROM actor_cards WHERE branch_id = ? AND actor_id = ?', [branchId, actorId]);
+      }
       for (const upsert of settlement.cardUpserts ?? []) {
         const committedAt = new Date().toISOString();
         await tx.execute(
@@ -540,13 +567,15 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       'SELECT snapshot_json FROM snapshots WHERE branch_id = ? AND state_version = ?',
       [branchId, branch.state_version],
     );
+    const snapshotPayload = snapshot
+      ? parseJson<GameStateSnapshot>(requireString(snapshot, 'snapshot_json'), 'snapshots.snapshot_json')
+      : null;
     let clockSeconds = 0;
-    if (snapshot) {
-      const snap = parseJson<SqliteRow>(requireString(snapshot, 'snapshot_json'), 'snapshots.snapshot_json');
-      if (typeof snap.clockSeconds === 'number') {
-        clockSeconds = snap.clockSeconds;
+    if (snapshotPayload) {
+      if (typeof snapshotPayload.clockSeconds === 'number') {
+        clockSeconds = snapshotPayload.clockSeconds;
       } else {
-        clockSeconds = requireNumber(snap, 'clockMinutes') * 60;
+        clockSeconds = requireNumber(snapshotPayload as unknown as SqliteRow, 'clockMinutes') * 60;
       }
     }
 
@@ -558,10 +587,19 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       actors: {},
       itemOwners: {},
     };
+    if (snapshotPayload?.cards) state.cards = snapshotPayload.cards;
+    if (snapshotPayload?.party) state.party = snapshotPayload.party;
+    if (snapshotPayload?.encounters) state.encounters = snapshotPayload.encounters;
+    if (snapshotPayload?.discoveries) state.discoveries = snapshotPayload.discoveries;
+    if (snapshotPayload?.questProgress) state.questProgress = snapshotPayload.questProgress;
+    if (snapshotPayload?.questRewards) state.questRewards = snapshotPayload.questRewards;
     for (const row of actors) {
+      const abilityCooldowns = snapshotPayload?.actors?.[row.actor_id]?.abilityCooldowns;
+      const zoneId = snapshotPayload?.actors?.[row.actor_id]?.zoneId;
       state.actors[row.actor_id] = {
         actorId: row.actor_id,
         locationId: row.location_id,
+        ...(zoneId ? { zoneId } : {}),
         resources: parseJson<Record<string, number>>(
           row.resources_json,
           'actor_states.resources_json',
@@ -570,9 +608,34 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           row.conditions_json,
           'actor_states.conditions_json',
         ),
+        ...(abilityCooldowns
+          ? { abilityCooldowns: { ...abilityCooldowns } }
+          : {}),
       };
     }
     for (const row of inventory) state.itemOwners[row.item_id] = row.owner_actor_id;
+
+    // Older P2 snapshots predate authoritative encounter history. Hydrate the
+    // current head from its live projection for recovery; historical forks
+    // still refuse incomplete encounter snapshots in forkBranch.
+    if (!state.encounters && await this.hasEncounterTables()) {
+      state.encounters = await this.readEncounterSnapshots(db, branchId);
+    }
+    const projectionsAvailable = await this.hasProjectionTables();
+    if (projectionsAvailable && !state.cards) {
+      const cardRows = await db.queryAll<{ actor_id: string; card_json: string }>(
+        'SELECT actor_id, card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
+        [branchId],
+      );
+      state.cards = cardRows.map(row => ({ actorId: row.actor_id, card: parseJson<unknown>(row.card_json, 'actor_cards.card_json') }));
+    }
+    if (projectionsAvailable && !state.party) {
+      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
+        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+        [branchId],
+      );
+      state.party = partyRows.map(row => ({ actorId: row.actor_id, controller: row.controller, role: row.role, joinedAt: row.joined_at }));
+    }
 
     // Hydrate the current skill and relationship projections so consumers
     // (card-driven roll specs, historical forks) see one consistent state.
@@ -608,6 +671,69 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       }
     }
     return cloneGameState(state);
+  }
+
+  private async readEncounterSnapshots(
+    db: Pick<SqliteDatabase, 'queryOne' | 'queryAll'> | Pick<SqliteTransaction, 'queryOne' | 'queryAll'>,
+    branchId: string,
+  ): Promise<EncounterSnapshotEntry[]> {
+    const rows = await db.queryAll<SqliteRow>(
+      `SELECT encounter_id, status, scene_id, distance_bands_json, initiative_json,
+              turn_cursor, round, created_at, resolved_at
+         FROM encounters WHERE branch_id = ? ORDER BY created_at, encounter_id`,
+      [branchId],
+    );
+    const actors = await db.queryAll<SqliteRow>(
+      `SELECT encounter_id, actor_id, side, hp, max_hp, stamina, conditions_json,
+              distance_band, acted_this_round, moved_this_round
+         FROM encounter_actors WHERE branch_id = ? ORDER BY encounter_id, actor_id`,
+      [branchId],
+    );
+    const actorsByEncounter = new Map<string, EncounterState['actors']>();
+    for (const row of actors) {
+      const encounterId = requireString(row, 'encounter_id');
+      const items = actorsByEncounter.get(encounterId) ?? {};
+      items[requireString(row, 'actor_id')] = {
+        actorId: requireString(row, 'actor_id'),
+        side: requireString(row, 'side') as EncounterState['actors'][string]['side'],
+        hp: requireNumber(row, 'hp'),
+        maxHp: requireNumber(row, 'max_hp'),
+        stamina: requireNumber(row, 'stamina'),
+        conditions: parseJson<string[]>(requireString(row, 'conditions_json'), 'encounter_actors.conditions_json'),
+        distanceBand: requireString(row, 'distance_band') as EncounterState['actors'][string]['distanceBand'],
+        actedThisRound: requireNumber(row, 'acted_this_round') === 1,
+        movedThisRound: row.moved_this_round === undefined ? false : requireNumber(row, 'moved_this_round') === 1,
+      };
+      actorsByEncounter.set(encounterId, items);
+    }
+    return rows.map(row => {
+      const envelope = parseJson<Record<string, unknown>>(requireString(row, 'distance_bands_json'), 'encounters.distance_bands_json');
+      const scene = (envelope.scene && typeof envelope.scene === 'object'
+        ? envelope.scene
+        : { sceneId: requireString(row, 'scene_id'), coverSpotIds: [], exitIds: [] }) as EncounterState['scene'];
+      const zones = Array.isArray(envelope.sceneZones) ? envelope.sceneZones as Array<{ zoneId: string; exits: string[] }> : [];
+      const exits = Array.isArray(envelope.exits) ? envelope.exits as string[] : [...scene.exitIds];
+      const encounterState: EncounterState = {
+        encounterId: requireString(row, 'encounter_id'),
+        status: requireString(row, 'status') as EncounterState['status'],
+        scene,
+        actors: actorsByEncounter.get(requireString(row, 'encounter_id')) ?? {},
+        initiative: parseJson<string[]>(requireString(row, 'initiative_json'), 'encounters.initiative_json'),
+        pendingActorIds: Array.isArray(envelope.pendingActorIds)
+          ? envelope.pendingActorIds.filter((id): id is string => typeof id === 'string')
+          : [],
+        turnCursor: requireNumber(row, 'turn_cursor'),
+        round: requireNumber(row, 'round'),
+      };
+      return {
+        state: encounterState,
+        zones,
+        zoneMap: envelope.zones && typeof envelope.zones === 'object' ? envelope.zones as Record<string, string> : {},
+        exits,
+        createdAt: requireString(row, 'created_at'),
+        resolvedAt: typeof row.resolved_at === 'string' ? row.resolved_at : null,
+      };
+    });
   }
 
   private async readCommittedTurn(
@@ -686,6 +812,43 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         'INSERT INTO inventory (branch_id, item_id, owner_actor_id, state_version) VALUES (?, ?, ?, ?)',
         [state.branchId, itemId, ownerActorId, state.stateVersion],
       );
+    }
+
+    if (state.encounters && await this.hasEncounterTables()) {
+      await replaceEncounterSnapshots(tx, state.branchId, state.encounters);
+    }
+
+    if (await this.hasKnowledgeTables()) {
+      await tx.execute('DELETE FROM branch_knowledge WHERE branch_id = ?', [state.branchId]);
+      for (const discovery of state.discoveries ?? []) {
+        await tx.execute(
+          `INSERT INTO branch_knowledge
+            (branch_id, actor_id, entry_id, known_via, source_turn_id, known_state_version)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [state.branchId, discovery.actorId, discovery.entryId, discovery.knownVia,
+            discovery.sourceTurnId, discovery.knownAtStateVersion],
+        );
+      }
+      await tx.execute('DELETE FROM quest_states WHERE branch_id = ?', [state.branchId]);
+      for (const quest of state.questProgress ?? []) {
+        await tx.execute(
+          `INSERT INTO quest_states
+            (branch_id, quest_id, status, counters_json, updated_state_version, completed_state_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [state.branchId, quest.questId, quest.status, JSON.stringify(quest.counters),
+            quest.updatedStateVersion, quest.completedStateVersion,
+            committedAt, committedAt],
+        );
+      }
+      await tx.execute('DELETE FROM quest_reward_ledger WHERE branch_id = ?', [state.branchId]);
+      for (const reward of state.questRewards ?? []) {
+        await tx.execute(
+          `INSERT INTO quest_reward_ledger
+            (branch_id, quest_id, reward_id, actor_id, granted_state_version)
+           VALUES (?, ?, ?, ?, ?)`,
+          [state.branchId, reward.questId, reward.rewardId, reward.actorId, reward.grantedStateVersion],
+        );
+      }
     }
 
     // Complete snapshot: stamp the authoritative skill, relationship, card and
@@ -851,6 +1014,23 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           turn.stateVersion,
           effect.op,
           JSON.stringify(effect),
+          turn.committedAt,
+        ],
+      );
+    }
+    for (const event of input.events ?? []) {
+      eventSeq += 1;
+      await tx.execute(
+        `INSERT INTO branch_events
+          (branch_id, event_seq, turn_id, state_version, event_type, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          turn.branchId,
+          eventSeq,
+          turn.turnId,
+          turn.stateVersion,
+          event.eventType,
+          JSON.stringify(event.payload),
           turn.committedAt,
         ],
       );

@@ -116,5 +116,9 @@ export function applyEffects(
     }
   }
 
+  // Keep the legacy minute projection in the same snapshot as the
+  // authoritative second-based clock. Action time and explicit clock effects
+  // are committed together, so callers never restore a stale header value.
+  next.clockMinutes = Math.floor(next.clockSeconds / 60);
   return next;
 }

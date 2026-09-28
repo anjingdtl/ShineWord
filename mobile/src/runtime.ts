@@ -5,6 +5,7 @@ import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompat
 import type { ApiProfile } from '../../src/application/llm/types';
 import { CampaignSession, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
+import type { BookSection, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
 import { FetchHttpTransport } from './fetchTransport';
 import { getDatabaseRuntime } from './database';
 import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
@@ -90,6 +91,9 @@ export interface CampaignPlayState {
   playerCard: ActorCard | null;
   playerResources: Record<string, number>;
   cards: ActorCard[];
+  packageRevision: number;
+  playerActorId: string | null;
+  discoveredEntryIds: string[];
 }
 
 export async function getCampaignState(
@@ -104,6 +108,7 @@ export async function getCampaignState(
     branchId: summary.branchId,
     title: summary.title,
     worldId: summary.worldId,
+    packageRevision: summary.packageRevision,
     goal: summary.goal,
     stateVersion: summary.state.stateVersion,
     locationId: Object.values(summary.state.actors)[0]?.locationId ?? 'unknown',
@@ -113,6 +118,10 @@ export async function getCampaignState(
       ? summary.state.actors[playerCard.actorId]?.resources ?? {}
       : {},
     cards: summary.cards,
+    playerActorId: playerCard?.actorId ?? null,
+    discoveredEntryIds: summary.state.discoveries
+      ?.filter(discovery => discovery.actorId === playerCard?.actorId)
+      .map(discovery => discovery.entryId) ?? [],
   };
 }
 
@@ -155,6 +164,9 @@ import {
 } from '../../src/application/export/saveFile';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 import type { EncounterView } from '../../src/application/campaign/encounterService';
+import { validatePackage } from '../../src/application/worldPackage/validate';
+import { publishWorldPackage } from '../../src/application/worldPackage/publish';
+import { encodeWorldPackageArchive, importPortableWorldPackage } from '../../src/application/export/worldPackageArchive';
 
 export { SAVE_SCHEMA_VERSION };
 export type { SaveFile, EncounterView };
@@ -218,6 +230,104 @@ export async function resolveReviewIssue(worldId: string, issueId: string, resol
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
   await worldStore.resolveReviewIssue(worldId, issueId, resolution);
+}
+
+export async function loadWorldPackageDraft(worldId: string): Promise<{
+  baseRevision: number;
+  draftJson: string;
+  updatedAt: string;
+} | null> {
+  const runtime = await getDatabaseRuntime();
+  return new SqliteWorldStore(runtime.db).getWorldPackageDraft(worldId);
+}
+
+export async function saveWorldPackageDraft(input: {
+  worldId: string;
+  baseRevision: number;
+  entries: ContentEntry[];
+  sections: BookSection[];
+}): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  await new SqliteWorldStore(runtime.db).saveWorldPackageDraft({
+    ...input,
+    draftJson: JSON.stringify({ entries: input.entries, sections: input.sections }),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export function validateWorldPackageDraft(input: {
+  worldId: string;
+  revision: number;
+  entries: ContentEntry[];
+  sections: BookSection[];
+}): ReturnType<typeof validatePackage> {
+  return validatePackage({ worldId: input.worldId, revision: input.revision }, input.entries, input.sections);
+}
+
+export async function publishWorldPackageDraft(input: {
+  worldId: string;
+  baseRevision: number;
+  entries: ContentEntry[];
+  sections: BookSection[];
+}): Promise<{ manifest: WorldPackageManifest; warnings: string[] }> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  const world = await worldStore.getWorld(input.worldId);
+  if (!world) throw new Error(`Unknown world: ${input.worldId}.`);
+  const currentRevision = await worldStore.getPublishedPackageRevision(input.worldId);
+  if (currentRevision !== input.baseRevision) throw new Error('Published world revision changed while this draft was open; reload before publishing.');
+  const base = await worldStore.getWorldPackage(input.worldId, input.baseRevision);
+  if (!base) throw new Error(`Base package r${input.baseRevision} is missing.`);
+  const result = await publishWorldPackage({
+    worldStore,
+    sha256Hex: nativeSha256.sha256Hex,
+    worldId: input.worldId,
+    sourceSha256: world.sourceSha256,
+    mappingVersion: base.manifest.mappingVersion,
+    entries: input.entries,
+    sections: input.sections,
+    createdAt: new Date().toISOString(),
+  });
+  await worldStore.clearWorldPackageDraft(input.worldId, input.baseRevision);
+  return { manifest: result.manifest, warnings: result.report.warnings };
+}
+
+export async function exportPortableWorldPackage(worldId: string): Promise<{
+  bytes: Uint8Array;
+  title: string;
+  revision: number;
+}> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  const world = await worldStore.getWorld(worldId);
+  if (!world) throw new Error(`Unknown world: ${worldId}.`);
+  const revision = await worldStore.getPublishedPackageRevision(worldId);
+  if (revision === null) throw new Error('This world has no published package to export.');
+  const pkg = await worldStore.getWorldPackage(worldId, revision);
+  if (!pkg) throw new Error(`Published package r${revision} is missing.`);
+  const bytes = await encodeWorldPackageArchive({ title: world.title, ...pkg }, nativeSha256.sha256Hex);
+  return { bytes, title: world.title, revision };
+}
+
+export async function importPortableWorldPackageFile(archive: Uint8Array): Promise<{
+  worldId: string;
+  title: string;
+  revision: number;
+}> {
+  const runtime = await getDatabaseRuntime();
+  const worldStore = new SqliteWorldStore(runtime.db);
+  const timestamp = Date.now().toString(36);
+  let suffix = 0;
+  let worldId = `world-import-${timestamp}`;
+  while (await worldStore.getWorld(worldId)) worldId = `world-import-${timestamp}-${++suffix}`;
+  const imported = await importPortableWorldPackage({
+    worldStore,
+    sha256Hex: nativeSha256.sha256Hex,
+    archive,
+    newWorldId: worldId,
+    createdAt: new Date().toISOString(),
+  });
+  return { worldId: imported.worldId, title: imported.title, revision: imported.revision };
 }
 
 /** Companion cards of a branch (for the play screen party strip). */

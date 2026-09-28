@@ -1,6 +1,6 @@
 import type { AttributeName, SkillRank } from '../../domain/rules/types';
 import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
-import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
+import type { ActorCard, CompanionDirective, SkillCatalog } from '../../domain/characters/card';
 import type { ActorTemplateDefinition, ContentEntry, SkillDefinition } from '../../domain/content/types';
 import type { SqliteDatabase } from '../ports/sqlite';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
@@ -19,6 +19,7 @@ export interface OpeningAnchor {
 export interface CompanionSpec {
   actorId: string;
   templateId: string;
+  directive?: CompanionDirective;
 }
 
 export interface CreateCampaignInput {
@@ -75,6 +76,18 @@ function cardSkillRows(card: ActorCard): Array<{ actorId: string; skillId: strin
  * instead of falling back to a demo world.
  */
 export async function createCampaign(input: CreateCampaignInput): Promise<CreatedCampaign> {
+  const companions = input.companions ?? [];
+  if (companions.length > 2) throw new Error('每支队伍最多可招募两名同伴。');
+  const companionActorIds = new Set<string>();
+  for (const companion of companions) {
+    if (companion.directive && !['follow', 'support', 'protect', 'conserve', 'retreat'].includes(companion.directive)) {
+      throw new Error(`未知的同伴指令：${String(companion.directive)}。`);
+    }
+    if (!companion.actorId.trim() || companion.actorId === input.protagonist.actorId || companionActorIds.has(companion.actorId)) {
+      throw new Error(`同伴角色 ID 无效或重复：${companion.actorId}。`);
+    }
+    companionActorIds.add(companion.actorId);
+  }
   const pkg = await input.worldStore.getWorldPackage(input.worldId, input.packageRevision);
   if (!pkg) throw new Error(`World package not found: ${input.worldId} r${input.packageRevision}.`);
   if (pkg.manifest.status !== 'published') {
@@ -158,12 +171,12 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   cards.push(protagonistCard);
 
   // Companion cards from actor templates.
-  for (const companion of input.companions ?? []) {
+  for (const companion of companions) {
     const templateEntry = templateEntries.get(companion.templateId);
     if (!templateEntry) {
       throw new Error(`Unknown companion template: ${companion.templateId}.`);
     }
-    cards.push(createTemplateCard({
+    const card = createTemplateCard({
       actorId: companion.actorId,
       worldId: input.worldId,
       worldPackageRevision: input.packageRevision,
@@ -171,7 +184,10 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       definition: templateEntry.definition as ActorTemplateDefinition,
       controller: 'companion',
       kind: 'companion',
-    }));
+    });
+    card.companionLeaderActorId = input.protagonist.actorId;
+    if (companion.directive) card.companionDirective = companion.directive;
+    cards.push(card);
   }
 
   const snapshot: GameStateSnapshot = {
@@ -181,10 +197,30 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     clockMinutes: 0,
     actors: {},
     itemOwners: {},
+    encounters: [],
+    discoveries: [],
+    questProgress: pkg.entries
+      .filter(entry => entry.kind === 'quest')
+      .map(entry => ({
+        questId: entry.entryId,
+        status: 'available' as const,
+        counters: {},
+        updatedStateVersion: 0,
+        completedStateVersion: null,
+      })),
+    questRewards: [],
     // Complete v0 snapshot: cards and party membership belong to the branch
     // timeline, so a historical fork restores them from snapshots instead of
     // copying the source branch's current rows (P2 acceptance A03).
     cards: cards.map(card => ({ actorId: card.actorId, card })),
+    skills: cards.flatMap(card => Object.entries(card.skills).map(([skillId, rank]) => ({
+      actorId: card.actorId,
+      skillId,
+      rank,
+      practicePoints: 0,
+      awardedKeys: [],
+    }))),
+    relationships: [],
     party: cards.map(card => ({
       actorId: card.actorId,
       controller: card.controller,
@@ -193,9 +229,15 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     })),
   };
   for (const card of cards) {
+    const sceneEntry = pkg.entries.find(entry => entry.kind === 'scene' &&
+      (entry.definition as { locationId?: string }).locationId === input.anchor.locationId);
+    const initialZoneId = sceneEntry
+      ? ((sceneEntry.definition as { zones?: Array<{ zoneId: string }> }).zones?.[0]?.zoneId)
+      : undefined;
     snapshot.actors[card.actorId] = {
       actorId: card.actorId,
       locationId: input.anchor.locationId,
+      ...(initialZoneId ? { zoneId: initialZoneId } : {}),
       resources: { ...card.resourceMax },
       conditions: [],
     };
@@ -254,6 +296,14 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
           [branchId, skill.actorId, skill.skillId, skill.rank],
         );
       }
+    }
+    for (const quest of snapshot.questProgress ?? []) {
+      await tx.execute(
+        `INSERT INTO quest_states
+          (branch_id, quest_id, status, counters_json, updated_state_version, completed_state_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 0, NULL, ?, ?)`,
+        [branchId, quest.questId, quest.status, JSON.stringify(quest.counters), input.createdAt, input.createdAt],
+      );
     }
     await tx.execute(
       `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)

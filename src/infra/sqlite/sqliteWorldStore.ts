@@ -929,6 +929,59 @@ export class SqliteWorldStore implements WorldStore {
     });
   }
 
+  /** Imports a remapped published package and its world row in one transaction. */
+  async saveImportedWorldPackage(input: {
+    world: WorldRecord;
+    manifest: WorldPackageManifest;
+    entries: readonly ContentEntry[];
+    sections: readonly BookSection[];
+    validationJson: string;
+    createdAt: string;
+  }): Promise<void> {
+    await this.db.transaction(async tx => {
+      const existing = await tx.queryOne<SqliteRow>('SELECT world_id FROM worlds WHERE world_id = ?', [input.world.worldId]);
+      if (existing) throw new Error(`World id already exists: ${input.world.worldId}.`);
+      await tx.execute(
+        `INSERT INTO worlds
+          (world_id, title, source_sha256, legacy_source_sha256, source_bytes, normalize_version,
+           chapter_split_version, build_status, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+        [input.world.worldId, input.world.title, input.world.sourceSha256, input.world.sourceBytes,
+          input.world.normalizeVersion, input.world.chapterSplitVersion, input.world.buildStatus,
+          input.world.createdAt, input.world.updatedAt],
+      );
+      await tx.execute(
+        `INSERT INTO world_packages
+          (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
+           mapping_version, status, content_hash, validation_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [input.manifest.worldId, input.manifest.revision, input.manifest.schemaVersion, input.manifest.sourceSha256,
+          input.manifest.ruleset.id, input.manifest.ruleset.version, input.manifest.mappingVersion,
+          input.manifest.status, input.manifest.contentHash, input.validationJson, input.createdAt],
+      );
+      for (const entry of input.entries) {
+        await tx.execute(
+          `INSERT INTO package_entries
+            (world_id, revision, entry_id, kind, definition_json, provenance_json,
+             field_provenance_json, visibility, dependency_ids_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [input.manifest.worldId, input.manifest.revision, entry.entryId, entry.kind,
+            JSON.stringify(entry.definition), JSON.stringify(entry.provenance), JSON.stringify(entry.fieldProvenance),
+            entry.visibility, JSON.stringify(entry.dependencyIds), input.createdAt],
+        );
+      }
+      for (const section of input.sections) {
+        await tx.execute(
+          `INSERT INTO book_sections
+            (world_id, revision, book, section_key, title, entry_ids_json, position)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [input.manifest.worldId, input.manifest.revision, section.book, section.sectionKey,
+            section.title, JSON.stringify(section.entryIds), section.position],
+        );
+      }
+    });
+  }
+
   async getWorldPackage(
     worldId: string,
     revision: number,
@@ -993,6 +1046,58 @@ export class SqliteWorldStore implements WorldStore {
       contentHash: String(row.content_hash),
       createdAt: String(row.created_at),
     }));
+  }
+
+  async getWorldPackageDraft(worldId: string): Promise<{ baseRevision: number; draftJson: string; updatedAt: string } | null> {
+    const row = await this.db.queryOne<SqliteRow>(
+      'SELECT base_revision, draft_json, updated_at FROM world_package_drafts WHERE world_id = ?',
+      [worldId],
+    );
+    if (!row) return null;
+    return {
+      baseRevision: requireNumber(row, 'base_revision'),
+      draftJson: requireString(row, 'draft_json'),
+      updatedAt: requireString(row, 'updated_at'),
+    };
+  }
+
+  async saveWorldPackageDraft(input: {
+    worldId: string;
+    baseRevision: number;
+    draftJson: string;
+    updatedAt: string;
+  }): Promise<void> {
+    if (input.draftJson.length > 15 * 1024 * 1024) throw new Error('World package draft exceeds 15 MB.');
+    try { JSON.parse(input.draftJson); } catch { throw new Error('World package draft must be valid JSON.'); }
+    await this.db.transaction(async tx => {
+      const published = await tx.queryOne<{ revision: number }>(
+        "SELECT revision FROM world_packages WHERE world_id = ? AND status = 'published' ORDER BY revision DESC LIMIT 1",
+        [input.worldId],
+      );
+      if (!published || published.revision !== input.baseRevision) {
+        throw new Error('World package draft is based on a stale or unpublished revision. Reload the latest published package.');
+      }
+      const existing = await tx.queryOne<{ base_revision: number }>(
+        'SELECT base_revision FROM world_package_drafts WHERE world_id = ?', [input.worldId],
+      );
+      if (existing && existing.base_revision !== input.baseRevision) {
+        throw new Error('An older draft is based on a different published revision. Export or discard it before editing this revision.');
+      }
+      await tx.execute(
+        `INSERT INTO world_package_drafts (world_id, base_revision, draft_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(world_id) DO UPDATE SET draft_json = excluded.draft_json, updated_at = excluded.updated_at
+         WHERE world_package_drafts.base_revision = excluded.base_revision`,
+        [input.worldId, input.baseRevision, input.draftJson, input.updatedAt],
+      );
+    });
+  }
+
+  async clearWorldPackageDraft(worldId: string, baseRevision: number): Promise<void> {
+    await this.db.execute(
+      'DELETE FROM world_package_drafts WHERE world_id = ? AND base_revision = ?',
+      [worldId, baseRevision],
+    );
   }
 
   async getPublishedPackageRevision(worldId: string): Promise<number | null> {

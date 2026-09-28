@@ -75,7 +75,7 @@ const SKILL_STEALTH = entry('stealth', 'skill', {
 });
 const SKILL_SWORD = entry('sword', 'skill', {
   name: '剑术', description: '近战攻击', attribute: 'agility',
-  allowUntrained: false, requirements: [], powerTier: 'ordinary',
+  allowUntrained: false, requirements: [], usage: 'attack', powerTier: 'ordinary',
 });
 const LORE_RAIN = entry('lore-rain', 'lore', {
   name: '雨夜', title: '雨夜的书阁', text: '藏书阁雨夜有守卫巡逻。',
@@ -134,7 +134,7 @@ async function seedWorld(db, worldStore, worldId = 'w-pkg') {
 // P2-1: package validation + publication gate
 // ---------------------------------------------------------------------------
 
-test('package validation rejects unknown ops, dangling deps and cycles', () => {
+test('package validation rejects unknown ops, dangling deps, cycles and missing loot item refs', () => {
   const badAbility = entry('bad-ability', 'ability', {
     name: '飞剑', description: '', attribute: 'agility',
     costs: { stamina: 2 }, range: 'mid', targetPolicy: 'single_enemy',
@@ -149,12 +149,19 @@ test('package validation rejects unknown ops, dangling deps and cycles', () => {
       { dependencyIds: ['b'] }),
     entry('b', 'item', { name: 'B', description: '', category: 'tool', unique: false },
       { dependencyIds: ['a'] }),
+    entry('bad-looter', 'actor_template', {
+      name: '无效守卫', hp: 2, defense: 1, lootItemIds: ['item-ghost'],
+    }, { dependencyIds: ['item-ghost'] }),
   ], []);
 
   assert.equal(report.ok, false);
   assert.ok(report.errors.some(e => /unknown effect op/.test(e)), 'unknown op rejected');
   assert.ok(report.errors.some(e => /dangling dependency ghost-skill/.test(e)), 'dangling dep rejected');
   assert.ok(report.errors.some(e => /cycle detected/.test(e)), 'dependency cycle rejected');
+  assert.ok(report.errors.some(e => /bad-looter: dangling dependency item-ghost/.test(e)),
+    'loot references must resolve before publication');
+  assert.ok(report.errors.some(e => /loot item item-ghost must reference a published item/.test(e)),
+    'loot references must resolve specifically to an item entry');
 });
 
 test('publication gate: blocking review issue stops publish; published revision is immutable', async () => {
@@ -285,7 +292,7 @@ test('card-driven roll specs: different cards produce different dice, untrained 
   assert.throws(() => rollSpecForSkill(expert, catalog, 'fly', 'normal'), /not defined/);
 });
 
-async function createSampleCampaign(db, adapter, worldStore, campaignId) {
+async function createSampleCampaign(db, adapter, worldStore, campaignId, initialSkills = ['stealth']) {
   const { result } = await publishSamplePackage(worldStore, 'w-pkg');
   return createCampaign({
     db: adapter, worldStore,
@@ -295,7 +302,7 @@ async function createSampleCampaign(db, adapter, worldStore, campaignId) {
     protagonist: {
       actorId: 'actor-shen', kind: 'original', name: '沈青',
       attributes: { physique: 1, agility: 3, insight: 2, knowledge: 1, willpower: 1, social: 1 },
-      initialSkills: ['stealth'],
+      initialSkills,
     },
     companions: [{ actorId: 'actor-su', templateId: 'guard-template' }],
     goal: '进入藏书阁取回手稿',
@@ -338,6 +345,22 @@ test('campaign creation locks the package and writes all state in one transactio
     }),
     /not found|not published/,
   );
+  await assert.rejects(
+    () => createCampaign({
+      db: adapter, worldStore, campaignId: 'camp-too-many-allies', title: 'x', worldId: 'w-pkg', packageRevision: 1,
+      anchor: { worldTimeOrder: 1, locationId: 'courtyard' },
+      protagonist: { actorId: 'player', kind: 'original', name: 'x',
+        attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
+      companions: [
+        { actorId: 'ally-1', templateId: 'guard-template' },
+        { actorId: 'ally-2', templateId: 'guard-template' },
+        { actorId: 'ally-3', templateId: 'guard-template' },
+      ],
+      goal: 'g', createdAt: 't',
+    }),
+    /最多可招募两名同伴/,
+    'the campaign API enforces the same party limit as the opening UI',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -375,11 +398,15 @@ class ScriptedPlannerProvider {
 
 const RNG = { nextIntInclusive: (min, max) => max };
 
-async function makeSession(db, campaignId = 'camp-s') {
+async function makeSession(db, campaignId = 'camp-s', options = {}) {
+  if (campaignId && typeof campaignId === 'object') {
+    options = campaignId;
+    campaignId = 'camp-s';
+  }
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
   await seedWorld(db, worldStore);
-  await createSampleCampaign(db, adapter, worldStore, campaignId);
+  await createSampleCampaign(db, adapter, worldStore, campaignId, options.initialSkills ?? ['stealth']);
   const provider = new ScriptedPlannerProvider();
   const session = new CampaignSession({
     db: adapter,
@@ -388,7 +415,7 @@ async function makeSession(db, campaignId = 'camp-s') {
     worldStore,
     narratives: new SqliteNarrativeStore(adapter),
     hashProvider: sha,
-    random: RNG,
+    random: options.random ?? RNG,
   }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
   return { session, adapter, worldStore, provider };
 }
@@ -544,5 +571,10 @@ test('rest and training follow V0.2 policy: threshold only enables training', as
   const after = await session.getSummary('camp-s', 'camp-s-main');
   assert.equal(after.state.stateVersion, before.state.stateVersion + 1);
   assert.equal(after.state.clockSeconds, before.state.clockSeconds + 1800);
+  assert.equal(after.state.clockMinutes, Math.floor(after.state.clockSeconds / 60),
+    'the loaded minute projection stays in sync with the action transaction clock');
+  const restSnapshot = JSON.parse(db.prepare("SELECT snapshot_json FROM snapshots WHERE branch_id = 'camp-s-main' ORDER BY state_version DESC LIMIT 1").get().snapshot_json);
+  assert.equal(restSnapshot.clockMinutes, Math.floor(restSnapshot.clockSeconds / 60),
+    'the raw persisted snapshot stores a minute projection matching its authoritative seconds');
   assert.equal(after.state.actors['actor-shen'].resources.stamina, 3, 'short rest restores 2 stamina from 1');
 });

@@ -11,6 +11,7 @@ import type { LlmRequest } from '../../application/llm/types';
 import { codePointLength } from '../../domain/world/textOffsets';
 
 export const LLM_EXTRACTOR_VERSION = 'llm-extractor-1';
+export const DEFAULT_LLM_EXTRACTOR_MAX_OUTPUT_TOKENS = 8000;
 
 const EXTRACTOR_SYSTEM = [
   'You are ShineWord Extractor. You read one chunk of a Chinese novel and output exactly one JSON object, no prose.',
@@ -67,7 +68,10 @@ export function parseExtractorJson(text: string): RawExtraction {
 export class LlmChunkExtractor implements ChunkExtractor {
   readonly version = LLM_EXTRACTOR_VERSION;
 
-  constructor(private readonly complete: LlmCompleteFn) {}
+  constructor(
+    private readonly complete: LlmCompleteFn,
+    private readonly maxOutputTokens = DEFAULT_LLM_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  ) {}
 
   async extract({ chunk, chunkText }: { chunk: StoredChunk; chunkText: string; worldId: string }): Promise<ExtractionResult> {
     const response = await this.complete({
@@ -78,7 +82,7 @@ export class LlmChunkExtractor implements ChunkExtractor {
         chunkId: chunk.chunkId,
         text: chunkText,
       }),
-      maxOutputTokens: 6000,
+      maxOutputTokens: this.maxOutputTokens,
       jsonMode: true,
     });
 

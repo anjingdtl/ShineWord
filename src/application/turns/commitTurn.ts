@@ -18,6 +18,13 @@ export interface CommitResolvedTurnInput {
    * enforces ledger dedup so a replayed encounter cannot double-award.
    */
   settlement?: TurnSettlementPlan;
+  /** Domain-specific authoritative projection changes applied before the same snapshot is committed. */
+  updateNextState?: (nextState: import('../../domain/state/types').GameStateSnapshot) => void;
+  /** Additional domain state and event projections produced by this exact action. */
+  applyAuthoritativeState?: (
+    nextState: import('../../domain/state/types').GameStateSnapshot,
+  ) => Array<{ eventType: string; payload: unknown }> | void;
+  events?: Array<{ eventType: string; payload: unknown }>;
   /** 'engine' contracts are local-built (rest/training) and may carry caps. */
   contractOrigin?: 'planner' | 'engine';
   committedAt?: string;
@@ -36,6 +43,9 @@ export async function commitResolvedTurn({
   outcomeGrade,
   rollRecord,
   settlement,
+  updateNextState,
+  applyAuthoritativeState,
+  events,
   contractOrigin = 'planner',
   committedAt = new Date().toISOString(),
 }: CommitResolvedTurnInput): Promise<CommitResolvedTurnResult> {
@@ -67,6 +77,8 @@ export async function commitResolvedTurn({
   assertResourcePreconditions(state, contract.resourcePreconditions);
   const outcome = contract.outcomes[outcomeGrade];
   const nextState = applyEffects(state, outcome.effects, contract.timeCostMinutes);
+  updateNextState?.(nextState);
+  const domainEvents = applyAuthoritativeState?.(nextState) ?? [];
   nextState.stateVersion = state.stateVersion + 1;
 
   const committedTurn: CommittedTurn = {
@@ -90,6 +102,7 @@ export async function commitResolvedTurn({
     actionContractHash: contractHash,
     committedTurn,
     settlement,
+    events: [...(events ?? []), ...domainEvents],
   });
 
   return { committedTurn: stored, replayed: false };

@@ -19,6 +19,7 @@ const {
 } = require('../dist/application/world/opening');
 const { importTxtSource } = require('../dist/application/import/txtImport');
 const { CodePointOffsetIndex } = require('../dist/domain/world/textOffsets');
+const { LlmChunkExtractor } = require('../dist/application/world/llmExtractor');
 
 const sha = {
   async sha256BytesHex(bytes) {
@@ -39,6 +40,22 @@ async function loadSmallParsed() {
   const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
   return importTxtSource(bytes, sha, decoder);
 }
+
+test('LLM extractor leaves reasoning-enabled models room for sourced facts', async () => {
+  const parsed = await loadSmallParsed();
+  let request;
+  const extractor = new LlmChunkExtractor(async input => {
+    request = input;
+    return { text: JSON.stringify({ entities: [], facts: [], events: [], ruleMappings: [] }) };
+  });
+  await extractor.extract({ chunk: parsed.chunks[0], chunkText: '', worldId: 'w-budget' });
+  assert.equal(request.role, 'Extractor');
+  assert.equal(request.maxOutputTokens, 8000,
+    'the default remains below the configured 8192-token profile cap while leaving room after reasoning');
+  assert.equal(request.jsonMode, true);
+  assert.equal(request.vendorOptions?.thinkingDisabled, undefined,
+    'the extractor never opts out of reasoning to reclaim output tokens');
+});
 
 test('evidence validation rejects tampered quotes and out-of-chapter spans', async () => {
   const parsed = await loadSmallParsed();

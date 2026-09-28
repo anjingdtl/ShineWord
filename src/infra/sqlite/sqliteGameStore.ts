@@ -41,6 +41,7 @@ interface EncounterActorRow extends SqliteRow {
   conditions_json: string;
   distance_band: string;
   acted_this_round: number;
+  moved_this_round: number;
 }
 
 interface MemoryRow extends SqliteRow {
@@ -227,15 +228,16 @@ export class SqliteGameStore {
       );
       for (const actor of Object.values(state.actors)) {
         await tx.execute(
-          `INSERT INTO encounter_actors (branch_id, encounter_id, actor_id, side, hp, max_hp, stamina,
-             conditions_json, distance_band, acted_this_round)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(branch_id, encounter_id, actor_id) DO UPDATE SET
+        `INSERT INTO encounter_actors (branch_id, encounter_id, actor_id, side, hp, max_hp, stamina,
+             conditions_json, distance_band, acted_this_round, moved_this_round)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(branch_id, encounter_id, actor_id) DO UPDATE SET
              hp = excluded.hp,
              stamina = excluded.stamina,
              conditions_json = excluded.conditions_json,
              distance_band = excluded.distance_band,
-             acted_this_round = excluded.acted_this_round`,
+             acted_this_round = excluded.acted_this_round,
+             moved_this_round = excluded.moved_this_round`,
           [
             branchId,
             state.encounterId,
@@ -247,6 +249,7 @@ export class SqliteGameStore {
             JSON.stringify(actor.conditions),
             actor.distanceBand,
             actor.actedThisRound ? 1 : 0,
+            actor.movedThisRound ? 1 : 0,
           ],
         );
       }
@@ -260,32 +263,41 @@ export class SqliteGameStore {
     );
     if (!row) return null;
     const actorRows = await this.db.queryAll<EncounterActorRow>(
-      'SELECT actor_id, side, hp, max_hp, stamina, conditions_json, distance_band, acted_this_round FROM encounter_actors WHERE branch_id = ? AND encounter_id = ?',
+      'SELECT actor_id, side, hp, max_hp, stamina, conditions_json, distance_band, acted_this_round, moved_this_round FROM encounter_actors WHERE branch_id = ? AND encounter_id = ?',
       [branchId, encounterId],
     );
     const actors: EncounterState['actors'] = {};
     for (const actor of actorRows) {
       actors[actor.actor_id] = {
         actorId: actor.actor_id,
-        side: actor.side as 'player' | 'npc',
+        side: actor.side as EncounterState['actors'][string]['side'],
         hp: actor.hp,
         maxHp: actor.max_hp,
         stamina: actor.stamina,
         conditions: JSON.parse(actor.conditions_json) as string[],
         distanceBand: actor.distance_band as DistanceBand,
         actedThisRound: actor.acted_this_round === 1,
+        movedThisRound: actor.moved_this_round === 1,
       };
     }
-    const distanceBands = JSON.parse(row.distance_bands_json) as Record<string, string>;
+    const envelope = JSON.parse(row.distance_bands_json) as Record<string, unknown>;
+    const distanceBands = envelope.bands && typeof envelope.bands === 'object'
+      ? envelope.bands as Record<string, string>
+      : envelope as Record<string, string>;
     for (const [actorId, band] of Object.entries(distanceBands)) {
       if (actors[actorId]) actors[actorId].distanceBand = band as DistanceBand;
     }
     return {
       encounterId: row.encounter_id,
       status: row.status as EncounterState['status'],
-      scene: { sceneId: row.scene_id, coverSpotIds: [], exitIds: [] },
+      scene: envelope.scene && typeof envelope.scene === 'object'
+        ? envelope.scene as EncounterState['scene']
+        : { sceneId: row.scene_id, coverSpotIds: [], exitIds: [] },
       actors,
       initiative: JSON.parse(row.initiative_json) as string[],
+      pendingActorIds: Array.isArray(envelope.pendingActorIds)
+        ? envelope.pendingActorIds.filter((id): id is string => typeof id === 'string')
+        : [],
       turnCursor: row.turn_cursor,
       round: row.round,
     };

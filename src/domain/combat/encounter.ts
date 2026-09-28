@@ -10,13 +10,16 @@ export const DISTANCE_BANDS: readonly DistanceBand[] = ['near', 'mid', 'far', 'o
 
 export interface EncounterActor {
   actorId: string;
-  side: 'player' | 'npc';
+  /** `neutral` is a distinct faction, never implicitly hostile. */
+  side: 'player' | 'npc' | 'neutral';
   hp: number;
   maxHp: number;
   stamina: number;
   conditions: string[];
   distanceBand: DistanceBand;
   actedThisRound: boolean;
+  /** Standard movement is separate from the main action (plan §10.3). */
+  movedThisRound: boolean;
 }
 
 export interface EncounterScene {
@@ -33,6 +36,8 @@ export interface EncounterState {
   actors: Record<string, EncounterActor>;
   /** Frozen at encounter start; NPC order never depends on generated text length. */
   initiative: string[];
+  /** New party members are held out of initiative until the next round. */
+  pendingActorIds?: string[];
   turnCursor: number;
   round: number;
 }
@@ -71,6 +76,7 @@ export function startEncounter(input: EncounterStartInput): EncounterStartResult
       conditions: [...actor.conditions],
       distanceBand: 'mid',
       actedThisRound: false,
+      movedThisRound: false,
     };
   }
   const state: EncounterState = {
@@ -83,10 +89,19 @@ export function startEncounter(input: EncounterStartInput): EncounterStartResult
     },
     actors,
     initiative: [...input.initiative],
+    pendingActorIds: [],
     turnCursor: 0,
     round: 1,
   };
-  const firstActorId = input.initiative[0];
+  const firstConsciousIndex = state.initiative.findIndex(actorId => {
+    const actor = state.actors[actorId];
+    return actor !== undefined && actor.hp > 0 && !actor.conditions.includes('disabled');
+  });
+  if (firstConsciousIndex < 0) {
+    throw new Error('An encounter requires at least one conscious actor.');
+  }
+  state.turnCursor = firstConsciousIndex;
+  const firstActorId = state.initiative[firstConsciousIndex];
   if (!firstActorId) {
     throw new Error('An encounter requires a non-empty initiative order.');
   }
@@ -146,9 +161,10 @@ export function changeDistance(state: EncounterState, actorId: string, band: Dis
 }
 
 /**
- * Advances the frozen initiative order. Zero-HP actors are skipped; they do
- * not regain agency. A full loop back to the first actor starts a new round
- * and resets per-round acted flags.
+ * Advances from the actor whose action just resolved to the next conscious
+ * actor. Incapacitated slots are skipped in the same advancement, including
+ * when the initiative order wraps. A full loop starts a new round and resets
+ * per-round action and movement allowances.
  */
 export function advanceInitiative(state: EncounterState): { actorId: string; round: number } {
   if (state.status !== 'active') {
@@ -159,23 +175,25 @@ export function advanceInitiative(state: EncounterState): { actorId: string; rou
     if (state.turnCursor >= state.initiative.length) {
       state.turnCursor = 0;
       state.round += 1;
-      for (const actor of Object.values(state.actors)) actor.actedThisRound = false;
+      for (const actor of Object.values(state.actors)) {
+        actor.actedThisRound = false;
+        actor.movedThisRound = false;
+      }
     }
   };
-  for (let steps = 0; steps <= state.initiative.length; steps += 1) {
-    const actorId = state.initiative[state.turnCursor];
-    if (!actorId) {
-      moveNext();
-      continue;
-    }
-    const actor = state.actors[actorId];
-    if (actor && actor.hp > 0) {
-      actor.actedThisRound = true;
-      const result = { actorId, round: state.round };
-      moveNext();
-      return result;
-    }
+  const currentActorId = state.initiative[state.turnCursor];
+  const currentActor = currentActorId ? state.actors[currentActorId] : undefined;
+  if (currentActor && currentActor.hp > 0 && !currentActor.conditions.includes('disabled')) {
+    currentActor.actedThisRound = true;
+  }
+
+  for (let steps = 0; steps < state.initiative.length; steps += 1) {
     moveNext();
+    const nextActorId = state.initiative[state.turnCursor];
+    const nextActor = nextActorId ? state.actors[nextActorId] : undefined;
+    if (nextActorId && nextActor && nextActor.hp > 0 && !nextActor.conditions.includes('disabled')) {
+      return { actorId: nextActorId, round: state.round };
+    }
   }
   throw new Error('No conscious actor remains in the encounter.');
 }

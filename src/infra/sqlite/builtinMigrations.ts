@@ -572,6 +572,52 @@ ALTER TABLE worlds ADD COLUMN legacy_source_sha256 TEXT;
 ALTER TABLE encounters ADD COLUMN round INTEGER NOT NULL DEFAULT 1;
 `;
 
+const COMBAT_ECONOMY_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- Combat uses a separate per-round movement allowance alongside the main action.
+ALTER TABLE encounter_actors ADD COLUMN moved_this_round INTEGER NOT NULL DEFAULT 0;
+`;
+
+const KNOWLEDGE_QUEST_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+ALTER TABLE quest_states ADD COLUMN completed_state_version INTEGER;
+
+-- Branch-local knowledge is a projection of the full snapshots and events.
+CREATE TABLE IF NOT EXISTS branch_knowledge (
+  branch_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  entry_id TEXT NOT NULL,
+  known_via TEXT NOT NULL CHECK(known_via IN ('witnessed', 'told', 'inferred')),
+  source_turn_id TEXT NOT NULL,
+  known_state_version INTEGER NOT NULL,
+  PRIMARY KEY(branch_id, actor_id, entry_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_branch_knowledge_entry ON branch_knowledge(branch_id, entry_id);
+
+-- Quest rewards are independent of narrated text and deduplicated by immutable key.
+CREATE TABLE IF NOT EXISTS quest_reward_ledger (
+  branch_id TEXT NOT NULL,
+  quest_id TEXT NOT NULL,
+  reward_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  granted_state_version INTEGER NOT NULL,
+  PRIMARY KEY(branch_id, quest_id, reward_id)
+);
+`;
+
+const WORLD_PACKAGE_DRAFTS_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS world_package_drafts (
+  world_id TEXT PRIMARY KEY NOT NULL,
+  base_revision INTEGER NOT NULL,
+  draft_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(world_id) REFERENCES worlds(world_id) ON DELETE CASCADE,
+  FOREIGN KEY(world_id, base_revision) REFERENCES world_packages(world_id, revision) ON DELETE CASCADE
+);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -579,4 +625,7 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 4, name: 'game', sql: GAME_SCHEMA_SQL },
   { version: 5, name: 'phase2', sql: PHASE2_SCHEMA_SQL },
   { version: 6, name: 'p2_acceptance', sql: P2_ACCEPTANCE_SCHEMA_SQL },
+  { version: 7, name: 'combat_economy', sql: COMBAT_ECONOMY_SCHEMA_SQL },
+  { version: 8, name: 'knowledge_quests', sql: KNOWLEDGE_QUEST_SCHEMA_SQL },
+  { version: 9, name: 'world_package_drafts', sql: WORLD_PACKAGE_DRAFTS_SCHEMA_SQL },
 ];

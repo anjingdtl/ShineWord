@@ -4,11 +4,13 @@ import type { PlannerProposal } from '../../domain/turns/proposal';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type {
   AbilityDefinition,
+  ConstraintDefinition,
   ContentEntry,
   SceneDefinition,
   SkillDefinition,
 } from '../../domain/content/types';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
+import { distanceBetweenZones, rangeCoversBand } from '../campaign/encounterFlow';
 import {
   assertAbilityAffordable,
   resolveSkillKey,
@@ -58,6 +60,7 @@ export interface CompileProposalInput {
   catalog: SkillCatalog;
   abilities: ReadonlyMap<string, AbilityDefinition>;
   scenes: readonly SceneDefinition[];
+  constraints?: readonly ConstraintDefinition[];
   state: GameStateSnapshot;
 }
 
@@ -226,16 +229,22 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
 }
 
 function compileAbilityAction(input: CompileProposalInput): CompiledAction {
-  const { proposal, actingCard, cards, catalog, abilities, state } = input;
+  const { proposal, actingCard, cards, catalog, abilities, scenes, state, constraints = [] } = input;
   const abilityId = proposal.abilityId!;
   const definition = abilities.get(abilityId);
   if (!definition) {
     throw new ProposalRejectedError(`能力「${abilityId}」在这个世界不存在或不可用。`);
   }
-  if (!actingCard.abilities.includes(abilityId) && !actingCard.preparedAbilities.includes(abilityId)) {
+  if (definition.passive) {
+    throw new ProposalRejectedError(`能力「${definition.name}」是被动能力，不能作为主动动作发动。`);
+  }
+  if (!actingCard.abilities.includes(abilityId)) {
     throw new ProposalRejectedError(
       `角色尚未习得能力「${abilityId}」，无法使用。`,
     );
+  }
+  if (!actingCard.preparedAbilities.includes(abilityId)) {
+    throw new ProposalRejectedError(`能力「${definition.name}」尚未准备，无法使用。`);
   }
   if (
     definition.requiresSkillId &&
@@ -248,10 +257,16 @@ function compileAbilityAction(input: CompileProposalInput): CompiledAction {
 
   const actorState = state.actors[actingCard.actorId];
   if (!actorState) throw new ProposalRejectedError('Acting actor missing from state.');
+  const cooldownReadyAt = actorState.abilityCooldowns?.[abilityId] ?? 0;
+  if (cooldownReadyAt > state.stateVersion) {
+    throw new ProposalRejectedError(`能力「${definition.name}」冷却中，需等到状态版本 ${cooldownReadyAt}。`);
+  }
   assertAbilityAffordable(actingCard, definition, actorState.resources);
 
   // Target policy is enforced locally (self / ally / enemy).
   const targetId = resolveAbilityTarget(proposal, definition, cards, state);
+  if (targetId) assertAbilityRange(actingCard.actorId, targetId, definition, state, scenes);
+  enforceAbilityWorldConstraints(definition, proposal.intent, constraints);
 
   for (const effect of definition.effects) {
     if (!COMPILABLE_ABILITY_OPS.has(effect.op)) {
@@ -296,6 +311,7 @@ function compileAbilityAction(input: CompileProposalInput): CompiledAction {
       expectedStateVersion: proposal.expectedStateVersion,
       actorId: actingCard.actorId,
       actionType: 'ability',
+      abilityId,
       ...(targetId !== null ? { targetId } : {}),
       ...(definition.requiresSkillId !== undefined ? { skillId: definition.requiresSkillId } : {}),
       requiresRoll: definition.requiresRoll,
@@ -321,7 +337,12 @@ function resolveAbilityTarget(
   cards: readonly ActorCard[],
   state: GameStateSnapshot,
 ): string | null {
-  if (definition.targetPolicy === 'self') return proposal.targetId ?? null;
+  if (definition.targetPolicy === 'self') {
+    if (proposal.targetId !== undefined && proposal.targetId !== proposal.actorId) {
+      throw new ProposalRejectedError(`能力「${definition.name}」只能以施动者本人为目标。`);
+    }
+    return proposal.actorId;
+  }
   if (definition.targetPolicy === 'area') return null;
   const targetId = proposal.targetId;
   if (!targetId) {
@@ -337,6 +358,56 @@ function resolveAbilityTarget(
     throw new ProposalRejectedError(`能力「${definition.name}」不能作用于队伍成员。`);
   }
   return targetId;
+}
+
+function assertAbilityRange(
+  actorId: string,
+  targetId: string,
+  definition: AbilityDefinition,
+  state: GameStateSnapshot,
+  scenes: readonly SceneDefinition[],
+): void {
+  if (definition.range === 'self') {
+    if (targetId !== actorId) throw new ProposalRejectedError(`能力「${definition.name}」只允许以施动者本人为目标。`);
+    return;
+  }
+  if (targetId === actorId) return;
+  const actor = state.actors[actorId];
+  const target = state.actors[targetId];
+  if (!actor || !target) throw new ProposalRejectedError('Ability target state is missing.');
+  if (target.locationId !== actor.locationId) {
+    throw new ProposalRejectedError(`目标「${targetId}」不在施术者所在场景；当前没有可验证的跨场景路径。`);
+  }
+  const scene = scenes.find(candidate => candidate.locationId === actor.locationId);
+  const band = scene && actor.zoneId && target.zoneId
+    ? distanceBetweenZones(scene.zones, actor.zoneId, target.zoneId)
+    : 'near';
+  const range = definition.range === 'touch' ? 'touch' : definition.range;
+  if (!rangeCoversBand(range, band)) {
+    throw new ProposalRejectedError(`目标「${targetId}」位于 ${band} 距离，能力「${definition.name}」的 ${definition.range} 射程无法触及。`);
+  }
+}
+
+function enforceAbilityWorldConstraints(
+  definition: AbilityDefinition,
+  intent: string,
+  constraints: readonly ConstraintDefinition[],
+): void {
+  const actionText = `${intent} ${definition.name} ${definition.description}`.toLocaleLowerCase();
+  for (const constraint of constraints) {
+    if (!constraint.pattern || constraint.enforcement === 'audit') continue;
+    const pattern = constraint.pattern.trim().toLocaleLowerCase();
+    if (!pattern) continue;
+    const matchesAction = actionText.includes(pattern);
+    const effectText = JSON.stringify(definition.effects).toLocaleLowerCase();
+    const matchesEffect = effectText.includes(pattern);
+    if ((constraint.enforcement === 'block_action' && matchesAction) ||
+        (constraint.enforcement === 'block_effect' && (matchesAction || matchesEffect))) {
+      throw new ProposalRejectedError(
+        `能力「${definition.name}」违反世界硬约束「${constraint.name}」，已阻止执行。`,
+      );
+    }
+  }
 }
 
 function compileAbilityEffects(
@@ -420,10 +491,12 @@ export function packageIndexes(entries: readonly ContentEntry[]): {
   catalog: SkillCatalog;
   abilities: Map<string, AbilityDefinition>;
   scenes: SceneDefinition[];
+  constraints: ConstraintDefinition[];
 } {
   const catalog: SkillCatalog = {};
   const abilities = new Map<string, AbilityDefinition>();
   const scenes: SceneDefinition[] = [];
+  const constraints: ConstraintDefinition[] = [];
   for (const entry of entries) {
     if (entry.kind === 'skill') {
       catalog[entry.entryId] = entry.definition as SkillDefinition;
@@ -439,7 +512,9 @@ export function packageIndexes(entries: readonly ContentEntry[]): {
       }
     } else if (entry.kind === 'scene') {
       scenes.push(entry.definition as SceneDefinition);
+    } else if (entry.kind === 'constraint') {
+      constraints.push(entry.definition as ConstraintDefinition);
     }
   }
-  return { catalog, abilities, scenes };
+  return { catalog, abilities, scenes, constraints };
 }

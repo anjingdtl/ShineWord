@@ -171,6 +171,8 @@ export interface ActorTemplateDefinition {
     morale: 'low' | 'steady' | 'fierce';
   };
   lootPolicy: string;
+  /** Published item entry IDs granted once if this actor is defeated. */
+  lootItemIds?: string[];
   threat: {
     damage: number;
     durability: number;

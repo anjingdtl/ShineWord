@@ -53,6 +53,8 @@ export interface ActionContract {
   expectedStateVersion: number;
   actorId: string;
   actionType: string;
+  /** Required for locally compiled ability contracts; planner cannot author effects. */
+  abilityId?: string;
   targetId?: string;
   skillId?: string;
   difficultyBand?: DifficultyBand;

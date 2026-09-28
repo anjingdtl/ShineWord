@@ -100,6 +100,7 @@ export function buildOpening(
         },
       },
       itemOwners: {},
+      encounters: [],
     };
     return { profile, snapshot, startLocation: request.fallbackLocationId ?? 'unset' };
   }
@@ -208,6 +209,7 @@ export function buildOpening(
       },
     },
     itemOwners: {},
+    encounters: [],
   };
   return { profile, snapshot, startLocation };
 }

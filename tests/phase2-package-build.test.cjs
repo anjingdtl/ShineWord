@@ -107,8 +107,19 @@ const VALID_PROPOSAL = {
     enforcement: 'block_action', provenanceKind: 'inferred',
     evidenceFactIds: ['fact-0'], rationale: '原著为低武世界。',
   }],
-  actorTemplates: [],
-  items: [],
+  actorTemplates: [{
+    id: 'night-watch', name: '夜巡守卫', category: 'human', description: '夜巡守卫。',
+    attributes: { agility: 1 }, skills: { sword: 'trained' }, hp: 5, stamina: 3, defense: 2,
+    attacks: [{ name: '佩刀', skillId: 'sword', damage: 2, range: 'touch' }], abilities: [],
+    behavior: { goal: '守住门廊', retreatThreshold: 0.2, morale: 'steady' },
+    lootPolicy: '战败后交出门禁牌', lootItemIds: ['seal'],
+    threat: { damage: 2, durability: 1, actions: 1, control: 0, environment: 0 },
+    provenanceKind: 'rule_mapping', evidenceFactIds: ['fact-0'], rationale: '由门廊守卫事实映射。',
+  }],
+  items: [{
+    id: 'seal', name: '门禁牌', description: '守卫持有的门禁牌。', category: 'key', unique: true,
+    provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '原著提到门禁牌。',
+  }],
   lore: [{
     id: 'qinglan-sect', name: '青岚派', title: '青岚派', text: '青岚派是正道门派。',
     provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '原著门派设定。',
@@ -165,6 +176,10 @@ test('P2-4: valid LLM mapping publishes; provenance, defaults and three books ar
   assert.equal(guard.definition.hp, 6);
   assert.equal(guard.definition.defense, 2);
   assert.ok(guard.dependencyIds.includes('skill-sword'), 'guard attack references the baseline sword skill');
+  const mappedGuard = byId.get('npc-night-watch');
+  assert.deepEqual(mappedGuard.definition.lootItemIds, ['item-seal'], 'mapped loot ids normalize to package item entry ids');
+  assert.ok(mappedGuard.dependencyIds.includes('item-seal'), 'loot item is a validated world-package dependency');
+  assert.equal(byId.get('item-seal').definition.unique, true, 'the mapped reward retains its one-time identity');
 
   // Constraint + lore flow into the right books; every reference resolves.
   const entryIds = new Set(result.entries.map(entry => entry.entryId));

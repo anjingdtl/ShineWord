@@ -40,6 +40,8 @@ export interface TurnSettlementPlan {
    * stamped by this commit (P2 acceptance A02/A03).
    */
   cardUpserts?: Array<{ actorId: string; card: unknown }>;
+  /** Remove temporary projections in the same commit that ends an encounter. */
+  cardDeletes?: string[];
   /** Engine-side loot grants (encounter end); applied before the snapshot. */
   loot?: Array<{ itemId: string; actorId: string }>;
 }
@@ -53,6 +55,8 @@ export interface AtomicCommitInput {
   actionContractHash: string;
   committedTurn: CommittedTurn;
   settlement?: TurnSettlementPlan;
+  /** Additional engine events produced by authoritative projections in this transaction. */
+  events?: Array<{ eventType: string; payload: unknown }>;
 }
 
 export interface TurnStore {

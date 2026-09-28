@@ -117,6 +117,17 @@ export function validatePackage(
     if (typeof def.hp !== 'number' || typeof def.defense !== 'number') {
       errors.push(`${entry.entryId}: actor template cannot enter combat without hp and defense.`);
     }
+    if (def.lootItemIds !== undefined) {
+      if (!Array.isArray(def.lootItemIds) || def.lootItemIds.some(itemId => typeof itemId !== 'string')) {
+        errors.push(`${entry.entryId}: lootItemIds must be an array of item entry ids.`);
+      } else {
+        for (const itemId of new Set(def.lootItemIds as string[])) {
+          if (byId.get(itemId)?.kind !== 'item') {
+            errors.push(`${entry.entryId}: loot item ${itemId} must reference a published item entry.`);
+          }
+        }
+      }
+    }
   }
 
   // Three books must reference entries of the same revision, without ghosts.

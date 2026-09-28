@@ -38,8 +38,10 @@ export interface RetrievalResult {
 
 const AUTHORITATIVE_STATUSES = new Set(['explicit', 'user_supplement', 'event', 'summary']);
 
-function charBigrams(text: string): Set<string> {
-  const normalized = text.toLowerCase().replace(/\s+/g, '');
+function charBigrams(text: string | null | undefined): Set<string> {
+  // Older/imported turn rows can have both publicSummary and narrativeText
+  // absent. Treat that record as non-searchable rather than failing the turn.
+  const normalized = (text ?? '').toLowerCase().replace(/\s+/g, '');
   const grams = new Set<string>();
   for (let i = 0; i < normalized.length - 1; i += 1) {
     grams.add(normalized.slice(i, i + 2));

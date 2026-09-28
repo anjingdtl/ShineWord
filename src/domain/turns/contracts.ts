@@ -1,5 +1,5 @@
 import { DIFFICULTY_BANDS, ROLL_GRADES } from '../rules/types';
-import type { ActionContract, OutcomeClause, PlannerEffectOperation } from './types';
+import type { ActionContract, EffectOperation, OutcomeClause } from './types';
 
 const FORBIDDEN_PLANNER_FIELDS = new Set([
   'diceCount',
@@ -27,22 +27,26 @@ const VALID_EFFECT_OPS = new Set([
   'restoreResource',
   'recordEvent',
 ]);
+const VALID_ENGINE_EFFECT_OPS = new Set(['removeCondition', 'grantItem']);
 
 function nonEmpty(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function validateEffect(effect: unknown, path: string, errors: string[]): void {
+function validateEffect(effect: unknown, path: string, errors: string[], origin: ContractOrigin): void {
   if (typeof effect !== 'object' || effect === null) {
     errors.push(`${path}: effect must be an object.`);
     return;
   }
   const op = (effect as { op?: unknown }).op;
-  if (typeof op !== 'string' || !VALID_EFFECT_OPS.has(op)) {
-    errors.push(`${path}: op must be one of ${[...VALID_EFFECT_OPS].join(', ')}; received ${String(op)}.`);
+  const allowedOps = origin === 'engine'
+    ? new Set([...VALID_EFFECT_OPS, ...VALID_ENGINE_EFFECT_OPS])
+    : VALID_EFFECT_OPS;
+  if (typeof op !== 'string' || !allowedOps.has(op)) {
+    errors.push(`${path}: op must be one of ${[...allowedOps].join(', ')}; received ${String(op)}.`);
     return;
   }
-  const e = effect as PlannerEffectOperation;
+  const e = effect as EffectOperation;
   switch (e.op) {
     case 'consumeResource':
       if (!nonEmpty(e.actorId) || !nonEmpty(e.resourceId)) {
@@ -88,10 +92,20 @@ function validateEffect(effect: unknown, path: string, errors: string[]): void {
         errors.push(`${path}: eventType and summary are required.`);
       }
       return;
+    case 'removeCondition':
+      if (!nonEmpty(e.actorId) || !nonEmpty(e.conditionId)) {
+        errors.push(`${path}: actorId and conditionId are required.`);
+      }
+      return;
+    case 'grantItem':
+      if (!nonEmpty(e.itemId) || !nonEmpty(e.actorId)) {
+        errors.push(`${path}: itemId and actorId are required.`);
+      }
+      return;
   }
 }
 
-function validateOutcome(outcome: OutcomeClause, path: string, errors: string[]): void {
+function validateOutcome(outcome: OutcomeClause, path: string, errors: string[], origin: ContractOrigin): void {
   if (typeof outcome.achieved !== 'boolean') {
     errors.push(`${path}: achieved must be a boolean.`);
   }
@@ -102,7 +116,7 @@ function validateOutcome(outcome: OutcomeClause, path: string, errors: string[])
     errors.push(`${path}: effects must be an array.`);
     return;
   }
-  outcome.effects.forEach((effect, index) => validateEffect(effect, `${path}.effects[${index}]`, errors));
+  outcome.effects.forEach((effect, index) => validateEffect(effect, `${path}.effects[${index}]`, errors, origin));
 }
 
 function findForbiddenKeys(value: unknown, path: string, errors: string[]): void {
@@ -136,6 +150,9 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
   }
   if (!nonEmpty(contract.actorId)) errors.push('actorId is required.');
   if (!nonEmpty(contract.actionType)) errors.push('actionType is required.');
+  if (contract.actionType === 'ability' && !nonEmpty(contract.abilityId)) {
+    errors.push('abilityId is required for ability actions.');
+  }
   if (!nonEmpty(contract.intent)) errors.push('intent is required.');
   if (!Array.isArray(contract.evidenceIds)) errors.push('evidenceIds must be an array.');
   if (!Number.isFinite(contract.timeCostMinutes) || contract.timeCostMinutes < 0) {
@@ -155,7 +172,7 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
     if (!outcome) {
       errors.push(`outcomes.${grade} is required.`);
     } else {
-      validateOutcome(outcome, `outcomes.${grade}`, errors);
+      validateOutcome(outcome, `outcomes.${grade}`, errors, origin);
     }
   }
 

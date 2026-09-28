@@ -86,8 +86,8 @@ class ShineWordFilesModule(
     pendingPickPromise = promise
     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
       addCategory(Intent.CATEGORY_OPENABLE)
-      setType("text/*")
-      putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "application/octet-stream", "application/json"))
+      setType("*/*")
+      putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "application/octet-stream", "application/json", "application/zip"))
     }
     try {
       activity.startActivityForResult(intent, REQUEST_PICK_TEXT)
@@ -130,7 +130,7 @@ class ShineWordFilesModule(
    * the save file lands; resolves with the target uri or null on cancel.
    */
   @ReactMethod
-  fun createTextFile(defaultName: String, promise: Promise) {
+  fun createTextFile(defaultName: String, mimeType: String, promise: Promise) {
     val activity = reactApplicationContext.currentActivity
     if (activity == null) {
       promise.reject("NO_ACTIVITY", "No foreground activity to host the file picker.")
@@ -143,7 +143,7 @@ class ShineWordFilesModule(
     pendingCreatePromise = promise
     val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
       addCategory(Intent.CATEGORY_OPENABLE)
-      setType("application/json")
+      setType(mimeType)
       putExtra(Intent.EXTRA_TITLE, defaultName)
     }
     try {

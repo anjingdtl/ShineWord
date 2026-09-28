@@ -130,6 +130,18 @@ test('encounter start freezes initiative and validates actors', () => {
     initiative: ['ghost'],
   }), /unknown actor/);
 
+  const afterDisabled = startEncounter({
+    encounterId: 'e-disabled-start',
+    scene: { sceneId: 's', coverSpotIds: [], exitIds: [] },
+    actors: [
+      { actorId: 'down', side: 'player', hp: 0, maxHp: 5, stamina: 0, conditions: ['disabled'] },
+      { actorId: 'ready', side: 'player', hp: 5, maxHp: 5, stamina: 2, conditions: [] },
+    ],
+    initiative: ['down', 'ready'],
+  });
+  assert.equal(afterDisabled.currentActorId, 'ready', 'an incapacitated first slot cannot deadlock encounter start');
+  assert.equal(afterDisabled.state.turnCursor, 1);
+
   assert.throws(() => startEncounter({
     encounterId: 'e',
     scene: { sceneId: 's', coverSpotIds: [], exitIds: [] },
@@ -171,9 +183,8 @@ test('initiative follows the frozen order, skips disabled actors, wraps rounds',
   // Round 1: player -> guard -> dog(disabled -> skipped) -> wrap -> player (round 2).
   applyDamage(state, 'dog', 99, 0);
   const first = advanceInitiative(state);
-  assert.equal(first.actorId, 'player');
+  assert.equal(first.actorId, 'guard');
   assert.equal(first.round, 1);
-  assert.equal(advanceInitiative(state).actorId, 'guard');
   const wrapped = advanceInitiative(state); // dog is disabled -> wraps to player
   assert.equal(wrapped.actorId, 'player');
   assert.equal(wrapped.round, 2);

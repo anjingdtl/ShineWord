@@ -6,7 +6,7 @@ declare const btoa: (data: string) => string;
 interface ShineWordFilesNative {
   pickTextFile(): Promise<{ uri: string; name: string; size: number } | null>;
   readFileBase64(uriString: string): Promise<string>;
-  createTextFile(defaultName: string): Promise<{ uri: string } | null>;
+  createTextFile(defaultName: string, mimeType: string): Promise<{ uri: string } | null>;
   writeFileBase64(uriString: string, base64Data: string): Promise<boolean>;
 }
 
@@ -51,18 +51,31 @@ export function base64ToBytes(base64: string): Uint8Array {
 
 /** SAF create-document picker; the user picks where the export lands. */
 export async function createExportFile(defaultName: string): Promise<string | null> {
-  const target = await native().createTextFile(defaultName);
+  const target = await native().createTextFile(defaultName, 'application/json');
+  return target?.uri ?? null;
+}
+
+export async function createExportBytesFile(defaultName: string, mimeType: string): Promise<string | null> {
+  const target = await native().createTextFile(defaultName, mimeType);
   return target?.uri ?? null;
 }
 
 export async function writeExportFile(uri: string, text: string): Promise<boolean> {
-  if (typeof btoa !== 'function') throw new Error('btoa is unavailable on this runtime.');
   const bytes = new TextEncoderLike().encode(text);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
+  return writeExportBytes(uri, bytes);
+}
+
+export async function writeExportBytes(uri: string, bytes: Uint8Array): Promise<boolean> {
+  if (typeof btoa !== 'function') throw new Error('btoa is unavailable on this runtime.');
+  let encoded = '';
+  const chunkSize = 0x6000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const limit = Math.min(bytes.length, offset + chunkSize);
+    let binary = '';
+    for (let index = offset; index < limit; index += 1) binary += String.fromCharCode(bytes[index] ?? 0);
+    encoded += btoa(binary);
   }
-  return native().writeFileBase64(uri, btoa(binary));
+  return native().writeFileBase64(uri, encoded);
 }
 
 /** Minimal UTF-8 encoder (Hermes has no TextEncoder). */

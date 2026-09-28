@@ -18,7 +18,7 @@ import type { TurnSettlementPlan, TurnStore } from '../ports/turnStore';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { resolveOrReuseRoll } from '../turns/resolveOrReuseRoll';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
-import type { AbilityDefinition, SceneDefinition } from '../../domain/content/types';
+import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '../../domain/content/types';
 import { compileProposal, type CompiledAction } from './v2Compile';
 
 export interface NarrativeCandidate {
@@ -44,6 +44,12 @@ export interface RunV2TurnInput {
   catalog: SkillCatalog;
   abilities: ReadonlyMap<string, AbilityDefinition>;
   scenes: readonly SceneDefinition[];
+  constraints?: readonly ConstraintDefinition[];
+  updateCommittedState?: (
+    nextState: import('../../domain/state/types').GameStateSnapshot,
+    contract: ActionContract,
+    grade: RollGrade,
+  ) => Array<{ eventType: string; payload: unknown }> | void;
   resolveRollSpec(contract: ActionContract): RollSpec;
   settlementFor?(grade: RollGrade, contract: ActionContract): Promise<TurnSettlementPlan>;
   now?: () => string;
@@ -222,6 +228,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       catalog: input.catalog,
       abilities: input.abilities,
       scenes: input.scenes,
+      constraints: input.constraints,
       state,
     });
     assertValidActionContract(compiled.contract, 'engine');
@@ -317,6 +324,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     outcomeGrade: grade,
     rollRecord,
     settlement,
+    applyAuthoritativeState: nextState => input.updateCommittedState?.(nextState, contract, grade),
     contractOrigin: 'engine',
     committedAt: now(),
   });

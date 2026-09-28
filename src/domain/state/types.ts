@@ -1,4 +1,5 @@
 import type { SkillRank } from '../rules/types';
+import type { EncounterState } from '../combat/encounter';
 
 /**
  * Snapshot-level skill projection. `awardedKeys` carries
@@ -29,6 +30,40 @@ export interface PartySnapshotEntry {
   joinedAt: string;
 }
 
+/** Full immutable encounter projection at a branch state version. */
+export interface EncounterSnapshotEntry {
+  state: EncounterState;
+  zones: Array<{ zoneId: string; exits: string[] }>;
+  zoneMap: Record<string, string>;
+  exits: string[];
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface KnowledgeSnapshotEntry {
+  entryId: string;
+  actorId: string;
+  knownAtStateVersion: number;
+  sourceTurnId: string;
+  knownVia: 'witnessed' | 'told' | 'inferred';
+}
+
+export interface QuestProgressSnapshotEntry {
+  questId: string;
+  status: 'available' | 'active' | 'succeeded' | 'failed' | 'abandoned';
+  counters: Record<string, number>;
+  processedEventIds?: string[];
+  updatedStateVersion: number;
+  completedStateVersion: number | null;
+}
+
+export interface QuestRewardSnapshotEntry {
+  questId: string;
+  rewardId: string;
+  actorId: string;
+  grantedStateVersion: number;
+}
+
 export interface RelationshipSnapshotEntry {
   relId: string;
   fromActorId: string;
@@ -41,8 +76,12 @@ export interface RelationshipSnapshotEntry {
 export interface ActorState {
   actorId: string;
   locationId: string;
+  /** Current scene zone when the locked world defines one. */
+  zoneId?: string;
   resources: Record<string, number>;
   conditions: string[];
+  /** Ability cooldown expiry expressed as a state version, restored with snapshots. */
+  abilityCooldowns?: Record<string, number>;
 }
 
 export interface GameStateSnapshot {
@@ -68,6 +107,40 @@ export interface GameStateSnapshot {
    */
   cards?: CardSnapshotEntry[];
   party?: PartySnapshotEntry[];
+  /** Encounters and battlefield state are authoritative branch history. */
+  encounters?: EncounterSnapshotEntry[];
+  /** Discoveries, quest counters and granted quest rewards are branch history. */
+  discoveries?: KnowledgeSnapshotEntry[];
+  questProgress?: QuestProgressSnapshotEntry[];
+  questRewards?: QuestRewardSnapshotEntry[];
+}
+
+function cloneEncounter(entry: EncounterSnapshotEntry): EncounterSnapshotEntry {
+  const state = entry.state;
+  return {
+    state: {
+      encounterId: state.encounterId,
+      status: state.status,
+      scene: {
+        sceneId: state.scene.sceneId,
+        coverSpotIds: [...state.scene.coverSpotIds],
+        exitIds: [...state.scene.exitIds],
+      },
+      actors: Object.fromEntries(Object.entries(state.actors).map(([actorId, actor]) => [actorId, {
+        ...actor,
+        conditions: [...actor.conditions],
+      }])),
+      initiative: [...state.initiative],
+      pendingActorIds: [...(state.pendingActorIds ?? [])],
+      turnCursor: state.turnCursor,
+      round: state.round,
+    },
+    zones: entry.zones.map(zone => ({ zoneId: zone.zoneId, exits: [...zone.exits] })),
+    zoneMap: { ...entry.zoneMap },
+    exits: [...entry.exits],
+    createdAt: entry.createdAt,
+    resolvedAt: entry.resolvedAt,
+  };
 }
 
 export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
@@ -82,8 +155,10 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
         {
           actorId: actor.actorId,
           locationId: actor.locationId,
+          ...(actor.zoneId ? { zoneId: actor.zoneId } : {}),
           resources: { ...actor.resources },
           conditions: [...actor.conditions],
+          ...(actor.abilityCooldowns ? { abilityCooldowns: { ...actor.abilityCooldowns } } : {}),
         },
       ]),
     ),
@@ -99,10 +174,21 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
     cloned.relationships = state.relationships.map(rel => ({ ...rel }));
   }
   if (state.cards) {
-    cloned.cards = state.cards.map(card => ({ actorId: card.actorId, card: card.card }));
+    cloned.cards = state.cards.map(card => ({
+      actorId: card.actorId,
+      card: JSON.parse(JSON.stringify(card.card)) as unknown,
+    }));
   }
   if (state.party) {
     cloned.party = state.party.map(member => ({ ...member }));
   }
+  if (state.encounters) cloned.encounters = state.encounters.map(cloneEncounter);
+  if (state.discoveries) cloned.discoveries = state.discoveries.map(entry => ({ ...entry }));
+  if (state.questProgress) cloned.questProgress = state.questProgress.map(entry => ({
+    ...entry,
+    counters: { ...entry.counters },
+    ...(entry.processedEventIds ? { processedEventIds: [...entry.processedEventIds] } : {}),
+  }));
+  if (state.questRewards) cloned.questRewards = state.questRewards.map(entry => ({ ...entry }));
   return cloned;
 }

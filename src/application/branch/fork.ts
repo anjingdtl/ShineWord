@@ -7,6 +7,7 @@ import {
 import type { SqliteDatabase } from '../ports/sqlite';
 import type { TurnStore } from '../ports/turnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
+import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
 
 export interface ForkBranchInput {
   db: SqliteDatabase;
@@ -73,6 +74,20 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
       `Legacy snapshot at version ${input.atStateVersion} lacks skill/relationship history; ` +
         'a historical fork would fabricate progress. Continue the branch read-only or create a new Phase-2 baseline.',
     );
+  }
+
+  if (!Array.isArray(snapshot.encounters)) {
+    const existingEncounter = await db.queryOne(
+      'SELECT encounter_id FROM encounters WHERE branch_id = ? LIMIT 1',
+      [input.sourceBranchId],
+    );
+    if (existingEncounter && !atHead) {
+      throw new Error(
+        `Snapshot at version ${input.atStateVersion} lacks encounter history; ` +
+          'a historical fork cannot reconstruct its battlefield from the branch head.',
+      );
+    }
+    snapshot.encounters = [];
   }
 
   const existing = await db.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [input.targetBranchId]);
@@ -172,6 +187,7 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         [input.targetBranchId, member.actorId, member.controller, member.role, member.joinedAt],
       );
     }
+    await replaceEncounterSnapshots(tx, input.targetBranchId, snapshot.encounters ?? []);
     await tx.execute(
       `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
        VALUES (?, ?, ?, NULL, ?)`,

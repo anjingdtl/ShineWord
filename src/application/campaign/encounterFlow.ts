@@ -257,63 +257,104 @@ export function decideNpcAction(options: {
   combatants: readonly Combatant[];
   catalog: SkillCatalog;
   zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>;
-}): { kind: 'attack'; targetId: string; skillId: string } | { kind: 'move'; towardActorId: string } | { kind: 'retreat'; exitId: string } {
+}):
+  | { kind: 'attack'; targetId: string; skillId: string }
+  | { kind: 'move'; towardActorId: string }
+  | { kind: 'retreat'; exitId: string }
+  | { kind: 'rescue'; targetId: string }
+  | { kind: 'guard' } {
   const { actor, combatants, catalog, zones } = options;
   const hpOf = (actorId: string): number => options.encounter.actors[actorId]?.hp ?? 0;
+  const actorState = options.encounter.actors[actor.actorId];
+  const directive = actor.card.controller === 'companion' ? actor.card.companionDirective : undefined;
+  const actorZone = zones.find(zone => zone.zoneId === actor.zoneId);
+  const exitId = actorZone?.exits.find(exit => options.encounter.scene.exitIds.includes(exit));
+
+  // Neutral is a real faction. It receives its initiative slot and recorded
+  // guard action, but never auto-targets either of the fighting sides.
+  if (actor.side === 'neutral') return { kind: 'guard' };
+
+  if (directive === 'retreat') return exitId ? { kind: 'retreat', exitId } : { kind: 'guard' };
+
+  if (directive === 'support') {
+    const disabledAlly = combatants
+      .filter(candidate => candidate.side === actor.side && candidate.actorId !== actor.actorId
+        && hpOf(candidate.actorId) <= 0
+        && options.encounter.actors[candidate.actorId]?.conditions.includes('disabled')
+        && candidate.zoneId === actor.zoneId)
+      .sort((a, b) => a.actorId.localeCompare(b.actorId))[0];
+    if (disabledAlly) return { kind: 'rescue', targetId: disabledAlly.actorId };
+  }
+
+  if (directive === 'follow') {
+    const leaderId = actor.card.companionLeaderActorId
+      ?? combatants.find(candidate => candidate.side === 'party' && candidate.card.controller === 'player')?.actorId;
+    const leader = leaderId ? combatants.find(candidate => candidate.actorId === leaderId) : undefined;
+    if (leader && leader.zoneId !== actor.zoneId) return { kind: 'move', towardActorId: leader.actorId };
+  }
 
   // Retreat check: behavior threshold on the template card, through an exit
   // that actually exists in the scene (a cornered actor keeps fighting).
-  const hasMorale = actor.card.kind === 'creature' || actor.card.kind === 'npc';
+  const hasMorale = actor.card.kind === 'creature' || actor.card.kind === 'npc' || actor.card.kind === 'companion';
   if (hasMorale) {
     const maxHp = actor.card.resourceMax.hp ?? 10;
-    const retreatThreshold = 0.25;
-    if (hpOf(actor.actorId) > 0 && hpOf(actor.actorId) / maxHp < retreatThreshold) {
-      const exit = options.encounter.scene.exitIds[0];
-      if (exit) return { kind: 'retreat', exitId: exit };
+    const retreatThreshold = actor.card.combatBehavior?.retreatThreshold ?? 0.25;
+    if (hpOf(actor.actorId) > 0 && hpOf(actor.actorId) / maxHp < retreatThreshold && exitId) {
+      return { kind: 'retreat', exitId };
     }
   }
 
   const enemies = combatants.filter(
     candidate => candidate.side !== actor.side && candidate.side !== 'neutral' && hpOf(candidate.actorId) > 0,
   );
-  if (enemies.length === 0) {
-    // No conscious enemies: the encounter ends instead of acting.
-    const exit = options.encounter.scene.exitIds[0];
-    if (exit) return { kind: 'retreat', exitId: exit };
-    return { kind: 'move', towardActorId: actor.actorId };
-  }
+  if (enemies.length === 0) return { kind: 'guard' };
+
+  const leaderId = actor.card.companionLeaderActorId
+    ?? combatants.find(candidate => candidate.side === 'party' && candidate.card.controller === 'player')?.actorId;
+  const leader = leaderId ? combatants.find(candidate => candidate.actorId === leaderId) : undefined;
+  const hops = (from: string, to: string): number => {
+    const band = distanceBetweenZones(zones, from, to);
+    return band === 'near' ? 0 : band === 'mid' ? 1 : band === 'far' ? 2 : 99;
+  };
+  const byAscendingHops = (a: Combatant, b: Combatant): number =>
+    hops(actor.zoneId, a.zoneId) - hops(actor.zoneId, b.zoneId);
+
+  // Protect policy chooses a nearby threat to the named leader before the
+  // ordinary weakest-target preference. Without a leader it safely falls
+  // back to the normal deterministic target order.
+  const orderedEnemies = [...enemies].sort((a, b) => {
+    if (directive === 'protect' && leader) {
+      const protectDistance = hops(a.zoneId, leader.zoneId) - hops(b.zoneId, leader.zoneId);
+      if (protectDistance !== 0) return protectDistance;
+    }
+    return hpOf(a.actorId) - hpOf(b.actorId) || byAscendingHops(a, b) || a.actorId.localeCompare(b.actorId);
+  });
+
   // Prefer the weakest enemy the actor can legally hit with its best attack
   // skill (attack skills only, range respected).
   const attackSkill = Object.entries(actor.card.skills)
     .filter(([skillId]) => actor.attackSkillIds.includes(skillId) && catalog[skillId])
     .sort((a, b) => SKILL_RANK_DIE[b[1] as SkillRank] - SKILL_RANK_DIE[a[1] as SkillRank])[0];
-  const byAscendingHops = (a: Combatant, b: Combatant): number => {
-    const hopsOf = (candidate: Combatant): number => {
-      const band = distanceBetweenZones(zones, actor.zoneId, candidate.zoneId);
-      return band === 'near' ? 0 : band === 'mid' ? 1 : band === 'far' ? 2 : 99;
-    };
-    return hopsOf(a) - hopsOf(b);
-  };
   if (attackSkill) {
     const range = attackRangeFor(actor, attackSkill[0]);
-    const inRange = enemies
+    const inRange = orderedEnemies
       .filter(enemy => rangeCoversBand(range, distanceBetweenZones(zones, actor.zoneId, enemy.zoneId)))
-      .sort((a, b) => hpOf(a.actorId) - hpOf(b.actorId) || byAscendingHops(a, b));
+      .sort((a, b) => orderedEnemies.indexOf(a) - orderedEnemies.indexOf(b));
     if (inRange.length > 0 && inRange[0]) {
       return { kind: 'attack', targetId: inRange[0].actorId, skillId: attackSkill[0] };
     }
-    const nearest = [...enemies].sort(byAscendingHops)[0]!;
+    if (directive === 'conserve' || (directive === 'follow' && actorState?.movedThisRound)) return { kind: 'guard' };
+    const nearest = directive === 'follow' && leader ? leader : orderedEnemies[0]!;
     return { kind: 'move', towardActorId: nearest.actorId };
   }
-  const nearest = [...enemies].sort(byAscendingHops)[0]!;
+  if (directive === 'conserve') return { kind: 'guard' };
+  const nearest = directive === 'follow' && leader ? leader : orderedEnemies[0]!;
   return { kind: 'move', towardActorId: nearest.actorId };
 }
 
 /** Default attack range for a combatant's attack skill (templates declare their own). */
-function attackRangeFor(_actor: Combatant, _skillId: string): 'touch' | 'near' | 'mid' | 'far' {
-  // V0.2 default: melee (touch) unless a template attack declares otherwise;
-  // callers pass explicit ranges when the template declares them.
-  return 'touch';
+function attackRangeFor(actor: Combatant, skillId: string): 'touch' | 'near' | 'mid' | 'far' {
+  return actor.card.combatAttacks?.find(attack => attack.skillId === skillId)?.range ?? 'touch';
 }
 
 /**
@@ -339,7 +380,7 @@ export function buildEncounterRewards(options: {
   };
   // Loot: granted once by the frozen loot policy, engine-side only.
   if (options.lootItemIds && options.lootRecipientActorId) {
-    plan.loot = options.lootItemIds.map(itemId => ({ itemId, actorId: options.lootRecipientActorId! }));
+    plan.loot = [...new Set(options.lootItemIds)].map(itemId => ({ itemId, actorId: options.lootRecipientActorId! }));
   }
   return plan;
 }

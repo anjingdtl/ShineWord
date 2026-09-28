@@ -221,6 +221,17 @@ test('retrieval filters visibility, time, branch and status BEFORE ranking', () 
   assert.equal(empty.items.length, 0);
 });
 
+test('retrieval safely skips legacy records without searchable text', () => {
+  const result = retrieveContext([
+    { id: 'empty-summary', text: null, scope: 'branch', branchId: 'b1', validFrom: null, validTo: null,
+      visibleToActors: null, status: 'event', knownToActors: null },
+  ], {
+    viewerActorId: 'actor-player', branchId: 'b1', worldTimeOrder: 1, queryText: 'continue', limit: 8,
+  });
+  assert.equal(result.items.length, 0);
+  assert.equal(result.stats.afterStatus, 1);
+});
+
 test('summarizer cadence and payload validation', () => {
   assert.equal(shouldSummarize(8, 0), true);
   assert.equal(shouldSummarize(7, 0), false);
@@ -268,7 +279,7 @@ test('save export contains no secrets and import validation rejects tampered fil
     assert.ok(!json.toLowerCase().includes('apikey'), 'no api key material in export');
 
     const valid = await validateSaveJson(json, sha256HexForSave);
-    assert.equal(valid.ok, true);
+    assert.equal(valid.ok, true, valid.errors.join('; '));
 
     const badSchema = await validateSaveJson(JSON.stringify({ ...parsed, manifest: { ...parsed.manifest, schemaVersion: 'x' } }), sha256HexForSave);
     assert.equal(badSchema.ok, false);

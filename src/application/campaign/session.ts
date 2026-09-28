@@ -1,5 +1,5 @@
 import { RejectionSamplingRandomSource } from '../../domain/rules/random';
-import type { DifficultyBand, SkillRank } from '../../domain/rules/types';
+import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
 import type { OpenAICompatibleProvider } from '../llm/openAICompatible';
 import { runV2Turn } from '../game/v2Turn';
@@ -42,8 +42,10 @@ import type {
   ConstraintDefinition,
   SceneDefinition,
   SkillDefinition,
+  QuestDefinition,
 } from '../../domain/content/types';
 import { assembleBook } from '../worldPackage/publish';
+import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { forkBranch } from '../branch/fork';
 import {
@@ -197,6 +199,20 @@ export class CampaignSession {
     return pkg.entries;
   }
 
+  private async assertNoActiveEncounter(branchId: string): Promise<void> {
+    const table = await this.deps.db.queryOne<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'encounters'",
+    );
+    if (!table) return;
+    const active = await this.deps.db.queryOne<{ encounter_id: string }>(
+      "SELECT encounter_id FROM encounters WHERE branch_id = ? AND status = 'active' LIMIT 1",
+      [branchId],
+    );
+    if (active) {
+      throw new Error(`战斗 ${active.encounter_id} 仍在进行，请先通过战斗行动推进或撤退。`);
+    }
+  }
+
   private skillCatalog(entries: readonly ContentEntry[]): SkillCatalog {
     const catalog: SkillCatalog = {};
     for (const entry of entries) {
@@ -226,6 +242,9 @@ export class CampaignSession {
     state: GameStateSnapshot,
     goal: string,
     recentHistory?: ReadonlyArray<{ turnId: string; publicSummary: string; narrativeText: string | null }>,
+    memories: ReadonlyArray<{ memoryId: string; summary: string; fromStateVersion: number; toStateVersion: number; invalidAt: number | null }> = [],
+    queryText = '',
+    viewerActorId = '',
   ): string {
     const parts: string[] = [];
     for (const entry of entries) {
@@ -238,6 +257,18 @@ export class CampaignSession {
         parts.push(`【世界规则】${constraint.name}: ${constraint.description}`);
       }
     }
+    const currentLocation = state.actors[viewerActorId]?.locationId;
+    const clueIds = new Set(entries.filter(entry => entry.kind === 'scene')
+      .map(entry => entry.definition as SceneDefinition)
+      .filter(scene => scene.locationId === currentLocation)
+      .flatMap(scene => scene.clues));
+    const discoverableClues = entries.filter(entry => clueIds.has(entry.entryId) && entry.visibility === 'discoverable');
+    if (discoverableClues.length > 0) {
+      parts.push(`【当前位置可调查的隐藏线索引用】${discoverableClues.map(entry => {
+        const clue = entry.definition as { name?: string; title?: string };
+        return `${entry.entryId}:${clue.name ?? clue.title ?? entry.entryId}`;
+      }).join('、')}。仅在观察、交互或相关检定成功且引用对应 ID 时记录为角色已知。`);
+    }
     for (const card of cards) {
       const actor = state.actors[card.actorId];
       if (!actor) continue;
@@ -248,6 +279,47 @@ export class CampaignSession {
       parts.push(`【角色】${card.actorId}(${card.name}) 位于 ${actor.locationId}，${resources}${conditions}`);
     }
     if (goal) parts.push(`【主目标】${goal}`);
+    const retrievalCandidates = [
+      ...(recentHistory ?? []).map(turn => ({
+        id: turn.turnId,
+        text: turn.narrativeText ?? turn.publicSummary,
+        scope: 'branch' as const,
+        branchId: state.branchId,
+        validFrom: null,
+        validTo: null,
+        visibleToActors: null,
+        status: 'event' as const,
+        knownToActors: null,
+      })),
+      ...memories.filter(memory => memory.invalidAt === null).map(memory => ({
+        id: memory.memoryId,
+        text: memory.summary,
+        scope: 'branch' as const,
+        branchId: state.branchId,
+        validFrom: memory.fromStateVersion,
+        validTo: memory.toStateVersion,
+        visibleToActors: null,
+        status: 'summary' as const,
+        knownToActors: null,
+      })),
+    ];
+    const retrieved = retrieveContext(retrievalCandidates, {
+      viewerActorId,
+      branchId: state.branchId,
+      worldTimeOrder: state.stateVersion,
+      queryText: `${queryText} ${goal} ${Object.values(state.actors).map(actor => actor.locationId).join(' ')}`,
+      limit: 8,
+    });
+    if (retrieved.items.length > 0) {
+      parts.push(`【相关长期记忆】\n${retrieved.items.map(item => `${item.id}: ${item.text.slice(0, 900)}`).join('\n')}`);
+    }
+    const discoveredIds = new Set((state.discoveries ?? [])
+      .filter(item => item.actorId === viewerActorId).map(item => item.entryId));
+    const learnedEntries = entries.filter(entry => discoveredIds.has(entry.entryId));
+    for (const entry of learnedEntries) {
+      const definition = entry.definition as { name?: string; title?: string; text?: string; description?: string };
+      parts.push(`【角色已知线索】${entry.entryId} ${definition.name ?? definition.title ?? entry.entryId}: ${definition.text ?? definition.description ?? ''}`);
+    }
     if (recentHistory && recentHistory.length > 0) {
       const recent = recentHistory.slice(-6).map(turn => {
         const story = (turn.narrativeText ?? turn.publicSummary ?? '').slice(0, 120);
@@ -257,6 +329,140 @@ export class CampaignSession {
     }
     parts.push('使用队伍中存在的 actorId。只提出提案允许的动作（skill_check/ability/observe/talk/interact/move）；检定与数值由本地规则引擎编译。');
     return parts.join('\n');
+  }
+
+  private applyDiscoveryAndQuestProgress(
+    nextState: GameStateSnapshot,
+    contract: ActionContract,
+    grade: RollGrade,
+    entries: readonly ContentEntry[],
+    sourceLocationId: string,
+  ): Array<{ eventType: string; payload: unknown }> {
+    const events: Array<{ eventType: string; payload: unknown }> = [];
+    const actingState = nextState.actors[contract.actorId];
+    if (actingState && actingState.locationId !== sourceLocationId) {
+      const destinationScene = entries.find(entry => entry.kind === 'scene' &&
+        (entry.definition as SceneDefinition).locationId === actingState.locationId);
+      const firstZone = destinationScene
+        ? (destinationScene.definition as SceneDefinition).zones[0]?.zoneId
+        : undefined;
+      if (firstZone) actingState.zoneId = firstZone;
+      else delete actingState.zoneId;
+    }
+    if (contract.actionType === 'ability' && contract.abilityId) {
+      const definition = entries.find(entry => entry.entryId === contract.abilityId || entry.entryId === `ability-${contract.abilityId}`);
+      const cooldownRounds = definition?.kind === 'ability'
+        ? Number((definition.definition as { cooldownRounds?: number }).cooldownRounds ?? 0)
+        : 0;
+      const actor = nextState.actors[contract.actorId];
+      if (cooldownRounds > 0) {
+        if (!actor) throw new Error(`Cooldown actor missing: ${contract.actorId}.`);
+        actor.abilityCooldowns ??= {};
+        actor.abilityCooldowns[contract.abilityId] = nextState.stateVersion + 1 + cooldownRounds;
+      }
+    }
+
+    if (grade !== 'success' && grade !== 'full_success') return events;
+    if (!['observe', 'interact', 'skill_check'].includes(contract.actionType)) return events;
+
+    const entryById = new Map(entries.map(entry => [entry.entryId, entry]));
+    const scenes = entries.filter(entry => entry.kind === 'scene')
+      .map(entry => entry.definition as SceneDefinition)
+      .filter(scene => scene.locationId === sourceLocationId);
+    const candidateIds = new Set(scenes.flatMap(scene => scene.clues));
+    const discovered = contract.evidenceIds
+      .filter(entryId => candidateIds.has(entryId))
+      .map(entryId => entryById.get(entryId))
+      .filter((entry): entry is ContentEntry => entry?.visibility === 'discoverable');
+    if (discovered.length === 0) return events;
+
+    nextState.discoveries ??= [];
+    nextState.questProgress ??= [];
+    nextState.questRewards ??= [];
+    const eventVersion = nextState.stateVersion + 1;
+    for (const clue of discovered) {
+      if (nextState.discoveries.some(record => record.actorId === contract.actorId && record.entryId === clue.entryId)) continue;
+      nextState.discoveries.push({
+        entryId: clue.entryId,
+        actorId: contract.actorId,
+        knownAtStateVersion: eventVersion,
+        sourceTurnId: contract.turnId,
+        knownVia: 'witnessed',
+      });
+      const clueDefinition = clue.definition as { name?: string; title?: string };
+      const clueLabel = `${clue.entryId} ${clueDefinition.name ?? clueDefinition.title ?? clue.entryId}`;
+      events.push({ eventType: 'knowledge_discovered', payload: {
+        entryId: clue.entryId,
+        actorId: contract.actorId,
+        sourceTurnId: contract.turnId,
+        knownVia: 'witnessed',
+      } });
+
+      for (const questEntry of entries.filter(entry => entry.kind === 'quest')) {
+        const quest = questEntry.definition as QuestDefinition;
+        if (quest.trigger.eventType !== 'knowledge_discovered') continue;
+        const pattern = quest.trigger.summaryPattern?.trim().toLocaleLowerCase();
+        if (pattern && !clueLabel.toLocaleLowerCase().includes(pattern)) continue;
+        let progress = nextState.questProgress.find(item => item.questId === questEntry.entryId);
+        if (!progress) {
+          progress = {
+            questId: questEntry.entryId,
+            status: 'available',
+            counters: {},
+            processedEventIds: [],
+            updatedStateVersion: nextState.stateVersion,
+            completedStateVersion: null,
+          };
+          nextState.questProgress.push(progress);
+        }
+        if (progress.status === 'succeeded' || progress.status === 'failed' || progress.status === 'abandoned') continue;
+        const justActivated = progress.status === 'available';
+        if (justActivated) {
+          progress.status = 'active';
+          events.push({ eventType: 'quest_activated', payload: { questId: questEntry.entryId, sourceTurnId: contract.turnId } });
+        }
+        const processed = progress.processedEventIds ??= [];
+        if (processed.includes(clue.entryId)) continue;
+        processed.push(clue.entryId);
+        for (const objective of quest.objectives) {
+          if (objective.counter !== 'knowledge_discovered' && objective.counter !== clue.entryId && objective.counter !== `discover:${clue.entryId}`) continue;
+          progress.counters[objective.counter] = (progress.counters[objective.counter] ?? 0) + 1;
+        }
+        progress.updatedStateVersion = eventVersion;
+        events.push({ eventType: 'quest_progressed', payload: {
+          questId: questEntry.entryId, entryId: clue.entryId, counters: { ...progress.counters }, sourceTurnId: contract.turnId,
+        } });
+        if (quest.objectives.length === 0 || !quest.objectives.every(objective =>
+          (progress!.counters[objective.counter] ?? 0) >= objective.target)) continue;
+
+        progress.status = 'succeeded';
+        progress.completedStateVersion = eventVersion;
+        events.push({ eventType: 'quest_succeeded', payload: { questId: questEntry.entryId, sourceTurnId: contract.turnId } });
+        const protagonist = nextState.actors[contract.actorId];
+        if (!protagonist) throw new Error(`Quest reward actor missing: ${contract.actorId}.`);
+        for (const itemId of quest.rewards.items ?? []) {
+          const rewardId = `item:${itemId}`;
+          if (nextState.questRewards.some(reward => reward.questId === questEntry.entryId && reward.rewardId === rewardId)) continue;
+          const itemEntry = entryById.get(itemId);
+          if (!itemEntry || itemEntry.kind !== 'item') {
+            throw new Error(`Quest ${questEntry.entryId} has an invalid item reward ${itemId}.`);
+          }
+          const existingOwner = nextState.itemOwners[itemId];
+          const granted = existingOwner === undefined;
+          if (granted) nextState.itemOwners[itemId] = contract.actorId;
+          nextState.questRewards.push({
+            questId: questEntry.entryId,
+            rewardId,
+            actorId: contract.actorId,
+            grantedStateVersion: eventVersion,
+          });
+          events.push({ eventType: 'quest_reward_granted', payload: {
+            questId: questEntry.entryId, rewardId, itemId, actorId: contract.actorId, granted, sourceTurnId: contract.turnId,
+          } });
+        }
+      }
+    }
+    return events;
   }
 
   /**
@@ -280,6 +486,7 @@ export class CampaignSession {
     turnIdOverride?: string;
     onProgress?: (phase: 'planning' | 'rolling' | 'narrating' | 'committing') => void;
   }): Promise<PlayTurnResult> {
+    await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
     // Rule dispatch (plan §9 / G05): legacy V0.1 campaigns carry no package
     // lock; they stay readable but cannot play forward on V0.2 mechanics.
@@ -290,7 +497,7 @@ export class CampaignSession {
       );
     }
     const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision);
-    const { catalog, abilities, scenes } = packageIndexes(entries);
+    const { catalog, abilities, scenes, constraints } = packageIndexes(entries);
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
 
@@ -299,8 +506,9 @@ export class CampaignSession {
       : summary.state.stateVersion + 1;
     const turnId = options.turnIdOverride ?? `turn-${String(stateVersion).padStart(4, '0')}`;
     const recentHistory = await this.deps.turns.listCommittedTurns(options.branchId);
+    const memories = await this.deps.game.listMemories(options.branchId);
     const worldContext = this.buildWorldContext(
-      entries, summary.cards, summary.state, summary.goal, recentHistory,
+      entries, summary.cards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
     );
 
     let usageSeq = 0;
@@ -324,6 +532,11 @@ export class CampaignSession {
         catalog,
         abilities,
         scenes,
+        constraints,
+        updateCommittedState: (nextState, contract, grade) => {
+          const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
+          return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, entries, sourceLocationId);
+        },
         resolveRollSpec(contract: ActionContract) {
           // Card-driven: attributes and dice come from the character card and
           // the world skill catalog - never from model output.
@@ -414,6 +627,7 @@ export class CampaignSession {
     branchId: string;
     kind: 'short' | 'long';
   }): Promise<{ committed: boolean; clockSecondsAdvanced: number }> {
+    await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
@@ -482,6 +696,7 @@ export class CampaignSession {
     trainingMinutes: number;
     staminaSpent: number;
   }> {
+    await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
     const state = summary.state;
     const card = await this.getCard(options.branchId, options.actorId);
@@ -599,6 +814,7 @@ export class CampaignSession {
     points: number;
     encounterId: string;
   }): Promise<{ granted: number; replayed: boolean }> {
+    await this.assertNoActiveEncounter(options.branchId);
     const card = await this.getCard(options.branchId, options.actorId);
     const storedSkillKey = resolveSkillKey(card, options.skillId) ?? options.skillId;
     const progress = await this.deps.game.getSkillProgress(options.branchId, options.actorId, storedSkillKey);
@@ -797,6 +1013,10 @@ export class CampaignSession {
     return this.encounters.begin(input);
   }
 
+  encounterQueueJoin(input: Parameters<EncounterService['queueParticipant']>[0]): Promise<EncounterView> {
+    return this.encounters.queueParticipant(input);
+  }
+
   getEncounterView(campaignId: string, branchId: string, encounterId: string): Promise<EncounterView> {
     return this.encounters.getView(campaignId, branchId, encounterId);
   }
@@ -815,6 +1035,10 @@ export class CampaignSession {
 
   encounterMove(input: Parameters<EncounterService['playerMove']>[0]): Promise<EncounterView> {
     return this.encounters.playerMove(input);
+  }
+
+  encounterDash(input: Parameters<EncounterService['playerDash']>[0]): Promise<EncounterView> {
+    return this.encounters.playerDash(input);
   }
 
   encounterRescue(input: Parameters<EncounterService['rescueAlly']>[0]): Promise<EncounterView> {
