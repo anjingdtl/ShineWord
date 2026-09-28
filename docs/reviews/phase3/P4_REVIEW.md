@@ -235,3 +235,40 @@
 | NPC 卡四主题截图 | **未截图** |
 | 真机确认 GM-only 字段不出现在界面上 | **未验证** |
 | 「未探明」占位随侦察解锁 | **未验证**（依赖未来目击记录口径） |
+
+---
+
+## P4.8 Encounter HUD
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| HUD 容器（新增） | `features/play/encounter/EncounterHud.tsx` | 轮次头部（当前行动者、是否玩家）+ 顺序条 + 距离带 + 场上角色卡 + 本轮动作；结束态显示结果与最后动作。同文件导出 `EncounterStarter`（从世界包模板发起遭遇的显式入口） |
+| 行动顺序（新增） | `features/play/encounter/InitiativeStrip.tsx` | 读取 `initiative` / `currentActorId` / `round`，不自行排序；当前行动者 ▶，已行动 ✓，阵亡降透明度 |
+| 距离带（新增） | `features/play/encounter/ZoneTrack.tsx` | 读取 `zones` / `actor.zoneId` / `exits`；显示每区占用者与「可达」标记，不做地图引擎 |
+| 角色卡（新增） | `features/play/encounter/CombatantCard.tsx` | 名 / 阵营（队·敌·中）/ 气血条与数值 / 位置 / 已行动·已移动·失能标记；点按打开对应角色卡 |
+| 战斗动作（新增） | `features/play/encounter/CombatActions.tsx` | 攻击 / 援救 / 戒备 / 疾行 / 标准移动 / 下一轮加入 / 撤退 / 推进自动角色行动；全部走既有 Session 方法 |
+| 页面替换 | `screens/PlayScreen.tsx` | 旧的文字+按钮遭遇面板整体删除；HUD 与旧队伍卡放入**高度受控的滚动区**（≤50% 屏高），保证叙事流始终留有阅读空间 |
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 方案 §23.3 禁止把规则复制到 UI | 已核对：动作只调用 `encounterAttack/Rescue/PassTurn/Move/Dash/QueueJoin/Retreat/NpcTurn`，可用性判断沿用视图上的 `actedThisRound/movedThisRound/conditions/currentActorIsPlayer` |
+| 2 | 旧实现把先攻顺序自己排序/拼接 | 改为直接使用遭遇视图的 `initiative` 顺序 |
+| 3 | 高大 HUD 会挤掉叙事流（真机小屏风险） | **已修复**：顶部区域包在 `maxHeight = 屏高 × 50%` 的 ScrollView 中（`nestedScrollEnabled`），叙事流保持弹性空间 |
+| 4 | 敌人角色卡必须走公开投影 | CombatantCard 只负责点按；打开哪一个卡片由页面按「是否在册（队伍）」分流到玩家/同伴卡或 `NpcCharacterSheet` |
+| 5 | 遭遇结果状态语义 | 直接映射 `resolved / escaped / defeated / active`，不发明新状态 |
+| 6 | 遭遇模板入口 | 保留为独立标注的「遭遇（测试入口）」，与战斗动作分开，避免误认为正式战术入口 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| HUD 四主题截图 | **未截图** |
+| encounter / attack / rescue / move / dash / NPC turn / retreat 的真机回归 | **未验证** |
+| 小屏设备上叙事流仍可阅读 | **未验证** |

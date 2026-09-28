@@ -1,14 +1,14 @@
 /**
  * 游玩页 — full-screen stack page (plan §2/§15/§17).
  *
- * P4.2 extracts every business function into `usePlayController` (plan §17):
- * this screen now only holds route context, the controller and the (still
- * P2-shaped) presentation, which the following P4 stages replace piece by
- * piece. The world's own skin is applied through `ThemeScope`, so a world theme
- * override reaches the play screen too (plan §14).
+ * The screen is a thin composition: route context → controller → features.
+ * Business behaviour lives in `usePlayController`; every visual block lives in
+ * `features/play`. What is still P2-shaped here (the party/recruitment block and
+ * the rest/rewind/export row) is replaced by the party panels (P4.9) and the
+ * game menu (P4.10).
  */
 import React, { useState } from 'react';
-import { Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
@@ -18,8 +18,9 @@ import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PartyStrip } from '../features/play/PartyStrip';
 import { PlayHeader } from '../features/play/PlayHeader';
 import { CompanionCharacterSheet } from '../features/play/character/CompanionCharacterSheet';
-import { PlayerCharacterSheet } from '../features/play/character/PlayerCharacterSheet';
 import { NpcCharacterSheet } from '../features/play/character/NpcCharacterSheet';
+import { PlayerCharacterSheet } from '../features/play/character/PlayerCharacterSheet';
+import { EncounterHud, EncounterStarter } from '../features/play/encounter/EncounterHud';
 import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
@@ -47,7 +48,9 @@ export function PlayScreen(): React.JSX.Element {
 
 function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController> }): React.JSX.Element {
   const { theme } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const controller = props.controller;
   const {
     campaignId,
     branchId,
@@ -59,20 +62,15 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     error,
     notice,
     encounter,
-    encounterTemplates,
-    encounterTemplateId,
-    setEncounterTemplateId,
     recruitmentOptions,
     rejoinOptions,
-    combat,
     submit,
     rest,
     rewind,
     exportSave,
     trainSkill,
     partyCall,
-    encounterCall,
-  } = props.controller;
+  } = controller;
 
   const player = view?.player ?? null;
   const partyMembers = view?.party ?? [];
@@ -86,6 +84,11 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const [npcActorId, setNpcActorId] = useState<string | null>(null);
   const npcActor = encounter?.actors.find(actor => actor.actorId === npcActorId) ?? null;
 
+  const openActorCard = (actorId: string): void => {
+    if (roster.some(member => member.actorId === actorId)) setSheetActorId(actorId);
+    else setNpcActorId(actorId);
+  };
+
   return (
     <ScreenShell bottom>
       <PlayHeader
@@ -98,172 +101,18 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
       />
 
+      {/* The combat HUD and the legacy party block live in a bounded scroll
+          area so the narrative feed always keeps its reading space; a tall
+          encounter can never squeeze the story out of the screen. */}
       <View style={{ paddingHorizontal: theme.space.lg }}>
-        {encounter && encounter.status === 'active' ? (
-          <View style={[styles.encounterCard, { marginTop: theme.space.md }]}>
-            <Text style={styles.cardTitle}>
-              战斗 · 第 {encounter.round} 轮 · 行动者：{combat.currentActor?.name ?? '?'}
-              {encounter.currentActorIsPlayer ? '（你）' : '（自动）'}
-            </Text>
-            <View style={styles.row}>
-              {encounter.actors.map(actor => (
-                <Pressable
-                  key={actor.actorId}
-                  onPress={() =>
-                    actor.side === 'party' ? setSheetActorId(actor.actorId) : setNpcActorId(actor.actorId)
-                  }
-                  accessibilityRole="button"
-                  accessibilityLabel={`查看 ${actor.name} 的角色卡`}>
-                  <Text style={actor.side === 'party' ? styles.tag : styles.dice}>
-                    {actor.name} {actor.hp}/{actor.maxHp}@{actor.zoneId}
-                    {actor.conditions.includes('disabled') ? ' 失能' : ''}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            {encounter.pendingActorIds.length > 0 ? (
-              <Text style={styles.muted}>
-                等待下一轮加入：
-                {encounter.pendingActorIds
-                  .map(id => roster.find(card => card.actorId === id)?.name ?? id)
-                  .join('、')}
-              </Text>
-            ) : null}
-            {encounter.lastAction ? <Text style={styles.bodyText}>{encounter.lastAction}</Text> : null}
-            {encounter.lastDice ? <Text style={styles.dice}>{encounter.lastDice}</Text> : null}
-            <View style={styles.row}>
-              {encounter.currentActorIsPlayer ? (
-                <>
-                  {combat.target ? (
-                    <TouchableOpacity
-                      style={styles.secondary}
-                      disabled={busy}
-                      onPress={() => encounterCall(s => s.encounterAttack({
-                        campaignId, branchId,
-                        encounterId: encounter.encounterId, targetId: combat.target!.actorId,
-                        requestId: combat.requestId('attack', combat.target!.actorId),
-                      }))}>
-                      <Text style={styles.secondaryText}>攻击 {combat.target.name}</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {combat.disabledAlly ? (
-                    <TouchableOpacity
-                      style={styles.secondary}
-                      disabled={busy}
-                      onPress={() => encounterCall(s => s.encounterRescue({
-                        campaignId, branchId,
-                        encounterId: encounter.encounterId, targetId: combat.disabledAlly!.actorId,
-                        requestId: combat.requestId('rescue', combat.disabledAlly!.actorId),
-                      }))}>
-                      <Text style={styles.secondaryText}>援救 {combat.disabledAlly.name}</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  <TouchableOpacity
-                    style={styles.secondary}
-                    disabled={busy}
-                    onPress={() => encounterCall(s => s.encounterPassTurn({
-                      campaignId, branchId, encounterId: encounter.encounterId,
-                      requestId: combat.requestId('pass'),
-                    }))}>
-                    <Text style={styles.secondaryText}>跳过（戒备）</Text>
-                  </TouchableOpacity>
-                  {combat.dashZones.map(zone => (
-                    <TouchableOpacity
-                      key={`dash-${zone.zoneId}`}
-                      style={styles.secondary}
-                      disabled={busy}
-                      onPress={() => encounterCall(s => s.encounterDash({
-                        campaignId, branchId,
-                        encounterId: encounter.encounterId, toZoneId: zone.zoneId,
-                        requestId: combat.requestId('dash', zone.zoneId),
-                      }))}>
-                      <Text style={styles.secondaryText}>疾行→{zone.zoneId}（消耗主要行动）</Text>
-                    </TouchableOpacity>
-                  ))}
-                </>
-              ) : (
-                <TouchableOpacity
-                  style={styles.secondary}
-                  disabled={busy}
-                  onPress={() => encounterCall(s => s.encounterNpcTurn({
-                    campaignId, branchId, encounterId: encounter.encounterId,
-                    requestId: combat.requestId('npc'),
-                  }))}>
-                  <Text style={styles.secondaryText}>推进自动角色行动</Text>
-                </TouchableOpacity>
-              )}
-              {combat.movementOptions.map(({ actor, zone }) => (
-                <TouchableOpacity
-                  key={`move-${actor.actorId}-${zone.zoneId}`}
-                  style={styles.secondary}
-                  disabled={busy}
-                  onPress={() => encounterCall(s => s.encounterMove({
-                    campaignId, branchId,
-                    encounterId: encounter.encounterId, actorId: actor.actorId, toZoneId: zone.zoneId,
-                    requestId: combat.requestId('move', `${actor.actorId}:${zone.zoneId}`, actor.actorId),
-                  }))}>
-                  <Text style={styles.secondaryText}>{actor.name} 移动→{zone.zoneId}（本轮标准移动）</Text>
-                </TouchableOpacity>
-              ))}
-              {combat.joinable.map(companion => (
-                <TouchableOpacity
-                  key={`join-${companion.actorId}`}
-                  style={styles.secondary}
-                  disabled={busy}
-                  onPress={() => encounterCall(s => s.encounterQueueJoin({
-                    campaignId, branchId,
-                    encounterId: encounter.encounterId, actorId: companion.actorId,
-                    requestId: combat.requestId('join', companion.actorId, companion.actorId),
-                  }))}>
-                  <Text style={styles.secondaryText}>{companion.name} 下一轮加入</Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity
-                style={styles.secondary}
-                disabled={busy}
-                onPress={() => encounterCall(s => s.encounterRetreat({
-                  campaignId, branchId, encounterId: encounter.encounterId,
-                  requestId: combat.requestId('retreat'),
-                }))}>
-                <Text style={styles.secondaryText}>撤退</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : encounter ? (
-          <View style={[styles.encounterCard, { marginTop: theme.space.md }]}>
-            <Text style={styles.cardTitle}>
-              战斗结束（
-              {encounter.status === 'resolved' ? '胜利' : encounter.status === 'escaped' ? '撤离' : '溃败'}）
-            </Text>
-            {encounter.lastAction ? <Text style={styles.bodyText}>{encounter.lastAction}</Text> : null}
-          </View>
-        ) : encounterTemplates.length > 0 ? (
-          <View style={[styles.encounterCard, { marginTop: theme.space.md }]}>
-            <Text style={styles.cardTitle}>遭遇（测试入口）</Text>
-            <View style={styles.row}>
-              {encounterTemplates.map(template => (
-                <TouchableOpacity
-                  key={template.entryId}
-                  style={[styles.secondary, encounterTemplateId === template.entryId && styles.secondaryActive]}
-                  onPress={() => setEncounterTemplateId(template.entryId)}>
-                  <Text style={styles.secondaryText}>{template.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity
-              style={styles.secondary}
-              disabled={busy}
-              onPress={() => encounterCall(s => s.beginEncounter({
-                campaignId, branchId,
-                hostiles: [{ templateId: encounterTemplateId, count: 1 }],
-                requestId: combat.requestId('begin', encounterTemplateId),
-              }))}>
-              <Text style={styles.secondaryText}>进入遭遇</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
+        <ScrollView
+          style={{ maxHeight: windowHeight * 0.5 }}
+          contentContainerStyle={{ gap: theme.space.md, paddingTop: theme.space.md }}
+          nestedScrollEnabled>
+          <EncounterHud controller={controller} onSelectActor={openActorCard} />
+          {!encounter ? <EncounterStarter controller={controller} /> : null}
 
-        {player && view ? (
+          {player && view ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>队伍、招募与通信</Text>
             {partyMembers.map(member => {
@@ -381,6 +230,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
             ))}
           </View>
         ) : null}
+        </ScrollView>
       </View>
 
       <NarrativeFeed turns={turns} goal={view?.goal ?? ''} busy={busy} />
