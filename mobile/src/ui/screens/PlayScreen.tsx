@@ -8,13 +8,15 @@
  * override reaches the play screen too (plan §14).
  */
 import React from 'react';
-import { Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { ScreenShell } from '../components/ScreenShell';
+import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PlayHeader } from '../features/play/PlayHeader';
+import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -70,6 +72,8 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const player = view?.player ?? null;
   const partyMembers = view?.party ?? [];
   const roster = [...(player ? [player] : []), ...partyMembers];
+  // Local derivation only — no LLM is asked for what the client can compute.
+  const quickActions = useContextualActions({ projection: view, encounter });
 
   return (
     <ScreenShell bottom>
@@ -406,20 +410,13 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
           </TouchableOpacity>
         </View>
 
-        <View style={styles.composer}>
-          <TextInput
-            style={[styles.input, styles.composerInput]}
-            value={intent}
-            onChangeText={setIntent}
-            editable={!busy}
-            placeholder="输入行动或对话…"
-            placeholderTextColor={theme.text.muted}
-            multiline
-          />
-          <TouchableOpacity style={styles.primary} onPress={submit} disabled={busy}>
-            <Text style={styles.primaryText}>{busy ? '结算中…' : '行动'}</Text>
-          </TouchableOpacity>
-        </View>
+        <ActionComposer
+          value={intent}
+          onChangeText={setIntent}
+          onSubmit={submit}
+          busy={busy}
+          quickActions={quickActions}
+        />
       </View>
     </ScreenShell>
   );

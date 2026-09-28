@@ -90,3 +90,39 @@
 | 有骰回合 / 无骰自动成功回合 / Narrator 失败恢复 / App kill 后恢复的展示 | **未验证** |
 | 「阅读旧内容时不抢滚动」的真机行为 | **未验证** |
 | 世界钟四皮肤格式（墨=戌时三刻 / 梭=timecode 等） | **未验证** |
+
+---
+
+## P4.4 ActionComposer + 情境快捷行动
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 快捷行动（新增） | `features/play/hooks/useContextualActions.ts` | 本地推导：遭遇态给「攻击 <目标> / 援救 <队友> / 移动到 <区域> / 戒备 / 撤退」，探索态给「观察四周 / 查看人物 / 与同伴交谈 / 查看任务（仅有进行中任务时）/ 推进任务：<名>」 |
+| 快捷 chips（新增） | `features/play/QuickActions.tsx` | 横滑 chip 条；点击只调用 `onChangeText`（填入输入框），**不存在** 自动发送路径 |
+| 常驻输入栏（新增） | `features/play/ActionComposer.tsx` | 快捷条 → 多行 `TextField`（500 字上限，接近上限显示计数）→ 「行动」按钮（≥44dp，busy 明确） |
+| 页面替换 | `screens/PlayScreen.tsx` | 输入区改用 `ActionComposer`；旧 `TextInput` + 旧 `primary` 按钮移除 |
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 方案 §14.5/§35 禁止为快捷行动新增 LLM 调用或自动发送 | 已核对：`useContextualActions` 纯本地推导；`QuickActions` 只 `onChangeText`，且 `ActionComposer` 的 `onSubmit` 仅由按钮触发 |
+| 2 | 计划中的「Planner 快捷建议」在现有协议下没有数据来源 | 名称与实现统一为「情境快捷行动」，来源是遭遇/任务/队伍等本地状态，不使用不存在的数据 |
+| 3 | 键盘遮挡风险 | AndroidManifest 已为 Activity 设置 `windowSoftInputMode="adjustResize"`，输入栏位于页面底部、不参与滚动，键盘弹出时随窗口上移；真机行为待验证 |
+| 4 | 提交失败必须恢复输入 | 由 Controller 负责写回 intent（P4.2 已实现），输入栏不做二次处理，避免两处状态 |
+| 5 | 移动端 Enter 语义 | 多行输入保留换行；发送只由按钮触发，避免误发 |
+| 6 | 字数上限「合理」 | 500 字上限 + 接近上限时显示剩余字数；上限只在 UI 层，未改任何协议 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 输入栏常驻、键盘弹出不遮挡（adjustResize） | **未验证** |
+| 点击快捷行动只填入、不发送 | **未验证** |
+| 提交失败后输入内容恢复 | **未验证** |
+| 无新增快捷行动 LLM 请求 | 静态确认（代码路径中无 LLM 调用），**运行期未验证** |
