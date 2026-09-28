@@ -12,6 +12,7 @@ class ShineWordNativePackage : ReactPackage {
     ShineWordCryptoModule(reactContext),
     ShineWordFilesModule(reactContext),
     ShineWordTextSourceModule(reactContext),
+    WorldBuildServiceModule(reactContext),
   )
 
   override fun createViewManagers(
