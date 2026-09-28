@@ -7,10 +7,11 @@
  * on the main surface — they live in the game information sheet (plan §24).
  */
 import React, { useState } from 'react';
-import { ScrollView, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { ScrollView, View, useWindowDimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenShell } from '../components/ScreenShell';
+import { StatusBanner } from '../components/StatusBanner';
 import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PartyStrip } from '../features/play/PartyStrip';
@@ -20,12 +21,12 @@ import { NpcCharacterSheet } from '../features/play/character/NpcCharacterSheet'
 import { PlayerCharacterSheet } from '../features/play/character/PlayerCharacterSheet';
 import { EncounterHud, EncounterStarter } from '../features/play/encounter/EncounterHud';
 import { GameInfoPanel } from '../features/play/panels/GameInfoPanel';
+import { GameMenu } from '../features/play/panels/GameMenu';
 import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
-import { styles } from './legacyStyles';
 
 export function PlayScreen(): React.JSX.Element {
   const { themeIdForWorld } = useTheme();
@@ -54,9 +55,6 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     notice,
     encounter,
     submit,
-    rest,
-    rewind,
-    exportSave,
     trainSkill,
     partyCall,
   } = controller;
@@ -74,6 +72,8 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const npcActor = encounter?.actors.find(actor => actor.actorId === npcActorId) ?? null;
   // The tabbed information sheet (角色 / 队伍 / 任务 / 物品 / 知识).
   const [infoOpen, setInfoOpen] = useState(false);
+  // The system menu (rest / rewind / export / campaign info / exit).
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const openActorCard = (actorId: string): void => {
     if (roster.some(member => member.actorId === actorId)) setSheetActorId(actorId);
@@ -89,7 +89,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         clockSeconds={view?.clockSeconds ?? null}
         stateVersion={view?.stateVersion ?? null}
         onBack={() => navigation.goBack()}
-        onMenu={() => setInfoOpen(true)}
+        onMenu={() => setMenuOpen(true)}
         busy={busy}
       />
 
@@ -115,24 +115,9 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
       />
 
-      <View style={{ paddingHorizontal: theme.space.lg }}>
-        {notice ? <Text style={styles.resumed}>{notice}</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        <View style={styles.row}>
-          <TouchableOpacity style={styles.secondary} onPress={() => rest('short')} disabled={busy}>
-            <Text style={styles.secondaryText}>短休</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondary} onPress={() => rest('long')} disabled={busy}>
-            <Text style={styles.secondaryText}>长休</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondary} onPress={rewind} disabled={busy}>
-            <Text style={styles.secondaryText}>回退</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondary} onPress={exportSave} disabled={busy}>
-            <Text style={styles.secondaryText}>导出存档</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.sm }}>
+        {notice ? <StatusBanner tone="info" message={notice} /> : null}
+        {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
 
         <ActionComposer
           value={intent}
@@ -188,6 +173,22 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
       </PlayPanel>
 
       <GameInfoPanel controller={controller} visible={infoOpen} onClose={() => setInfoOpen(false)} />
+
+      <GameMenu
+        controller={controller}
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onOpenInfo={() => {
+          setMenuOpen(false);
+          setInfoOpen(true);
+        }}
+        onExit={() => {
+          setMenuOpen(false);
+          // Back to the campaign list: Tabs already sits below this screen in
+          // the stack, so navigating to it pops the play screen.
+          navigation.navigate('Tabs', { screen: 'Campaigns' });
+        }}
+      />
     </ScreenShell>
   );
 }
