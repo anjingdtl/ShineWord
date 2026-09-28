@@ -231,7 +231,7 @@ export function WorldBooksEditor(props: {
             testID="book-editor-definition"
           />
           <View style={{ gap: theme.space.xs }}>
-            <Text style={[typeStyle(theme, theme.type.label), { color: theme.text.secondary }]}>
+            <Text style={[typeStyle(theme, theme.type.label), { color: theme.onRaised.secondary }]}>
               可见性
             </Text>
             <SegmentedControl
@@ -241,7 +241,7 @@ export function WorldBooksEditor(props: {
               disabled={busy}
               testID="book-editor-visibility"
             />
-            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
+            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
               public = 所有玩家可见；discoverable = 战役内发现后解锁；gm = 仅编辑模式可见。
             </Text>
           </View>
@@ -279,7 +279,7 @@ export function WorldBooksEditor(props: {
                 padding: theme.space.md,
                 backgroundColor: theme.bg.overlay,
               }}>
-              <Text style={[typeStyle(theme, theme.type.label), { color: theme.text.secondary }]}>
+              <Text style={[typeStyle(theme, theme.type.label), { color: theme.onRaised.secondary }]}>
                 差异（发布版本 → 草稿）
               </Text>
               <Text

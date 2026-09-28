@@ -58,6 +58,7 @@ export function ActionComposer(props: {
         maxLength={MAX_LENGTH}
         disabled={props.busy}
         placeholder="你打算怎么做？"
+        tone="base"
         hint={
           props.value.length > MAX_LENGTH - 80
             ? `还可输入 ${MAX_LENGTH - props.value.length} 字`

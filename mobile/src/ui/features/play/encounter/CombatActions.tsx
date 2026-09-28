@@ -33,7 +33,7 @@ export function CombatActions(props: { controller: PlayController }): React.JSX.
   return (
     <View style={{ gap: theme.space.md }}>
       <View style={{ gap: theme.space.xs }}>
-        <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+        <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
           当前行动
         </Text>
         <View style={[styles.wrap, { gap: theme.space.sm }]}>
@@ -126,7 +126,7 @@ export function CombatActions(props: { controller: PlayController }): React.JSX.
 
       {combat.movementOptions.length > 0 ? (
         <View style={{ gap: theme.space.xs }}>
-          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
             本轮标准移动
           </Text>
           <View style={[styles.wrap, { gap: theme.space.sm }]}>
@@ -152,7 +152,7 @@ export function CombatActions(props: { controller: PlayController }): React.JSX.
 
       {combat.joinable.length > 0 ? (
         <View style={{ gap: theme.space.xs }}>
-          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
             下一轮加入
           </Text>
           <View style={[styles.wrap, { gap: theme.space.sm }]}>

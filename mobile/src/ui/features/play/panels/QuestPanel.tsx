@@ -78,7 +78,7 @@ export function QuestPanel(props: { quests: QuestProgressView[] }): React.JSX.El
                     </Text>
                   ) : null}
                   {quest.completedStateVersion !== null ? (
-                    <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+                    <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
                       结算于 v{quest.completedStateVersion}
                     </Text>
                   ) : null}

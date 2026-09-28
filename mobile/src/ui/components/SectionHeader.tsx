@@ -14,9 +14,18 @@ export function SectionHeader(props: {
   action?: React.ReactNode;
   /** Draw a hairline under the block. */
   divider?: boolean;
+  /**
+   * Which surface the header sits on: `raised` (inside a Card, the common case)
+   * or `base` (directly on the page). Light skins such as 漫 invert the text
+   * ramp between the two, so the caller must state it instead of guessing.
+   */
+  tone?: 'base' | 'raised';
   style?: StyleProp<ViewStyle>;
 }): React.JSX.Element {
   const { theme } = useTheme();
+  const tone = props.tone ?? 'raised';
+  const titleColor = tone === 'raised' ? theme.onRaised.primary : theme.text.primary;
+  const subtitleColor = tone === 'raised' ? theme.onRaised.secondary : theme.text.secondary;
   return (
     <View
       style={[
@@ -31,11 +40,11 @@ export function SectionHeader(props: {
         props.style,
       ]}>
       <View style={{ flex: 1 }}>
-        <Text style={[typeStyle(theme, theme.type.heading), { color: theme.text.primary }]}>
+        <Text style={[typeStyle(theme, theme.type.heading), { color: titleColor }]}>
           {props.title}
         </Text>
         {props.subtitle ? (
-          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.secondary }]}>
+          <Text style={[typeStyle(theme, theme.type.caption), { color: subtitleColor }]}>
             {props.subtitle}
           </Text>
         ) : null}

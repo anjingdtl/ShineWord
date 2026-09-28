@@ -51,7 +51,7 @@ export function BranchList(props: {
             <Text
               style={[
                 typeStyle(theme, theme.type.caption),
-                { color: theme.text.muted, width: theme.space.lg },
+                { color: theme.onRaised.secondary, width: theme.space.lg },
               ]}>
               {role === 'main' ? '└─' : last ? '└─' : '├─'}
             </Text>

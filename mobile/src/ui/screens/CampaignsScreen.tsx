@@ -95,6 +95,7 @@ export function CampaignsScreen(): React.JSX.Element {
         <View>
           <SectionHeader
             title="我的战役"
+            tone="base"
             subtitle={campaigns.length > 0 ? `${campaigns.length} 场` : undefined}
           />
           {campaigns.length === 0 ? (

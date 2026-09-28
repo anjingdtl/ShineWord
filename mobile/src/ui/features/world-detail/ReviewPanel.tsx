@@ -55,6 +55,7 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
     <View style={{ gap: theme.space.md }}>
       <SectionHeader
         title="审查队列"
+        tone="base"
         subtitle={issues.length > 0 ? `待处理 ${issues.length} 项` : '没有待处理的审核问题'}
       />
       {notice ? <StatusBanner tone="success" message={notice} /> : null}

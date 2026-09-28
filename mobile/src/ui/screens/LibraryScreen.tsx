@@ -174,6 +174,7 @@ export function LibraryScreen(): React.JSX.Element {
         <View>
           <SectionHeader
             title="我的世界"
+            tone="base"
             subtitle={worlds.length > 0 ? `已导入 ${worlds.length} 部` : undefined}
           />
           <WorldList

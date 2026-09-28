@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { EmptyState } from '../../components/EmptyState';
 import { typeStyle } from '../../components/typography';
+import { BackgroundPattern } from '../../theme/ornaments/BackgroundPattern';
 import { useTheme } from '../../theme/ThemeContext';
 import { TurnCard } from './TurnCard';
 import type { TurnView } from '../../../runtime';
@@ -42,42 +43,48 @@ export function NarrativeFeed(props: {
   }, [props.turns.length, nearBottom]);
 
   return (
-    <FlatList
-      ref={listRef}
-      style={styles.list}
-      data={props.turns}
-      keyExtractor={item => item.turnId}
-      onScroll={onScroll}
-      scrollEventThrottle={64}
-      contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
-      ListEmptyComponent={
-        <EmptyState
-          title="故事还没开始"
-          description={
-            props.goal
-              ? `主目标：${props.goal}\n写下你的第一个行动，检定由角色卡与本地规则完成。`
-              : '写下你的第一个行动，检定由角色卡与本地规则完成。'
-          }
-        />
-      }
-      renderItem={({ item, index }) => <TurnCard turn={item} index={index} />}
-      ListFooterComponent={
-        props.busy ? (
-          <View style={{ paddingVertical: theme.space.sm }}>
-            <Text
-              style={[
-                typeStyle(theme, theme.type.caption),
-                { color: theme.text.muted, textAlign: 'center' },
-              ]}>
-              正在结算这一回合…
-            </Text>
-          </View>
-        ) : null
-      }
-    />
+    <View style={styles.list}>
+      {/* The active skin's texture (竹简竖线 / 网点纸 / 六边形网格) sits behind
+          the story; skins without one render nothing (plan §26). */}
+      <BackgroundPattern style={styles.pattern} />
+      <FlatList
+        ref={listRef}
+        style={styles.list}
+        data={props.turns}
+        keyExtractor={item => item.turnId}
+        onScroll={onScroll}
+        scrollEventThrottle={64}
+        contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
+        ListEmptyComponent={
+          <EmptyState
+            title="故事还没开始"
+            description={
+              props.goal
+                ? `主目标：${props.goal}\n写下你的第一个行动，检定由角色卡与本地规则完成。`
+                : '写下你的第一个行动，检定由角色卡与本地规则完成。'
+            }
+          />
+        }
+        renderItem={({ item, index }) => <TurnCard turn={item} index={index} />}
+        ListFooterComponent={
+          props.busy ? (
+            <View style={{ paddingVertical: theme.space.sm }}>
+              <Text
+                style={[
+                  typeStyle(theme, theme.type.caption),
+                  { color: theme.text.muted, textAlign: 'center' },
+                ]}>
+                正在结算这一回合…
+              </Text>
+            </View>
+          ) : null
+        }
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   list: { flex: 1 },
+  pattern: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
 });

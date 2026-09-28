@@ -46,6 +46,12 @@ export interface TextFieldProps {
   /** RN 0.85 keyboard action; defaults to blur-and-submit (single line). */
   submitBehavior?: TextInputProps['submitBehavior'];
   maxLength?: number;
+  /**
+   * Which surface the field's label/hint sit on: `raised` (inside a Card, the
+   * common case) or `base` (directly on the page). Light skins invert the text
+   * ramp between the two.
+   */
+  tone?: 'base' | 'raised';
   style?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
   testID?: string;
@@ -71,11 +77,18 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
   const minHeight = multiline
     ? theme.type.body.lineHeight * lines + theme.space.md * 2
     : theme.touch.min;
+  // The field box itself is `bg.overlay`, so everything inside it uses the
+  // on-raised ramp; only the label/hint depend on the host surface.
+  const hostSecondary = props.tone === 'base' ? theme.text.secondary : theme.onRaised.secondary;
+  const hostMuted = props.tone === 'base' ? theme.text.muted : theme.onRaised.secondary;
+  // Comic (light) skins cannot carry a red error line at 4.5:1, so the error
+  // uses the readable ink plus a glyph instead of relying on hue (§30).
+  const errorColor = theme.scheme === 'light' ? theme.onRaised.primary : theme.semantic.bad;
 
   return (
     <View style={[styles.root, { gap: theme.space.xs }, props.style]}>
       {props.label ? (
-        <Text style={[typeStyle(theme, theme.type.label), { color: theme.text.secondary }]}>
+        <Text style={[typeStyle(theme, theme.type.label), { color: hostSecondary }]}>
           {props.label}
         </Text>
       ) : null}
@@ -97,7 +110,7 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
           value={props.value}
           onChangeText={props.onChangeText}
           placeholder={props.placeholder}
-          placeholderTextColor={theme.text.muted}
+          placeholderTextColor={hostMuted}
           multiline={multiline}
           secureTextEntry={props.secureTextEntry === true && !revealed}
           editable={!disabled}
@@ -116,7 +129,7 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
           style={[
             typeStyle(theme, theme.type.body),
             {
-              color: disabled ? theme.text.muted : theme.onRaised.primary,
+              color: disabled ? theme.onRaised.secondary : theme.onRaised.primary,
               fontFamily,
               flex: 1,
               minHeight: multiline ? minHeight - theme.space.md * 2 : undefined,
@@ -134,17 +147,17 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
             hitSlop={{ top: theme.space.sm, bottom: theme.space.sm, left: theme.space.sm, right: theme.space.sm }}
             style={styles.toggle}>
             {revealed
-              ? <EyeOff size={18} color={theme.text.secondary} />
-              : <Eye size={18} color={theme.text.secondary} />}
+              ? <EyeOff size={18} color={hostMuted} />
+              : <Eye size={18} color={hostMuted} />}
           </Pressable>
         ) : null}
       </View>
       {hasError ? (
-        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semantic.bad }]}>
+        <Text style={[typeStyle(theme, theme.type.caption), { color: errorColor }]}>
           {'⚠ '}{props.error}
         </Text>
       ) : props.hint ? (
-        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
+        <Text style={[typeStyle(theme, theme.type.caption), { color: hostMuted }]}>
           {props.hint}
         </Text>
       ) : null}

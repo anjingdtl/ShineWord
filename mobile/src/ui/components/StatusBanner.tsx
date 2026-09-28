@@ -56,12 +56,12 @@ export function StatusBanner(props: {
       <View style={[styles.rule, { backgroundColor: color, borderRadius: theme.radius.sm }]} />
       <View style={{ flex: 1, gap: theme.space.xs }}>
         {props.title ? (
-          <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.primary, fontWeight: '700' }]}>
+          <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.primary, fontWeight: '700' }]}>
             <Text style={{ color }}>{GLYPH[tone]} </Text>
             {props.title}
           </Text>
         ) : null}
-        <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.secondary }]}>
+        <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>
           {props.title ? '' : `${GLYPH[tone]} `}
           {props.message}
         </Text>

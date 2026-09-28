@@ -74,7 +74,7 @@ export function EncounterHud(props: {
         <ZoneTrack encounter={encounter} />
 
         <View style={{ gap: theme.space.xs }}>
-          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
             场上角色（点按查看角色卡）
           </Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: theme.space.sm }}>
@@ -105,7 +105,7 @@ export function EncounterHud(props: {
 
         <CombatActions controller={props.controller} />
         {busy ? (
-          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+          <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
             正在结算遭遇行动…
           </Text>
         ) : null}

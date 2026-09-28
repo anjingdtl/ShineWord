@@ -63,7 +63,7 @@ export function ReviewIssueCard(props: {
                   ? theme.semantic.bad
                   : issue.severity === 'major'
                     ? theme.semantic.warn
-                    : theme.text.secondary,
+                    : theme.onRaised.secondary,
             },
           ]}>
           {glyph} {severity}

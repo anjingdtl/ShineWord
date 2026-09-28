@@ -8,6 +8,7 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Svg, { Polygon } from 'react-native-svg';
 import { DieBadge } from '../../components/Bar';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
@@ -26,6 +27,28 @@ const GRADES: Record<string, GradeStyle> = {
   failure: { label: '失败', glyph: '▲', good: false },
   severe_failure: { label: '大失败', glyph: '✕', good: false },
 };
+
+/** 漫 skin only: the comic "success!" burst on the strip's corner. */
+function BurstBadge(props: { text: string }): React.JSX.Element {
+  const { theme } = useTheme();
+  return (
+    <View pointerEvents="none" style={styles.burst}>
+      <Svg width={64} height={48} viewBox="0 0 52 40">
+        <Polygon
+          points="26,0 30,10 40,4 37,14 50,12 40,20 50,28 37,26 40,36 30,30 26,40 22,30 12,36 15,26 2,28 12,20 2,12 15,14 12,4 22,10"
+          fill={theme.accent.tertiary}
+          stroke={theme.border.color}
+          strokeWidth={2}
+        />
+      </Svg>
+      <View style={[StyleSheet.absoluteFill, styles.burstLabel]}>
+        <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.primary }]}>
+          {props.text}
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 export function RollStrip(props: { roll: TurnRollView }): React.JSX.Element {
   const { theme } = useTheme();
@@ -102,6 +125,7 @@ export function RollStrip(props: { roll: TurnRollView }): React.JSX.Element {
         ]}>
         {grade.glyph} {grade.label}
       </Text>
+      {theme.id === 'manga' && roll.grade === 'full_success' ? <BurstBadge text="大成功!" /> : null}
     </View>
   );
 }
@@ -110,4 +134,6 @@ const styles = StyleSheet.create({
   root: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   diceRow: { flexDirection: 'row', alignItems: 'center' },
   spacer: { flex: 1 },
+  burst: { position: 'absolute', right: -8, top: -16 },
+  burstLabel: { alignItems: 'center', justifyContent: 'center' },
 });

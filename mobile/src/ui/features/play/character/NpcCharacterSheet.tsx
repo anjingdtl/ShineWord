@@ -187,10 +187,10 @@ export function NpcCharacterSheet(props: {
           ))}
           {Array.from({ length: Math.min(npc.unknownSkillCount, MAX_UNKNOWN_ROWS) }, (_, index) => (
             <View key={`unknown-skill-${index}`} style={[styles.row, { gap: theme.space.sm }]}>
-              <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.muted, flex: 1 }]}>
+              <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary, flex: 1 }]}>
                 ？？？
               </Text>
-              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
+              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
                 未探明
               </Text>
             </View>
@@ -233,7 +233,7 @@ function UnknownBlock(props: { text: string }): React.JSX.Element {
       <Text
         style={[
           typeStyle(theme, theme.type.caption),
-          { color: theme.text.muted, textAlign: 'center', letterSpacing: 2 },
+          { color: theme.onRaised.secondary, textAlign: 'center', letterSpacing: 2 },
         ]}>
         {props.text}
       </Text>

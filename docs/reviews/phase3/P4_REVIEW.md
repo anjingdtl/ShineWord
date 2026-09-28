@@ -346,3 +346,48 @@
 | 菜单四主题截图 | **未截图** |
 | 短休 / 长休 / 回退（新分支）/ 导出存档真机回归 | **未验证** |
 | 退出到战役列表后返回栈正确 | **未验证** |
+
+---
+
+## P4.11 四主题完整适配
+
+### 实现内容
+
+| 皮肤 | 落实点 |
+|---|---|
+| 墨 | 叙事卡左侧泥金细线；叙述卡四角云纹（`Card ornament`）；竹简竖线底纹随 `BackgroundPattern` 出现在叙事流背后；世界钟显示「戌时三刻」式时辰 |
+| 烛 | 卡片内嵌双线框（`effects.insetFrame`，既有 Surface 能力）；藤蔓角花；章节分隔饰；世界钟显示「第 N 日 hh:mm」 |
+| 漫 | 白漫画格 + 3px 黑描边 + 硬投影（既有 Token）；叙事卡带对白气泡小尾；大成功时骰点条右上出现爆炸拟声徽记；网点纸底纹；世界钟显示 `D# hh:mm` |
+| 梭 | HUD 切角（`Surface cut` / `Card`）；青与品红语义色；数值全部走 mono；六边形网格底纹；世界钟显示 `T+ddd:hh:mm` |
+| 品牌 | 四皮肤中 BrandMark 几何一致，仅颜色适配（P3.1 已实现） |
+
+### 关键修复：文字 Token 与承载面错配（漫的白卡问题）
+
+| # | 位置 | 问题 | 处理 |
+|---|---|---|---|
+| 1 | `components/SectionHeader.tsx` | 标题/副标题写死 `text.*`，放在 raised 卡片上时在「漫」的白卡里变成浅灰字（≈2.9:1） | 新增 `tone: 'base' \| 'raised'`（默认 raised）；对「直接放在页面上」的 3 处（审查队列 / 我的战役 / 我的世界）显式传 `tone="base"` |
+| 2 | `components/TextField.tsx` | 标签/提示/占位符写死 `text.*`；错误行用 `semantic.bad` 在白卡上仅 3.3:1 | 新增 `tone` 参数（ActionComposer 传 `base`）；框内文字统一 `onRaised.*`；浅色皮肤的错误行改用可读墨色 + ⚠ 图形 |
+| 3 | `components/StatusBanner.tsx`、`components/SegmentedControl.tsx` | 自身底色是 `bg.overlay`，文字却用 `text.*` | 改为 `onRaised.*` |
+| 4 | 游玩页组件（`TurnCard` / `CharacterSections` / `NpcCharacterSheet` / `QuestPanel` / `EncounterHud` / `CombatActions` / `ZoneTrack`） | 卡片内标签用 `text.muted` | 统一改 `onRaised.secondary` |
+| 5 | P3 页面遗留同类问题（`BranchList` / `StepCompanions` / `ReviewIssueCard` / `WorldBooksEditor`） | 同上 | 同批修正（同类缺陷一次清干净） |
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 方案 §26「绝不因白卡造成文字 token 错用」 | 系统性排查上述 5 类位置并修正；对比度依据 Token 值静态估算，真机截图复核对齐待验证 |
+| 2 | 主题专属表现不得新增大依赖 | 全部用既有 `react-native-svg`（爆炸徽记）与既有 `BackgroundPattern`（底纹），未新增依赖 |
+| 3 | 装饰不得拦截触摸 | 新增加的气泡尾/左侧细线/爆炸徽记均 `pointerEvents="none"` |
+| 4 | 未探明/状态不得只靠颜色 | 沿用既有图形 + 文字标记（⚠危 / ⛔失能 / ✓ / ▲ / ✕ / ？？？ 未探明） |
+| 5 | 扫描线（梭） | `effects.scanlines` 仍为 false（默认关），未擅自打开 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 四主题 Play 完整截图（叙事/骰点/遭遇/角色卡/面板/菜单） | **未截图** |
+| 四主题对比度实测（尤其漫的白卡与墨的泥金） | **未验证** |
+| 漫的对白尾与爆炸徽记观感 | **未验证** |

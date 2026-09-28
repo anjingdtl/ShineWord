@@ -104,7 +104,7 @@ export function SkillSection(props: {
                   <Text
                     style={[
                       typeStyle(theme, theme.type.micro),
-                      { color: theme.text.muted, fontFamily: theme.font.numeric },
+                      { color: theme.onRaised.secondary, fontFamily: theme.font.numeric },
                     ]}>
                     {skill.threshold === null
                       ? '已至终阶'
@@ -167,7 +167,7 @@ export function AbilitySlots(props: {
                 numberOfLines={2}
                 style={[
                   typeStyle(theme, theme.type.caption),
-                  { color: ability ? theme.onRaised.primary : theme.text.muted, textAlign: 'center' },
+                  { color: ability ? theme.onRaised.primary : theme.onRaised.secondary, textAlign: 'center' },
                 ]}>
                 {ability ? ability.name : '空槽'}
               </Text>

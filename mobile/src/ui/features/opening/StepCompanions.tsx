@@ -56,7 +56,7 @@ export function StepCompanions(props: {
                 testID={`companion-${template.entryId}`}>
                 {selected ? (
                   <View style={{ gap: theme.space.xs, marginTop: theme.space.xs }}>
-                    <Text style={[typeStyle(theme, theme.type.label), { color: theme.text.secondary }]}>
+                    <Text style={[typeStyle(theme, theme.type.label), { color: theme.onRaised.secondary }]}>
                       当前指令
                     </Text>
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>

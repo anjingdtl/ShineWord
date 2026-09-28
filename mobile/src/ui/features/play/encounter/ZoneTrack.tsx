@@ -50,7 +50,7 @@ export function ZoneTrack(props: { encounter: EncounterView }): React.JSX.Elemen
                   {reachable ? ' · 可达' : ''}
                 </Text>
                 {occupants.length === 0 ? (
-                  <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted }]}>
+                  <Text style={[typeStyle(theme, theme.type.micro), { color: theme.onRaised.secondary }]}>
                     空
                   </Text>
                 ) : (
@@ -66,7 +66,7 @@ export function ZoneTrack(props: { encounter: EncounterView }): React.JSX.Elemen
                               ? theme.semantic.bad
                               : actor.side === 'party'
                                 ? theme.semantic.good
-                                : theme.text.secondary,
+                                : theme.onRaised.secondary,
                         },
                       ]}>
                       {actor.name}

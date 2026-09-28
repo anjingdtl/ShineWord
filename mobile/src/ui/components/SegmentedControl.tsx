@@ -74,7 +74,7 @@ export function SegmentedControl<T extends string>(props: {
               style={[
                 typeStyle(theme, props.compact ? theme.type.label : theme.type.small),
                 {
-                  color: selected ? theme.onAccent : theme.text.secondary,
+                  color: selected ? theme.onAccent : theme.onRaised.secondary,
                   fontWeight: selected ? '700' : '500',
                 },
               ]}>
