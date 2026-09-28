@@ -272,3 +272,43 @@
 | HUD 四主题截图 | **未截图** |
 | encounter / attack / rescue / move / dash / NPC turn / retreat 的真机回归 | **未验证** |
 | 小屏设备上叙事流仍可阅读 | **未验证** |
+
+---
+
+## P4.9 游戏信息面板
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 面板宿主（新增） | `features/play/panels/GameInfoPanel.tsx` | 一个 Bottom Sheet + 五个 Tab（角色 / 队伍 / 任务 / 物品 / 知识）；角色 Tab 内联渲染角色卡，避免嵌套 Modal |
+| 队伍（新增） | `features/play/panels/PartyPanel.tsx` | 主队（指令 / 分队 / 退出队伍）、分队（重入主队）、知识分享、招募与重新招募（含不可用原因） |
+| 任务（新增） | `features/play/panels/QuestPanel.tsx` | 五态分组（进行中 / 可接取 / 已完成 / 已失败 / 已放弃）+ 真实 counters |
+| 物品（新增） | `features/play/panels/InventoryPanel.tsx` | 名称 / 持有者 / 来源 + 转交动作 |
+| 知识（新增） | `features/play/panels/KnowledgePanel.tsx` | 已知条目 + `knownVia`（亲眼所见 / 他人告知 / 自行推断，含图形徽记） |
+| 顶栏入口 | `features/play/PlayHeader.tsx` | 新增 `☰ 信息` 入口（≥44dp 触达） |
+| 页面清理 | `screens/PlayScreen.tsx` | **删除主页面上的队伍/招募/知识分享/物品转交面板**（全部迁入信息面板）；页面缩短到约 190 行 |
+
+命名说明：方案 §4 的目标结构在 `panels/` 下同时列了 `PlayPanel.tsx` 与四个数据面板，而 §20.2 又明确允许 Sheet 载体叫 `PlayPanel`；实现上保留 `PlayPanel` = 载体，Tab 宿主命名为 `GameInfoPanel`，避免同名冲突。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 复杂操作不得占据主叙事区（方案 §24.2） | 已全部迁入信息面板；主页面只剩叙事流、队伍条、HUD、输入栏 |
+| 2 | 嵌套 Modal 在 Android 上易出现层级/返回键问题 | 角色 Tab 内联渲染角色卡（不叠加 Modal）；仅保留两个独立 Sheet（角色卡 / NPC 卡）与一个信息面板 |
+| 3 | 招募资格不能由 UI 判断 | 资格与原因字符串直接来自 `getRecruitmentOptions()` / `getRejoinOptions()`，UI 只做置灰 |
+| 4 | 知识来源不能只靠颜色 | `knownVia` 三种来源各带图形徽记（👁 / ☞ / ⟳）与中文标签 |
+| 5 | 物品转交的两个入口（§24.2 与 §24.4） | 归口到物品面板一处，避免同一动作在两处出现不同实现 |
+| 6 | 任务分组顺序 | 按 进行中 → 可接取 → 已完成 → 已失败 → 已放弃 固定顺序，不按字典序 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 五个面板四主题截图 | **未截图** |
+| 队伍指令 / 分队 / 重入 / 招募 / 知识分享 / 物品转交真机回归 | **未验证** |
+| 任务与知识面板内容与游戏内记录一致 | **未验证** |

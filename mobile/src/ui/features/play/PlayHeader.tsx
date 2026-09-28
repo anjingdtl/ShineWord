@@ -6,7 +6,7 @@
  * authoritative value is always `clockSeconds`; only the rendering differs.
  */
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Header } from '../../components/Header';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
@@ -57,19 +57,41 @@ export function PlayHeader(props: {
       onBack={props.onBack}
       backLabel="‹ 战役"
       actions={
-        <View style={styles.meta}>
-          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.secondary }]}>
-            {props.branchLabel}
-            {props.locationLabel ? ` · ${props.locationLabel}` : ''}
-          </Text>
-          <Text
-            style={[
-              typeStyle(theme, theme.type.micro),
-              { color: theme.text.muted, fontFamily: theme.font.numeric },
-            ]}>
-            {clock ? `${clock} · ` : ''}v{props.stateVersion ?? '–'}
-            {props.busy ? ' · 结算中…' : ''}
-          </Text>
+        <View style={[styles.actions, { gap: theme.space.sm }]}>
+          <View style={styles.meta}>
+            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.secondary }]}>
+              {props.branchLabel}
+              {props.locationLabel ? ` · ${props.locationLabel}` : ''}
+            </Text>
+            <Text
+              style={[
+                typeStyle(theme, theme.type.micro),
+                { color: theme.text.muted, fontFamily: theme.font.numeric },
+              ]}>
+              {clock ? `${clock} · ` : ''}v{props.stateVersion ?? '–'}
+              {props.busy ? ' · 结算中…' : ''}
+            </Text>
+          </View>
+          {props.onMenu ? (
+            <Pressable
+              onPress={props.onMenu}
+              accessibilityRole="button"
+              accessibilityLabel="打开游戏信息"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              testID="play-menu"
+              style={({ pressed }) => [
+                styles.menu,
+                {
+                  borderColor: theme.border.colorStrong,
+                  borderRadius: theme.radius.md,
+                  paddingHorizontal: theme.space.sm,
+                  paddingVertical: theme.space.xs,
+                  opacity: pressed ? 0.8 : 1,
+                },
+              ]}>
+              <Text style={[typeStyle(theme, theme.type.small), { color: theme.accentText }]}>☰ 信息</Text>
+            </Pressable>
+          ) : null}
         </View>
       }
     />
@@ -78,4 +100,6 @@ export function PlayHeader(props: {
 
 const styles = StyleSheet.create({
   meta: { alignItems: 'flex-end' },
+  actions: { flexDirection: 'row', alignItems: 'center' },
+  menu: { borderWidth: 1 },
 });
