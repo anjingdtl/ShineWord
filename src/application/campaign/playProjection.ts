@@ -127,6 +127,12 @@ export interface PlayUiProjection {
   goal: string;
   player: ActorUiProjection | null;
   party: ActorUiProjection[];
+  /**
+   * Display names of every actor the player can currently see (party plus
+   * active-encounter participants). Lets the UI label relationship rows
+   * without ever printing a raw actor id.
+   */
+  actorNames: Record<string, string>;
   skills: ActorSkillProgressView[];
   relationships: RelationshipView[];
   discoveries: DiscoveryView[];
@@ -343,6 +349,7 @@ export function buildPlayUiProjection(input: PlayProjectionInput): PlayUiProject
     goal: input.goal,
     player,
     party,
+    actorNames: Object.fromEntries(nameByActor),
     skills,
     relationships,
     discoveries,

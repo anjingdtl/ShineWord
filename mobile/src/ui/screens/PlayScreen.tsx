@@ -17,7 +17,8 @@ import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PartyStrip } from '../features/play/PartyStrip';
 import { PlayHeader } from '../features/play/PlayHeader';
-import { CharacterSheet } from '../features/play/character/CharacterSheet';
+import { CompanionCharacterSheet } from '../features/play/character/CompanionCharacterSheet';
+import { PlayerCharacterSheet } from '../features/play/character/PlayerCharacterSheet';
 import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
@@ -380,31 +381,6 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
       />
 
       <View style={{ paddingHorizontal: theme.space.lg }}>
-        {player && view ? (
-          <View style={styles.row}>
-            {view.skills
-              .filter(skill => skill.actorId === player.actorId)
-              .map(skill => (
-                <TouchableOpacity key={skill.skillId} onPress={() => trainSkill(skill.skillId)} disabled={busy}>
-                  <Text style={styles.tag}>
-                    {skill.name}·{skill.rank}（训练）
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            {partyMembers.map(member => (
-              <Text key={member.actorId} style={styles.dice}>同伴:{member.name}</Text>
-            ))}
-            <Text style={styles.tag}>
-              HP {player.resources.hp ?? '?'} · 体力 {player.resources.stamina ?? '?'}
-              {player.lifeStatus === 'critical'
-                ? ' · 濒危待援救/处置'
-                : player.lifeStatus === 'dead'
-                  ? ' · 已结束'
-                  : ''}
-              {player.conditions.includes('disabled') ? ' · 失能' : ''}
-            </Text>
-          </View>
-        ) : null}
         {notice ? <Text style={styles.resumed}>{notice}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -443,11 +419,21 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
             : undefined
         }
         onClose={() => setSheetActorId(null)}>
-        {sheetActor ? (
-          <CharacterSheet
-            actor={sheetActor}
-            isPlayer={sheetActor.actorId === player?.actorId}
-          />
+        {sheetActor && view ? (
+          sheetActor.actorId === view.player?.actorId ? (
+            <PlayerCharacterSheet projection={view} busy={busy} onTrain={trainSkill} />
+          ) : (
+            <CompanionCharacterSheet
+              projection={view}
+              actor={sheetActor}
+              busy={busy}
+              onSetDirective={directive =>
+                partyCall(s => s.setCompanionDirective({
+                  campaignId, branchId, actorId: sheetActor.actorId, directive,
+                }))
+              }
+            />
+          )
         ) : null}
       </PlayPanel>
     </ScreenShell>

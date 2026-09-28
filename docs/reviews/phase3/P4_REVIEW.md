@@ -165,3 +165,41 @@
 | 队伍条四主题截图 / 面板四主题截图 | **未截图** |
 | Android Back 先关面板、面板可关闭 | **未验证** |
 | 队伍条气血/体力与真实状态一致（含濒危、失能） | **未验证** |
+
+---
+
+## P4.6 玩家与同伴角色卡
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 区块（新增） | `features/play/character/CharacterSections.tsx` | 技能区（骰面 / 等阶名 / 五阶阶梯 / 真实练习进度 `practicePoints / PRACTICE_THRESHOLDS[rank]` / 终阶显示「已至终阶」）、能力四槽（含冷却到期的状态版本）、装备与物品（含来源）、关系（按显示名 + 亲密条）、同伴指令五态选择 |
+| 玩家卡（新增） | `features/play/character/PlayerCharacterSheet.tsx` | 框架 + 技能（含训练动作）+ 能力 + 装备 + 关系 |
+| 同伴卡（新增） | `features/play/character/CompanionCharacterSheet.tsx` | 框架 + 指令（可就地调整）+ 技能（只读）+ 能力 + 装备 |
+| 投影补充 | `src/application/campaign/playProjection.ts` | 新增 `actorNames`（玩家 + 当前可见角色显示名），关系行不再需要打印 actorId |
+| 页面接线 | `screens/PlayScreen.tsx` | 面板按角色类型渲染玩家 / 同伴卡；**移除主页面上的技能训练入口**（迁移进玩家卡，方案 §25.2） |
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 练习点必须按真实阈值显示（5/10/20/40），master 无阈值 | 直接从核心投影取 `threshold`（null = 终阶），UI 不做任何换算 |
+| 2 | 四预备槽要能显示空槽 | 以 `preparedAbilitySlots`（规则域常量）补空槽，空槽用虚线 + 降透明度 + 「空槽」文字 |
+| 3 | 装备需要显示来源 | 来源标签映射 `starting_loadout/recruitment/quest_reward/encounter_loot/transfer`，未记录时明示「来源未记录」 |
+| 4 | 关系行不能显示 `actor-npc-1` 这类 id | 已新增投影 `actorNames`；仍未知时回退显示 id（Debug 场景），正常路径为显示名 |
+| 5 | 主页面仍残留训练按钮，与方案 §25.2 冲突 | **已修复**：主页面训练入口删除，训练只在玩家卡技能区 |
+| 6 | 同伴指令不应只出现在主页面队伍面板 | 已加入同伴卡；主页面队伍面板将随 P4.9 迁入队伍面板，避免两处重复 |
+| 7 | 角色卡信息不得泄漏 GM 数据 | 玩家/同伴卡只渲染 `ActorUiProjection`（来源即 party 投影），不含 GM 字段 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 玩家卡 / 同伴卡四主题截图 | **未截图** |
+| `practicePoints` 与 `PRACTICE_THRESHOLDS` 实际显示一致 | **未验证** |
+| 能力冷却状态与实际一致 | **未验证** |
+| 技能训练在角色卡内执行（真机） | **未验证** |
