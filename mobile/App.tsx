@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +9,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { ThemeProvider } from './src/ui/theme';
+import { ThemeGalleryScreen } from './src/ui/screens/ThemeGalleryScreen';
 import type { ApiProfile } from '../src/application/llm/types';
 import { loadApiProfile, saveApiProfile } from './src/profileStore';
 import { KeychainSecretStore } from './src/secureKeyStore';
@@ -42,6 +44,7 @@ import {
   type WorldLibraryEntry,
 } from './src/worldImport';
 import { assembleBook } from '../src/application/worldPackage/publish';
+import { projectPlayerEntriesAtAnchor } from '../src/application/campaign/session';
 import type { BookSection, ContentEntry } from '../src/domain/content/types';
 import type { CompanionDirective } from '../src/domain/characters/card';
 import { createCampaign } from '../src/application/campaign/createCampaign';
@@ -103,11 +106,23 @@ function assembleBookViews(
 }
 
 export default function App(): React.JSX.Element {
+  return (
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <AppShell />
+      </SafeAreaProvider>
+    </ThemeProvider>
+  );
+}
+
+function AppShell(): React.JSX.Element {
   const [profile, setProfile] = useState<ApiProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>({ name: 'library' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Temporary P1 inspection harness (long-press the settings title to reach it).
+  const [showThemeGallery, setShowThemeGallery] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +141,9 @@ export default function App(): React.JSX.Element {
     };
   }, []);
 
+  if (showThemeGallery) {
+    return <ThemeGalleryScreen onClose={() => setShowThemeGallery(false)} />;
+  }
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
@@ -138,6 +156,7 @@ export default function App(): React.JSX.Element {
     return (
       <SettingsScreen
         profile={profile}
+        onOpenThemeGallery={() => setShowThemeGallery(true)}
         onSaved={savedProfile => {
           setProfile(savedProfile);
           setScreen({ name: 'library' });
@@ -210,6 +229,8 @@ export default function App(): React.JSX.Element {
 function SettingsScreen(props: {
   profile: ApiProfile | null;
   onSaved: (profile: ApiProfile) => void;
+  /** Hidden P1 entry point for the theme self-check gallery. */
+  onOpenThemeGallery?: () => void;
 }): React.JSX.Element {
   const [endpoint, setEndpoint] = useState(props.profile?.endpoint ?? '');
   const [model, setModel] = useState(props.profile?.model ?? '');
@@ -241,7 +262,9 @@ function SettingsScreen(props: {
 
   return (
     <SafeAreaView style={styles.page}>
-      <Text style={styles.title}>ShineWord</Text>
+      <Text style={styles.title} onLongPress={props.onOpenThemeGallery}>
+        ShineWord
+      </Text>
       <Text style={styles.subtitle}>小说三宝书 · 单人跑团战役</Text>
       <TextInput
         style={styles.input}
@@ -583,6 +606,14 @@ function BooksScreen(props: {
           } else if (draft) {
             setEditorStatus(`发现基于 r${draft.baseRevision} 的旧草稿；当前发布版本是 r${packageRevision}，需要人工核对后再编辑。`);
           }
+        } else {
+          const facts = await runtime.worldStore.listFacts(props.worldId);
+          nextEntries = projectPlayerEntriesAtAnchor(
+            pkg.entries,
+            facts,
+            campaignState?.anchorWorldTimeOrder ?? undefined,
+            discoveries,
+          );
         }
         setPackageEntries(nextEntries);
         setBaseEntries(pkg.entries);
