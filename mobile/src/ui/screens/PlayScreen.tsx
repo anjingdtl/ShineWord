@@ -8,7 +8,7 @@
  * override reaches the play screen too (plan §14).
  */
 import React, { useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
@@ -19,6 +19,7 @@ import { PartyStrip } from '../features/play/PartyStrip';
 import { PlayHeader } from '../features/play/PlayHeader';
 import { CompanionCharacterSheet } from '../features/play/character/CompanionCharacterSheet';
 import { PlayerCharacterSheet } from '../features/play/character/PlayerCharacterSheet';
+import { NpcCharacterSheet } from '../features/play/character/NpcCharacterSheet';
 import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
@@ -81,6 +82,9 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   // Which actor's character sheet is open (null = closed).
   const [sheetActorId, setSheetActorId] = useState<string | null>(null);
   const sheetActor = roster.find(member => member.actorId === sheetActorId) ?? null;
+  // NPC / creature sheets use the safe public projection and load on demand.
+  const [npcActorId, setNpcActorId] = useState<string | null>(null);
+  const npcActor = encounter?.actors.find(actor => actor.actorId === npcActorId) ?? null;
 
   return (
     <ScreenShell bottom>
@@ -103,10 +107,18 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
             </Text>
             <View style={styles.row}>
               {encounter.actors.map(actor => (
-                <Text key={actor.actorId} style={actor.side === 'party' ? styles.tag : styles.dice}>
-                  {actor.name} {actor.hp}/{actor.maxHp}@{actor.zoneId}
-                  {actor.conditions.includes('disabled') ? ' 失能' : ''}
-                </Text>
+                <Pressable
+                  key={actor.actorId}
+                  onPress={() =>
+                    actor.side === 'party' ? setSheetActorId(actor.actorId) : setNpcActorId(actor.actorId)
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={`查看 ${actor.name} 的角色卡`}>
+                  <Text style={actor.side === 'party' ? styles.tag : styles.dice}>
+                    {actor.name} {actor.hp}/{actor.maxHp}@{actor.zoneId}
+                    {actor.conditions.includes('disabled') ? ' 失能' : ''}
+                  </Text>
+                </Pressable>
               ))}
             </View>
             {encounter.pendingActorIds.length > 0 ? (
@@ -434,6 +446,21 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
               }
             />
           )
+        ) : null}
+      </PlayPanel>
+
+      <PlayPanel
+        visible={npcActorId !== null}
+        title={npcActor?.name ?? '角色'}
+        subtitle="公开投影 · 未探明内容保持隐藏"
+        onClose={() => setNpcActorId(null)}>
+        {npcActorId ? (
+          <NpcCharacterSheet
+            campaignId={campaignId}
+            branchId={branchId}
+            actorId={npcActorId}
+            side={npcActor?.side}
+          />
         ) : null}
       </PlayPanel>
     </ScreenShell>
