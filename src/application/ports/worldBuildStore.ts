@@ -1,3 +1,5 @@
+import type { LlmPhysicalRequestMetric } from '../llm/types';
+
 /**
  * Persistent build-run storage (closeout C2, plan §6.2).
  *
@@ -96,6 +98,13 @@ export interface BuildRunStore {
     retryAt?: string | null;
     now: string;
   }): Promise<boolean>;
+  /** Appends sanitized physical-attempt measurements to the unit checkpoint. */
+  appendUnitRequestMetrics(
+    unitId: string,
+    fencingToken: number,
+    metrics: readonly LlmPhysicalRequestMetric[],
+    now: string,
+  ): Promise<boolean>;
   /** Replaces a unit with child units (C3 split); fenced by token. */
   replaceUnitWithChildren(input: {
     unitId: string;

@@ -83,6 +83,64 @@ test('provider rejects public cleartext HTTP but permits explicit localhost', as
     .complete({ role: 'Narrator', system: 's', user: 'u', maxOutputTokens: 10 });
 });
 
+test('provider records every physical reasoning attempt and honors a strict request cap', async () => {
+  const secrets = new MemorySecretStore();
+  await secrets.set('shineword.llm.p1', 'k');
+  const requests = [];
+  const observed = [];
+  let call = 0;
+  const provider = new OpenAICompatibleProvider(profile(), secrets, {
+    async post(input) {
+      requests.push(input);
+      call += 1;
+      return call === 1
+        ? { status: 200, body: JSON.stringify({
+          choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'private reasoning is not returned' } }],
+          usage: { prompt_tokens: 12, completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 99 } },
+        }), timings: { responseHeadersMs: 25, completeResponseMs: 30 } }
+        : { status: 200, body: JSON.stringify({
+          choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }],
+          usage: { prompt_tokens: 14, completion_tokens: 110, completion_tokens_details: { reasoning_tokens: 80 } },
+        }), timings: { responseHeadersMs: 20, completeResponseMs: 35 } };
+    },
+  }, 1000, { maxPhysicalRequests: 2, onPhysicalRequest: metric => observed.push(metric) });
+
+  const result = await provider.complete({ role: 'Extractor', system: 's', user: 'u', maxOutputTokens: 100 });
+  assert.equal(requests.length, 2);
+  assert.equal(result.requestMetrics.length, 2);
+  assert.equal(observed.length, 2);
+  assert.equal(result.requestMetrics[0].outcome, 'reasoning_only');
+  assert.equal(result.requestMetrics[0].usage.reasoningTokens, 99);
+  assert.equal(result.requestMetrics[1].outcome, 'completed');
+  assert.equal(result.requestMetrics[1].timings.responseHeadersMs, 20);
+  assert.equal(JSON.parse(requests[0].body).thinking, undefined,
+    'the provider does not add an automatic reasoning opt-out');
+  assert.equal(JSON.stringify(result.requestMetrics).includes('private reasoning'), false);
+});
+
+test('provider emits one physical attempt when configured with a one-request cap', async () => {
+  const secrets = new MemorySecretStore();
+  await secrets.set('shineword.llm.p1', 'k');
+  let requests = 0;
+  const observed = [];
+  const provider = new OpenAICompatibleProvider(profile(), secrets, {
+    async post() {
+      requests += 1;
+      return { status: 200, body: JSON.stringify({
+        choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'reasoning' } }],
+        usage: { completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 100 } },
+      }) };
+    },
+  }, 1000, { maxPhysicalRequests: 1, onPhysicalRequest: metric => observed.push(metric) });
+  await assert.rejects(
+    provider.complete({ role: 'Extractor', system: 's', user: 'u', maxOutputTokens: 100 }),
+    /只输出了思维链/,
+  );
+  assert.equal(requests, 1);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].outcome, 'reasoning_only');
+});
+
 test('turn request budget hard-stops the fifth physical request', () => {
   const budget = new TurnRequestBudget(4);
   budget.consume('Planner');

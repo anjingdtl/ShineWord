@@ -15,6 +15,7 @@ import type { BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/wo
 import type { WorldStore, WorldRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
+import { LlmRequestFailure } from '../llm/types';
 import { planExtractGroups, type ModelBudget } from './groupPlanner';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 
@@ -249,6 +250,33 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   }
 
   let lostLease = false;
+  let leaseRenewalInFlight: Promise<void> | null = null;
+  const renewLeaseInBackground = (): void => {
+    if (leaseRenewalInFlight || lostLease) return;
+    leaseRenewalInFlight = deps.runStore.renewLease(runId, owner, fencingToken, ttl, now())
+      .then(renewed => { if (!renewed) lostLease = true; })
+      .catch(() => { lostLease = true; })
+      .finally(() => { leaseRenewalInFlight = null; });
+  };
+  const leaseTimer = setInterval(renewLeaseInBackground, Math.max(25, Math.floor(ttl / 3)));
+  const confirmLeaseAfterRequest = async (): Promise<boolean> => {
+    if (lostLease) return false;
+    const renewed = await deps.runStore.renewLease(runId, owner, fencingToken, ttl, now());
+    if (!renewed) lostLease = true;
+    return renewed;
+  };
+  const pauseResultAfterRequest = async (): Promise<ExecuteRunResult> => {
+    await deps.runStore.setRunStatus(runId, 'paused_user', now());
+    const paused = await deps.runStore.getRun(runId);
+    return {
+      runId,
+      completed: false,
+      unitsDone: paused?.unitsDone ?? run.unitsDone,
+      unitsTotal: paused?.unitsTotal ?? run.unitsTotal,
+      unitsFailed: paused?.unitsFailed ?? run.unitsFailed,
+      lostLease: false,
+    };
+  };
   try {
     for (;;) {
       if (deps.signal?.aborted) {
@@ -318,6 +346,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const extraction = await deps.extractor.extract({
             unitId: unit.unitId, chunk, chunkText, worldId: run.worldId,
           });
+          if (deps.signal?.aborted) return await pauseResultAfterRequest();
+          if (!(await confirmLeaseAfterRequest())) { lostLease = true; break; }
           const committed = await commitExtractionForChunks(
             deps, run, [chunk], extraction, evidenceSource,
           );
@@ -347,18 +377,34 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const group = await deps.groupExtractor.extract({
             unitId: unit.unitId, segments, worldId: run.worldId,
           });
+          if (deps.signal?.aborted) return await pauseResultAfterRequest();
+          if (!(await confirmLeaseAfterRequest())) { lostLease = true; break; }
           await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
           const ok = await deps.runStore.completeUnit({
             unitId: unit.unitId, fencingToken, status: 'completed',
-            usageJson: JSON.stringify({ rejectedQuotes: group.rejectedQuotes }),
+            usageJson: JSON.stringify({
+              rejectedQuotes: group.rejectedQuotes,
+              requestMetrics: group.requestMetrics ?? [],
+            }),
             resultRef: pendingChunks.map(chunk => chunkJobId(chunk.chunkId)).join(','),
             now: now(),
           });
           if (!ok) { lostLease = true; break; }
         }
       } catch (error) {
+        if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
+          const recorded = await deps.runStore.appendUnitRequestMetrics(
+            unit.unitId, fencingToken, error.requestMetrics, now(),
+          );
+          if (!recorded) lostLease = true;
+        }
+        if (lostLease) break;
+        if (deps.signal?.aborted) return await pauseResultAfterRequest();
         const message = error instanceof Error ? error.message : String(error);
         const classification = classifyExtractionError(message);
+        const persistedMessage = error instanceof LlmRequestFailure
+          ? safeProviderFailureText(error, classification)
+          : message.slice(0, 500);
         if (classification === 'truncation' && ranges.length > 1) {
           // Transactional split (plan §7.2): replace the oversized group with
           // halved child units; the parent is canceled and never counts.
@@ -392,18 +438,21 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           if (!replaced) { lostLease = true; break; }
           continue;
         }
-        const backoffMs = classification === 'config' ? 0 : 5_000 * Math.min(unit.attempt, 6);
+        // claimUnit increments the persisted attempt after `unit` was read;
+        // account for that in the first backoff too, or a failed first request
+        // is immediately sent a second physical time before the loop yields.
+        const backoffMs = classification === 'config' ? 0 : 5_000 * Math.min(unit.attempt + 1, 6);
         await deps.runStore.completeUnit({
           unitId: unit.unitId,
           fencingToken,
           status: classification === 'config' ? 'needs_review' : 'failed_retryable',
           errorCode: classification,
-          errorMessage: message.slice(0, 500),
+          errorMessage: persistedMessage,
           retryAt: classification === 'config' ? null : new Date(Date.parse(now()) + backoffMs).toISOString(),
           now: now(),
         });
         if (classification === 'config') {
-          await deps.runStore.setRunStatus(runId, 'needs_review', now(), classification, message.slice(0, 500));
+          await deps.runStore.setRunStatus(runId, 'needs_review', now(), classification, persistedMessage);
           break;
         }
       }
@@ -438,6 +487,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       unitsTotal: fresh.unitsTotal, unitsFailed: fresh.unitsFailed, lostLease,
     };
   } finally {
+    clearInterval(leaseTimer);
+    if (leaseRenewalInFlight) await leaseRenewalInFlight;
     if (!lostLease) {
       await deps.runStore.releaseLease(runId, owner, fencingToken, now());
     }
@@ -594,6 +645,21 @@ function classifyExtractionError(message: string): ErrorClass {
     }
   }
   return 'unknown';
+}
+
+function safeProviderFailureText(error: LlmRequestFailure, classification: ErrorClass): string {
+  const metric = error.requestMetrics[error.requestMetrics.length - 1];
+  if (metric?.httpStatus !== null && metric?.httpStatus !== undefined) {
+    return `模型服务请求失败（HTTP ${metric.httpStatus}，${classification}）。`;
+  }
+  if (metric?.errorCategory === 'timeout') {
+    return `模型请求超时（${metric.durationMs}ms）。`;
+  }
+  if (metric?.errorCategory === 'network') return '模型网络连接失败。';
+  if (metric?.completionState === 'content_filter') return '模型输出被服务商内容过滤拦截。';
+  if (metric?.completionState === 'reasoning_only') return '模型只返回推理内容，正文未完成。';
+  if (classification === 'truncation') return '模型响应被截断，结果未通过本地解析。';
+  return '模型结果未通过本地校验。';
 }
 
 /**

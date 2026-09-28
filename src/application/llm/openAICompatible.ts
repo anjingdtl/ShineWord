@@ -1,8 +1,10 @@
+import { LlmRequestFailure } from './types';
 import type {
   ApiProfile,
   LlmProvider,
   LlmRequest,
   LlmResponse,
+  LlmPhysicalRequestMetric,
   SecretStore,
 } from './types';
 
@@ -17,6 +19,13 @@ export interface HttpResponse {
   status: number;
   body: string;
   headers?: Record<string, string>;
+  timings?: {
+    localQueueMs?: number | null;
+    responseHeadersMs?: number | null;
+    firstBodyByteMs?: number | null;
+    completeResponseMs?: number | null;
+    providerQueueMs?: number | null;
+  };
 }
 
 export interface HttpTransport {
@@ -100,12 +109,26 @@ function messageText(
 const REASONING_ONLY_RETRIES = 2;
 const RETRY_BUDGET_GROWTH = 1.5;
 
+export interface OpenAICompatibleProviderOptions {
+  /** Physical HTTP request cap; omitted preserves the existing retry policy. */
+  maxPhysicalRequests?: number;
+  /** Optional redacted observer, invoked once for each completed HTTP attempt. */
+  onPhysicalRequest?: (metric: LlmPhysicalRequestMetric) => void;
+}
+
+function transportErrorCategory(error: unknown): 'timeout' | 'network' {
+  const value = error as { name?: unknown; code?: unknown; message?: unknown };
+  const descriptor = `${String(value?.name ?? '')} ${String(value?.code ?? '')} ${String(value?.message ?? '')}`;
+  return /abort|timeout|timed out/i.test(descriptor) ? 'timeout' : 'network';
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   constructor(
     private readonly profile: ApiProfile,
     private readonly secrets: SecretStore,
     private readonly transport: HttpTransport,
     private readonly timeoutMs = 60_000,
+    private readonly options: OpenAICompatibleProviderOptions = {},
   ) {}
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
@@ -121,6 +144,17 @@ export class OpenAICompatibleProvider implements LlmProvider {
     let attempt = 0;
     let lastEmptyReason: EmptyCompletionReason | undefined;
     let lastFinishReason: string | null = null;
+    const requestMetrics: LlmPhysicalRequestMetric[] = [];
+    const maxPhysicalRequests = this.options.maxPhysicalRequests ?? REASONING_ONLY_RETRIES + 1;
+    if (!Number.isInteger(maxPhysicalRequests) || maxPhysicalRequests < 1
+      || maxPhysicalRequests > REASONING_ONLY_RETRIES + 1) {
+      throw new Error(`maxPhysicalRequests must be an integer from 1 to ${REASONING_ONLY_RETRIES + 1}.`);
+    }
+    const observe = (metric: LlmPhysicalRequestMetric): void => {
+      requestMetrics.push(metric);
+      try { this.options.onPhysicalRequest?.(metric); } catch { /* telemetry must not fail a turn */ }
+    };
+    const requestUrl = normalizeEndpoint(this.profile.endpoint);
 
     while (true) {
       const body: Record<string, unknown> = {
@@ -141,10 +175,12 @@ export class OpenAICompatibleProvider implements LlmProvider {
         body.thinking = { type: 'disabled' };
       }
 
-      let response;
+      let response: HttpResponse;
+      const physicalStartedAt = Date.now();
+      const physicalAttempt = requestMetrics.length + 1;
       try {
         response = await this.transport.post({
-          url: normalizeEndpoint(this.profile.endpoint),
+          url: requestUrl,
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
@@ -153,20 +189,48 @@ export class OpenAICompatibleProvider implements LlmProvider {
           timeoutMs: this.timeoutMs,
         });
       } catch (error) {
+        const category = transportErrorCategory(error);
+        observe({
+          attempt: physicalAttempt,
+          durationMs: Math.max(0, Date.now() - physicalStartedAt),
+          httpStatus: null,
+          outcome: 'transport_error',
+          errorCategory: category,
+          timings: { completeResponseMs: Math.max(0, Date.now() - physicalStartedAt) },
+        });
         if (error instanceof Error && /aborted?/i.test(error.name + error.message)) {
-          throw new Error(`LLM 请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`);
+          throw new LlmRequestFailure(
+            `LLM 请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`,
+            requestMetrics,
+          );
         }
-        throw error;
+        throw new LlmRequestFailure(error instanceof Error ? error.message : 'LLM transport failed.', requestMetrics);
       }
 
       let parsed: OpenAIResponseShape;
       try {
         parsed = JSON.parse(response.body) as OpenAIResponseShape;
       } catch {
-        throw new Error(`LLM provider returned non-JSON HTTP body (status ${response.status}).`);
+        observe({
+          attempt: physicalAttempt,
+          durationMs: Math.max(0, Date.now() - physicalStartedAt),
+          httpStatus: response.status,
+          outcome: 'invalid_response',
+          errorCategory: 'invalid_response',
+          timings: response.timings,
+        });
+        throw new LlmRequestFailure(`LLM provider returned non-JSON HTTP body (status ${response.status}).`, requestMetrics);
       }
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(parsed.error?.message || `LLM provider HTTP ${response.status}.`);
+        observe({
+          attempt: physicalAttempt,
+          durationMs: Math.max(0, Date.now() - physicalStartedAt),
+          httpStatus: response.status,
+          outcome: 'http_error',
+          errorCategory: 'provider_http',
+          timings: response.timings,
+        });
+        throw new LlmRequestFailure(parsed.error?.message || `LLM provider HTTP ${response.status}.`, requestMetrics);
       }
 
       const choice = parsed.choices?.[0];
@@ -182,18 +246,28 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
       if (text.trim()) {
         const usage = parsed.usage;
+        const normalizedUsage = usage
+          ? {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+              cachedInputTokens: usage.prompt_tokens_details?.cached_tokens,
+              reasoningTokens: usage.completion_tokens_details?.reasoning_tokens,
+              estimated: false,
+            }
+          : { estimated: true };
+        observe({
+          attempt: physicalAttempt,
+          durationMs: Math.max(0, Date.now() - physicalStartedAt),
+          httpStatus: response.status,
+          outcome: 'completed',
+          timings: response.timings,
+          usage: normalizedUsage,
+        });
         return {
           text,
           requestId: parsed.id,
-          usage: usage
-            ? {
-                inputTokens: usage.prompt_tokens,
-                outputTokens: usage.completion_tokens,
-                cachedInputTokens: usage.prompt_tokens_details?.cached_tokens,
-                reasoningTokens: usage.completion_tokens_details?.reasoning_tokens,
-                estimated: false,
-              }
-            : { estimated: true },
+          usage: normalizedUsage,
+          requestMetrics,
         };
       }
 
@@ -203,12 +277,31 @@ export class OpenAICompatibleProvider implements LlmProvider {
         hasChoices: Boolean(choice),
       });
 
+      const emptyUsage = parsed.usage
+        ? {
+            inputTokens: parsed.usage.prompt_tokens,
+            outputTokens: parsed.usage.completion_tokens,
+            cachedInputTokens: parsed.usage.prompt_tokens_details?.cached_tokens,
+            reasoningTokens: parsed.usage.completion_tokens_details?.reasoning_tokens,
+            estimated: false,
+          }
+        : { estimated: true };
+      observe({
+        attempt: physicalAttempt,
+        durationMs: Math.max(0, Date.now() - physicalStartedAt),
+        httpStatus: response.status,
+        outcome: lastEmptyReason === 'reasoning_only' ? 'reasoning_only' : 'invalid_response',
+        completionState: lastEmptyReason,
+        timings: response.timings,
+        usage: emptyUsage,
+      });
+
       // A reasoning-only completion means the model spent the budget thinking
       // (TAVO-MINI approach): retry with a grown budget instead of failing the
       // turn or disabling reasoning. content_filter / no_choices never retry.
       if (
         lastEmptyReason === 'reasoning_only' &&
-        attempt < REASONING_ONLY_RETRIES
+        attempt < Math.min(REASONING_ONLY_RETRIES, maxPhysicalRequests - 1)
       ) {
         attempt += 1;
         maxTokens = Math.min(Math.ceil(maxTokens * RETRY_BUDGET_GROWTH), capabilityMax);
@@ -216,18 +309,19 @@ export class OpenAICompatibleProvider implements LlmProvider {
       }
 
       if (lastEmptyReason === 'reasoning_only') {
-        throw new Error(
+        throw new LlmRequestFailure(
           '模型只输出了思维链，未产生正文（已自动重试并提高输出预算）。' +
             `请提高该模型的最大输出 token 配置后重试（finish_reason=${lastFinishReason ?? 'unknown'}）。`,
+          requestMetrics,
         );
       }
       if (lastEmptyReason === 'content_filter') {
-        throw new Error('模型输出被服务商内容过滤拦截，请调整行动描述后重试。');
+        throw new LlmRequestFailure('模型输出被服务商内容过滤拦截，请调整行动描述后重试。', requestMetrics);
       }
       if (lastEmptyReason === 'length') {
-        throw new Error('模型输出被截断（finish_reason=length），请提高输出 token 上限。');
+        throw new LlmRequestFailure('模型输出被截断（finish_reason=length），请提高输出 token 上限。', requestMetrics);
       }
-      throw new Error('LLM provider returned an empty completion.');
+      throw new LlmRequestFailure('LLM provider returned an empty completion.', requestMetrics);
     }
   }
 }

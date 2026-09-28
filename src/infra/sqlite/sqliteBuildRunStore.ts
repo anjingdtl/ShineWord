@@ -6,6 +6,7 @@ import type {
   BuildUnitRecord,
 } from '../../application/ports/worldBuildStore';
 import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
+import type { LlmPhysicalRequestMetric } from '../../application/llm/types';
 
 interface RunRow extends SqliteRow {
   run_id: string;
@@ -65,6 +66,31 @@ function requireNumber(row: SqliteRow, key: string): number {
 function optionalString(row: SqliteRow, key: string): string | null {
   const value = row[key];
   return typeof value === 'string' ? value : null;
+}
+
+function parseUsageObject(serialized: string | null): Record<string, unknown> {
+  if (!serialized) return {};
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  } catch { /* preserve the legacy value below */ }
+  return { legacyUsageJson: serialized };
+}
+
+function mergeUsageJson(previous: string | null, incoming: string | null): string | null {
+  if (incoming === null) return previous;
+  if (previous === null) return incoming;
+  const before = parseUsageObject(previous);
+  const after = parseUsageObject(incoming);
+  const beforeMetrics = Array.isArray(before.requestMetrics) ? before.requestMetrics : [];
+  const afterMetrics = Array.isArray(after.requestMetrics) ? after.requestMetrics : [];
+  const merged = { ...before, ...after };
+  if (beforeMetrics.length > 0 || afterMetrics.length > 0) {
+    merged.requestMetrics = [...beforeMetrics, ...afterMetrics];
+  }
+  return JSON.stringify(merged);
 }
 
 function runFromRow(row: RunRow): BuildRunRecord {
@@ -310,9 +336,9 @@ export class SqliteBuildRunStore implements BuildRunStore {
     now: string;
   }): Promise<boolean> {
     return this.db.transaction(async tx => {
-      const run = await tx.queryOne<{ fencing_token: number }>(
-        `SELECT fencing_token FROM world_build_runs
-           WHERE run_id = (SELECT run_id FROM world_build_units WHERE unit_id = ?)`,
+      const run = await tx.queryOne<{ fencing_token: number; usage_json: string | null }>(
+        `SELECT r.fencing_token, u.usage_json FROM world_build_runs r
+           JOIN world_build_units u ON u.run_id = r.run_id WHERE u.unit_id = ?`,
         [input.unitId],
       );
       if (!run || run.fencing_token !== input.fencingToken) return false;
@@ -322,7 +348,7 @@ export class SqliteBuildRunStore implements BuildRunStore {
            retry_at = ?, updated_at = ?
          WHERE unit_id = ?`,
         [
-          input.status, input.resultRef ?? null, input.usageJson ?? null,
+          input.status, input.resultRef ?? null, mergeUsageJson(run.usage_json, input.usageJson ?? null),
           input.errorCode ?? null, input.errorMessage ?? null, input.retryAt ?? null,
           input.now, input.unitId,
         ],
@@ -341,6 +367,28 @@ export class SqliteBuildRunStore implements BuildRunStore {
           [input.now, input.unitId],
         );
       }
+      return true;
+    });
+  }
+
+  async appendUnitRequestMetrics(
+    unitId: string,
+    fencingToken: number,
+    metrics: readonly LlmPhysicalRequestMetric[],
+    now: string,
+  ): Promise<boolean> {
+    if (metrics.length === 0) return false;
+    return this.db.transaction(async tx => {
+      const row = await tx.queryOne<{ usage_json: string | null; fencing_token: number }>(
+        `SELECT u.usage_json, r.fencing_token FROM world_build_units u
+           JOIN world_build_runs r ON r.run_id = u.run_id WHERE u.unit_id = ?`, [unitId],
+      );
+      if (!row || row.fencing_token !== fencingToken) return false;
+      const next = mergeUsageJson(row.usage_json, JSON.stringify({ requestMetrics: metrics }));
+      await tx.execute(
+        'UPDATE world_build_units SET usage_json = ?, updated_at = ? WHERE unit_id = ?',
+        [next, now, unitId],
+      );
       return true;
     });
   }

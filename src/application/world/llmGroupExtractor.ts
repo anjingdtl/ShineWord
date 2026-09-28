@@ -14,7 +14,7 @@ import type {
   RuleMappingProposal,
 } from '../../domain/world/types';
 import { codePointLength } from '../../domain/world/textOffsets';
-import type { LlmRequest } from '../../application/llm/types';
+import { LlmRequestFailure, type LlmPhysicalRequestMetric, type LlmRequest } from '../../application/llm/types';
 import type { LlmCompleteFn } from './llmExtractor';
 import { parseExtractorJson } from './llmExtractor';
 
@@ -85,6 +85,8 @@ export interface GroupExtractionResult {
   ruleMappings: RuleMappingProposal[];
   /** Facts dropped because the quote did not exist in the claimed segment. */
   rejectedQuotes: number;
+  /** Redacted timings and token counts for each physical provider attempt. */
+  requestMetrics?: readonly LlmPhysicalRequestMetric[];
 }
 
 export class LlmGroupExtractor {
@@ -108,7 +110,15 @@ export class LlmGroupExtractor {
       jsonMode: true,
     };
     const response = await this.complete(request);
-    const raw = parseExtractorJson(response.text) as RawGroupExtraction;
+    let raw: RawGroupExtraction;
+    try {
+      raw = parseExtractorJson(response.text) as RawGroupExtraction;
+    } catch (error) {
+      if (response.requestMetrics?.length) {
+        throw new LlmRequestFailure(error instanceof Error ? error.message : 'Group extraction JSON was invalid.', response.requestMetrics);
+      }
+      throw error;
+    }
 
     const entities: EntityProposal[] = [];
     for (const candidate of raw.entities ?? []) {
@@ -205,7 +215,7 @@ export class LlmGroupExtractor {
       });
     }
 
-    return { entities, facts, events, ruleMappings, rejectedQuotes };
+    return { entities, facts, events, ruleMappings, rejectedQuotes, requestMetrics: response.requestMetrics };
   }
 }
 

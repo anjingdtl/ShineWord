@@ -15,10 +15,41 @@ export interface LlmUsage {
   estimated: boolean;
 }
 
+/** Redacted measurements for one physical provider HTTP attempt. */
+export interface LlmPhysicalRequestMetric {
+  attempt: number;
+  durationMs: number;
+  httpStatus: number | null;
+  outcome: 'completed' | 'reasoning_only' | 'http_error' | 'transport_error' | 'invalid_response';
+  completionState?: 'content_filter' | 'length' | 'reasoning_only' | 'no_choices' | 'empty';
+  errorCategory?: 'timeout' | 'network' | 'provider_http' | 'invalid_response';
+  timings?: {
+    localQueueMs?: number | null;
+    responseHeadersMs?: number | null;
+    firstBodyByteMs?: number | null;
+    completeResponseMs?: number | null;
+    providerQueueMs?: number | null;
+  };
+  usage?: LlmUsage;
+}
+
+/** Failed provider completion with its safe, per-attempt measurements. */
+export class LlmRequestFailure extends Error {
+  constructor(
+    message: string,
+    readonly requestMetrics: readonly LlmPhysicalRequestMetric[],
+  ) {
+    super(message);
+    this.name = 'LlmRequestFailure';
+  }
+}
+
 export interface LlmResponse {
   text: string;
   usage?: LlmUsage;
   requestId?: string;
+  /** Metrics contain no prompt, response, endpoint, or credential data. */
+  requestMetrics?: readonly LlmPhysicalRequestMetric[];
 }
 
 export interface LlmRequest {

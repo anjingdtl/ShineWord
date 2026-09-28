@@ -7,7 +7,7 @@ import type {
   RuleMappingProposal,
 } from '../../domain/world/types';
 import type { StoredChunk } from '../../application/ports/worldStore';
-import type { LlmRequest } from '../../application/llm/types';
+import { LlmRequestFailure, type LlmRequest, type LlmResponse } from '../../application/llm/types';
 import { codePointLength } from '../../domain/world/textOffsets';
 
 export const LLM_EXTRACTOR_VERSION = 'llm-extractor-1';
@@ -43,7 +43,7 @@ interface RawExtraction {
 }
 
 export interface LlmCompleteFn {
-  (request: LlmRequest): Promise<{ text: string }>;
+  (request: LlmRequest): Promise<LlmResponse>;
 }
 
 function asString(value: unknown): string | null {
@@ -86,7 +86,15 @@ export class LlmChunkExtractor implements ChunkExtractor {
       jsonMode: true,
     });
 
-    const raw = parseExtractorJson(response.text);
+    let raw: RawExtraction;
+    try {
+      raw = parseExtractorJson(response.text);
+    } catch (error) {
+      if (response.requestMetrics?.length) {
+        throw new LlmRequestFailure(error instanceof Error ? error.message : 'Extractor JSON was invalid.', response.requestMetrics);
+      }
+      throw error;
+    }
     const entities: EntityProposal[] = [];
     for (const candidate of raw.entities ?? []) {
       const key = asString(candidate.key);

@@ -13,6 +13,7 @@ import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore'
 import { createExtractionRun, executeRun, type UnitExtractor } from '../../src/application/worldBuild/coordinator';
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
+import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import type { ApiProfile } from '../../src/application/llm/types';
 import { KeychainSecretStore } from './secureKeyStore';
@@ -157,6 +158,7 @@ export async function importNovelStreaming(
       // C3 group mode: consecutive chunks packed into budget-bounded
       // requests with the segment protocol.
       mode: 'group',
+      budget: modelBudgetFromProfile(profile),
     },
   );
   return {

@@ -20,6 +20,7 @@ const {
   DEFAULT_MODEL_BUDGET,
 } = require('../dist/application/worldBuild/groupPlanner');
 const { LlmGroupExtractor } = require('../dist/application/world/llmGroupExtractor');
+const { LlmRequestFailure } = require('../dist/application/llm/types');
 const {
   createExtractionRun,
   executeRun,
@@ -286,6 +287,151 @@ test('C3 coordinator group mode completes with per-chunk commits', async () => {
     }
     const world = await worldStore.getWorld('w-g1');
     assert.equal(world.buildStatus, 'ready');
+  } finally {
+    db.close();
+  }
+});
+
+test('G0 lease heartbeat keeps ownership during a slow provider call', async () => {
+  const db = setupDb();
+  try {
+    const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-heartbeat');
+    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
+    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
+      {
+        runId: 'run-g0-heartbeat', worldId: 'w-g0-heartbeat', sourceId: 'src-g0-heartbeat',
+        modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
+        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+      },
+    );
+    const base = fakeGroupExtractorFromFixture();
+    const slow = {
+      version: base.version,
+      async extract(input) {
+        await new Promise(resolve => setTimeout(resolve, 240));
+        return base.extract(input);
+      },
+    };
+    const execution = executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor: slow,
+      sha256Hex: sha.sha256Hex, owner: 'heartbeat-owner', leaseTtlMs: 90,
+    }, 'run-g0-heartbeat');
+    await new Promise(resolve => setTimeout(resolve, 125));
+    const competingToken = await runStore.acquireLease(
+      'run-g0-heartbeat', 'second-owner', 90, new Date().toISOString(),
+    );
+    assert.equal(competingToken, null, 'active request lease must be extended past its original TTL');
+    assert.equal((await execution).completed, true);
+  } finally {
+    db.close();
+  }
+});
+
+test('G0 canceled late extraction is discarded and its unit can be resumed', async () => {
+  const db = setupDb();
+  try {
+    const { store: sourceStore, result: imported } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-cancel');
+    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
+    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
+      {
+        runId: 'run-g0-cancel', worldId: 'w-g0-cancel', sourceId: 'src-g0-cancel',
+        modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
+        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+      },
+    );
+    const base = fakeGroupExtractorFromFixture();
+    let signalStarted;
+    const started = new Promise(resolve => { signalStarted = resolve; });
+    const gate = {
+      version: base.version,
+      async extract(input) {
+        signalStarted();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return base.extract(input);
+      },
+    };
+    const signal = { aborted: false };
+    const execution = executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor: gate,
+      sha256Hex: sha.sha256Hex, owner: 'cancel-owner', signal,
+    }, 'run-g0-cancel');
+    await started;
+    signal.aborted = true;
+    const paused = await execution;
+    assert.equal(paused.completed, false);
+    assert.equal((await runStore.getRun('run-g0-cancel')).status, 'paused_user');
+    assert.equal((await worldStore.listFacts('w-g0-cancel')).length, 0,
+      'late model response must not mutate world facts');
+    for (const chunk of imported.chunks) {
+      assert.equal(await worldStore.getJob('w-g0-cancel', `job-extract-${chunk.chunkId}`), null,
+        'late model response must not mark any source chunk done');
+    }
+
+    const resumed = await executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture,
+      groupExtractor: base, sha256Hex: sha.sha256Hex, owner: 'resume-owner',
+    }, 'run-g0-cancel');
+    assert.equal(resumed.completed, true);
+    assert.ok((await worldStore.listFacts('w-g0-cancel')).length > 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('G0 failed physical request metrics survive a later unit retry', async () => {
+  const db = setupDb();
+  try {
+    const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-metrics');
+    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
+    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
+      {
+        runId: 'run-g0-metrics', worldId: 'w-g0-metrics', sourceId: 'src-g0-metrics',
+        modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
+        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+      },
+    );
+    const failed = {
+      version: 'llm-group-extractor-1',
+      async extract() {
+        throw new LlmRequestFailure('network timeout PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
+          attempt: 1, durationMs: 90000, httpStatus: null, outcome: 'transport_error',
+          errorCategory: 'timeout', timings: { completeResponseMs: 90000 },
+        }]);
+      },
+    };
+    await executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor: failed,
+      sha256Hex: sha.sha256Hex, owner: 'metrics-owner',
+    }, 'run-g0-metrics');
+    const pending = (await runStore.listUnits('run-g0-metrics'))[0];
+    assert.equal(pending.status, 'failed_retryable');
+    assert.equal(JSON.parse(pending.usageJson).requestMetrics[0].errorCategory, 'timeout');
+    assert.doesNotMatch(pending.errorMessage, /PRIVATE_RAW_RESPONSE/);
+    assert.doesNotMatch((await runStore.getRun('run-g0-metrics')).lastErrorMessage ?? '', /PRIVATE_RAW_RESPONSE/);
+
+    await new NodeSqliteAdapter(db).execute(
+      "UPDATE world_build_units SET status = 'queued', retry_at = NULL WHERE unit_id = ?", [pending.unitId],
+    );
+    const retried = await executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture,
+      groupExtractor: fakeGroupExtractorFromFixture(), sha256Hex: sha.sha256Hex,
+      owner: 'metrics-owner-retry',
+    }, 'run-g0-metrics');
+    assert.equal(retried.completed, true);
+    const completed = (await runStore.listUnits('run-g0-metrics'))[0];
+    const usage = JSON.parse(completed.usageJson);
+    assert.equal(usage.requestMetrics.length, 1, JSON.stringify(usage.requestMetrics));
+    assert.equal(usage.requestMetrics[0].durationMs, 90000);
+    assert.equal(usage.rejectedQuotes, 0);
   } finally {
     db.close();
   }
