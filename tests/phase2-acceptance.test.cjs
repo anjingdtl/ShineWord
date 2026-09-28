@@ -18,7 +18,7 @@ const { assembleBook } = require('../dist/application/worldPackage/publish');
 const { CampaignSession } = require('../dist/application/campaign/session');
 const { commitResolvedTurn } = require('../dist/application/turns/commitTurn');
 const {
-  distanceBetweenZones, rangeCoversBand, decideNpcAction,
+  distanceBetweenZones, rangeCoversBand, decideNpcAction, explainNpcDecision,
 } = require('../dist/application/campaign/encounterFlow');
 const { exportSave, restoreSave, validateSaveJson, SAVE_SCHEMA_VERSION } = require('../dist/application/export/saveFile');
 const { validatePlannerProposal } = require('../dist/domain/turns/proposal');
@@ -289,6 +289,17 @@ test('A08: GM templates stay private and direct template IDs cannot bypass recru
     'secret template IDs are also absent from the player encounter projection');
   assert.ok(!setup.encounterTemplates.some(item => item.entryId === 'future-companion-template'),
     'future templates stay outside the current time projection');
+  const { projectPlayerEntriesAtAnchor } = require('../dist/application/campaign/session');
+  const { assembleBook } = require('../dist/application/worldPackage/publish');
+  const lockedPackage = await worldStore.getWorldPackage('w-pkg', setup.packageRevision);
+  const playerEntries = projectPlayerEntriesAtAnchor(lockedPackage.entries, await worldStore.listFacts('w-pkg'), 5, new Set());
+  const playerBooks = ['player_handbook', 'gm_guide', 'monster_manual'].flatMap(book =>
+    assembleBook({ entries: playerEntries, sections: lockedPackage.sections }, book,
+      { includeGm: false, knowledge: { discoveredEntryIds: new Set() } }));
+  assert.ok(!JSON.stringify(playerBooks).includes('guard-template'));
+  assert.ok(!JSON.stringify(playerBooks).includes('未来同行者'));
+  assert.deepEqual(playerEntries.find(item => item.entryId === 'scene-open-courtyard').definition.actors, [],
+    'the anchored three-book projection also strips private nested scene actor references');
   const futureSetup = await session.getWorldSetup('w-pkg', 10);
   assert.ok(futureSetup.companionTemplates.some(item => item.entryId === 'future-companion-template'));
   assert.ok(futureSetup.encounterTemplates.some(item => item.entryId === 'future-companion-template'));
@@ -951,7 +962,7 @@ test('Phase 2: companion directives and neutral faction semantics are determinis
   });
   const nearThreat = card('near-threat', 'npc', 'gm');
   const weakThreat = card('weak-threat', 'npc', 'gm');
-  const makeDecision = ({ directive, actorSide = 'party', actorZone = 'z2', actorHp = 10,
+  const makeDecisionCase = ({ directive, actorSide = 'party', actorZone = 'z2', actorHp = 10,
     allyHp = 10, allyConditions = [], firstThreatHp = 5, secondThreatHp = 1, secondThreatZone = 'z3',
     attackRange = 'far', exits = ['north-gate'] } = {}) => {
     const actorCard = { ...companion, companionDirective: directive,
@@ -973,11 +984,14 @@ test('Phase 2: companion directives and neutral faction semantics are determinis
       ],
       initiative: ['hero', 'ally', 'near-threat', 'weak-threat'],
     }).state;
-    return decideNpcAction({
-      actor: { ...combatants[1], card: actorCard }, encounter, combatants,
+    const actor = { ...combatants[1], card: actorCard };
+    const decision = decideNpcAction({
+      actor, encounter, combatants,
       catalog: { sword: SKILL_SWORD.definition }, zones,
     });
+    return { actor, encounter, combatants, zones, decision };
   };
+  const makeDecision = options => makeDecisionCase(options).decision;
 
   assert.equal(makeDecision({ directive: 'follow', actorZone: 'z3' }).kind, 'move',
     'follow closes distance to its persisted leader');
@@ -999,6 +1013,11 @@ test('Phase 2: companion directives and neutral faction semantics are determinis
     'ordinary template morale does not retreat above its threshold');
   assert.equal(makeDecision({ actorHp: 1, exits: [] }).kind, 'attack',
     'low morale cannot retreat when the scene has no connected exit');
+  const supportDeclined = makeDecisionCase({ directive: 'support', actorZone: 'z3',
+    secondThreatZone: 'z1', attackRange: 'touch' });
+  assert.deepEqual(supportDeclined.decision, { kind: 'move', towardActorId: 'weak-threat' });
+  assert.match(explainNpcDecision(supportDeclined), /支援指令未触发：同一区域没有满足规则的失能队友.*接近 weak-threat/,
+    'a support no-op reports both the missing aid condition and the deterministic fallback action');
   const moraleCard = { ...companion, kind: 'npc', combatBehavior: { retreatThreshold: 0.75, morale: 'low' } };
   const moraleState = startEncounter({
     encounterId: 'template-morale', scene: { sceneId: 's', coverSpotIds: [], exitIds: ['north-gate'] },

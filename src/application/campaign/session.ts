@@ -1855,10 +1855,10 @@ function trainingSourceSatisfied(
 /** Filter package entries and nested scene references before constructing any
  * player or planner projection. A public scene must not reveal a private,
  * undiscovered, or not-yet-valid actor/item/clue by embedding its id. */
-function projectPlayerEntriesAtAnchor(
+export function projectPlayerEntriesAtAnchor(
   allEntries: readonly ContentEntry[],
   facts: readonly import('../ports/worldStore').StoredFact[],
-  worldTimeOrder: number,
+  worldTimeOrder: number | undefined,
   discoveredEntryIds: ReadonlySet<string>,
 ): ContentEntry[] {
   const visible = allEntries.filter(entry => (entry.visibility === 'public'

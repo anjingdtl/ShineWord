@@ -385,7 +385,18 @@ export function explainNpcDecision(options: {
       && encounter.actors[candidate.actorId]?.conditions.includes('disabled')
       && candidate.zoneId === actor.zoneId);
     if (decision.kind === 'rescue') return '遵循支援指令：同一区域有失能队友，执行援救。';
-    if (!needsAid) return '支援指令未触发：同一区域没有满足规则的失能队友。';
+    if (!needsAid) {
+      const noSupportTarget = '支援指令未触发：同一区域没有满足规则的失能队友。';
+      if (decision.kind === 'move') {
+        return `${noSupportTarget} 当前没有处于已声明攻击范围内的合法目标，按确定性策略接近 ${decision.towardActorId}。`;
+      }
+      if (decision.kind === 'attack') {
+        return `${noSupportTarget} 当前存在合法敌对目标，按已声明技能规则处理。`;
+      }
+      if (decision.kind === 'guard') {
+        return `${noSupportTarget} 且没有其他可执行动作，本轮保持戒备。`;
+      }
+    }
   }
   if (directive === 'follow' && leader) {
     if (decision.kind === 'move' && decision.towardActorId === leader.actorId) return `遵循跟随指令：沿场景路径靠近队长 ${leader.card.name}。`;

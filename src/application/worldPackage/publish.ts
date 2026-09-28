@@ -117,9 +117,8 @@ export function assembleBook(
   return pkg.sections
     .filter(section => section.book === book)
     .sort((a, b) => a.position - b.position)
-    .map(section => ({
-      section,
-      entries: section.entryIds
+    .map(section => {
+      const entries = section.entryIds
         .map(entryId => byId.get(entryId))
         .filter((entry): entry is ContentEntry => {
           if (!entry) return false;
@@ -130,7 +129,11 @@ export function assembleBook(
             return options.includeGm || discovered?.has(entry.entryId) === true;
           }
           return true;
-        }),
-    }))
+        });
+      // Section metadata is part of the player payload too. Keeping the
+      // original entryIds here would reveal GM-only and undiscovered content
+      // even though the entries themselves were filtered out.
+      return { section: { ...section, entryIds: entries.map(entry => entry.entryId) }, entries };
+    })
     .filter(group => group.entries.length > 0);
 }
