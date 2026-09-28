@@ -8,12 +8,13 @@
  * override reaches the play screen too (plan §14).
  */
 import React from 'react';
-import { FlatList, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
-import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
+import { NarrativeFeed } from '../features/play/NarrativeFeed';
+import { PlayHeader } from '../features/play/PlayHeader';
 import { usePlayController } from '../features/play/hooks/usePlayController';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -72,15 +73,14 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
 
   return (
     <ScreenShell bottom>
-      <Header
+      <PlayHeader
         title={view?.title ?? campaignId}
-        subtitle={
-          view
-            ? `v${view.stateVersion} · ${player?.locationId ?? '未知地点'} · 世界钟 ${Math.round(view.clockSeconds / 60)} 分`
-            : '加载中…'
-        }
+        branchLabel={branchId}
+        locationLabel={player?.locationId ?? ''}
+        clockSeconds={view?.clockSeconds ?? null}
+        stateVersion={view?.stateVersion ?? null}
         onBack={() => navigation.goBack()}
-        backLabel="‹ 战役"
+        busy={busy}
       />
 
       <View style={{ paddingHorizontal: theme.space.lg }}>
@@ -360,31 +360,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         ) : null}
       </View>
 
-      <FlatList
-        style={styles.story}
-        data={turns}
-        keyExtractor={item => item.turnId}
-        contentContainerStyle={{ paddingHorizontal: theme.space.lg }}
-        ListEmptyComponent={
-          <Text style={styles.muted}>
-            {view?.goal
-              ? `主目标：${view.goal}\n输入行动，检定由你的角色卡与本地规则决定。`
-              : '输入行动开始冒险。'}
-          </Text>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{item.turnId} · {item.grade}</Text>
-            {item.roll ? (
-              <Text style={styles.dice}>
-                {item.roll.diceCount}d{item.roll.dieSides} 取高 · [{item.roll.rolls.join(', ')}] · 最高 {item.roll.highest}
-              </Text>
-            ) : null}
-            <Text style={styles.bodyText}>{item.text}</Text>
-            {item.resumed ? <Text style={styles.resumed}>已从本地断点恢复</Text> : null}
-          </View>
-        )}
-      />
+      <NarrativeFeed turns={turns} goal={view?.goal ?? ''} busy={busy} />
 
       <View style={{ paddingHorizontal: theme.space.lg }}>
         {player && view ? (
