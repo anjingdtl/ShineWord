@@ -150,6 +150,8 @@ function projection(cards, state) {
     branchId: 'camp-1-main',
     worldId: 'world-1',
     packageRevision: 1,
+    title: '长安诡事录 · 李慕白',
+    anchorWorldTimeOrder: 3,
     goal: '查明失踪人口',
     state,
     cards,

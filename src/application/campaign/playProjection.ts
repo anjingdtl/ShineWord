@@ -118,6 +118,10 @@ export interface PlayUiProjection {
   stateVersion: number;
   worldId: string;
   packageRevision: number;
+  /** Campaign title (`world · protagonist`), used by the play header. */
+  title: string;
+  /** Anchor world-time order the campaign was locked to (null = origin). */
+  anchorWorldTimeOrder: number | null;
   /** Authoritative world clock (seconds); `clockMinutes` stays for compat. */
   clockSeconds: number;
   goal: string;
@@ -135,6 +139,8 @@ export interface PlayProjectionInput {
   branchId: string;
   worldId: string;
   packageRevision: number;
+  title: string;
+  anchorWorldTimeOrder: number | null;
   goal: string;
   state: GameStateSnapshot;
   cards: readonly ActorCard[];
@@ -331,6 +337,8 @@ export function buildPlayUiProjection(input: PlayProjectionInput): PlayUiProject
     stateVersion: state.stateVersion,
     worldId: input.worldId,
     packageRevision: input.packageRevision,
+    title: input.title,
+    anchorWorldTimeOrder: input.anchorWorldTimeOrder,
     clockSeconds: state.clockSeconds ?? state.clockMinutes * 60,
     goal: input.goal,
     player,

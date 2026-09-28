@@ -39,6 +39,8 @@ export async function getPlayUiProjection(
     branchId,
     worldId: summary.worldId,
     packageRevision: summary.packageRevision,
+    title: summary.title,
+    anchorWorldTimeOrder: summary.anchorWorldTimeOrder,
     goal: summary.goal,
     state: summary.state,
     cards: summary.cards,

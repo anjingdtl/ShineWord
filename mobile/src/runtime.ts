@@ -155,12 +155,26 @@ export async function getCampaignState(
   };
 }
 
+/** Structured roll of one committed turn (plan §18.2) — never a formatted string. */
+export interface TurnRollView {
+  diceCount: number;
+  dieSides: number;
+  rolls: number[];
+  highest: number;
+  difficulty: number;
+  margin: number;
+  grade: string;
+}
+
 export interface TurnView {
   turnId: string;
   text: string;
   grade: string;
-  dice?: string;
+  /** Branch state version this turn committed as. */
+  stateVersion: number;
   resumed: boolean;
+  /** Absent for turns that needed no roll (deterministic auto-success). */
+  roll?: TurnRollView;
 }
 
 export async function loadHistory(branchId: string): Promise<TurnView[]> {
@@ -172,10 +186,21 @@ export async function loadHistory(branchId: string): Promise<TurnView[]> {
       turnId: row.turnId,
       text: row.narrativeText ?? row.publicSummary,
       grade: row.rollRecord?.grade ?? row.outcomeGrade,
-      dice: row.rollRecord
-        ? `${row.rollRecord.diceCount}d${row.rollRecord.dieSides}: [${row.rollRecord.rolls.join(', ')}]`
-        : undefined,
+      stateVersion: row.stateVersion,
       resumed: false,
+      ...(row.rollRecord
+        ? {
+            roll: {
+              diceCount: row.rollRecord.diceCount,
+              dieSides: row.rollRecord.dieSides,
+              rolls: [...row.rollRecord.rolls],
+              highest: row.rollRecord.highest,
+              difficulty: row.rollRecord.difficulty,
+              margin: row.rollRecord.margin,
+              grade: row.rollRecord.grade,
+            },
+          }
+        : {}),
     }));
 }
 
