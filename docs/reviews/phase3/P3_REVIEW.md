@@ -329,3 +329,138 @@
 | 数据校验仍由原业务逻辑兜底 | 静态确认（`createCampaign` 原样） |
 | 不改变 `createCampaign` 规则 | 静态确认（参数与 P2 一致） |
 | 真机完整创建一场战役通过 | **未验证** |
+
+---
+
+## P3.7 P3 收口
+
+### legacyStyles 门禁（方案 §12.1）
+
+| 页面 | `legacyStyles` 引用 | 状态 |
+|---|---|---|
+| Library | 0 | 达标（P3.2） |
+| Campaigns | 0 | 达标（P3.3） |
+| Profile | 0 | 达标（P3.4） |
+| WorldDetail | 0 | 达标（P3.5） |
+| Books | 0 | 达标（P3.5，文件已迁入 `features/world-detail`） |
+| Review | 0 | 达标（P3.5，文件已迁入 `features/world-detail`） |
+| Opening | 0 | 达标（P3.6） |
+| Play | 1 | **允许暂留**（P4 删除 `legacyStyles.ts`） |
+
+静态扫描命令与结果：
+
+```bash
+grep -rn "from './legacyStyles'" mobile/src   # 仅 PlayScreen.tsx 命中
+```
+
+旧硬编码 Hex（`#08141f` / `#d9a441` / `#263a4d` / `#0e2030` / `#f1f5f9`）扫描结果：
+仅存在于 `mobile/src/ui/theme/tokens.ts`（合法主题 Token）与 `mobile/src/ui/screens/legacyStyles.ts`（P4 删除目标），
+UI Feature 与其余 Screen 中为零。
+
+### 品牌迁移矩阵（方案 §12.2）
+
+**必须消除 —— 用户可见品牌（本期已全部处理）**
+
+| 位置 | 处理结果 |
+|---|---|
+| Android 桌面 App 名 | `strings.xml` → `Shine-TRPG` |
+| 品牌启动页 | `BrandLockup` + 「正在载入世界…」 |
+| First Run | 品牌锁定组合 + 「配置你的 AI 模型」 |
+| About | `PRODUCT_NAME` = `Shine-TRPG` |
+| README 标题与描述 | 改为 `Shine-TRPG`，并注明内部兼容标识不变 |
+| Launcher Icon | 矢量前景 + Adaptive Icon + 5 档回退位图 |
+| 新增 UI 文案 | 全部使用 `PRODUCT_NAME` / 主题 Token，无旧品牌字面量 |
+| 新导出默认文件名前缀 | `shine-trpg-*`（世界包、存档） |
+
+**必须保留 —— 兼容性 / 内部标识（本期未改）**
+
+| 类别 | 现值 | 保留原因 |
+|---|---|---|
+| GitHub 仓库 | `anjingdtl/ShineWord` | 仓库地址 |
+| applicationId / namespace | `com.shineword.app` | 变更会被 Android 视为新应用 |
+| SQLite 数据库 | `shineword.db` | 变更需要迁移 |
+| 原生模块 | `NativeModules.ShineWordFiles` / `ShineWordCrypto` | 用户无收益，改名会破坏桥接 |
+| AsyncStorage key | `shineword.ui.*` | 既有主题偏好必须继续可读 |
+| 存档 schema / 扩展名 | `shineword-save-2..5` / `.shineword-save.json` | 旧存档必须继续导入 |
+| 世界包扩展名 | `.shineword-world.zip` | 旧世界包必须继续导入 |
+| Ruleset id | `shineword-core`（`SHINEWORD_RULESET_ID`） | 规则域冻结 |
+| 世界包归档 schema | `shineword-world-archive-1` | 归档格式冻结 |
+| ActionContract schema 标题 | `ShineWord Action Contract v1` | 冻结契约 |
+| LLM 角色提示词 | `You are ShineWord …` | 属已验证抽取/叙事写路径，改名不影响用户可见品牌，留待独立迁移期 |
+| RN 组件注册名 / Gradle 工程名 | `ShineWord`（`app.json`、`settings.gradle`、`MainActivity`） | 内部注册标识 |
+| 构建产物名 | `ShineWord-V<version>-<variant>.apk` | 开发机构建产物命名，非应用内导出 |
+| npm 包名 / 包描述 | `shineword-mobile`、核心包 description | 内部元数据 |
+| 测试与文档 | `tests/**`、`docs/**` 历史报告 | 不属用户界面，保持历史可追溯 |
+
+> 用户可见界面中 `ShineWord` 品牌字面量：**0**（`mobile/src/ui` + `mobile/App.tsx` 静态核对）。
+
+### 版本（方案 §33）
+
+| 项 | 变更 |
+|---|---|
+| `mobile/package.json` version | `0.2.0-p2.9` → `0.3.0-p3` |
+| `build.gradle` versionName | `0.3.0-p3` |
+| `build.gradle` versionCode | `10` → `11`（下一次真实 APK 发布使用） |
+
+### 本阶段文件变更总览（P3.1 – P3.7）
+
+- 新增品牌层：`mobile/src/ui/brand/**`（5 文件）+ Android 图标资源（12 文件）。
+- 新增基础组件：`TextField`、`SegmentedControl`、`StatusBanner`、`SectionHeader`、`ProgressSteps`。
+- 新增 Feature 目录：`features/library`、`features/campaigns`、`features/profile`、`features/world-detail`、`features/opening`、`features/worldStatus.ts`。
+- 重写 Screen：Library / Campaigns / Profile / WorldDetail / Opening。
+- 删除：`screens/WorldDetailBooks.tsx`、`screens/WorldDetailReview.tsx`（逻辑迁入 features）。
+- 主题能力：`ThemeScope`（世界主题覆盖生效）。
+- 只读桥接：`worldImport.getWorldEntry`、`WorldLibraryEntry.packageRevision / openReviewIssues`。
+- 生成脚本：`scripts/gen-brand-icons.py`。
+
+### 未执行的验证项（本阶段统一待办）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core`（core 回归，方案基线 152/152） | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| Release APK 与 arm64 包体积 | **未测量** |
+| 四主题截图（Library / Campaigns / Profile / WorldDetail / Opening / Play） | **未截图** |
+| Opening 四步截图 | **未截图** |
+| 方案 §29 P3 真机矩阵（首次启动、Profile 保存、四主题切换、导入 TXT、Library、WorldDetail、三宝书、Review Queue、世界主题覆盖、Opening 4 步、创建战役） | **未执行** |
+
+### 已知偏差与说明
+
+1. **验证类 DoD 未勾选**：本轮的测试、typecheck、APK、模拟器/真机项全部未执行，相关 DoD 项保持未勾选。
+2. **品牌范围**：LLM 提示词、npm 包名/描述、构建产物名仍是历史名称（见上方「必须保留」表）；方案 §3.5 未要求，且改动提示词会影响已验证的抽取/叙事行为，故不在本期。
+3. **`Play` 页面仍引用 `legacyStyles`**：方案明确允许暂留，P4 收口删除。
+4. **世界主题覆盖生效范围**：世界详情页已生效；游玩页待 P4 接入 `ThemeScope`（已在 UI 文案中向用户说明）。
+5. **`SegmentedControl` 采用「选中底色 + 下划线 + 加粗」三重提示**，与原型仅用底色略有增强，属可访问性要求（§30 禁止仅靠颜色表达状态）。
+6. **`Button secondary` 填充色由 `bg.raised` 调整为 `bg.overlay`**，以保证次级按钮在 raised 卡片上的可辨识度；四主题均由 Token 派生，无新增字面量。
+
+### P3 Definition of Done 对照（方案 §36）
+
+| DoD 项 | 状态 |
+|---|---|
+| 用户可见产品品牌统一为 Shine-TRPG | ✅ 静态确认（用户界面 0 处旧品牌） |
+| Android launcher label 为 Shine-TRPG | ✅ 源码就绪 / **待安装验证** |
+| 品牌启动页完成 | ✅ 源码就绪 / **待设备验证** |
+| 正式 App Icon 完成 | ✅ 资源就绪（矢量 + Adaptive + 位图回退）/ **待安装验证** |
+| FirstRun 品牌完成 | ✅ 源码就绪 / **待设备验证** |
+| About 品牌完成 | ✅ 源码就绪 |
+| README 品牌完成 | ✅ |
+| 新导出默认文件名前缀使用 `shine-trpg-` | ✅ 源码就绪 / **待真机导出验证** |
+| 兼容性 `.shineword-*` 扩展名仍可读 | ✅ 未改动导入路径（静态）/ **待旧存档真机验证** |
+| Library 零 legacyStyles | ✅ |
+| Campaigns 零 legacyStyles | ✅ |
+| Profile 零 legacyStyles | ✅ |
+| WorldDetail 零 legacyStyles | ✅ |
+| Books 零 legacyStyles | ✅ |
+| Review 零 legacyStyles | ✅ |
+| Opening 零 legacyStyles | ✅ |
+| Opening 改成 4 步向导 | ✅ 源码就绪 / **待真机验证** |
+| 世界级主题覆盖有正式入口 | ✅ 入口 + `ThemeScope` 生效 / **待真机验证** |
+| 四主题视觉通过 | ⬜ **未截图，待验证** |
+| typecheck PASS | ⬜ **未运行** |
+| core regression PASS | ⬜ **未运行** |
+| Android APK PASS | ⬜ **未运行** |
+| P3 Review/Fix 关闭 | ✅ 本文件各阶段 Review/Fix 已逐项关闭（除运行期验证项） |
+
+> P3 结论：**源码实现与静态审查完成**；所有构建、测试、截图与设备验收项均未执行，
+> 不得判定 P3 已通过，需在具备 Android 环境的线下开发机补齐后再进入 P3 出口判定。
