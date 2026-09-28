@@ -380,7 +380,9 @@ export function searchLocalSource(index: LocalSourceSearchIndex, input: {
     const position = paragraphPositions.get(hit.paragraphId);
     if (position === undefined) continue;
     const candidates = [index.paragraphs[position - 1], index.paragraphs[position + 1]]
-      .filter((candidate): candidate is IndexedSourceParagraph => Boolean(candidate && candidate.chapterId === hit.chapterId))
+      .filter((candidate): candidate is IndexedSourceParagraph => Boolean(candidate
+        && candidate.chapterId === hit.chapterId
+        && Math.max(0, candidate.startCodePoint - hit.endCodePoint, hit.startCodePoint - candidate.endCodePoint) <= 4))
       .sort((a, b) => Math.abs(a.paragraphIndex - hit.paragraphIndex) - Math.abs(b.paragraphIndex - hit.paragraphIndex));
     for (const candidate of candidates) {
       if (hitIds.has(candidate.paragraphId) || adjacentPrefetch.some(item => item.paragraphId === candidate.paragraphId)) continue;

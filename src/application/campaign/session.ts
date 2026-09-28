@@ -14,6 +14,8 @@ import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SqliteNarrativeStore } from '../../infra/sqlite/sqliteNarrativeStore';
 import type { TurnSettlementPlan } from '../ports/turnStore';
+import type { ProgressiveTurnContextService } from '../progressiveBuild/progressiveTurnContext';
+import { visibleEvidenceRanges } from '../progressiveBuild/progressiveTurnContext';
 import {
   assertTrainingAllowed,
   awardPractice,
@@ -64,6 +66,7 @@ export interface SessionDeps {
   game: SqliteGameStore;
   worldStore: SqliteWorldStore;
   narratives: SqliteNarrativeStore;
+  progressiveTurnContext?: ProgressiveTurnContextService;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -93,6 +96,16 @@ export interface PlayTurnResult {
   resumed: boolean;
   stateVersion: number;
   practiceAwarded: boolean;
+}
+
+export interface PlayTurnOptions {
+  campaignId: string;
+  branchId: string;
+  intent: string;
+  encounterId?: string;
+  /** Explicit replay target (recovery flows); defaults to head+1. */
+  turnIdOverride?: string;
+  onProgress?: (phase: 'planning' | 'rolling' | 'narrating' | 'committing') => void;
 }
 
 /**
@@ -1127,15 +1140,16 @@ export class CampaignSession {
    * farm points); a new challenge opens only after the previous one was
    * achieved (see domain/progression/growth.ts).
    */
-  async playTurn(options: {
-    campaignId: string;
-    branchId: string;
-    intent: string;
-    encounterId?: string;
-    /** Explicit replay target (recovery flows); defaults to head+1. */
-    turnIdOverride?: string;
-    onProgress?: (phase: 'planning' | 'rolling' | 'narrating' | 'committing') => void;
-  }): Promise<PlayTurnResult> {
+  async playTurn(options: PlayTurnOptions): Promise<PlayTurnResult> {
+    this.deps.progressiveTurnContext?.setForegroundBusy(true);
+    try {
+      return await this.playTurnInForeground(options);
+    } finally {
+      this.deps.progressiveTurnContext?.setForegroundBusy(false);
+    }
+  }
+
+  private async playTurnInForeground(options: PlayTurnOptions): Promise<PlayTurnResult> {
     await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
     // Rule dispatch (plan §9 / G05): legacy V0.1 campaigns carry no package
@@ -1190,6 +1204,37 @@ export class CampaignSession {
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, facts,
     );
+    const visibleSourceRanges = visibleEvidenceRanges(entries, facts, worldTimeOrder);
+    let sourceHash: string | null = null;
+    let safeSourceContext = '';
+    if (this.deps.progressiveTurnContext && visibleSourceRanges.length > 0) {
+      try {
+        const world = await this.deps.worldStore.getWorld(summary.worldId);
+        sourceHash = world?.sourceSha256 ?? null;
+        if (sourceHash) {
+          const lookup = await this.deps.progressiveTurnContext.currentAction({
+            campaignId: options.campaignId,
+            branchId: options.branchId,
+            worldId: summary.worldId,
+            sourceSha256: sourceHash,
+            stateVersion: summary.state.stateVersion,
+            query: options.intent,
+            sourceRanges: visibleSourceRanges,
+            isCurrent: async () => (await this.deps.turns.getState(options.branchId))?.stateVersion === summary.state.stateVersion,
+          });
+          if (lookup && lookup.passages.length > 0) {
+            safeSourceContext = `\n【已发布且当前时间锚点可见的原著证据】\n${lookup.passages
+              .slice(0, 3)
+              .map(passage => `${passage.chapterId} [${passage.startCodePoint},${passage.endCodePoint}): ${passage.text}`)
+              .join('\n')}\n以上仅为已整理资料引用的原文片段；没有提供的情节仍属未知。`;
+          }
+        }
+      } catch {
+        // Local retrieval is optional; it must never hold a playable turn
+        // hostage or replace an unknown with invented canon.
+      }
+    }
+    const plannerWorldContext = worldContext + safeSourceContext;
 
     let usageSeq = 0;
     const gameStore = this.deps.game;
@@ -1204,7 +1249,7 @@ export class CampaignSession {
         branchId: options.branchId,
         turnId,
         playerIntent: options.intent,
-        worldContext,
+        worldContext: plannerWorldContext,
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
         actingCard: playerCard,
@@ -1291,6 +1336,25 @@ export class CampaignSession {
         }
       }
       throw error;
+    }
+
+    if (sourceHash && this.deps.progressiveTurnContext && visibleSourceRanges.length > 0) {
+      const nextState = await this.deps.turns.getState(options.branchId);
+      const nextLocationId = nextState?.actors[playerCard.actorId]?.locationId;
+      if (nextState && nextLocationId) {
+        const nextScene = entries.find(entry => entry.kind === 'scene'
+          && (entry.definition as SceneDefinition).locationId === nextLocationId)?.definition as SceneDefinition | undefined;
+        void this.deps.progressiveTurnContext.nearDomainPrefetch({
+          campaignId: options.campaignId,
+          branchId: options.branchId,
+          worldId: summary.worldId,
+          sourceSha256: sourceHash,
+          stateVersion: nextState.stateVersion,
+          query: `${nextScene?.name ?? nextLocationId} ${summary.goal}`,
+          sourceRanges: visibleSourceRanges,
+          isCurrent: async () => (await this.deps.turns.getState(options.branchId))?.stateVersion === nextState.stateVersion,
+        }).catch(() => undefined);
+      }
     }
 
     return {

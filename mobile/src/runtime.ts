@@ -41,6 +41,7 @@ export async function createSession(
       game: runtime.game,
       worldStore: runtime.worldStore,
       narratives: runtime.narratives,
+      progressiveTurnContext: runtime.progressiveTurnContext,
       hashProvider: nativeSha256,
       random: new RejectionSamplingRandomSource(createNativeRandomBytes()),
     },
