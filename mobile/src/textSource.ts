@@ -6,6 +6,7 @@
  * with multi-byte carry. The whole novel never crosses the bridge as one
  * payload.
  */
+import { NativeModules } from 'react-native';
 import type { TextWindow, StreamingTextSource } from '../../src/application/import/streamingTxtImport';
 
 interface TextSourceNative {
@@ -21,7 +22,7 @@ interface TextSourceNative {
 }
 
 function native(): TextSourceNative {
-  const module = (globalThis as { ShineWordTextSource?: TextSourceNative }).ShineWordTextSource;
+  const module = NativeModules.ShineWordTextSource as TextSourceNative | undefined;
   if (!module) throw new Error('ShineWordTextSource native module is unavailable.');
   return module;
 }

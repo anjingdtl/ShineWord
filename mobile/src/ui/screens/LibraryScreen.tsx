@@ -20,6 +20,7 @@ import {
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
 import { importNovelStreaming, runExtraction, pauseRun } from '../../sourceImport';
 import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
+import { startBuildService } from '../../buildServiceBridge';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -100,7 +101,14 @@ export function LibraryScreen(): React.JSX.Element {
     if (taskBusy || !profile) return;
     setTaskBusy(true);
     try {
-      await runExtraction(runId, profile, () => undefined);
+      // C5: prefer the dataSync foreground service (headless runner); fall
+      // back to inline execution when the service cannot start (e.g. the
+      // process is background-restricted). The run lease guarantees a single
+      // executor either way.
+      const serviceStarted = await startBuildService(runId);
+      if (!serviceStarted) {
+        await runExtraction(runId, profile, () => undefined);
+      }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -134,6 +142,7 @@ export function LibraryScreen(): React.JSX.Element {
         `已解析 ${imported.chapterCount} 章 / ${imported.chunkCount} 块`
         + `${imported.reusedSource ? '（复用已有源）' : ''}，开始抽取…`,
       );
+      await startBuildService(imported.runId).catch(() => undefined);
       const built = await runExtraction(imported.runId, profile, p => {
         setProgress(p);
         if (p.chunksTotal && p.chunksDone !== undefined && p.chunksTotal > 0) {

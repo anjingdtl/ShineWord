@@ -40,6 +40,12 @@ export interface EncounterState {
   pendingActorIds?: string[];
   turnCursor: number;
   round: number;
+  /**
+   * Closeout C6: per-actor disabled-fate states selected by the scene's fate
+   * contract (domain/combat/disabledFate.ts). Rides the snapshot verbatim so
+   * rewind and save/restore reproduce fate progress exactly.
+   */
+  fates?: Record<string, import('./disabledFate').DisabledFateState>;
 }
 
 export interface EncounterStartInput {
