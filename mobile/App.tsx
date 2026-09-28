@@ -9,6 +9,8 @@
  *
  * The gate is deliberately kept: the app is useless without an OpenAI-compatible
  * endpoint, so first-run shows the profile form instead of an empty navigator.
+ *
+ * P3.1: the loading screen is now the branded splash lockup (plan §6.3).
  */
 import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
@@ -16,6 +18,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from './src/ui/theme';
 import { typeStyle } from './src/ui/components/typography';
 import { ScreenShell } from './src/ui/components/ScreenShell';
+import { BrandLockup } from './src/ui/brand';
 import { AppSessionProvider, useAppSession } from './src/ui/state/AppSessionContext';
 import { AppNavigator } from './src/ui/navigation/AppNavigator';
 import { FirstRunScreen } from './src/ui/screens/ProfileScreen';
@@ -39,15 +42,23 @@ function AppRoot(): React.JSX.Element {
   return <AppNavigator />;
 }
 
+/**
+ * Branded bootstrap: mark, product name and the loading line. No fake progress
+ * bar — the app is either still reading storage or already past this screen
+ * (plan §6.3).
+ */
 function BootstrapScreen(): React.JSX.Element {
   const { theme } = useTheme();
   return (
     <ScreenShell>
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.space.md }}>
-        <ActivityIndicator color={theme.accent.primary} />
-        <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.secondary }]}>
-          正在初始化 ShineWord…
-        </Text>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.space.xl }}>
+        <BrandLockup />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}>
+          <ActivityIndicator color={theme.accent.primary} />
+          <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.secondary }]}>
+            正在载入世界…
+          </Text>
+        </View>
       </View>
     </ScreenShell>
   );

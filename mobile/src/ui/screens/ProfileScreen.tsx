@@ -196,8 +196,9 @@ export function ProfileScreen(): React.JSX.Element {
       <Header
         title="我的"
         subtitle="模型端点 · 密钥 · 主题皮肤 · 关于"
-        // Temporary: the theme self-check gallery is reached by a long press.
-        onTitleLongPress={() => navigation.navigate('ThemeGallery')}
+        // Debug-only: the theme self-check gallery is reached by a long press
+        // and is not registered in release builds (plan §6.5).
+        onTitleLongPress={__DEV__ ? () => navigation.navigate('ThemeGallery') : undefined}
       />
       <ScrollView contentContainerStyle={{ padding: theme.space.lg }}>
         <ThemeSkinPicker />

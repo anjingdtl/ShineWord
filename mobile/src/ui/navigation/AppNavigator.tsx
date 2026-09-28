@@ -96,7 +96,8 @@ export function AppNavigator(): React.JSX.Element {
         <RootStack.Screen name="WorldDetail" component={WorldDetailScreen} />
         <RootStack.Screen name="Opening" component={OpeningScreen} />
         <RootStack.Screen name="Play" component={PlayScreen} />
-        <RootStack.Screen name="ThemeGallery" component={ThemeGalleryRoute} />
+        {/* Debug-only inspection harness (plan §6.5): never a release feature. */}
+        {__DEV__ ? <RootStack.Screen name="ThemeGallery" component={ThemeGalleryRoute} /> : null}
       </RootStack.Navigator>
     </NavigationContainer>
   );
