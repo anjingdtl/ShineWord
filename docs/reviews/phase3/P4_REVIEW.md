@@ -126,3 +126,42 @@
 | 点击快捷行动只填入、不发送 | **未验证** |
 | 提交失败后输入内容恢复 | **未验证** |
 | 无新增快捷行动 LLM 请求 | 静态确认（代码路径中无 LLM 调用），**运行期未验证** |
+
+---
+
+## P4.5 队伍条 + 角色卡载体（Party Strip & Modal Sheet）
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 队伍条（新增） | `features/play/PartyStrip.tsx` | 玩家 + 同伴横排：姓名首字徽记、气血/体力双细条（数值同时给出）、濒危 `⚠危` / 失能 `⛔失能` 文字标记、同伴指令角标（跟/援/护/省/退）；点按打开角色卡 |
+| 面板载体（新增） | `features/play/panels/PlayPanel.tsx` | `Modal` + `Animated` 底部弹层（**未引入 Reanimated / 第三方 Sheet**）；背景遮罩淡入、面板上滑；Android Back 由 Modal `onRequestClose` 优先关闭面板 |
+| 角色卡框架（新增） | `features/play/character/CharacterSheet.tsx` | 身份区（名/类型/出身·道途/等阶/防御/队伍归属/指令）+ 资源区（气血/体力条 + 状态）+ 属性区；后续阶段以 `children` 追加技能/能力/装备/关系区块 |
+| 页面接线 | `screens/PlayScreen.tsx` | 叙事流与输入栏之间插入队伍条；点按打开 `PlayPanel`，内嵌 `CharacterSheet` |
+
+> 说明：方案 §4 的目标结构里角色卡分成 `PlayerCharacterSheet / CompanionCharacterSheet / NpcCharacterSheet`，本阶段先落地共用的 `CharacterSheet` 框架（玩家/同伴共用），
+> P4.6 在同一框架上补齐玩家与同伴的完整区块，P4.7 再加入 NPC 公开投影变体；阶段提交按此拆分（P4.5 用「party strip and modal sheet carrier」，P4.6 沿用方案 §21.2 的
+> `feat(play): add player and companion character sheets`）。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 方案禁止新增大型 UI 框架 / Reanimated | 满足：仅 `Modal` + `Animated`；`useNativeDriver: true` |
+| 2 | 方案 §30 要求「Modal / Sheet 可关闭」「Android Back 先关 Sheet」 | 已实现：遮罩点击、✕ 按钮、`onRequestClose`（Back）三条关闭路径 |
+| 3 | 角色资源条必须同时显示数值 | 已实现：`Bar` 的 `valueText` 输出 `当前 / 上限`，并带无障碍标签 |
+| 4 | 队伍条上的状态不能只靠颜色 | 已实现：濒危/失能用「⚠危 / ⛔失能」文字，指令用字符角标 |
+| 5 | 面板打开动画在关闭时会不可见（Modal 立即卸载） | 已简化为仅保留入场动画，删除无意义的退场补间 |
+| 6 | 队伍条不应触发任何游戏动作 | 已核对：只 `onSelect` 打开角色卡，所有写动作仍走 Controller |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 队伍条四主题截图 / 面板四主题截图 | **未截图** |
+| Android Back 先关面板、面板可关闭 | **未验证** |
+| 队伍条气血/体力与真实状态一致（含濒危、失能） | **未验证** |

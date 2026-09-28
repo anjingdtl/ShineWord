@@ -7,7 +7,7 @@
  * piece. The world's own skin is applied through `ThemeScope`, so a world theme
  * override reaches the play screen too (plan §14).
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,7 +15,10 @@ import type { CompanionDirective } from '../../../../src/domain/characters/card'
 import { ScreenShell } from '../components/ScreenShell';
 import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
+import { PartyStrip } from '../features/play/PartyStrip';
 import { PlayHeader } from '../features/play/PlayHeader';
+import { CharacterSheet } from '../features/play/character/CharacterSheet';
+import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
@@ -74,6 +77,9 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const roster = [...(player ? [player] : []), ...partyMembers];
   // Local derivation only — no LLM is asked for what the client can compute.
   const quickActions = useContextualActions({ projection: view, encounter });
+  // Which actor's character sheet is open (null = closed).
+  const [sheetActorId, setSheetActorId] = useState<string | null>(null);
+  const sheetActor = roster.find(member => member.actorId === sheetActorId) ?? null;
 
   return (
     <ScreenShell bottom>
@@ -366,6 +372,13 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
 
       <NarrativeFeed turns={turns} goal={view?.goal ?? ''} busy={busy} />
 
+      <PartyStrip
+        members={roster}
+        playerActorId={player?.actorId ?? null}
+        onSelect={setSheetActorId}
+        busy={busy}
+      />
+
       <View style={{ paddingHorizontal: theme.space.lg }}>
         {player && view ? (
           <View style={styles.row}>
@@ -418,6 +431,25 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
           quickActions={quickActions}
         />
       </View>
+
+      <PlayPanel
+        visible={sheetActor !== null}
+        title={sheetActor?.name ?? ''}
+        subtitle={
+          sheetActor
+            ? `${sheetActor.kind === 'companion' ? '同伴' : '角色'} · ${
+                sheetActor.groupId === 'main' ? '主队' : `分队 ${sheetActor.groupId}`
+              }`
+            : undefined
+        }
+        onClose={() => setSheetActorId(null)}>
+        {sheetActor ? (
+          <CharacterSheet
+            actor={sheetActor}
+            isPlayer={sheetActor.actorId === player?.actorId}
+          />
+        ) : null}
+      </PlayPanel>
     </ScreenShell>
   );
 }
