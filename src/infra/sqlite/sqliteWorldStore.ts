@@ -4,13 +4,16 @@ import type {
   ParsedTxtSource,
 } from '../../domain/world/types';
 import type { BookSection, ContentEntry, WorldPackageManifest } from '../../domain/content/types';
-import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
+import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import type {
+  CommitChunkResultInput,
+  CommitChunkResultOutcome,
   FactSourceSpan,
   StoredChapter,
   StoredChunk,
   StoredEntity,
   StoredEvent,
+  StoredEventProposal,
   StoredFact,
   StoredRuleMapping,
   WorldJobRecord,
@@ -143,6 +146,17 @@ interface JobRow extends SqliteRow {
   updated_at: string;
 }
 
+interface EventProposalRow extends SqliteRow {
+  chunk_id: string;
+  event_id: string;
+  title: string;
+  summary: string;
+  world_time_order: number | null;
+  narrative_chapter_id: string | null;
+  depends_on_event_keys_json: string;
+  status: string;
+}
+
 function requireString(row: SqliteRow, key: string): string {
   const value = row[key];
   if (typeof value !== 'string') throw new Error(`Expected string column ${key}.`);
@@ -248,10 +262,17 @@ export class SqliteWorldStore implements WorldStore {
     await this.db.transaction(async tx => {
       for (const chapter of parsed.chapters) {
         await tx.execute(
-          `INSERT OR IGNORE INTO source_chapters
+          `INSERT INTO source_chapters
             (world_id, chapter_id, chapter_index, title, start_offset, end_offset,
              char_count, content_hash, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(world_id, chapter_id) DO UPDATE SET
+             chapter_index = excluded.chapter_index,
+             title = excluded.title,
+             start_offset = excluded.start_offset,
+             end_offset = excluded.end_offset,
+             char_count = excluded.char_count,
+             content_hash = excluded.content_hash`,
           [
             worldId,
             chapter.chapterId,
@@ -266,11 +287,28 @@ export class SqliteWorldStore implements WorldStore {
         );
       }
       for (const chunk of parsed.chunks) {
+        // Closeout C1: rows written by the pre-fix mobile hash adapter stored
+        // the whole-file digest for every chunk. Re-importing the same novel
+        // with correct per-chunk digests must REPLACE that residue and reset
+        // the extraction status, so "done" markers recorded against the wrong
+        // hash are never trusted again. Rows whose hash did not change keep
+        // their status (idempotent resume for correct imports).
         await tx.execute(
-          `INSERT OR IGNORE INTO source_chunks
+          `INSERT INTO source_chunks
             (world_id, chunk_id, chapter_id, chunk_index, start_offset, end_offset,
              char_count, content_hash, extraction_status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+           ON CONFLICT(world_id, chunk_id) DO UPDATE SET
+             chapter_id = excluded.chapter_id,
+             chunk_index = excluded.chunk_index,
+             start_offset = excluded.start_offset,
+             end_offset = excluded.end_offset,
+             char_count = excluded.char_count,
+             content_hash = excluded.content_hash,
+             extraction_status = CASE
+               WHEN source_chunks.content_hash IS NOT excluded.content_hash THEN 'pending'
+               ELSE source_chunks.extraction_status
+             END`,
           [
             worldId,
             chunk.chunkId,
@@ -352,31 +390,33 @@ export class SqliteWorldStore implements WorldStore {
   }
 
   async upsertEntity(entity: StoredEntity, createdAt: string): Promise<void> {
-    await this.db.transaction(async tx => {
-      const existing = await tx.queryOne<EntityRow>(
-        'SELECT entity_id, type, name, first_seen_chapter_id FROM entities WHERE world_id = ? AND entity_id = ?',
-        [entity.worldId, entity.entityId],
+    await this.db.transaction(async tx => this.upsertEntityTx(tx, entity, createdAt));
+  }
+
+  private async upsertEntityTx(tx: SqliteTransaction, entity: StoredEntity, createdAt: string): Promise<void> {
+    const existing = await tx.queryOne<EntityRow>(
+      'SELECT entity_id, type, name, first_seen_chapter_id FROM entities WHERE world_id = ? AND entity_id = ?',
+      [entity.worldId, entity.entityId],
+    );
+    if (existing) {
+      await tx.execute(
+        'UPDATE entities SET type = ?, name = ?, first_seen_chapter_id = COALESCE(first_seen_chapter_id, ?) WHERE world_id = ? AND entity_id = ?',
+        [entity.type, entity.name, entity.firstSeenChapterId, entity.worldId, entity.entityId],
       );
-      if (existing) {
-        await tx.execute(
-          'UPDATE entities SET type = ?, name = ?, first_seen_chapter_id = COALESCE(first_seen_chapter_id, ?) WHERE world_id = ? AND entity_id = ?',
-          [entity.type, entity.name, entity.firstSeenChapterId, entity.worldId, entity.entityId],
-        );
-      } else {
-        await tx.execute(
-          `INSERT INTO entities (world_id, entity_id, type, name, first_seen_chapter_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [entity.worldId, entity.entityId, entity.type, entity.name, entity.firstSeenChapterId, createdAt],
-        );
-      }
-      for (const alias of entity.aliases) {
-        await tx.execute(
-          `INSERT OR IGNORE INTO entity_aliases (world_id, alias_id, entity_id, alias, score, evidence_json, created_at)
-           VALUES (?, ?, ?, ?, 1.0, '[]', ?)`,
-          [entity.worldId, `al-${entity.entityId}-${alias}`, entity.entityId, alias, createdAt],
-        );
-      }
-    });
+    } else {
+      await tx.execute(
+        `INSERT INTO entities (world_id, entity_id, type, name, first_seen_chapter_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [entity.worldId, entity.entityId, entity.type, entity.name, entity.firstSeenChapterId, createdAt],
+      );
+    }
+    for (const alias of entity.aliases) {
+      await tx.execute(
+        `INSERT OR IGNORE INTO entity_aliases (world_id, alias_id, entity_id, alias, score, evidence_json, created_at)
+         VALUES (?, ?, ?, ?, 1.0, '[]', ?)`,
+        [entity.worldId, `al-${entity.entityId}-${alias}`, entity.entityId, alias, createdAt],
+      );
+    }
   }
 
   async getEntity(worldId: string, entityId: string): Promise<StoredEntity | null> {
@@ -433,30 +473,35 @@ export class SqliteWorldStore implements WorldStore {
   }
 
   async saveFact(fact: StoredFact, createdAt: string): Promise<'inserted' | 'duplicate' | 'conflict'> {
-    return this.db.transaction(async tx => {
-      const valueKey = factValueKey(fact.predicate, fact.value);
-      const existingRows = await tx.queryAll<FactRow>(
-        `SELECT fact_id, value_json, value_key, status FROM canon_facts
-          WHERE world_id = ? AND subject_entity_id = ? AND predicate = ?`,
-        [fact.worldId, fact.subjectEntityId, fact.predicate],
-      );
-      for (const existing of existingRows) {
-        if (existing.value_json === JSON.stringify(fact.value)) {
-          return 'duplicate';
-        }
-        if (existing.value_key === valueKey && fact.status === 'explicit') {
-          await this.insertFact(tx, { ...fact, status: 'conflict' }, createdAt);
-          return 'conflict';
-        }
-      }
-      await this.insertFact(tx, fact, createdAt);
-      return 'inserted';
-    });
+    return this.db.transaction(async tx => this.saveFactTx(tx, fact, createdAt));
   }
 
-  private async insertFact(tx: {
-    execute(sql: string, params?: readonly unknown[]): Promise<unknown>;
-  }, fact: StoredFact, createdAt: string): Promise<void> {
+  /** Dedupe rules shared by single-fact saves and atomic chunk commits. */
+  private async saveFactTx(
+    tx: SqliteTransaction,
+    fact: StoredFact,
+    createdAt: string,
+  ): Promise<'inserted' | 'duplicate' | 'conflict'> {
+    const valueKey = factValueKey(fact.predicate, fact.value);
+    const existingRows = await tx.queryAll<FactRow>(
+      `SELECT fact_id, value_json, value_key, status FROM canon_facts
+        WHERE world_id = ? AND subject_entity_id = ? AND predicate = ?`,
+      [fact.worldId, fact.subjectEntityId, fact.predicate],
+    );
+    for (const existing of existingRows) {
+      if (existing.value_json === JSON.stringify(fact.value)) {
+        return 'duplicate';
+      }
+      if (existing.value_key === valueKey && fact.status === 'explicit') {
+        await this.insertFact(tx, { ...fact, status: 'conflict' }, createdAt);
+        return 'conflict';
+      }
+    }
+    await this.insertFact(tx, fact, createdAt);
+    return 'inserted';
+  }
+
+  private async insertFact(tx: Pick<SqliteTransaction, 'execute'>, fact: StoredFact, createdAt: string): Promise<void> {
     await tx.execute(
       `INSERT INTO canon_facts
         (world_id, fact_id, subject_entity_id, predicate, value_json, value_key, status, confidence,
@@ -762,7 +807,11 @@ export class SqliteWorldStore implements WorldStore {
   }
 
   async upsertJob(job: WorldJobRecord, updatedAt: string): Promise<void> {
-    await this.db.execute(
+    await this.db.transaction(async tx => this.upsertJobTx(tx, job, updatedAt));
+  }
+
+  private async upsertJobTx(tx: SqliteTransaction, job: WorldJobRecord, updatedAt: string): Promise<void> {
+    await tx.execute(
       `INSERT INTO world_jobs
         (world_id, job_id, kind, target_id, status, attempts, content_hash,
          extractor_version, model_fingerprint, usage_json, result_json, error, created_at, updated_at)
@@ -810,15 +859,103 @@ export class SqliteWorldStore implements WorldStore {
     kind: WorldJobRecord['kind'],
     contentHash: string,
     extractorVersion: string,
+    modelFingerprint?: string | null,
   ): Promise<WorldJobRecord | null> {
+    // Cache fingerprint (closeout C1): a done job is reusable only when the
+    // content AND the extraction configuration match. Jobs recorded under a
+    // different model/prompt fingerprint - including rows polluted by the
+    // whole-file-hash bug - must not be reused.
     const row = await this.db.queryOne<JobRow>(
       `SELECT * FROM world_jobs
         WHERE world_id = ? AND kind = ? AND content_hash = ? AND extractor_version = ?
           AND status = 'done'
+          ${modelFingerprint !== undefined && modelFingerprint !== null ? 'AND model_fingerprint = ?' : ''}
         ORDER BY updated_at DESC LIMIT 1`,
-      [worldId, kind, contentHash, extractorVersion],
+      modelFingerprint !== undefined && modelFingerprint !== null
+        ? [worldId, kind, contentHash, extractorVersion, modelFingerprint]
+        : [worldId, kind, contentHash, extractorVersion],
     );
     return row ? this.jobFromRow(row) : null;
+  }
+
+  async commitChunkResult(input: CommitChunkResultInput): Promise<CommitChunkResultOutcome> {
+    const factOutcomes: Array<'inserted' | 'duplicate' | 'conflict'> = [];
+    await this.db.transaction(async tx => {
+      for (const entity of input.entities) {
+        await this.upsertEntityTx(tx, entity, input.createdAt);
+      }
+      for (const fact of input.facts) {
+        factOutcomes.push(await this.saveFactTx(tx, fact, input.createdAt));
+      }
+      for (const proposal of input.eventProposals) {
+        await tx.execute(
+          `INSERT INTO world_event_proposals
+            (world_id, chunk_id, event_id, title, summary, world_time_order,
+             narrative_chapter_id, depends_on_event_keys_json, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)
+           ON CONFLICT(world_id, chunk_id, event_id) DO UPDATE SET
+             title = excluded.title,
+             summary = excluded.summary,
+             world_time_order = excluded.world_time_order,
+             narrative_chapter_id = excluded.narrative_chapter_id,
+             depends_on_event_keys_json = excluded.depends_on_event_keys_json,
+             status = 'proposed',
+             updated_at = excluded.updated_at`,
+          [
+            input.worldId,
+            input.chunkId,
+            proposal.eventId,
+            proposal.title,
+            proposal.summary,
+            proposal.worldTimeOrder,
+            proposal.narrativeChapterId,
+            JSON.stringify(proposal.dependsOnEventKeys),
+            input.createdAt,
+            input.updatedAt,
+          ],
+        );
+      }
+      await tx.execute(
+        `UPDATE source_chunks SET extraction_status = 'extracted' WHERE world_id = ? AND chunk_id = ?`,
+        [input.worldId, input.chunkId],
+      );
+      await this.upsertJobTx(tx, input.job, input.updatedAt);
+    });
+    return { factOutcomes };
+  }
+
+  async listEventProposals(worldId: string): Promise<StoredEventProposal[]> {
+    const rows = await this.db.queryAll<EventProposalRow>(
+      `SELECT chunk_id, event_id, title, summary, world_time_order, narrative_chapter_id,
+              depends_on_event_keys_json, status
+         FROM world_event_proposals WHERE world_id = ? AND status = 'proposed'
+        ORDER BY chunk_id, event_id`,
+      [worldId],
+    );
+    return rows.map(row => ({
+      worldId,
+      chunkId: row.chunk_id,
+      eventId: row.event_id,
+      title: row.title,
+      summary: row.summary,
+      worldTimeOrder: row.world_time_order,
+      narrativeChapterId: row.narrative_chapter_id,
+      dependsOnEventKeys: JSON.parse(row.depends_on_event_keys_json) as string[],
+      status: 'proposed',
+    }));
+  }
+
+  async markEventProposalsResolved(worldId: string, eventIds: readonly string[], updatedAt: string): Promise<void> {
+    if (eventIds.length === 0) return;
+    await this.db.transaction(async tx => {
+      for (const eventId of eventIds) {
+        await tx.execute(
+          `UPDATE world_event_proposals SET status = 'resolved', updated_at = ?
+             WHERE world_id = ? AND event_id = ? AND status = 'proposed'`,
+          [updatedAt, worldId, eventId],
+        );
+      }
+    });
   }
 
   private jobFromRow(row: JobRow): WorldJobRecord {

@@ -624,6 +624,32 @@ const PARTY_LIFECYCLE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 ALTER TABLE party_members ADD COLUMN party_group_id TEXT NOT NULL DEFAULT 'main';
 `;
 
+const EVENT_PROPOSAL_CHECKPOINT_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- Closeout C1: per-chunk event proposals are checkpointed in the same
+-- transaction that marks a chunk done. Timeline resolution later reads ALL
+-- unresolved proposals (across runs/chunks) so a crash between chunk commit
+-- and timeline resolution never loses events, and re-resolution is replayable.
+CREATE TABLE IF NOT EXISTS world_event_proposals (
+  world_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  world_time_order INTEGER,
+  narrative_chapter_id TEXT,
+  depends_on_event_keys_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'resolved')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(world_id, chunk_id, event_id),
+  FOREIGN KEY(world_id) REFERENCES worlds(world_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_proposals_status
+  ON world_event_proposals(world_id, status);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -635,4 +661,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 8, name: 'knowledge_quests', sql: KNOWLEDGE_QUEST_SCHEMA_SQL },
   { version: 9, name: 'world_package_drafts', sql: WORLD_PACKAGE_DRAFTS_SCHEMA_SQL },
   { version: 10, name: 'party_lifecycle', sql: PARTY_LIFECYCLE_SCHEMA_SQL },
+  { version: 11, name: 'event_proposal_checkpoint', sql: EVENT_PROPOSAL_CHECKPOINT_SCHEMA_SQL },
 ];

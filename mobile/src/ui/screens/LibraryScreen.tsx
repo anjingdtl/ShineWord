@@ -108,7 +108,6 @@ export function LibraryScreen(): React.JSX.Element {
           setProgress(p);
           if (p.phase === 'extracting') setPreview(p.message ?? null);
         },
-        picked.base64,
       );
       setSummary(built);
       await refresh();

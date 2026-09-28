@@ -91,6 +91,45 @@ export interface StoredEvent {
   dependsOnEventIds: readonly string[];
 }
 
+/**
+ * Closeout C1 event checkpoint: extraction defers cross-chunk dependency
+ * resolution until every chunk ran, so per-chunk proposals are persisted in
+ * the SAME transaction that marks the chunk done. A crash between "chunk
+ * committed" and "timeline resolved" therefore loses nothing — the next run
+ * replays resolution from these rows instead of trusting in-memory state.
+ */
+export interface StoredEventProposal {
+  worldId: string;
+  chunkId: string;
+  eventId: string;
+  title: string;
+  summary: string;
+  worldTimeOrder: number | null;
+  narrativeChapterId: string | null;
+  dependsOnEventKeys: readonly string[];
+  status: 'proposed' | 'resolved';
+}
+
+/**
+ * Single-transaction chunk commit (closeout C1): entities, deduplicated facts,
+ * event proposals, chunk extraction status and the done-job marker either all
+ * land or none do. A write failure must never leave a chunk marked done.
+ */
+export interface CommitChunkResultInput {
+  worldId: string;
+  chunkId: string;
+  entities: readonly StoredEntity[];
+  facts: readonly StoredFact[];
+  eventProposals: readonly Omit<StoredEventProposal, 'worldId' | 'status'>[];
+  job: WorldJobRecord;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommitChunkResultOutcome {
+  factOutcomes: Array<'inserted' | 'duplicate' | 'conflict'>;
+}
+
 export interface StoredRuleMapping {
   worldId: string;
   mappingId: string;
@@ -162,5 +201,23 @@ export interface WorldStore {
 
   upsertJob(job: WorldJobRecord, updatedAt: string): Promise<void>;
   getJob(worldId: string, jobId: string): Promise<WorldJobRecord | null>;
-  findReusableJob(worldId: string, kind: WorldJobRecord['kind'], contentHash: string, extractorVersion: string): Promise<WorldJobRecord | null>;
+  findReusableJob(
+    worldId: string,
+    kind: WorldJobRecord['kind'],
+    contentHash: string,
+    extractorVersion: string,
+    modelFingerprint?: string | null,
+  ): Promise<WorldJobRecord | null>;
+
+  /**
+   * Atomically commits one finished chunk: entities, deduplicated facts,
+   * event proposals, chunk status 'extracted' and the done job. Returns the
+   * per-fact dedupe outcomes so callers can report honest counters.
+   */
+  commitChunkResult(input: CommitChunkResultInput): Promise<CommitChunkResultOutcome>;
+
+  /** Every unresolved event proposal for the world, across runs. */
+  listEventProposals(worldId: string): Promise<StoredEventProposal[]>;
+  /** Marks proposals resolved once their canon events are committed. */
+  markEventProposalsResolved(worldId: string, eventIds: readonly string[], updatedAt: string): Promise<void>;
 }

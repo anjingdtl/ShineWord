@@ -1,8 +1,8 @@
 import type { ParsedTxtSource } from '../../src/domain/world/types';
 import type { WorldRecord } from '../../src/application/ports/worldStore';
 
-declare const btoa: (data: string) => string;
 import { importTxtSource } from '../../src/application/import/txtImport';
+import { makeBase64NativeByteSha } from '../../src/application/import/byteShaAdapter';
 import { buildWorldFromTxt } from '../../src/application/world/buildWorld';
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
@@ -16,34 +16,17 @@ import { KeychainSecretStore } from './secureKeyStore';
 import { FetchHttpTransport } from './fetchTransport';
 
 /**
- * Byte-level hashing (P2 acceptance G06): the true digest hashes the raw file
- * bytes via the native module; the legacy re-encode digest is kept ONLY as a
- * resume key for worlds imported before the fix - it is never written over
- * an existing row.
+ * The import pipeline's byte-hash provider (closeout C1). Every call hashes
+ * EXACTLY the bytes passed in: the whole-file digest once per parse, and each
+ * chapter/chunk digest over its own text. The pre-C1 adapter ignored the
+ * argument whenever a whole-file base64 was supplied, which made every
+ * chapter/chunk digest equal the raw file digest — resume then "reused" one
+ * extraction for every chunk and silently skipped the rest of the novel.
  */
-export interface BytesSha {
-  sha256BytesHex(bytes: Uint8Array): Promise<string>;
-  sha256Hex(input: string): Promise<string>;
-}
-
-function makeBytesSha(fileBase64: string | null): BytesSha {
-  return {
-    async sha256BytesHex(bytes: Uint8Array): Promise<string> {
-      if (fileBase64 !== null) {
-        // The bytes came from this exact file: hash the original bytes.
-        return nativeSha256BytesHex(fileBase64);
-      }
-      // Fallback (non-file callers): base64-encode in JS, then hash natively.
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += 1) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      if (typeof btoa !== 'function') throw new Error('btoa is unavailable on this runtime.');
-      return nativeSha256BytesHex(btoa(binary));
-    },
-    sha256Hex: async input => nativeSha256.sha256Hex(input),
-  };
-}
+export const bytesSha = makeBase64NativeByteSha({
+  sha256BytesHexFromBase64: nativeSha256BytesHex,
+  sha256Hex: async input => nativeSha256.sha256Hex(input),
+});
 
 /** The pre-G6 digest (byte -> binary string -> UTF-8 re-encode). Resume-only. */
 async function legacyReencodeDigest(bytes: Uint8Array): Promise<string> {
@@ -60,7 +43,7 @@ export interface ImportPreview {
 }
 
 export async function previewNovel(bytes: Uint8Array, fallbackTitle: string): Promise<ImportPreview> {
-  const parsed = await importTxtSource(bytes, makeBytesSha(null), mobileTextDecoder);
+  const parsed = await importTxtSource(bytes, bytesSha, mobileTextDecoder);
   return { parsed, title: fallbackTitle };
 }
 
@@ -169,12 +152,10 @@ export async function buildWorldOnDevice(
   fallbackTitle: string,
   profile: ApiProfile,
   onProgress: (progress: WorldBuildProgress) => void,
-  fileBase64: string | null = null,
 ): Promise<BuiltWorldSummary> {
   onProgress({ phase: 'importing' });
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
-  const bytesSha = makeBytesSha(fileBase64);
   const parsed = await importTxtSource(bytes, bytesSha, mobileTextDecoder);
   const title = makeTitleFromText(parsed, fallbackTitle);
   const legacySha256 = await legacyReencodeDigest(bytes);
