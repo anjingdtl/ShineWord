@@ -38,6 +38,21 @@ export async function pickNovelFile(): Promise<PickedNovelFile | null> {
   };
 }
 
+
+/** Picker-only variant (closeout C2): no bytes cross the bridge; the native
+ * staging copy owns the file content from here on. */
+export interface PickedTextRef {
+  uri: string;
+  name: string;
+  size: number;
+}
+
+export async function pickTextRef(): Promise<PickedTextRef | null> {
+  const picked = await native().pickTextFile();
+  if (!picked) return null;
+  return { uri: picked.uri, name: picked.name ?? 'novel.txt', size: picked.size };
+}
+
 export function base64ToBytes(base64: string): Uint8Array {
   const atobFn = (globalThis as { atob?: (data: string) => string }).atob;
   if (!atobFn) throw new Error('atob is unavailable on this runtime.');

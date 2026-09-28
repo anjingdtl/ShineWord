@@ -11,6 +11,7 @@ class ShineWordNativePackage : ReactPackage {
   ): List<NativeModule> = listOf(
     ShineWordCryptoModule(reactContext),
     ShineWordFilesModule(reactContext),
+    ShineWordTextSourceModule(reactContext),
   )
 
   override fun createViewManagers(

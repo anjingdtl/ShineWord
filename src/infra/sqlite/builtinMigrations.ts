@@ -650,6 +650,142 @@ CREATE INDEX IF NOT EXISTS idx_event_proposals_status
   ON world_event_proposals(world_id, status);
 `;
 
+const IMPORTED_SOURCES_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- Closeout C2: persisted private source of imported novels. The normalized
+-- text lives in bounded shards, builds read ranges from here so resuming a
+-- build never requires re-picking the original file. A source is written
+-- under a staging manifest during streaming import and activated in one
+-- transaction after all shards/chapters/chunks are verified.
+CREATE TABLE IF NOT EXISTS imported_sources (
+  source_id TEXT PRIMARY KEY,
+  raw_sha256 TEXT NOT NULL,
+  normalized_tree_hash TEXT NOT NULL,
+  normalize_tree_hash_version TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  code_point_count INTEGER NOT NULL,
+  encoding TEXT NOT NULL,
+  normalize_version TEXT NOT NULL,
+  chapter_split_version TEXT NOT NULL,
+  normalize_shard_scheme TEXT NOT NULL,
+  split_strategy TEXT NOT NULL,
+  file_name TEXT,
+  title TEXT,
+  status TEXT NOT NULL DEFAULT 'staging' CHECK(status IN ('staging', 'active', 'orphaned')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_sources_raw_active
+  ON imported_sources(raw_sha256) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS imported_source_segments (
+  source_id TEXT NOT NULL,
+  shard_index INTEGER NOT NULL,
+  start_cp INTEGER NOT NULL,
+  end_cp INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  PRIMARY KEY(source_id, shard_index),
+  FOREIGN KEY(source_id) REFERENCES imported_sources(source_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_imported_source_segments_range
+  ON imported_source_segments(source_id, start_cp, end_cp);
+
+CREATE TABLE IF NOT EXISTS imported_source_chapters (
+  source_id TEXT NOT NULL,
+  chapter_id TEXT NOT NULL,
+  chapter_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  start_cp INTEGER NOT NULL,
+  end_cp INTEGER NOT NULL,
+  char_count INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  PRIMARY KEY(source_id, chapter_id),
+  UNIQUE(source_id, chapter_index),
+  FOREIGN KEY(source_id) REFERENCES imported_sources(source_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS imported_source_chunks (
+  source_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  chapter_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  start_cp INTEGER NOT NULL,
+  end_cp INTEGER NOT NULL,
+  char_count INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  PRIMARY KEY(source_id, chunk_id),
+  UNIQUE(source_id, chapter_id, chunk_index),
+  FOREIGN KEY(source_id) REFERENCES imported_sources(source_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_imported_source_chunks_chapter
+  ON imported_source_chunks(source_id, chapter_id);
+`;
+
+const WORLD_BUILD_RUNS_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- Closeout C2: persistent build runs and units. One coordinator owns a run
+-- at a time via a CAS lease with a monotonically increasing fencing token,
+-- late commits from a stale owner are rejected by token comparison.
+CREATE TABLE IF NOT EXISTS world_build_runs (
+  run_id TEXT PRIMARY KEY,
+  world_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_snapshot_hash TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL,
+  plan_version TEXT NOT NULL,
+  model_fingerprint TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK(phase IN
+    ('reading', 'normalizing', 'indexing', 'extracting', 'merging', 'mapping', 'validating', 'publishing')),
+  status TEXT NOT NULL CHECK(status IN
+    ('queued', 'running', 'waiting_network', 'waiting_unlock', 'paused_system', 'paused_user',
+     'failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'completed')),
+  units_total INTEGER NOT NULL DEFAULT 0,
+  units_done INTEGER NOT NULL DEFAULT 0,
+  units_failed INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  fencing_token INTEGER NOT NULL DEFAULT 0,
+  heartbeat_at TEXT,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(source_id) REFERENCES imported_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_world_build_runs_status ON world_build_runs(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS world_build_units (
+  unit_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('extract_group', 'map_batch')),
+  source_ranges_json TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  config_fingerprint TEXT NOT NULL,
+  parent_unit_id TEXT,
+  ord INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
+    ('queued', 'running', 'waiting_network', 'waiting_unlock',
+     'failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'completed')),
+  attempt INTEGER NOT NULL DEFAULT 0,
+  retry_at TEXT,
+  result_ref TEXT,
+  usage_json TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES world_build_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_world_build_units_run ON world_build_units(run_id, ord);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_world_build_units_unique_input
+  ON world_build_units(run_id, kind, input_hash, config_fingerprint);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -662,4 +798,6 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 9, name: 'world_package_drafts', sql: WORLD_PACKAGE_DRAFTS_SCHEMA_SQL },
   { version: 10, name: 'party_lifecycle', sql: PARTY_LIFECYCLE_SCHEMA_SQL },
   { version: 11, name: 'event_proposal_checkpoint', sql: EVENT_PROPOSAL_CHECKPOINT_SCHEMA_SQL },
+  { version: 12, name: 'imported_sources', sql: IMPORTED_SOURCES_SCHEMA_SQL },
+  { version: 13, name: 'world_build_runs', sql: WORLD_BUILD_RUNS_SCHEMA_SQL },
 ];

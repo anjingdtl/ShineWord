@@ -67,35 +67,32 @@ test('evidence validation rejects tampered quotes and out-of-chapter spans', asy
   const cpStart = index.utf16IndexOf(absStart);
   const cpEnd = cpStart + quote.length;
 
-  const ok = checkEvidence(
+  const evidenceSource = { chapters: parsed.chapters, sliceRange: (a, b) => Promise.resolve(index.slice(a, b)) };
+  const ok = await checkEvidence(
     { subjectKey: '陈青云', predicate: 'home_location', value: {}, status: 'explicit', confidence: 1, evidence: { chapterId: 'ch-0001', startOffset: cpStart, endOffset: cpEnd, quote } },
-    parsed,
     chapterIndex,
-    index,
+    evidenceSource,
   );
   assert.equal(ok.ok, true);
 
-  const wrongQuote = checkEvidence(
+  const wrongQuote = await checkEvidence(
     { subjectKey: '陈青云', predicate: 'home_location', value: {}, status: 'explicit', confidence: 1, evidence: { chapterId: 'ch-0001', startOffset: cpStart, endOffset: cpEnd, quote: '篡改过的引文' } },
-    parsed,
     chapterIndex,
-    index,
+    evidenceSource,
   );
   assert.equal(wrongQuote.ok, false);
 
-  const shiftedSpan = checkEvidence(
+  const shiftedSpan = await checkEvidence(
     { subjectKey: '陈青云', predicate: 'home_location', value: {}, status: 'explicit', confidence: 1, evidence: { chapterId: 'ch-0001', startOffset: cpStart + 1, endOffset: cpEnd + 1, quote } },
-    parsed,
     chapterIndex,
-    index,
+    evidenceSource,
   );
   assert.equal(shiftedSpan.ok, false);
 
-  const outsideChapter = checkEvidence(
+  const outsideChapter = await checkEvidence(
     { subjectKey: '陈青云', predicate: 'home_location', value: {}, status: 'explicit', confidence: 1, evidence: { chapterId: 'ch-0002', startOffset: cpStart, endOffset: cpEnd, quote } },
-    parsed,
     chapterIndex,
-    index,
+    evidenceSource,
   );
   assert.equal(outsideChapter.ok, false);
 });
@@ -109,7 +106,7 @@ test('applyExtraction preserves speculation status and rejects unevidenced facts
 
   const resolved = await applyExtraction({
     worldId: 'w-ex',
-    parsed,
+    source: { chapters: parsed.chapters, sliceRange: (a, b) => Promise.resolve(index.slice(a, b)) },
     createdAt: '2026-09-27T00:00:00.000Z',
     sha256Hex: sha.sha256Hex,
     extraction: {
@@ -209,9 +206,10 @@ test('original character opening distributes 4 free points with single cap 3', (
 
 test('canon character opening derives location and only mapped skills, never speculation', async () => {
   const parsed = await loadSmallParsed();
+  const canIndex = new CodePointOffsetIndex(parsed.text);
   const resolved = await applyExtraction({
     worldId: 'w-can',
-    parsed,
+    source: { chapters: parsed.chapters, sliceRange: (a, b) => Promise.resolve(canIndex.slice(a, b)) },
     createdAt: 't',
     sha256Hex: sha.sha256Hex,
     extraction: {

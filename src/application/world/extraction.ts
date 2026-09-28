@@ -3,13 +3,22 @@ import type {
   EventProposal,
   ExtractionResult,
   FactProposal,
-  ParsedTxtSource,
 } from '../../domain/world/types';
-import { CodePointOffsetIndex } from '../../domain/world/textOffsets';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { StoredEntity, StoredFact } from '../ports/worldStore';
 
 export type Sha256Hex = Sha256HexProvider['sha256Hex'];
+
+/**
+ * Bounded evidence source (closeout C2): chapter bounds plus a range read.
+ * The batch builder backs this with a CodePointOffsetIndex over the whole
+ * text; the streaming coordinator backs it with persisted shards, so quote
+ * verification no longer requires an O(N) full-text index per chunk.
+ */
+export interface EvidenceSource {
+  chapters: readonly { chapterId: string; startOffset: number; endOffset: number }[];
+  sliceRange(startCp: number, endCp: number): Promise<string>;
+}
 
 export interface EvidenceCheckResult {
   ok: boolean;
@@ -21,12 +30,11 @@ export interface EvidenceCheckResult {
  * declared code point span must reproduce it exactly. This is what keeps
  * "source location = 100%" a hard guarantee, independent of the extractor.
  */
-export function checkEvidence(
+export async function checkEvidence(
   proposal: FactProposal,
-  parsed: ParsedTxtSource,
   chapterIndex: Map<string, { start: number; end: number }>,
-  index: CodePointOffsetIndex,
-): EvidenceCheckResult {
+  source: EvidenceSource,
+): Promise<EvidenceCheckResult> {
   if (!proposal.evidence) return { ok: false, reason: 'missing evidence span' };
   const { chapterId, startOffset, endOffset, quote } = proposal.evidence;
   const chapter = chapterIndex.get(chapterId);
@@ -34,7 +42,7 @@ export function checkEvidence(
   if (startOffset < chapter.start || endOffset > chapter.end || startOffset >= endOffset) {
     return { ok: false, reason: `span outside chapter ${chapterId}` };
   }
-  const sliced = index.slice(startOffset, endOffset);
+  const sliced = await source.sliceRange(startOffset, endOffset);
   if (sliced !== quote) {
     return { ok: false, reason: 'quote does not match declared span' };
   }
@@ -67,7 +75,7 @@ export function eventIdFor(worldId: string, key: string): string {
 
 export interface ApplyExtractionInput {
   worldId: string;
-  parsed: ParsedTxtSource;
+  source: EvidenceSource;
   extraction: ExtractionResult;
   createdAt: string;
   sha256Hex: Sha256Hex;
@@ -80,10 +88,9 @@ export interface ApplyExtractionInput {
  * - entity keys resolve to stable entity ids with name aliases.
  */
 export async function applyExtraction(input: ApplyExtractionInput): Promise<ResolvedExtraction> {
-  const { worldId, parsed, extraction, createdAt, sha256Hex } = input;
-  const index = new CodePointOffsetIndex(parsed.text);
+  const { worldId, source, extraction, sha256Hex } = input;
   const chapterIndex = new Map<string, { start: number; end: number }>();
-  for (const chapter of parsed.chapters) {
+  for (const chapter of source.chapters) {
     chapterIndex.set(chapter.chapterId, { start: chapter.startOffset, end: chapter.endOffset });
   }
 
@@ -106,7 +113,7 @@ export async function applyExtraction(input: ApplyExtractionInput): Promise<Reso
   const facts: StoredFact[] = [];
   let factCounter = 0;
   for (const proposal of extraction.facts) {
-    const evidence = checkEvidence(proposal, parsed, chapterIndex, index);
+    const evidence = await checkEvidence(proposal, chapterIndex, source);
     if (!evidence.ok) {
       rejected.push({ kind: 'evidence', detail: `${proposal.subjectKey}.${proposal.predicate}: ${evidence.reason}` });
       continue;

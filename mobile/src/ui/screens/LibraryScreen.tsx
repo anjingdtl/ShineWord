@@ -17,7 +17,8 @@ import {
   importPortableWorldPackageFile,
   type CampaignListItem,
 } from '../../runtime';
-import { pickNovelFile } from '../../fileBridge';
+import { pickNovelFile, pickTextRef } from '../../fileBridge';
+import { importNovelStreaming, runExtraction } from '../../sourceImport';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -98,18 +99,44 @@ export function LibraryScreen(): React.JSX.Element {
     setSummary(null);
     setPreview(null);
     try {
-      const picked = await pickNovelFile();
+      // Closeout C2: staged streaming import - the novel never crosses the
+      // bridge as one base64 payload and builds read from persisted shards.
+      const picked = await pickTextRef();
       if (!picked) return;
-      const built = await buildWorldOnDevice(
-        picked.bytes,
-        picked.name.replace(/\.txt$/i, ''),
+      const imported = await importNovelStreaming(
+        picked.uri,
+        picked.name,
         profile,
         p => {
           setProgress(p);
-          if (p.phase === 'extracting') setPreview(p.message ?? null);
+          if (p.phase === 'importing') setPreview(p.message ?? null);
         },
       );
-      setSummary(built);
+      setPreview(
+        `已解析 ${imported.chapterCount} 章 / ${imported.chunkCount} 块`
+        + `${imported.reusedSource ? '（复用已有源）' : ''}，开始抽取…`,
+      );
+      const built = await runExtraction(imported.runId, profile, p => {
+        setProgress(p);
+        if (p.chunksTotal && p.chunksDone !== undefined && p.chunksTotal > 0) {
+          setPreview(`抽取 ${p.chunksDone}/${p.chunksTotal} 组`);
+        }
+      });
+      setSummary({
+        worldId: imported.worldId,
+        title: picked.name.replace(/\.txt$/i, ''),
+        chapterCount: imported.chapterCount,
+        chunkCount: imported.chunkCount,
+        entityCount: 0,
+        factCount: 0,
+        eventCount: 0,
+        failedChunks: built.unitsFailed,
+        rejected: 0,
+        resumed: imported.reusedSource,
+        packageRevision: 0,
+        reviewIssues: 0,
+        needsRetry: !built.completed,
+      });
       await refresh();
     } catch (e) {
       const detail = e instanceof Error

@@ -33,6 +33,15 @@ const STANDARD_HEADING =
 const LOOSE_HEADING_EN = /^\s*(?:Chapter|CHAPTER|chapter)\s+\d+(?:[^\n]{0,44})?\s*$/;
 const LOOSE_HEADING_NUM = /^\s*\d{1,4}[、.．]\s*\S[^\n]{0,40}\s*$/;
 
+/** Heading matchers shared with the streaming importer (closeout C2). */
+export function isStandardHeadingLine(line: string): boolean {
+  return STANDARD_HEADING.test(line);
+}
+
+export function isLooseHeadingLine(line: string): boolean {
+  return LOOSE_HEADING_EN.test(line) || LOOSE_HEADING_NUM.test(line);
+}
+
 export function detectEncoding(bytes: Uint8Array): string {
   const byteAt = (i: number): number => bytes[i] ?? 0;
   if (bytes.length >= 3 && byteAt(0) === 0xef && byteAt(1) === 0xbb && byteAt(2) === 0xbf) {
@@ -101,27 +110,58 @@ function splitParagraphs(normalized: string): Paragraph[] {
   return paragraphs;
 }
 
-function classifyChapterHeadings(paragraphs: readonly Paragraph[]): ChapterSplitStrategy {
+/**
+ * Paragraph metadata shared by the batch importer and the streaming importer
+ * (closeout C2) so chapter/chunk planning cannot drift between them.
+ * `headingText` is populated only for lines matching a chapter heading
+ * pattern - the streaming pass does not retain full paragraph text.
+ */
+export interface ParagraphMeta {
+  startOffset: number;
+  lengthCp: number;
+  headingKind: 'none' | 'standard' | 'loose';
+  /** Trimmed line for heading matches (title source); '' otherwise. */
+  headingText: string;
+}
+
+export function paragraphMetaFrom(normalized: string): ParagraphMeta[] {
+  const paragraphs = splitParagraphs(normalized);
+  return paragraphs.map(paragraph => {
+    const line = paragraph.text.trim();
+    const headingKind: ParagraphMeta['headingKind'] = STANDARD_HEADING.test(line)
+      ? 'standard'
+      : LOOSE_HEADING_EN.test(line) || LOOSE_HEADING_NUM.test(line)
+        ? 'loose'
+        : 'none';
+    return {
+      startOffset: paragraph.startOffset,
+      lengthCp: codePointLength(paragraph.text),
+      headingKind,
+      headingText: headingKind === 'none' ? '' : line,
+    };
+  });
+}
+
+export function classifyChapterStrategy(paragraphs: readonly ParagraphMeta[]): ChapterSplitStrategy {
   let standard = 0;
   let loose = 0;
   for (const paragraph of paragraphs) {
-    const line = paragraph.text.trim();
-    if (STANDARD_HEADING.test(line)) standard += 1;
-    else if (LOOSE_HEADING_EN.test(line) || LOOSE_HEADING_NUM.test(line)) loose += 1;
+    if (paragraph.headingKind === 'standard') standard += 1;
+    else if (paragraph.headingKind === 'loose') loose += 1;
   }
   if (standard >= 2) return 'standard';
   if (loose >= 3) return 'loose';
   return 'fallback';
 }
 
-interface ChapterDraft {
+export interface ChapterDraft {
   title: string;
   startOffset: number;
   endOffset: number;
 }
 
-function buildChapterDrafts(
-  paragraphs: readonly Paragraph[],
+export function buildChapterDraftsFromMeta(
+  paragraphs: readonly ParagraphMeta[],
   strategy: ChapterSplitStrategy,
   codePointCount: number,
   fallbackChapterSize: number,
@@ -134,7 +174,7 @@ function buildChapterDrafts(
     for (let i = 0; i < paragraphs.length; i += 1) {
       const paragraph = paragraphs[i];
       if (!paragraph) continue;
-      acc += codePointLength(paragraph.text) + 1;
+      acc += paragraph.lengthCp + 1;
       const nextParagraph = paragraphs[i + 1];
       const nextStart = nextParagraph ? nextParagraph.startOffset : codePointCount;
       if (acc >= fallbackChapterSize || i === paragraphs.length - 1) {
@@ -155,11 +195,9 @@ function buildChapterDrafts(
   let currentTitle = '开篇';
   let currentStart = 0;
   for (const paragraph of paragraphs) {
-    const line = paragraph.text.trim();
-    const isHeading = strategy === 'standard'
-      ? STANDARD_HEADING.test(line)
-      : LOOSE_HEADING_EN.test(line) || LOOSE_HEADING_NUM.test(line);
-    if (!isHeading) continue;
+    if (paragraph.headingKind === 'none') continue;
+    if (paragraph.headingKind !== strategy) continue;
+    const line = paragraph.headingText;
     if (paragraph.startOffset > currentStart) {
       drafts.push({ title: currentTitle, startOffset: currentStart, endOffset: paragraph.startOffset });
       currentTitle = line.slice(0, 60);
@@ -189,12 +227,12 @@ export async function importTxtSource(
   );
   const sourceSha256Hex = await sha.sha256BytesHex(bytes);
 
-  const paragraphs = splitParagraphs(normalized);
-  const strategy = classifyChapterHeadings(paragraphs);
+  const paragraphs = paragraphMetaFrom(normalized);
+  const strategy = classifyChapterStrategy(paragraphs);
   const index = new CodePointOffsetIndex(normalized);
   const codePointCount = index.codePointCount;
 
-  const drafts = buildChapterDrafts(paragraphs, strategy, codePointCount, fallbackChapterSize);
+  const drafts = buildChapterDraftsFromMeta(paragraphs, strategy, codePointCount, fallbackChapterSize);
 
   const chapters: SourceChapter[] = [];
   const chunks: SourceChunk[] = [];
@@ -213,46 +251,7 @@ export async function importTxtSource(
       contentHash: await sha.sha256BytesHex(utf8Bytes(chapterText)),
     };
     chapters.push(chapter);
-
-    const chapterParagraphs = paragraphs.filter(
-      p => p.startOffset >= draft.startOffset && p.startOffset < draft.endOffset,
-    );
-
-    let chunkIndex = 0;
-    let batch: Paragraph[] = [];
-    let acc = 0;
-    const flush = (endOffset: number) => {
-      const firstParagraph = batch[0];
-      if (!firstParagraph) return;
-      const startOffset = firstParagraph.startOffset;
-      const boundedEnd = Math.min(endOffset, draft.endOffset);
-      if (boundedEnd <= startOffset) {
-        batch = [];
-        acc = 0;
-        return;
-      }
-      chunks.push({
-        chunkId: `${chapter.chapterId}-c${String(chunkIndex + 1).padStart(3, '0')}`,
-        chapterId: chapter.chapterId,
-        chunkIndex,
-        startOffset,
-        endOffset: boundedEnd,
-        charCount: 0, // filled with hashes below
-        contentHash: '',
-      });
-      chunkIndex += 1;
-      batch = [];
-      acc = 0;
-    };
-
-    for (const paragraph of chapterParagraphs) {
-      batch.push(paragraph);
-      acc += codePointLength(paragraph.text) + 1;
-      if (acc >= targetChunk) {
-        flush(paragraph.startOffset + codePointLength(paragraph.text) + 1);
-      }
-    }
-    flush(draft.endOffset);
+    chunks.push(...planChunksForChapter(chapter, draft, paragraphs, targetChunk));
   }
 
   // Fill chunk sizes and hashes in one pass after offsets are final.
@@ -274,6 +273,59 @@ export async function importTxtSource(
     chapters,
     chunks,
   };
+}
+
+/**
+ * Physical chunk planning shared by batch and streaming importers: packs
+ * consecutive paragraphs of one chapter up to `targetChunk` code points.
+ * Offsets only - text and hashes are the caller's responsibility.
+ */
+export function planChunksForChapter(
+  chapter: { chapterId: string },
+  draft: { startOffset: number; endOffset: number },
+  paragraphs: readonly ParagraphMeta[],
+  targetChunk: number,
+): SourceChunk[] {
+  const chapterParagraphs = paragraphs.filter(
+    p => p.startOffset >= draft.startOffset && p.startOffset < draft.endOffset,
+  );
+  const chunks: SourceChunk[] = [];
+  let chunkIndex = 0;
+  let batch: ParagraphMeta[] = [];
+  let acc = 0;
+  const flush = (endOffset: number) => {
+    const firstParagraph = batch[0];
+    if (!firstParagraph) return;
+    const startOffset = firstParagraph.startOffset;
+    const boundedEnd = Math.min(endOffset, draft.endOffset);
+    if (boundedEnd <= startOffset) {
+      batch = [];
+      acc = 0;
+      return;
+    }
+    chunks.push({
+      chunkId: `${chapter.chapterId}-c${String(chunkIndex + 1).padStart(3, '0')}`,
+      chapterId: chapter.chapterId,
+      chunkIndex,
+      startOffset,
+      endOffset: boundedEnd,
+      charCount: boundedEnd - startOffset,
+      contentHash: '',
+    });
+    chunkIndex += 1;
+    batch = [];
+    acc = 0;
+  };
+
+  for (const paragraph of chapterParagraphs) {
+    batch.push(paragraph);
+    acc += paragraph.lengthCp + 1;
+    if (acc >= targetChunk) {
+      flush(paragraph.startOffset + paragraph.lengthCp + 1);
+    }
+  }
+  flush(draft.endOffset);
+  return chunks;
 }
 
 export function sliceByCodePoints(text: string, startOffset: number, endOffset: number): string {

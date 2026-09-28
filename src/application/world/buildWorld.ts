@@ -3,7 +3,7 @@ import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import { CodePointOffsetIndex } from '../../domain/world/textOffsets';
 import type { StoredChunk, WorldJobRecord, WorldRecord, WorldStore } from '../ports/worldStore';
 import { importTxtSource, type ByteSha256Provider, type TextDecodeProvider, type TxtImportOptions } from '../import/txtImport';
-import { applyExtraction, entityIdFor, eventIdFor } from './extraction';
+import { applyExtraction, entityIdFor, eventIdFor, type EvidenceSource } from './extraction';
 
 export interface ChunkExtractor {
   readonly version: string;
@@ -55,6 +55,13 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
 
   const parsed = await importTxtSource(input.bytes, input.sha, input.decoder, input.importOptions);
   const createdAt = now();
+  // One shared index for the whole build (closeout C1/C2): chunk text reads
+  // and evidence slices reuse it instead of rebuilding an O(N) index per chunk.
+  const index = new CodePointOffsetIndex(parsed.text);
+  const evidenceSource: EvidenceSource = {
+    chapters: parsed.chapters,
+    sliceRange: (startCp, endCp) => Promise.resolve(index.slice(startCp, endCp)),
+  };
 
   const world: WorldRecord = {
     worldId,
@@ -151,11 +158,11 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
       }, now());
 
       try {
-        const absoluteText = await extractChunkText(parsed, chunk);
+        const absoluteText = index.slice(chunk.startOffset, chunk.endOffset);
         const extraction = await input.extractor.extract({ chunk, chunkText: absoluteText, worldId });
         const resolved = await applyExtraction({
           worldId,
-          parsed,
+          source: evidenceSource,
           extraction,
           createdAt,
           sha256Hex: input.sha.sha256Hex,
@@ -332,15 +339,6 @@ export async function buildWorldFromTxt(input: BuildWorldInput): Promise<BuildWo
     failedChunks,
     reusedJobs,
   };
-}
-
-/**
- * Chunks carry absolute code point offsets into the normalized source, so the
- * extractor always sees text that maps 1:1 back to the immutable source.
- */
-async function extractChunkText(parsed: ParsedTxtSource, chunk: StoredChunk): Promise<string> {
-  const index = new CodePointOffsetIndex(parsed.text);
-  return index.slice(chunk.startOffset, chunk.endOffset);
 }
 
 export function resolveEntityIdFor(worldId: string, key: string): string {
