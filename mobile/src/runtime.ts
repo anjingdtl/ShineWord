@@ -80,6 +80,15 @@ async function createSessionNoop(): Promise<CampaignSession> {
   return createSession(stubProfile(), await buildProvider(stubProfile()));
 }
 
+/**
+ * Read-only session for list screens and projections (P4.1). Never calls the
+ * LLM: the stub profile is unreachable by design, so any accidental write or
+ * provider use would fail loudly instead of spending the user's quota.
+ */
+export async function createReadOnlySession(): Promise<CampaignSession> {
+  return createSessionNoop();
+}
+
 export interface CampaignPlayState {
   campaignId: string;
   branchId: string;
