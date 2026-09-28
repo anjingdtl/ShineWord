@@ -148,6 +148,23 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
   if (!Number.isInteger(contract.expectedStateVersion) || contract.expectedStateVersion < 0) {
     errors.push('expectedStateVersion must be a non-negative integer.');
   }
+  if (contract.contentDependency !== undefined) {
+    const dependency = contract.contentDependency;
+    if (!dependency || !nonEmpty(dependency.manifestHash) || !/^[a-f0-9]{64}$/i.test(dependency.manifestHash)) {
+      errors.push('contentDependency.manifestHash must be a SHA-256 digest.');
+    }
+    if (!Number.isSafeInteger(dependency.contentVersion) || dependency.contentVersion < 0 ||
+        !Number.isSafeInteger(dependency.basePackageRevision) || dependency.basePackageRevision < 1) {
+      errors.push('contentDependency package versions are invalid.');
+    }
+    if (!nonEmpty(dependency.branchId) || dependency.stateVersion !== contract.expectedStateVersion) {
+      errors.push('contentDependency must bind the contract branch and expected state version.');
+    }
+    if (!Array.isArray(dependency.deltaIds) || dependency.deltaIds.length > 512 ||
+        dependency.deltaIds.some(id => !nonEmpty(id)) || new Set(dependency.deltaIds).size !== dependency.deltaIds.length) {
+      errors.push('contentDependency.deltaIds must contain unique package ids.');
+    }
+  }
   if (!nonEmpty(contract.actorId)) errors.push('actorId is required.');
   if (!nonEmpty(contract.actionType)) errors.push('actionType is required.');
   if (contract.actionType === 'ability' && !nonEmpty(contract.abilityId)) {

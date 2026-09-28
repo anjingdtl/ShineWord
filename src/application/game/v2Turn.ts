@@ -9,6 +9,7 @@ import {
 } from '../../domain/turns/canonical';
 import { assertValidActionContract } from '../../domain/turns/contracts';
 import type { ActionContract } from '../../domain/turns/types';
+import type { ContentDependencyBinding } from '../../domain/content/types';
 import type { LlmProvider } from '../llm/types';
 import { parseStrictJsonObject } from '../llm/json';
 import { TurnRequestBudget } from '../llm/requestBudget';
@@ -20,6 +21,7 @@ import { resolveOrReuseRoll } from '../turns/resolveOrReuseRoll';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
 import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '../../domain/content/types';
 import { compileProposal, type CompiledAction } from './v2Compile';
+import { contentDependencyBinding } from '../worldPackage/contentManifest';
 
 export interface NarrativeCandidate {
   turnId: string;
@@ -36,6 +38,8 @@ export interface RunV2TurnInput {
   turnId: string;
   playerIntent: string;
   worldContext?: string;
+  /** Content snapshot used to prepare worldContext and local indexes. */
+  expectedContentDependency?: ContentDependencyBinding;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
   /** The acting player card (multi-actor scheduling adds companions later). */
@@ -184,6 +188,13 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   } else {
     const state = await input.store.getState(input.branchId);
     if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
+    const stateContentDependency = state.contentManifest
+      ? contentDependencyBinding(state.contentManifest)
+      : undefined;
+    if (input.expectedContentDependency && (!stateContentDependency ||
+        JSON.stringify(input.expectedContentDependency) !== JSON.stringify(stateContentDependency))) {
+      throw new Error('Campaign content changed while the turn context was being prepared; retry against the latest snapshot.');
+    }
 
     // One repair round for malformed proposals (plan §13.1 step 8): a real
     // model occasionally drops required keys; feeding the validator's errors
@@ -231,6 +242,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       constraints: input.constraints,
       state,
     });
+    if (stateContentDependency) compiled.contract.contentDependency = stateContentDependency;
     assertValidActionContract(compiled.contract, 'engine');
     contractHash = await hashActionContract(compiled.contract, input.hashProvider);
     await input.journal.stageRollTurn({

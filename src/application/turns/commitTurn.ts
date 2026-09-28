@@ -50,6 +50,9 @@ export async function commitResolvedTurn({
   committedAt = new Date().toISOString(),
 }: CommitResolvedTurnInput): Promise<CommitResolvedTurnResult> {
   assertValidActionContract(contract, contractOrigin);
+  if (contract.contentDependency && contract.contentDependency.branchId !== branchId) {
+    throw new Error('Frozen content dependency belongs to a different campaign branch.');
+  }
 
   const existing = await store.getCommittedTurn(branchId, contract.turnId);
   if (existing) {

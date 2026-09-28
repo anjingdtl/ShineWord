@@ -20,6 +20,7 @@ export interface MobileDatabaseRuntime {
   narratives: SqliteNarrativeStore;
   game: SqliteGameStore;
   worldStore: SqliteWorldStore;
+  sourceStore: SqliteSourceStore;
   sqliteCapabilities: { fts5: boolean };
   progressiveTurnContext: ProgressiveTurnContextService;
 }
@@ -54,6 +55,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     narratives: new SqliteNarrativeStore(db),
     game: new SqliteGameStore(db),
     worldStore,
+    sourceStore,
     sqliteCapabilities: { fts5 },
     progressiveTurnContext,
   };

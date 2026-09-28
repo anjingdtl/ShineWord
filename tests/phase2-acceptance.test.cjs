@@ -540,7 +540,7 @@ test('A11: recruitment, relationship, party lifecycle, knowledge and item lineag
       'actor_entered_critical_state', 'actor_recovered_from_critical', 'actor_death_resolved']));
 
   const exported = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex, campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'lifecycle' });
-  await restoreSave({ db: adapter, save: exported.save, newCampaignId: 'camp-lifecycle-copy', newBranchId: 'branch-lifecycle-copy', createdAt: 'lifecycle' });
+  await restoreSave({ db: adapter, save: exported.save, sha256Hex: sha.sha256Hex, newCampaignId: 'camp-lifecycle-copy', newBranchId: 'branch-lifecycle-copy', createdAt: 'lifecycle' });
   const restored = await session.getSummary('camp-lifecycle-copy', 'branch-lifecycle-copy');
   assert.equal(restored.state.itemSources['item-field-kit'].kind, 'transfer');
   assert.equal(restored.state.party.find(member => member.actorId === 'actor-su').groupId, 'main');
@@ -735,7 +735,7 @@ test('A05: exported save restores dependencies, cards, contracts and dice; play 
   assert.equal(exported.save.manifest.schemaVersion, SAVE_SCHEMA_VERSION);
   assert.equal(exported.save.manifest.packageRevision, 1, 'dependency lock exported');
 
-  await restoreSave({ db: adapter, save: exported.save, newCampaignId: 'restored-c', newBranchId: 'restored-b', createdAt: 'review' });
+  await restoreSave({ db: adapter, save: exported.save, sha256Hex: sha.sha256Hex, newCampaignId: 'restored-c', newBranchId: 'restored-b', createdAt: 'review' });
   const restored = await session.getSummary('restored-c', 'restored-b');
   assert.equal(restored.cards.length, 2, 'cards restored');
   assert.equal(restored.packageRevision, 1, 'package lock restored');
@@ -783,7 +783,7 @@ test('A05: a rolled-but-uncommitted turn resumes after import with its own dice'
   });
 
   const exported = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex, campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'review' });
-  await restoreSave({ db: adapter, save: exported.save, newCampaignId: 'rc2', newBranchId: 'rb2', createdAt: 'review' });
+  await restoreSave({ db: adapter, save: exported.save, sha256Hex: sha.sha256Hex, newCampaignId: 'rc2', newBranchId: 'rb2', createdAt: 'review' });
   const persistedRoll = db.prepare("SELECT rolls_json, grade FROM roll_records WHERE branch_id='rb2' AND turn_id='turn-0002'").get();
   assert.deepEqual(JSON.parse(persistedRoll.rolls_json), [2, 5, 1], 'the rolled dice traveled with the save');
   // Resuming the interrupted turn reuses the persisted roll — never re-rolls.
@@ -1485,6 +1485,7 @@ test('R2-03: rescue spends the major action, then the rescued actor waits for it
   const rescueSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-rescue' });
   await restoreSave({ db: adapter, save: rescueSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-rescue-import', newBranchId: 'camp-rescue-import-main', createdAt: 'r2-rescue-import' });
   const restored = await session.getActiveEncounter('camp-rescue-import', 'camp-rescue-import-main');
   assert.ok(restored, 'a save after rescue retains the active encounter');
@@ -1562,6 +1563,7 @@ test('R2-01: attack snapshot fault rolls back HP, cursor, events and rewards; re
   const rolledSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-rolled-uncommitted' });
   await restoreSave({ db: adapter, save: rolledSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-rolled-import', newBranchId: 'camp-rolled-import-main', createdAt: 'r2-rolled-import' });
   const rolledImportView = await session.getActiveEncounter('camp-rolled-import', 'camp-rolled-import-main');
   assert.ok(rolledImportView, 'an exported rolled-but-uncommitted fight remains active');
@@ -1617,6 +1619,7 @@ test('R2-02: fork and save restore the active battlefield; ended snapshots never
   const preBattleSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-before-battle' });
   await restoreSave({ db: adapter, save: preBattleSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-before-battle-import', newBranchId: 'camp-before-battle-import-main', createdAt: 'r2-before-battle-import' });
   assert.equal(await session.getActiveEncounter('camp-before-battle-import', 'camp-before-battle-import-main'), null,
     'a pre-battle save does not invent or revive an encounter');
@@ -1629,6 +1632,7 @@ test('R2-02: fork and save restore the active battlefield; ended snapshots never
   const startedSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-after-begin' });
   await restoreSave({ db: adapter, save: startedSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-start-import', newBranchId: 'camp-start-import-main', createdAt: 'r2-start-import' });
   const startedImport = await session.getActiveEncounter('camp-start-import', 'camp-start-import-main');
   assert.ok(startedImport, 'a save immediately after encounter start restores the frozen initiative');
@@ -1673,7 +1677,7 @@ test('R2-02: fork and save restore the active battlefield; ended snapshots never
     'the portable save carries earlier complete snapshots, not only its current state');
   assert.equal((await validateSaveJson(exported.json, sha.sha256Hex)).ok, true,
     'the history-bearing save passes payload integrity validation');
-  await restoreSave({ db: adapter, save: exported.save, newCampaignId: 'camp-active-import', newBranchId: 'camp-active-import-main', createdAt: 'r2-import' });
+  await restoreSave({ db: adapter, save: exported.save, sha256Hex: sha.sha256Hex, newCampaignId: 'camp-active-import', newBranchId: 'camp-active-import-main', createdAt: 'r2-import' });
   const importedView = await session.getActiveEncounter('camp-active-import', 'camp-active-import-main');
   assert.ok(importedView, 'save import restores the active encounter');
   assert.equal(importedView.currentActorId, view.currentActorId);
@@ -1699,6 +1703,7 @@ test('R2-02: fork and save restore the active battlefield; ended snapshots never
   const attackSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-after-attack' });
   await restoreSave({ db: adapter, save: attackSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-attack-import', newBranchId: 'camp-attack-import-main', createdAt: 'r2-attack-import' });
   const attackImport = await session.getActiveEncounter('camp-attack-import', 'camp-attack-import-main');
   assert.ok(attackImport, 'a post-attack save remains in the same active encounter');
@@ -1714,7 +1719,7 @@ test('R2-02: fork and save restore the active battlefield; ended snapshots never
   assert.equal(endedState.state.encounters[0].state.status, 'escaped', 'ended encounter history remains in the snapshot');
   const endedSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'r2-ended' });
-  await restoreSave({ db: adapter, save: endedSave.save, newCampaignId: 'camp-ended-import', newBranchId: 'camp-ended-import-main', createdAt: 'r2-ended-import' });
+  await restoreSave({ db: adapter, save: endedSave.save, sha256Hex: sha.sha256Hex, newCampaignId: 'camp-ended-import', newBranchId: 'camp-ended-import-main', createdAt: 'r2-ended-import' });
   const endedImport = await session.getSummary('camp-ended-import', 'camp-ended-import-main');
   assert.equal(await session.getActiveEncounter('camp-ended-import', 'camp-ended-import-main'), null);
   assert.equal(endedImport.state.actors[hostileId], undefined, 'ended save history does not resurrect the temporary enemy');
@@ -1789,6 +1794,7 @@ test('R2-03: a mid-encounter party join waits for next round and restores with f
   const queuedSave = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex,
     campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'pending-entrant' });
   await restoreSave({ db: adapter, save: queuedSave.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'camp-pending-import', newBranchId: 'camp-pending-import-main', createdAt: 'pending-entrant-import' });
   view = await session.getActiveEncounter('camp-pending-import', 'camp-pending-import-main');
   assert.ok(view?.pendingActorIds.includes(joined.actorId), 'save import preserves a participant waiting for next-round entry');
@@ -1946,7 +1952,7 @@ test('discovering an in-scene clue advances a quest, grants an item and survives
   assert.equal(past.state.itemOwners['item-key'], undefined, 'rewind does not carry a future reward');
 
   const save = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex, campaignId: 'camp-knowledge', branchId: 'camp-knowledge-main', createdAt: 't1' });
-  await restoreSave({ db: adapter, save: save.save, newCampaignId: 'camp-knowledge-copy', newBranchId: 'camp-knowledge-copy-main', createdAt: 't2' });
+  await restoreSave({ db: adapter, save: save.save, sha256Hex: sha.sha256Hex, newCampaignId: 'camp-knowledge-copy', newBranchId: 'camp-knowledge-copy-main', createdAt: 't2' });
   const restored = await new SqliteTurnStore(adapter).getState('camp-knowledge-copy-main');
   assert.deepEqual(restored.discoveries.map(discovery => discovery.entryId), ['clue-secret']);
   assert.equal(restored.questProgress.find(progress => progress.questId === 'quest-hidden-room').status, 'succeeded');
@@ -2053,6 +2059,7 @@ test('portable package identity restores a combat save after local world-id rema
   assert.deepEqual(importedPackage.entries.map(item => item.revision), sourcePackage.entries.map(item => item.revision));
 
   await restoreSave({ db: targetAdapter, save: exported.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'portable-restored-campaign', newBranchId: 'portable-restored-main', createdAt: 'portable-restore' });
   const restoredSession = new CampaignSession({
     db: targetAdapter,
@@ -2091,6 +2098,7 @@ test('portable package identity restores a combat save after local world-id rema
   });
   assert.equal(chainedImport.revision, sourcePackage.manifest.revision);
   await restoreSave({ db: chainedAdapter, save: reExported.save,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'portable-chained-campaign', newBranchId: 'portable-chained-main', createdAt: 'portable-chained-restore' });
   const chainedSession = new CampaignSession({
     db: chainedAdapter,
@@ -2112,8 +2120,9 @@ test('portable package identity restores a combat save after local world-id rema
   const wrongLock = structuredClone(exported.save);
   wrongLock.manifest.worldRef.packageContentHash = 'f'.repeat(64);
   await assert.rejects(() => restoreSave({ db: targetAdapter, save: wrongLock,
+    sha256Hex: sha.sha256Hex,
     newCampaignId: 'portable-wrong-lock', newBranchId: 'portable-wrong-lock-main', createdAt: 'portable-wrong-lock' }),
-  /Missing dependency|different content hash/);
+  /Save validation failed before restore/);
   assert.equal(await targetAdapter.queryOne('SELECT campaign_id FROM campaigns WHERE campaign_id = ?', ['portable-wrong-lock']), null,
     'a different same-revision package is rejected before creating a campaign');
   sourceDb.close();

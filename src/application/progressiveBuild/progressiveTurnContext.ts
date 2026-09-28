@@ -99,11 +99,26 @@ export function visibleEvidenceRanges(
   worldTimeOrder: number,
 ): LocalSourceRange[] {
   const referencedFactIds = new Set<string>();
+  const directEvidenceRanges: LocalSourceRange[] = [];
   const addFactIds = (value: unknown): void => {
     if (!value || typeof value !== 'object') return;
     const ids = (value as { sourceFactIds?: unknown }).sourceFactIds;
     if (Array.isArray(ids)) {
       for (const id of ids) if (typeof id === 'string' && id.length > 0) referencedFactIds.add(id);
+    }
+    const ranges = (value as { sourceRanges?: unknown }).sourceRanges;
+    if (Array.isArray(ranges)) {
+      for (const range of ranges) {
+        if (!range || typeof range !== 'object') continue;
+        const evidence = range as { chapterId?: unknown; startCodePoint?: unknown; endCodePoint?: unknown };
+        if (typeof evidence.chapterId === 'string' && typeof evidence.startCodePoint === 'number'
+            && typeof evidence.endCodePoint === 'number' && Number.isSafeInteger(evidence.startCodePoint)
+            && Number.isSafeInteger(evidence.endCodePoint) && evidence.startCodePoint >= 0
+            && evidence.endCodePoint > evidence.startCodePoint) {
+          directEvidenceRanges.push({ chapterId: evidence.chapterId,
+            startCodePoint: evidence.startCodePoint as number, endCodePoint: evidence.endCodePoint as number });
+        }
+      }
     }
   };
   for (const entry of entries) {
@@ -112,6 +127,9 @@ export function visibleEvidenceRanges(
     for (const provenance of Object.values(entry.fieldProvenance ?? {})) addFactIds(provenance);
   }
   const unique = new Map<string, LocalSourceRange>();
+  for (const range of directEvidenceRanges) {
+    unique.set(`${range.chapterId}:${range.startCodePoint}:${range.endCodePoint}`, range);
+  }
   for (const fact of facts) {
     if (!referencedFactIds.has(fact.factId) || fact.status === 'speculation' || fact.status === 'conflict'
       || !isFactVisibleAtAnchor(fact, worldTimeOrder)) continue;

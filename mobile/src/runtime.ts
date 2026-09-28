@@ -42,6 +42,7 @@ export async function createSession(
       worldStore: runtime.worldStore,
       narratives: runtime.narratives,
       progressiveTurnContext: runtime.progressiveTurnContext,
+      sourceStore: runtime.sourceStore,
       hashProvider: nativeSha256,
       random: new RejectionSamplingRandomSource(createNativeRandomBytes()),
     },
@@ -222,7 +223,9 @@ import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 import type { EncounterView } from '../../src/application/campaign/encounterService';
 import { validatePackage } from '../../src/application/worldPackage/validate';
 import { publishWorldPackage } from '../../src/application/worldPackage/publish';
-import { encodeWorldPackageArchive, importPortableWorldPackage } from '../../src/application/export/worldPackageArchive';
+import { encodeWorldPackageArchive, importPortableWorldPackage, importProgressiveBranchContentArchive } from '../../src/application/export/worldPackageArchive';
+import { ensureBaseBranchContentManifest } from '../../src/application/worldPackage/branchContentStore';
+import { loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
 
 export { SAVE_SCHEMA_VERSION };
 export type { SaveFile, EncounterView };
@@ -254,6 +257,7 @@ export async function importCampaignSave(json: string): Promise<{ campaignId: st
   await restoreSave({
     db: runtime.db,
     save,
+    sha256Hex: nativeSha256.sha256Hex,
     newCampaignId: campaignId,
     newBranchId: branchId,
     createdAt: new Date().toISOString(),
@@ -385,6 +389,58 @@ export async function importPortableWorldPackageFile(archive: Uint8Array): Promi
     createdAt: new Date().toISOString(),
   });
   return { worldId: imported.worldId, title: imported.title, revision: imported.revision };
+}
+
+/** Branch-bound world archive for moving immutable progressive expansions.
+ * Unlike the library export, this carries only the active manifest/deltas for
+ * the selected campaign snapshot and still excludes novel source text. */
+export async function exportProgressiveBranchWorldArchive(campaignId: string, branchId: string): Promise<{
+  bytes: Uint8Array;
+  title: string;
+  revision: number;
+  stateVersion: number;
+  deltaCount: number;
+}> {
+  const runtime = await getDatabaseRuntime();
+  const session = await createReadOnlySession();
+  const summary = await session.getSummary(campaignId, branchId);
+  const pkg = await runtime.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+  if (!pkg || pkg.manifest.status !== 'published') throw new Error('Campaign locked package is missing or unpublished.');
+  let manifest = summary.state.contentManifest;
+  if (!manifest) {
+    manifest = await ensureBaseBranchContentManifest({
+      db: runtime.db, branchId, worldId: summary.worldId, stateVersion: summary.state.stateVersion,
+      packageRevision: summary.packageRevision, packageContentHash: pkg.manifest.contentHash,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  const deltas = await loadBranchDeltaEntries({
+    manifest, worldId: summary.worldId, branchId, stateVersion: summary.state.stateVersion,
+    baseRevision: summary.packageRevision, baseContentHash: pkg.manifest.contentHash,
+    getDelta: id => runtime.worldStore.getProgressiveDeltaPackage(id), sha256Hex: nativeSha256.sha256Hex,
+  });
+  const world = await runtime.worldStore.getWorld(summary.worldId);
+  if (!world) throw new Error(`Campaign world is missing: ${summary.worldId}.`);
+  const bytes = await encodeWorldPackageArchive({
+    title: world.title,
+    ...pkg,
+    branchContent: { manifest, deltas },
+  }, nativeSha256.sha256Hex);
+  return { bytes, title: world.title, revision: summary.packageRevision,
+    stateVersion: summary.state.stateVersion, deltaCount: deltas.length };
+}
+
+export async function importProgressiveBranchWorldArchive(archive: Uint8Array, branchId: string): Promise<{
+  branchId: string;
+  stateVersion: number;
+  manifestHash: string;
+  deltaCount: number;
+}> {
+  const runtime = await getDatabaseRuntime();
+  return importProgressiveBranchContentArchive({
+    db: runtime.db, worldStore: runtime.worldStore, sha256Hex: nativeSha256.sha256Hex,
+    archive, branchId, createdAt: new Date().toISOString(),
+  });
 }
 
 /** Companion cards of a branch (for the play screen party strip). */

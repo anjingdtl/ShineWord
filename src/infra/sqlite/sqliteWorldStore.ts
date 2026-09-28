@@ -3,7 +3,7 @@ import type {
   FactStatus,
   ParsedTxtSource,
 } from '../../domain/world/types';
-import type { BookSection, ContentEntry, WorldPackageManifest } from '../../domain/content/types';
+import type { BookSection, ContentEntry, ProgressiveDeltaPackage, WorldPackageManifest } from '../../domain/content/types';
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import type {
   CommitChunkResultInput,
@@ -1187,6 +1187,26 @@ export class SqliteWorldStore implements WorldStore {
         position: Number(sectionRow.position),
       })),
     };
+  }
+
+  /** Loads one append-only branch delta. The caller must check that the
+   * selected content manifest references it and verify its content hash. */
+  async getProgressiveDeltaPackage(deltaId: string): Promise<ProgressiveDeltaPackage | null> {
+    const row = await this.db.queryOne<SqliteRow>(
+      `SELECT status, content_hash, package_json FROM progressive_world_deltas WHERE delta_id = ?`,
+      [deltaId],
+    );
+    if (!row) return null;
+      let delta: ProgressiveDeltaPackage;
+      try { delta = JSON.parse(String(row.package_json)) as ProgressiveDeltaPackage; }
+      catch { throw new Error(`Progressive delta package ${deltaId} is malformed.`); }
+      if (!delta || typeof delta !== 'object' || Array.isArray(delta) ||
+          typeof delta.deltaId !== 'string' || typeof delta.contentHash !== 'string' ||
+          delta.deltaId !== deltaId || delta.status !== String(row.status) ||
+          delta.contentHash.toLowerCase() !== String(row.content_hash).toLowerCase()) {
+      throw new Error(`Progressive delta package ${deltaId} has inconsistent immutable metadata.`);
+    }
+    return delta;
   }
 
   async listWorldPackages(worldId: string): Promise<Array<{ revision: number; status: string; contentHash: string; createdAt: string }>> {

@@ -1,5 +1,6 @@
 import type { SkillRank } from '../rules/types';
 import type { EncounterState } from '../combat/encounter';
+import type { BranchContentManifest } from '../content/types';
 
 /**
  * Snapshot-level skill projection. `awardedKeys` carries
@@ -125,6 +126,8 @@ export interface GameStateSnapshot {
   discoveries?: KnowledgeSnapshotEntry[];
   questProgress?: QuestProgressSnapshotEntry[];
   questRewards?: QuestRewardSnapshotEntry[];
+  /** Exact base + published branch deltas visible at this state. */
+  contentManifest?: BranchContentManifest;
 }
 
 function cloneEncounter(entry: EncounterSnapshotEntry): EncounterSnapshotEntry {
@@ -177,6 +180,13 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
     ),
     itemOwners: { ...state.itemOwners },
   };
+  if (state.contentManifest) {
+    cloned.contentManifest = {
+      ...state.contentManifest,
+      basePackage: { ...state.contentManifest.basePackage },
+      deltas: state.contentManifest.deltas.map(delta => ({ ...delta })),
+    };
+  }
   if (state.itemSources) {
     cloned.itemSources = Object.fromEntries(Object.entries(state.itemSources).map(([itemId, source]) => [itemId, { ...source }]));
   }

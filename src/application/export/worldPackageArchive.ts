@@ -1,15 +1,20 @@
-import type { BookSection, ContentEntry, WorldPackageManifest } from '../../domain/content/types';
+import type { BookSection, BranchContentManifest, ContentEntry, ProgressiveDeltaPackage, WorldPackageManifest } from '../../domain/content/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { WorldRecord } from '../ports/worldStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
+import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
 import { computePackageContentHash, validatePackage } from '../worldPackage/validate';
+import { isBranchContentManifestStructure, isProgressiveDeltaPackageStructure,
+  verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
+import { insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
 const ARCHIVE_SCHEMA = 'shineword-world-archive-1';
+const CONTENT_ARCHIVE_SCHEMA = 'shineword-world-archive-2';
 const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 15 * 1024 * 1024;
 
 export interface PortableWorldPackage {
-  schemaVersion: typeof ARCHIVE_SCHEMA;
+  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA;
   title: string;
   manifest: WorldPackageManifest;
   entries: ContentEntry[];
@@ -20,6 +25,12 @@ export interface PortableWorldPackage {
    * in the portable envelope so old packages remain verifiable after export.
    */
   contentHashBasisRevision?: number;
+  /** Optional branch-bound delta bundle. Base-package import alone cannot
+   * activate it; use importProgressiveBranchContentArchive for a matching branch. */
+  branchContent?: {
+    manifest: BranchContentManifest;
+    deltas: ProgressiveDeltaPackage[];
+  };
 }
 
 /**
@@ -41,9 +52,10 @@ export async function encodeWorldPackageArchive(
   if (contentHashBasisRevision === null) {
     throw new Error('World package content hash does not match its manifest.');
   }
+  if (input.branchContent) await validateBranchContent(input.branchContent, input.manifest, sha256Hex);
   const payload = utf8Encode(JSON.stringify({
     ...input,
-    schemaVersion: ARCHIVE_SCHEMA,
+    schemaVersion: input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
     contentHashBasisRevision,
   }));
   if (payload.length > MAX_PACKAGE_JSON_BYTES) throw new Error('World package payload exceeds the portable archive limit.');
@@ -100,8 +112,11 @@ export async function decodeWorldPackageArchive(
   } catch {
     throw new Error('World package archive payload is not valid UTF-8 JSON.');
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('World package archive payload must be a JSON object.');
+  }
   const bundle = parsed as Partial<PortableWorldPackage>;
-  if (bundle.schemaVersion !== ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
+  if (bundle.schemaVersion !== ARCHIVE_SCHEMA && bundle.schemaVersion !== CONTENT_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
   if (typeof bundle.title !== 'string' || !bundle.title.trim() || bundle.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
@@ -109,6 +124,12 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive is missing its manifest, entries or book sections.');
   }
   validatePortableInput({ title: bundle.title, manifest: bundle.manifest, entries: bundle.entries, sections: bundle.sections });
+  if (bundle.schemaVersion === CONTENT_ARCHIVE_SCHEMA) {
+    if (!bundle.branchContent) throw new Error('World archive v2 is missing its branch content bundle.');
+    await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
+  } else if (bundle.branchContent) {
+    throw new Error('World archive v1 cannot carry branch content.');
+  }
   if (bundle.manifest.status !== 'published') throw new Error('Only a published world package can be imported for play.');
   const report = validatePackage(bundle.manifest, bundle.entries, bundle.sections);
   if (!report.ok) throw new Error(`World package validation failed:\n- ${report.errors.join('\n- ')}`);
@@ -125,12 +146,13 @@ export async function decodeWorldPackageArchive(
   );
   if (verifiedBasis === null) throw new Error('World package content hash verification failed.');
   return {
-    schemaVersion: ARCHIVE_SCHEMA,
+    schemaVersion: bundle.schemaVersion,
     title: bundle.title,
     manifest: bundle.manifest,
     entries: bundle.entries,
     sections: bundle.sections,
     contentHashBasisRevision: verifiedBasis,
+    ...(bundle.branchContent ? { branchContent: bundle.branchContent } : {}),
   };
 }
 
@@ -143,6 +165,9 @@ export async function importPortableWorldPackage(input: {
 }): Promise<{ worldId: string; title: string; revision: number; contentHash: string }> {
   if (!input.newWorldId.trim() || input.newWorldId.length > 120) throw new Error('New world id is invalid.');
   const bundle = await decodeWorldPackageArchive(input.archive, input.sha256Hex);
+  if (bundle.branchContent) {
+    throw new Error('This archive contains branch-bound deltas. Import its base package, then attach the delta bundle to its matching campaign branch.');
+  }
   // Keep the published revision, entry revisions and content hash intact.
   // Campaign saves lock this immutable package version, and portable import
   // must not silently turn rN into a different local r1 package.
@@ -189,6 +214,123 @@ export async function importPortableWorldPackage(input: {
     revision: manifest.revision,
     contentHash: manifest.contentHash,
   };
+}
+
+/** Attaches a v2 branch-bound world-archive delta set to an existing branch
+ * only at its exact state and locked base package. This is an append-only
+ * content projection; it never rewrites the branch snapshot or package. */
+export async function importProgressiveBranchContentArchive(input: {
+  db: SqliteDatabase;
+  worldStore: SqliteWorldStore;
+  sha256Hex: Sha256HexProvider['sha256Hex'];
+  archive: Uint8Array;
+  branchId: string;
+  createdAt: string;
+}): Promise<{ branchId: string; stateVersion: number; manifestHash: string; deltaCount: number }> {
+  const bundle = await decodeWorldPackageArchive(input.archive, input.sha256Hex);
+  if (!bundle.branchContent) throw new Error('World archive does not include a branch-bound delta bundle.');
+  const binding = await input.db.queryOne<SqliteRow>(
+    `SELECT b.state_version, c.world_id, c.package_revision
+       FROM branches b JOIN campaigns c ON c.campaign_id = b.campaign_id
+      WHERE b.branch_id = ?`, [input.branchId],
+  );
+  if (!binding) throw new Error(`Unknown campaign branch: ${input.branchId}.`);
+  const targetVersion = Number(binding.state_version);
+  const targetWorldId = String(binding.world_id);
+  const targetRevision = Number(binding.package_revision);
+  const pkg = await input.worldStore.getWorldPackage(targetWorldId, targetRevision);
+  if (!pkg || pkg.manifest.status !== 'published' || pkg.manifest.contentHash.toLowerCase() !== bundle.manifest.contentHash.toLowerCase() ||
+      bundle.branchContent.manifest.basePackage.contentHash.toLowerCase() !== pkg.manifest.contentHash.toLowerCase() ||
+      bundle.branchContent.manifest.basePackage.revision !== targetRevision ||
+      bundle.branchContent.manifest.stateVersion !== targetVersion) {
+    throw new Error('Branch content archive does not match the campaign state and immutable package lock.');
+  }
+  const targetManifest = rebindBranchContentManifest(
+    bundle.branchContent.manifest, input.branchId, targetVersion, targetWorldId,
+  );
+  const current = await readBranchContentManifest(input.db, input.branchId, targetVersion);
+  if (current?.manifestHash === targetManifest.manifestHash && current.contentVersion === targetManifest.contentVersion) {
+    return { branchId: input.branchId, stateVersion: targetVersion, manifestHash: current.manifestHash, deltaCount: current.deltas.length };
+  }
+  if (current && (current.deltas.length > 0 || current.basePackage.contentHash.toLowerCase() !== targetManifest.basePackage.contentHash.toLowerCase())) {
+    throw new Error('Target branch already has a different progressive content extension at this state.');
+  }
+  if (!await verifyContentManifest(targetManifest, input.sha256Hex)) throw new Error('Branch content archive manifest failed integrity verification.');
+
+  await input.db.transaction(async tx => {
+    const live = await tx.queryOne<SqliteRow>(
+      `SELECT b.state_version, c.world_id, c.package_revision
+         FROM branches b JOIN campaigns c ON c.campaign_id = b.campaign_id
+        WHERE b.branch_id = ?`, [input.branchId],
+    );
+    const latest = await readBranchContentManifest(tx, input.branchId, targetVersion);
+    if (!live || Number(live.state_version) !== targetVersion || String(live.world_id) !== targetWorldId ||
+        Number(live.package_revision) !== targetRevision || latest?.manifestHash !== current?.manifestHash ||
+        latest?.contentVersion !== current?.contentVersion) {
+      throw new Error('Branch changed while the content archive was being attached.');
+    }
+    for (const delta of bundle.branchContent!.deltas) {
+      const ref = targetManifest.deltas.find(item => item.deltaId === delta.deltaId);
+      if (!ref || !await verifyDeltaPackage(delta, {
+        deltaId: ref.deltaId, contentHash: ref.contentHash, baseContentHash: pkg.manifest.contentHash,
+      }, input.sha256Hex)) throw new Error(`Branch archive delta ${delta.deltaId} failed publication or hash checks.`);
+      const existing = await tx.queryOne<{ content_hash: string; status: string }>(
+        'SELECT content_hash, status FROM progressive_world_deltas WHERE delta_id = ?', [delta.deltaId],
+      );
+      if (existing) {
+        if (existing.content_hash.toLowerCase() !== delta.contentHash.toLowerCase() || existing.status !== 'published') {
+          throw new Error(`Progressive delta id collision while importing archive: ${delta.deltaId}.`);
+        }
+        continue;
+      }
+      await tx.execute(
+        `INSERT INTO progressive_world_deltas
+          (delta_id, world_id, origin_branch_id, published_at_state_version, base_revision,
+           base_content_hash, status, content_hash, package_json, validation_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [delta.deltaId, delta.worldId, delta.originBranchId, delta.publishedAtStateVersion,
+          delta.basePackage.revision, delta.basePackage.contentHash, delta.status, delta.contentHash,
+          JSON.stringify(delta), JSON.stringify(delta.validation), delta.createdAt],
+      );
+    }
+    await insertBranchContentManifest(tx, targetManifest, input.createdAt);
+  });
+  return { branchId: input.branchId, stateVersion: targetVersion, manifestHash: targetManifest.manifestHash,
+    deltaCount: targetManifest.deltas.length };
+}
+
+async function validateBranchContent(
+  branchContent: { manifest: BranchContentManifest; deltas: ProgressiveDeltaPackage[] },
+  base: WorldPackageManifest,
+  sha256Hex: Sha256HexProvider['sha256Hex'],
+): Promise<void> {
+  if (!branchContent || typeof branchContent !== 'object' || Array.isArray(branchContent)) {
+    throw new Error('Branch content archive bundle is malformed.');
+  }
+  const manifest = branchContent.manifest;
+  const deltas = branchContent.deltas;
+  if (!isBranchContentManifestStructure(manifest) ||
+      manifest.worldId !== base.worldId || manifest.basePackage.revision !== base.revision ||
+      manifest.basePackage.contentHash.toLowerCase() !== base.contentHash.toLowerCase() ||
+      !Number.isSafeInteger(manifest.stateVersion) || manifest.stateVersion < 0 ||
+      !Number.isSafeInteger(manifest.contentVersion) || manifest.contentVersion < 1 ||
+      !Array.isArray(deltas) || deltas.length !== manifest.deltas.length ||
+      deltas.some(delta => !isProgressiveDeltaPackageStructure(delta)) ||
+      !await verifyContentManifest(manifest, sha256Hex)) {
+    throw new Error('Branch content archive manifest is invalid or does not match its base package.');
+  }
+  const byId = new Map(deltas.map(delta => [delta.deltaId, delta]));
+  if (byId.size !== deltas.length) throw new Error('Branch content archive contains duplicate delta ids.');
+  for (const ref of manifest.deltas) {
+    const delta = byId.get(ref.deltaId);
+    if (!delta || ref.publishedAtStateVersion > manifest.stateVersion ||
+        ref.originBranchId !== delta.originBranchId || ref.publishedAtStateVersion !== delta.publishedAtStateVersion ||
+        !await verifyDeltaPackage(delta, {
+          deltaId: ref.deltaId, contentHash: ref.contentHash, baseContentHash: base.contentHash,
+        }, sha256Hex)) {
+      throw new Error(`Branch content archive delta ${ref.deltaId} is invalid or unpublished.`);
+    }
+  }
 }
 
 function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'>): void {

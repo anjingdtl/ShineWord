@@ -15,6 +15,7 @@ import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SqliteNarrativeStore } from '../../infra/sqlite/sqliteNarrativeStore';
 import type { TurnSettlementPlan } from '../ports/turnStore';
 import type { ProgressiveTurnContextService } from '../progressiveBuild/progressiveTurnContext';
+import type { SourceStore } from '../ports/sourceStore';
 import { visibleEvidenceRanges } from '../progressiveBuild/progressiveTurnContext';
 import {
   assertTrainingAllowed,
@@ -39,6 +40,7 @@ import {
 } from '../../domain/characters/card';
 import type {
   AbilityDefinition,
+  BranchContentManifest,
   ContentEntry,
   LoreDefinition,
   ConstraintDefinition,
@@ -54,6 +56,9 @@ import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { forkBranch } from '../branch/fork';
+import { hasBranchContentManifestTable, ensureBaseBranchContentManifest } from '../worldPackage/branchContentStore';
+import { contentDependencyBinding, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
+import { publishSourceEvidenceExcerptDelta } from '../worldPackage/progressiveDelta';
 import {
   EncounterService,
   type BeginEncounterInput,
@@ -67,6 +72,7 @@ export interface SessionDeps {
   worldStore: SqliteWorldStore;
   narratives: SqliteNarrativeStore;
   progressiveTurnContext?: ProgressiveTurnContextService;
+  sourceStore?: SourceStore;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -1160,7 +1166,39 @@ export class CampaignSession {
           '历史与存档保持可读；请从世界书架用当前三宝书重新开局。',
       );
     }
-    const allEntries = await this.loadPackageEntries(summary.worldId, summary.packageRevision);
+    const basePackage = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+    if (!basePackage || basePackage.manifest.status !== 'published') {
+      throw new Error(`Locked published world package is missing: ${summary.worldId} r${summary.packageRevision}.`);
+    }
+    let contentManifest: BranchContentManifest | undefined = summary.state.contentManifest;
+    if (!contentManifest && await hasBranchContentManifestTable(this.deps.db)) {
+      contentManifest = await ensureBaseBranchContentManifest({
+        db: this.deps.db,
+        branchId: options.branchId,
+        worldId: summary.worldId,
+        stateVersion: summary.state.stateVersion,
+        packageRevision: summary.packageRevision,
+        packageContentHash: basePackage.manifest.contentHash,
+        createdAt: new Date().toISOString(),
+      });
+      summary.state.contentManifest = contentManifest;
+    }
+    const activeDeltas = contentManifest
+      ? await loadBranchDeltaEntries({
+          manifest: contentManifest,
+          worldId: summary.worldId,
+          branchId: options.branchId,
+          stateVersion: summary.state.stateVersion,
+          baseRevision: summary.packageRevision,
+          baseContentHash: basePackage.manifest.contentHash,
+          getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
+          sha256Hex: this.deps.hashProvider.sha256Hex,
+        })
+      : [];
+    const allEntries = [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)];
+    if (new Set(allEntries.map(entry => entry.entryId)).size !== allEntries.length) {
+      throw new Error('The active branch content manifest contains conflicting immutable entry ids.');
+    }
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
     const playerState = summary.state.actors[playerCard.actorId];
@@ -1227,6 +1265,31 @@ export class CampaignSession {
               .slice(0, 3)
               .map(passage => `${passage.chapterId} [${passage.startCodePoint},${passage.endCodePoint}): ${passage.text}`)
               .join('\n')}\n以上仅为已整理资料引用的原文片段；没有提供的情节仍属未知。`;
+            if (this.deps.sourceStore && contentManifest) {
+              const excerptDelta = await publishSourceEvidenceExcerptDelta({
+                db: this.deps.db,
+                worldStore: this.deps.worldStore,
+                sourceStore: this.deps.sourceStore,
+                sha256Hex: this.deps.hashProvider.sha256Hex,
+                worldId: summary.worldId,
+                branchId: options.branchId,
+                stateVersion: summary.state.stateVersion,
+                baseRevision: summary.packageRevision,
+                sourceSha256: sourceHash,
+                passages: lookup.passages,
+                existingEntryIds: new Set(allEntries.map(entry => entry.entryId)),
+                createdAt: new Date().toISOString(),
+              });
+              if (excerptDelta?.status === 'published' && excerptDelta.activeManifest) {
+                contentManifest = excerptDelta.activeManifest;
+                summary.state.contentManifest = excerptDelta.activeManifest;
+                allEntries.push(...excerptDelta.delta.entries);
+                entries.push(...projectPlayerEntriesAtAnchor(
+                  excerptDelta.delta.entries, facts, worldTimeOrder, knownEntryIds,
+                ));
+                authoritativeEntries.push(...excerptDelta.delta.entries);
+              }
+            }
           }
         }
       } catch {
@@ -1250,6 +1313,7 @@ export class CampaignSession {
         turnId,
         playerIntent: options.intent,
         worldContext: plannerWorldContext,
+        ...(contentManifest ? { expectedContentDependency: contentDependencyBinding(contentManifest) } : {}),
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
         actingCard: playerCard,

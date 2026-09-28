@@ -66,7 +66,7 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
     );
   }
 
-  if (input.buildScope) validateBuildScope(input.buildScope);
+  if (input.buildScope) assertValidWorldPackageBuildScope(input.buildScope);
   const contentHash = await computePackageContentHash(
     input.entries, input.sections, input.sha256Hex, input.buildScope,
   );
@@ -103,7 +103,7 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
   return { manifest, report };
 }
 
-function validateBuildScope(scope: WorldPackageBuildScope): void {
+export function assertValidWorldPackageBuildScope(scope: WorldPackageBuildScope): void {
   if (!['progressive', 'full'].includes(scope.strategy)
     || !['opening', 'incremental', 'whole_source'].includes(scope.scope)
     || !['partial', 'complete'].includes(scope.completeness)

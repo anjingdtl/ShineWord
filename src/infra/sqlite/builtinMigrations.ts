@@ -790,6 +790,38 @@ const PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL = `
 ALTER TABLE world_packages ADD COLUMN build_scope_json TEXT NOT NULL DEFAULT '{}';
 `;
 
+const PROGRESSIVE_CONTENT_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS branch_content_manifests (
+  branch_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL CHECK(state_version >= 0),
+  content_version INTEGER NOT NULL CHECK(content_version >= 0),
+  manifest_hash TEXT NOT NULL,
+  manifest_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(branch_id, state_version, content_version),
+  FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_branch_content_manifest_head
+  ON branch_content_manifests(branch_id, state_version DESC, content_version DESC);
+
+CREATE TABLE IF NOT EXISTS progressive_world_deltas (
+  delta_id TEXT PRIMARY KEY,
+  world_id TEXT NOT NULL,
+  origin_branch_id TEXT NOT NULL,
+  published_at_state_version INTEGER NOT NULL CHECK(published_at_state_version >= 0),
+  base_revision INTEGER NOT NULL CHECK(base_revision > 0),
+  base_content_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('needs_review', 'published')),
+  content_hash TEXT NOT NULL,
+  package_json TEXT NOT NULL,
+  validation_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_progressive_delta_origin
+  ON progressive_world_deltas(origin_branch_id, published_at_state_version);
+
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -805,4 +837,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 12, name: 'imported_sources', sql: IMPORTED_SOURCES_SCHEMA_SQL },
   { version: 13, name: 'world_build_runs', sql: WORLD_BUILD_RUNS_SCHEMA_SQL },
   { version: 14, name: 'progressive_package_scope', sql: PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL },
+  { version: 15, name: 'progressive_branch_content', sql: PROGRESSIVE_CONTENT_SCHEMA_SQL },
 ];

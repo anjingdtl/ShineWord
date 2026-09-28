@@ -11,6 +11,7 @@ import type { EncounterState } from '../../domain/combat/encounter';
 import { replaceEncounterSnapshots } from './encounterPersistence';
 import type { EffectOperation } from '../../domain/turns/types';
 import type { RollGrade, RollRecord, SkillRank } from '../../domain/rules/types';
+import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../../application/worldPackage/branchContentStore';
 
 interface BranchRow extends SqliteRow {
   branch_id: string;
@@ -183,6 +184,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
   private projectionTablesAvailable: boolean | null = null;
   private encounterTablesAvailable: boolean | null = null;
   private knowledgeTablesAvailable: boolean | null = null;
+  private contentManifestTablesAvailable: boolean | null = null;
 
   constructor(private readonly db: SqliteDatabase) {}
 
@@ -214,6 +216,13 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       this.knowledgeTablesAvailable = (row?.n ?? 0) === 3;
     }
     return this.knowledgeTablesAvailable;
+  }
+
+  private async hasContentManifestTables(): Promise<boolean> {
+    if (this.contentManifestTablesAvailable === null) {
+      this.contentManifestTablesAvailable = await hasBranchContentManifestTable(this.db);
+    }
+    return this.contentManifestTablesAvailable;
   }
 
   async getState(branchId: string): Promise<GameStateSnapshot | null> {
@@ -617,6 +626,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     if (snapshotPayload?.discoveries) state.discoveries = snapshotPayload.discoveries;
     if (snapshotPayload?.questProgress) state.questProgress = snapshotPayload.questProgress;
     if (snapshotPayload?.questRewards) state.questRewards = snapshotPayload.questRewards;
+    if (snapshotPayload?.contentManifest) state.contentManifest = snapshotPayload.contentManifest;
+    if (await this.hasContentManifestTables()) {
+      const manifest = await readBranchContentManifest(db, branchId, branch.state_version);
+      if (manifest) state.contentManifest = manifest;
+    }
     for (const row of actors) {
       const abilityCooldowns = snapshotPayload?.actors?.[row.actor_id]?.abilityCooldowns;
       const zoneId = snapshotPayload?.actors?.[row.actor_id]?.zoneId;
@@ -843,6 +857,15 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
 
     if (state.encounters && await this.hasEncounterTables()) {
       await replaceEncounterSnapshots(tx, state.branchId, state.encounters);
+    }
+
+    if (state.contentManifest && await this.hasContentManifestTables()) {
+      if (state.contentManifest.branchId !== state.branchId || state.contentManifest.stateVersion !== expectedStateVersion) {
+        throw new Error('Atomic commit content manifest is not bound to the expected branch snapshot.');
+      }
+      const nextManifest = rebindBranchContentManifest(state.contentManifest, state.branchId, state.stateVersion);
+      await insertBranchContentManifest(tx, nextManifest, committedAt);
+      state.contentManifest = nextManifest;
     }
 
     if (await this.hasKnowledgeTables()) {

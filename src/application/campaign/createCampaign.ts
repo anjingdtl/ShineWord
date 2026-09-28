@@ -7,6 +7,8 @@ import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import { createOriginalCard, createTemplateCard } from '../../domain/characters/card';
 import { buildOpening, isFactVisibleAtAnchor } from '../world/opening';
 import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAtAnchor, openingRelationshipFor } from './recruitment';
+import { createBaseContentManifest } from '../worldPackage/contentManifest';
+import { hasBranchContentManifestTable, insertBranchContentManifest } from '../worldPackage/branchContentStore';
 
 export interface OpeningAnchor {
   /** World-time order the game starts at (canon events after this diverge). */
@@ -406,6 +408,14 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       groupId: 'main',
     })),
   };
+  if (await hasBranchContentManifestTable(input.db)) {
+    snapshot.contentManifest = createBaseContentManifest({
+      worldId: input.worldId,
+      branchId,
+      stateVersion: 0,
+      basePackage: { revision: input.packageRevision, contentHash: pkg.manifest.contentHash },
+    });
+  }
   for (const card of cards) {
     const sceneEntry = pkg.entries.find(entry => entry.kind === 'scene' &&
       (entry.definition as { locationId?: string }).locationId === input.anchor.locationId);
@@ -451,6 +461,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
        VALUES (?, ?, NULL, NULL, 0, ?)`,
       [branchId, input.campaignId, input.createdAt],
     );
+    if (snapshot.contentManifest) await insertBranchContentManifest(tx, snapshot.contentManifest, input.createdAt);
     for (const card of cards) {
       const actor = snapshot.actors[card.actorId]!;
       await tx.execute(

@@ -7,18 +7,24 @@ import {
 import type { SqliteDatabase } from '../ports/sqlite';
 import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
 import { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
+import type { BranchContentManifest, ProgressiveDeltaPackage } from '../../domain/content/types';
+import { createBaseContentManifest, isBranchContentManifestStructure, isProgressiveDeltaPackageStructure,
+  verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
+import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
-export const SAVE_SCHEMA_VERSION = 'shineword-save-5';
+export const SAVE_SCHEMA_VERSION = 'shineword-save-6';
 export const SAVE_FILE_EXTENSION = '.shineword-save.json';
-/** Previous full-save schema; it contains the current encounter but not its rewind history. */
-export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-4';
-/** Earlier full-save schema; it predates encounter snapshots. */
-export const OLDER_SAVE_SCHEMA_VERSION = 'shineword-save-3';
+/** Previous full-save schema with rewind history, before branch content manifests. */
+export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-5';
+/** Earlier full-save schema; it contains encounters but no rewind history. */
+export const OLDER_SAVE_SCHEMA_VERSION = 'shineword-save-4';
+/** Save schema that predates encounter snapshots. */
+export const OLDER_V3_SAVE_SCHEMA_VERSION = 'shineword-save-3';
 /** Legacy schema that predates complete card/contract/roll round-trips. */
 export const LEGACY_SAVE_SCHEMA_VERSION = 'shineword-save-2';
 
 export interface SaveManifest {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION;
+  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
   worldRef: {
@@ -82,6 +88,8 @@ export interface SavedSnapshot {
 export interface SaveFile {
   manifest: SaveManifest;
   state: GameStateSnapshot;
+  /** Immutable published branch deltas referenced by this save's history. */
+  contentDeltas?: ProgressiveDeltaPackage[];
   /** Full branch snapshot history, including battlefield state at every rewind point. */
   snapshotHistory?: SavedSnapshot[];
   turns: SavedTurn[];
@@ -148,6 +156,9 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
   if (save.snapshotHistory !== undefined) {
     payload.snapshotHistory = save.snapshotHistory as unknown as CanonicalJson;
   }
+  if (save.contentDeltas !== undefined) {
+    payload.contentDeltas = save.contentDeltas as unknown as CanonicalJson;
+  }
   return payload;
 }
 
@@ -184,7 +195,7 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     [input.branchId],
   );
   if (!stateHead) throw new Error(`Branch has no snapshot: ${input.branchId}.`);
-  const state = await new SqliteTurnStore(db).getState(input.branchId);
+  let state = await new SqliteTurnStore(db).getState(input.branchId);
   if (!state) throw new Error(`Branch has no state: ${input.branchId}.`);
   if (state.stateVersion !== stateHead.state_version) {
     throw new Error(`Branch state version ${state.stateVersion} does not match its latest snapshot ${stateHead.state_version}.`);
@@ -222,6 +233,55 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
       );
   if (campaign.package_revision !== null && (!lockedPackage || lockedPackage.status !== 'published')) {
     throw new Error(`Campaign package dependency ${campaign.world_id} r${campaign.package_revision} is missing or unpublished.`);
+  }
+
+  const contentDeltas: ProgressiveDeltaPackage[] = [];
+  if (campaign.package_revision !== null && lockedPackage) {
+    const manifestByDelta = new Map<string, BranchContentManifest['deltas'][number]>();
+    const hasManifestTable = await hasBranchContentManifestTable(db);
+    for (const historyItem of snapshotHistory) {
+      const stored = hasManifestTable
+        ? await readBranchContentManifest(db, input.branchId, historyItem.stateVersion)
+        : null;
+      const original: BranchContentManifest = stored ?? historyItem.snapshot.contentManifest ?? createBaseContentManifest({
+        worldId: campaign.world_id,
+        branchId: input.branchId,
+        stateVersion: historyItem.stateVersion,
+        basePackage: { revision: campaign.package_revision, contentHash: lockedPackage.content_hash },
+      });
+      if (original.basePackage.revision !== campaign.package_revision ||
+          original.basePackage.contentHash.toLowerCase() !== lockedPackage.content_hash.toLowerCase()) {
+        throw new Error(`Snapshot ${historyItem.stateVersion} is bound to a different immutable base package.`);
+      }
+      const manifest = rebindBranchContentManifest(original, input.branchId, historyItem.stateVersion, campaign.world_id);
+      if (!await verifyContentManifest(manifest, input.sha256Hex)) {
+        throw new Error(`Snapshot ${historyItem.stateVersion} has a corrupt content manifest.`);
+      }
+      historyItem.snapshot.contentManifest = manifest;
+      for (const ref of manifest.deltas) {
+        if (ref.publishedAtStateVersion > historyItem.stateVersion) {
+          throw new Error(`Snapshot ${historyItem.stateVersion} references a delta from a later state.`);
+        }
+        manifestByDelta.set(ref.deltaId, ref);
+      }
+    }
+    const headManifest = snapshotHistory[snapshotHistory.length - 1]?.snapshot.contentManifest;
+    if (headManifest) state = { ...state, contentManifest: headManifest };
+    for (const ref of manifestByDelta.values()) {
+      const row = await db.queryOne<{ status: string; content_hash: string; package_json: string }>(
+        `SELECT status, content_hash, package_json FROM progressive_world_deltas WHERE delta_id = ?`, [ref.deltaId],
+      );
+      if (!row || row.status !== 'published') throw new Error(`Published content delta ${ref.deltaId} is missing from this save.`);
+      let delta: ProgressiveDeltaPackage;
+      try { delta = JSON.parse(row.package_json) as ProgressiveDeltaPackage; }
+      catch { throw new Error(`Published content delta ${ref.deltaId} is malformed.`); }
+      if (delta.contentHash.toLowerCase() !== row.content_hash.toLowerCase() || !await verifyDeltaPackage(delta, {
+        deltaId: ref.deltaId, contentHash: ref.contentHash, baseContentHash: lockedPackage.content_hash,
+      }, input.sha256Hex)) {
+        throw new Error(`Published content delta ${ref.deltaId} failed save integrity verification.`);
+      }
+      contentDeltas.push(delta);
+    }
   }
 
   const turnRows = await db.queryAll<{
@@ -318,6 +378,7 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
 
   const payload = {
     state,
+    contentDeltas,
     snapshotHistory,
     turns,
     skills: skills.map(skill => ({
@@ -425,13 +486,17 @@ export async function validateSaveJsonBytes(
   }
   let parsed: SaveFile;
   try {
-    parsed = JSON.parse(json) as SaveFile;
+    const value: unknown = JSON.parse(json);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { ok: false, errors: ['Save file root must be a JSON object.'] };
+    }
+    parsed = value as SaveFile;
   } catch {
     return { ok: false, errors: ['Save file is not valid JSON.'] };
   }
   const schemaVersion = parsed.manifest?.schemaVersion;
   if (schemaVersion !== SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
-      schemaVersion !== OLDER_SAVE_SCHEMA_VERSION) {
+      schemaVersion !== OLDER_SAVE_SCHEMA_VERSION && schemaVersion !== OLDER_V3_SAVE_SCHEMA_VERSION) {
     if (schemaVersion === LEGACY_SAVE_SCHEMA_VERSION) {
       return {
         ok: false,
@@ -461,8 +526,22 @@ export async function validateSaveJsonBytes(
       !Array.isArray(parsed.state?.encounters)) {
     errors.push('Save is missing complete encounter and battlefield snapshots.');
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
+  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+      (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
     errors.push('Save is missing the full branch snapshot history required for rewind and combat recovery.');
+  }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && !Array.isArray(parsed.contentDeltas)) {
+    errors.push('Save v6 is missing its immutable progressive content package list.');
+  }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.contentDeltas) &&
+      parsed.contentDeltas.some(delta => !isProgressiveDeltaPackageStructure(delta))) {
+    errors.push('Save v6 contains a malformed progressive content package.');
+  }
+  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+      Array.isArray(parsed.snapshotHistory) && parsed.snapshotHistory.some(item =>
+        !item || typeof item !== 'object' || Array.isArray(item) ||
+        !('snapshot' in item) || !item.snapshot || typeof item.snapshot !== 'object' || Array.isArray(item.snapshot))) {
+    errors.push('Save snapshot history contains a malformed entry.');
   }
   if (!Array.isArray(parsed.turns)) errors.push('turns must be an array.');
   if (!Array.isArray(parsed.skills)) errors.push('skills must be an array.');
@@ -476,7 +555,7 @@ export async function validateSaveJsonBytes(
   }
   if (!Array.isArray(parsed.rewardLedger)) errors.push('rewardLedger must be an array.');
   if (!Array.isArray(parsed.branchEvents)) errors.push('branchEvents must be an array.');
-  if (schemaVersion === OLDER_SAVE_SCHEMA_VERSION && !Array.isArray(parsed.state?.encounters)) {
+  if (schemaVersion === OLDER_V3_SAVE_SCHEMA_VERSION && !Array.isArray(parsed.state?.encounters)) {
     const containsTemporaryActor = Array.isArray(parsed.cards) && parsed.cards.some(card => {
       try {
         const value = JSON.parse(card.cardJson) as { controller?: string };
@@ -486,7 +565,7 @@ export async function validateSaveJsonBytes(
       }
     });
     if (containsTemporaryActor) {
-      errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a v5 save.');
+        errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a current save.');
     }
   }
   if (errors.length > 0) {
@@ -504,7 +583,7 @@ export async function validateSaveJsonBytes(
   if (parsed.state.stateVersion !== parsed.manifest.stateVersion) {
     errors.push('Snapshot stateVersion does not match the manifest.');
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.snapshotHistory)) {
+  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) && Array.isArray(parsed.snapshotHistory)) {
     let previousVersion = -1;
     for (const [index, item] of parsed.snapshotHistory.entries()) {
       if (!Number.isInteger(item.stateVersion) || item.stateVersion < 0 || item.stateVersion <= previousVersion) {
@@ -531,6 +610,49 @@ export async function validateSaveJsonBytes(
     const head = parsed.snapshotHistory.find(item => item.stateVersion === parsed.manifest.stateVersion);
     if (!head) {
       errors.push('Snapshot history does not include the manifest stateVersion.');
+    }
+  }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.snapshotHistory)) {
+    const expectedBaseHash = parsed.manifest.worldRef?.packageContentHash;
+    if (!expectedBaseHash || !Array.isArray(parsed.contentDeltas)) {
+      errors.push('Save v6 requires a locked base package hash and contentDeltas array.');
+    } else {
+      const allSnapshots = [
+        { stateVersion: parsed.state.stateVersion, snapshot: parsed.state },
+        ...parsed.snapshotHistory.map(item => ({ stateVersion: item.stateVersion, snapshot: item.snapshot })),
+      ];
+      for (const [index, item] of allSnapshots.entries()) {
+        const manifest = item.snapshot.contentManifest;
+        if (!isBranchContentManifestStructure(manifest) ||
+            manifest.branchId !== parsed.manifest.branchId || manifest.stateVersion !== item.stateVersion ||
+            manifest.basePackage.revision !== parsed.manifest.packageRevision ||
+            manifest.basePackage.contentHash.toLowerCase() !== expectedBaseHash.toLowerCase()) {
+          errors.push(`Save v6 content manifest ${index} does not match its branch, state or locked package.`);
+          continue;
+        }
+        if (!await verifyContentManifest(manifest, sha256Hex)) {
+          errors.push(`Save v6 content manifest ${index} failed integrity verification.`);
+        }
+      }
+      const deltasById = new Map(parsed.contentDeltas.map(delta => [delta.deltaId, delta]));
+      if (deltasById.size !== parsed.contentDeltas.length) errors.push('Save v6 contains duplicate progressive delta ids.');
+      for (const item of allSnapshots) {
+        for (const ref of item.snapshot.contentManifest?.deltas ?? []) {
+          const delta = deltasById.get(ref.deltaId);
+          if (!delta || ref.publishedAtStateVersion > item.stateVersion ||
+              !await verifyDeltaPackage(delta, {
+                deltaId: ref.deltaId, contentHash: ref.contentHash, baseContentHash: expectedBaseHash,
+              }, sha256Hex)) {
+            errors.push(`Save v6 snapshot ${item.stateVersion} is missing or has an invalid published delta ${ref.deltaId}.`);
+          }
+        }
+      }
+      for (const delta of parsed.contentDeltas) {
+        if (delta.status !== 'published' || delta.basePackage.revision !== parsed.manifest.packageRevision ||
+            delta.basePackage.contentHash.toLowerCase() !== expectedBaseHash.toLowerCase()) {
+          errors.push(`Save v6 includes a non-published or mismatched delta ${delta.deltaId}.`);
+        }
+      }
     }
   }
   const committed = parsed.turns
@@ -577,6 +699,7 @@ export async function validateSaveJsonBytes(
 export interface RestoreSaveInput {
   db: SqliteDatabase;
   save: SaveFile;
+  sha256Hex: Sha256HexProvider['sha256Hex'];
   /** New campaign identity for the imported game (never overwrites). */
   newCampaignId: string;
   newBranchId: string;
@@ -600,6 +723,10 @@ export interface RestoreSaveResult {
  */
 export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveResult> {
   const { db, save } = input;
+  const saveValidation = await validateSaveJson(JSON.stringify(save), input.sha256Hex);
+  if (!saveValidation.ok) {
+    throw new Error(`Save validation failed before restore:\n- ${saveValidation.errors.join('\n- ')}`);
+  }
   const { manifest } = save;
 
   const originalWorldId = manifest.worldRef.worldId;
@@ -737,11 +864,35 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
        VALUES (?, ?, NULL, NULL, ?, ?)`,
       [input.newBranchId, input.newCampaignId, manifest.stateVersion, input.createdAt],
     );
+    for (const delta of save.contentDeltas ?? []) {
+      const existingDelta = await tx.queryOne<{ content_hash: string; status: string }>(
+        'SELECT content_hash, status FROM progressive_world_deltas WHERE delta_id = ?', [delta.deltaId],
+      );
+      if (existingDelta) {
+        if (existingDelta.content_hash.toLowerCase() !== delta.contentHash.toLowerCase() || existingDelta.status !== 'published') {
+          throw new Error(`Progressive delta id collision while restoring save: ${delta.deltaId}.`);
+        }
+        continue;
+      }
+      await tx.execute(
+        `INSERT INTO progressive_world_deltas
+          (delta_id, world_id, origin_branch_id, published_at_state_version, base_revision,
+           base_content_hash, status, content_hash, package_json, validation_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [delta.deltaId, delta.worldId, delta.originBranchId, delta.publishedAtStateVersion,
+          delta.basePackage.revision, delta.basePackage.contentHash, delta.status, delta.contentHash,
+          JSON.stringify(delta), JSON.stringify(delta.validation), delta.createdAt],
+      );
+    }
 
     const state: GameStateSnapshot = {
       ...save.state,
       branchId: input.newBranchId,
       encounters: save.state.encounters ?? [],
+      ...(save.state.contentManifest ? {
+        contentManifest: rebindBranchContentManifest(save.state.contentManifest, input.newBranchId,
+          save.state.stateVersion, resolvedWorldId),
+      } : {}),
     };
     for (const actor of Object.values(state.actors)) {
       await tx.execute(
@@ -762,7 +913,14 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
     for (const item of history) {
       const restoredSnapshot: GameStateSnapshot = item.stateVersion === state.stateVersion
         ? state
-        : { ...item.snapshot, branchId: input.newBranchId };
+        : { ...item.snapshot, branchId: input.newBranchId,
+            ...(item.snapshot.contentManifest ? {
+              contentManifest: rebindBranchContentManifest(item.snapshot.contentManifest, input.newBranchId,
+                item.stateVersion, resolvedWorldId),
+            } : {}) };
+      if (restoredSnapshot.contentManifest) {
+        await insertBranchContentManifest(tx, restoredSnapshot.contentManifest, item.createdAt || input.createdAt);
+      }
       await tx.execute(
         `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
          VALUES (?, ?, ?, NULL, ?)`,

@@ -20,6 +20,13 @@ export interface Provenance {
   sourceFactIds: readonly string[];
   policyId?: string;
   rationale: string;
+  /** Exact normalized-source passage(s) used without adding interpretation. */
+  sourceRanges?: readonly {
+    chapterId: string;
+    startCodePoint: number;
+    endCodePoint: number;
+    contentSha256: string;
+  }[];
 }
 
 export type EntryKind =
@@ -73,6 +80,57 @@ export interface WorldPackageBuildScope {
     branchId?: string;
     stateVersion?: number;
   };
+}
+
+/** Immutable base-plus-delta view selected by one branch snapshot. The
+ * manifest hash covers the base package hash, ordered delta references and
+ * contentVersion; branch/state are stored alongside it as the activation
+ * binding so a fork can rebind the same immutable content safely. */
+export interface BranchContentManifest {
+  schemaVersion: 'shineword-content-manifest-1';
+  worldId: string;
+  branchId: string;
+  stateVersion: number;
+  contentVersion: number;
+  basePackage: { revision: number; contentHash: string };
+  deltas: ReadonlyArray<{
+    deltaId: string;
+    contentHash: string;
+    publishedAtStateVersion: number;
+    originBranchId: string;
+  }>;
+  manifestHash: string;
+}
+
+/** A branch-scoped immutable extension. Review proposals are stored with
+ * `needs_review` and can never be relabeled as published in place. */
+export interface ProgressiveDeltaPackage {
+  schemaVersion: 'shineword-progressive-delta-1';
+  deltaId: string;
+  worldId: string;
+  basePackage: { revision: number; contentHash: string };
+  originBranchId: string;
+  publishedAtStateVersion: number;
+  sourceSha256: string;
+  mappingVersion: string;
+  buildScope: WorldPackageBuildScope;
+  status: 'needs_review' | 'published';
+  contentHash: string;
+  entries: readonly ContentEntry[];
+  sections: readonly BookSection[];
+  validation: { errors: readonly string[]; warnings: readonly string[] };
+  createdAt: string;
+}
+
+/** Exact package dependency frozen into the ActionContract before resolving
+ * the turn. The action contract hash therefore fences later content growth. */
+export interface ContentDependencyBinding {
+  manifestHash: string;
+  contentVersion: number;
+  branchId: string;
+  stateVersion: number;
+  basePackageRevision: number;
+  deltaIds: readonly string[];
 }
 
 export interface ContentEntry {

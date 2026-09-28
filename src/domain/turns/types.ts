@@ -1,4 +1,5 @@
 import type { DifficultyBand, RollGrade } from '../rules/types';
+import type { ContentDependencyBinding } from '../content/types';
 
 export const TURN_STATES = [
   'Draft',
@@ -51,6 +52,9 @@ export interface ActionContract {
   protocolVersion: '1.0';
   turnId: string;
   expectedStateVersion: number;
+  /** Optional on pre-progressive contracts; when present it is frozen into
+   * actionContractHash and names every immutable package used this turn. */
+  contentDependency?: ContentDependencyBinding;
   actorId: string;
   actionType: string;
   /** Required for locally compiled ability contracts; planner cannot author effects. */

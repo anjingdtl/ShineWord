@@ -8,6 +8,7 @@ import type { SqliteDatabase } from '../ports/sqlite';
 import type { TurnStore } from '../ports/turnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
+import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
 export interface ForkBranchInput {
   db: SqliteDatabase;
@@ -133,8 +134,14 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     }
   }
 
-  snapshot.branchId = input.targetBranchId;
   const targetStateVersion = snapshot.stateVersion;
+  if (await hasBranchContentManifestTable(db)) {
+    const manifest = await readBranchContentManifest(db, input.sourceBranchId, targetStateVersion)
+      ?? snapshot.contentManifest
+      ?? null;
+    if (manifest) snapshot.contentManifest = rebindBranchContentManifest(manifest, input.targetBranchId, targetStateVersion);
+  }
+  snapshot.branchId = input.targetBranchId;
   const skills: SkillSnapshotEntry[] = snapshot.skills ?? [];
   const relationships: RelationshipSnapshotEntry[] = snapshot.relationships ?? [];
   if (cards.length > 0) snapshot.cards = cards;
@@ -147,6 +154,7 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
        VALUES (?, ?, ?, ?, ?, ?)`,
       [input.targetBranchId, input.campaignId, input.sourceBranchId, input.forkTurnId, targetStateVersion, input.createdAt],
     );
+    if (snapshot.contentManifest) await insertBranchContentManifest(tx, snapshot.contentManifest, input.createdAt);
     for (const actor of Object.values(snapshot.actors)) {
       await tx.execute(
         `INSERT INTO actor_states (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)

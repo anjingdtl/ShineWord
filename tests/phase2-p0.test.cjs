@@ -313,7 +313,7 @@ test('save round-trip: export hashes payload, restore rebuilds a new campaign at
 
     // Restore as a NEW campaign/branch into the same DB.
     const restored = await restoreSave({
-      db: adapter, save: JSON.parse(json),
+      db: adapter, save: JSON.parse(json), sha256Hex: sha.sha256Hex,
       newCampaignId: 'camp-restore', newBranchId: 'restored-main', createdAt: 't2',
     });
     assert.equal(restored.branchId, 'restored-main');
@@ -333,18 +333,20 @@ test('save round-trip: export hashes payload, restore rebuilds a new campaign at
       async () => restoreSave({
         db: adapter,
         save: { ...JSON.parse(json), manifest: { ...JSON.parse(json).manifest, worldRef: { worldId: 'ghost-world', sourceSha256: 'b'.repeat(64) } } },
+        sha256Hex: sha.sha256Hex,
         newCampaignId: 'camp-ghost', newBranchId: 'ghost-main', createdAt: 't3',
       }),
-      /Missing dependency/,
+      /Save validation failed before restore/,
     );
     // Hash mismatch on the world: refuse to mix versions.
     await assert.rejects(
       async () => restoreSave({
         db: adapter,
         save: { ...JSON.parse(json), manifest: { ...JSON.parse(json).manifest, worldRef: { worldId: 'world-1', sourceSha256: 'c'.repeat(64) } } },
+        sha256Hex: sha.sha256Hex,
         newCampaignId: 'camp-hash', newBranchId: 'hash-main', createdAt: 't3',
       }),
-      /differs from the save manifest/,
+      /Save validation failed before restore/,
     );
   } finally {
     db.close();
