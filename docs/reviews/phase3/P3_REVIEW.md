@@ -171,3 +171,50 @@
 | 多 branch 可清楚区分 | 源码就绪，**待截图验证** |
 | 空态 / 导入存档 / 错误态完整 | 源码就绪，**待截图验证** |
 | 点击继续仍进入正确 branch | 逻辑静态确认，**待真机验证** |
+
+---
+
+## P3.4 Profile / First Run / 品牌入口
+
+### 实现内容
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 表单状态（迁移） | `features/profile/useProfileForm.ts` | 从 `ProfileScreen.tsx` 原样迁出；持久化路径未改（`saveApiProfile` + `KeychainSecretStore`，密钥不回显） |
+| 页面组件（新增） | `features/profile/ProfileFormCard.tsx` | 模型与密钥卡：端点 / 模型 / API Key 全部改用 `TextField`（含 secure 与 hint）；成功与失败使用 `StatusBanner` |
+| 页面组件（新增） | `features/profile/ThemeSkinCard.tsx` | 主题皮肤产品化：四个可选皮肤瓷砖，各自展示名称、氛围与色板；选中态有 ✓ 与加粗（非纯颜色表达） |
+| 页面组件（新增） | `features/profile/AboutCard.tsx` | 使用 `PRODUCT_NAME = Shine-TRPG`，并说明保留的兼容性内部标识 |
+| 页面重写 | `screens/ProfileScreen.tsx` | 「我的」= 皮肤 / 模型与密钥 / 关于 三层；删除本地 `legacyInput` 样式对象 |
+| 首次启动 | `screens/ProfileScreen.tsx` | `FirstRunScreen` 改为品牌锁定组合（BrandLockup）+「配置你的 AI 模型」+ 同一表单 |
+
+品牌入口：`BrandLockup` 与 `AboutCard` 都只读 `brand.ts` 常量，界面中不再出现 `ShineWord` 字样。
+
+### 静态审查结果（Review / Fix）
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 旧实现用本地 `legacyInput`（原始 `TextInput` + 硬编码圆角/内边距），无 focus/error/disabled 状态 | **已修复**：三处输入全部替换为 `TextField`（normal/focus/disabled/error/secure/placeholder 齐备） |
+| 2 | 主题选择只有一个 chips 行，看不出各皮肤差别 | **已修复**：改为瓷砖（名称 + 氛围 + 色板），仍使用同一 `setThemeId` 持久化路径 |
+| 3 | 旧 About / FirstRun 标题仍写 `ShineWord` | **已修复**：统一 `PRODUCT_NAME`；旧品牌字样在 `mobile/src/ui` 中已清零（`mobile/app.json`、原生模块名等内部标识按方案 §3.6 保留） |
+| 4 | 主题皮肤卡原有的「入口在后续阶段接入」提示已过时（世界主题入口在 P3.5 落地） | 文案已更新为指向「世界详情 → 资料」，P3.5 完成后此处不再需要改动 |
+| 5 | 首启保存行为 | 未改动：仍由 `AppRoot` 依据 `profile` 是否存在切换导航，保存端点逻辑与 P2 完全一致 |
+
+### 未执行的验证项（待线下开发机验证）
+
+| 验证项 | 状态 |
+|---|---|
+| `npm run typecheck --prefix mobile` | **未运行** |
+| `npm run verify:core` | **未运行** |
+| `npm run apk:debug --prefix mobile` | **未运行** |
+| 首次启动品牌页与保存流程（真机） | **未验证** |
+| Profile 四主题截图 | **未截图** |
+| 表单 disabled / error / secure 状态截图 | **未截图** |
+
+### P3.4 出口对照（方案 §9.2）
+
+| 出口条件 | 状态 |
+|---|---|
+| Profile / FirstRun 零旧品牌 | 静态确认（`mobile/src/ui` 内 `ShineWord` 仅剩注释类内部标识，已逐条核对） |
+| 无 legacy input | 满足（静态确认，`legacyInput` 已删除） |
+| 品牌一致 | 源码就绪，**待截图验证** |
+| 保存端点行为不变 | 静态确认（hook 逻辑逐行对照 P2 版本） |

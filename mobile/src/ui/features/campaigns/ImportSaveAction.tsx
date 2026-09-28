@@ -26,7 +26,7 @@ export function ImportSaveAction(props: {
           typeStyle(theme, theme.type.small),
           { color: theme.onRaised.secondary, marginTop: theme.space.xs },
         ]}>
-        导入 `.shineword-save.json` 会校验完整性并创建为一个新的战役；旧版存档同样兼容。
+        导入「.shineword-save.json」会校验完整性并创建为一个新的战役；旧版存档同样兼容。
       </Text>
       <View style={{ marginTop: theme.space.md }}>
         <Button
