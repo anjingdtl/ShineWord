@@ -18,7 +18,8 @@ import {
   type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelStreaming, runExtraction } from '../../sourceImport';
+import { importNovelStreaming, runExtraction, pauseRun } from '../../sourceImport';
+import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -33,6 +34,7 @@ import { SectionHeader } from '../components/SectionHeader';
 import { StatusBanner } from '../components/StatusBanner';
 import { typeStyle } from '../components/typography';
 import { BuildStatusCard } from '../features/library/BuildStatusCard';
+import { BuildTaskCard } from '../features/library/BuildTaskCard';
 import { ImportNovelCard } from '../features/library/ImportNovelCard';
 import { WorldList } from '../features/library/WorldList';
 import { useTheme } from '../theme/ThemeContext';
@@ -50,10 +52,13 @@ export function LibraryScreen(): React.JSX.Element {
   const [summary, setSummary] = useState<BuiltWorldSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tasks, setTasks] = useState<BuildTaskView[]>([]);
+  const [taskBusy, setTaskBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!profile) return;
     try {
+      setTasks(await listOpenBuildTasks().catch(() => []));
       setWorlds(await listWorlds());
       // The campaign list is still loaded here because a world card links to
       // its books with the branch that filters discovered entries.
@@ -90,6 +95,19 @@ export function LibraryScreen(): React.JSX.Element {
     },
     [campaigns],
   );
+
+  async function resumeTask(runId: string) {
+    if (taskBusy || !profile) return;
+    setTaskBusy(true);
+    try {
+      await runExtraction(runId, profile, () => undefined);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTaskBusy(false);
+    }
+  }
 
   async function importAndBuild() {
     if (busy || !profile) return;
@@ -184,6 +202,17 @@ export function LibraryScreen(): React.JSX.Element {
         }
       />
       <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
+        {tasks.length > 0 ? (
+          tasks.map(task => (
+            <BuildTaskCard
+              key={task.runId}
+              task={task}
+              busy={taskBusy}
+              onResume={runId => resumeTask(runId)}
+              onPause={runId => { pauseRun(runId); }}
+            />
+          ))
+        ) : null}
         <ImportNovelCard
           busy={busy}
           onImportNovel={importAndBuild}

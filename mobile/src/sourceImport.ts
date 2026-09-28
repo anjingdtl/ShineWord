@@ -202,6 +202,24 @@ export function coordinatorGroupExtractor(profile: ApiProfile): LlmGroupExtracto
   return new LlmGroupExtractor(request => provider.complete(request));
 }
 
+/**
+ * Module-level abort registry: pause asks the in-flight executeRun loop to
+ * stop at the next unit boundary (the lease is released and the run persists
+ * as paused_user - the DB stays the single source of truth for progress).
+ */
+const activeRuns = new Map<string, { aborted: boolean }>();
+
+export function pauseRun(runId: string): boolean {
+  const signal = activeRuns.get(runId);
+  if (!signal) return false;
+  signal.aborted = true;
+  return true;
+}
+
+export function isRunActive(runId: string): boolean {
+  return activeRuns.has(runId);
+}
+
 /** Drives an existing run to completion (used by the UI now, C5 runner later). */
 export async function runExtraction(
   runId: string,
@@ -219,6 +237,9 @@ export async function runExtraction(
     chunksTotal: run.unitsTotal,
     message: `抽取中 ${run.unitsDone}/${run.unitsTotal} 组`,
   });
+  const signal = { aborted: false };
+  activeRuns.set(runId, signal);
+  try {
   const result = await executeRun(
     {
       sourceStore,
@@ -228,6 +249,7 @@ export async function runExtraction(
       groupExtractor: coordinatorGroupExtractor(profile),
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       owner: 'ui',
+      signal,
       onUnitDone: info => {
         onProgress({
           phase: 'extracting',
@@ -246,4 +268,7 @@ export async function runExtraction(
     message: result.completed ? '抽取完成' : '抽取未全部完成，可重试续建',
   });
   return result;
+  } finally {
+    activeRuns.delete(runId);
+  }
 }
