@@ -14,6 +14,8 @@ export function Header(props: {
   subtitle?: string;
   onBack?: () => void;
   backLabel?: string;
+  /** Long-press on the title; used by the temporary theme self-check entry. */
+  onTitleLongPress?: () => void;
   /** Trailing actions (icon buttons, settings). */
   actions?: React.ReactNode;
   /** Hairline under the bar; on by default. */
@@ -48,6 +50,7 @@ export function Header(props: {
       <View style={styles.titles}>
         <Text
           numberOfLines={1}
+          onLongPress={props.onTitleLongPress}
           style={[typeStyle(theme, theme.type.title), { color: theme.text.primary }]}>
           {props.title}
         </Text>

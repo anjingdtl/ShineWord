@@ -12,6 +12,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ChapterDivider, BackgroundPattern, ScanlineOverlay, useTheme } from '../theme';
+import { ScreenShell } from '../components/ScreenShell';
 import { THEME_ORDER, type ThemeId } from '../theme/tokens';
 import {
   AttributePips,
@@ -30,7 +31,7 @@ export function ThemeGalleryScreen(props: { onClose: () => void }): React.JSX.El
   const { theme, themeId, setThemeId } = useTheme();
 
   return (
-    <View style={[styles.root, { backgroundColor: theme.bg.base }]}>
+    <ScreenShell>
       <BackgroundPattern />
       <ScanlineOverlay />
 
@@ -173,7 +174,7 @@ export function ThemeGalleryScreen(props: { onClose: () => void }): React.JSX.El
           </Text>
         </View>
       </ScrollView>
-    </View>
+    </ScreenShell>
   );
 }
 
