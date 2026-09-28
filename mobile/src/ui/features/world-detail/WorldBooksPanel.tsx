@@ -10,7 +10,7 @@
  * The view model, projection rules and draft/publish flow are the P2 ones; only
  * the presentation moved onto phase-3 components.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { assembleBook } from '../../../../../src/application/worldPackage/publish';
 import type { BookSection, ContentEntry } from '../../../../../src/domain/content/types';
@@ -19,15 +19,19 @@ import {
   createSession,
   getCampaignState,
   getWorldBookProjection,
+  lookupProgressiveBookSource,
   loadWorldPackageDraft,
+  recordProgressiveSourceKnowledge,
 } from '../../../runtime';
 import { getDatabaseRuntime } from '../../../database';
 import { useAppSession } from '../../state/AppSessionContext';
 import { Card } from '../../components/Card';
+import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { SectionHeader } from '../../components/SectionHeader';
 import { SegmentedControl } from '../../components/SegmentedControl';
 import { StatusBanner } from '../../components/StatusBanner';
+import { TextField } from '../../components/TextField';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import { WorldBooksEditor } from './WorldBooksEditor';
@@ -113,8 +117,24 @@ export function WorldBooksPanel(props: {
   const [packageRevision, setPackageRevision] = useState<number | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [contentInfo, setContentInfo] = useState<string | null>(null);
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMessage, setLookupMessage] = useState<string | null>(null);
+  const [pendingSourceEntryIds, setPendingSourceEntryIds] = useState<string[]>([]);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const lookupAbort = useRef<AbortController | null>(null);
 
   const editMode = mode === 'gm';
+
+  useEffect(() => () => {
+    lookupAbort.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    lookupAbort.current?.abort();
+    setPendingSourceEntryIds([]);
+    setLookupMessage(null);
+  }, [props.worldId, props.campaignId, props.branchId, activeBook, editMode]);
 
   useEffect(() => {
     if (!profile) return;
@@ -199,7 +219,66 @@ export function WorldBooksPanel(props: {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.worldId, props.campaignId, props.branchId, editMode, profile]);
+  }, [props.worldId, props.campaignId, props.branchId, editMode, profile, refreshVersion]);
+
+  const runBookLookup = async (): Promise<void> => {
+    if (!profile || !props.campaignId || !props.branchId) {
+      setLookupMessage('请先从这个世界创建或打开一条战役，再按分支整理角色知识。');
+      return;
+    }
+    const query = lookupQuery.trim();
+    if (!query || Array.from(query).length > 80) {
+      setLookupMessage('请输入一至八十个字符的关键词或短句。');
+      return;
+    }
+    lookupAbort.current?.abort();
+    const controller = new AbortController();
+    lookupAbort.current = controller;
+    setLookupBusy(true);
+    setPendingSourceEntryIds([]);
+    setLookupMessage('正在本机索引已导入原文；内容不会发送给模型。');
+    try {
+      const result = await lookupProgressiveBookSource({
+        worldId: props.worldId,
+        campaignId: props.campaignId,
+        branchId: props.branchId,
+        book: activeBook,
+        query,
+        signal: controller.signal,
+      });
+      setLookupMessage(result.message);
+      setPendingSourceEntryIds(result.status === 'found' ? result.entryIds : []);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      setLookupMessage(error.name === 'AbortError'
+        ? '本次本地查找已取消。'
+        : `本地查找未完成：${error.message}`);
+    } finally {
+      if (lookupAbort.current === controller) {
+        lookupAbort.current = null;
+        setLookupBusy(false);
+      }
+    }
+  };
+
+  const confirmBookLookup = async (): Promise<void> => {
+    if (!props.campaignId || !props.branchId || pendingSourceEntryIds.length === 0) return;
+    setLookupBusy(true);
+    try {
+      await recordProgressiveSourceKnowledge({
+        campaignId: props.campaignId,
+        branchId: props.branchId,
+        entryIds: pendingSourceEntryIds,
+      });
+      setPendingSourceEntryIds([]);
+      setLookupMessage('已记入当前角色知识；回退或分支时会按对应存档恢复。');
+      setRefreshVersion(version => version + 1);
+    } catch (cause) {
+      setLookupMessage(`确认失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      setLookupBusy(false);
+    }
+  };
 
   const current = books.find(book => book.book === activeBook);
   const selectedEntry = packageEntries.find(entry => entry.entryId === selectedEntryId) ?? null;
@@ -232,7 +311,12 @@ export function WorldBooksPanel(props: {
       <SegmentedControl
         options={BOOK_OPTIONS}
         value={activeBook}
-        onChange={setActiveBook}
+        onChange={book => {
+          lookupAbort.current?.abort();
+          setActiveBook(book);
+          setPendingSourceEntryIds([]);
+          setLookupMessage(null);
+        }}
         compact
         testID="books-tab"
       />
@@ -241,6 +325,58 @@ export function WorldBooksPanel(props: {
       {error ? <StatusBanner tone="error" title="三宝书未就绪" message={error} /> : null}
 
       <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl, gap: theme.space.md }}>
+        {!editMode ? (
+          <Card>
+            <SectionHeader
+              title="随探索补齐"
+              subtitle="按当前三宝书，在本机导入原文中查找"
+              divider={false}
+            />
+            <TextField
+              label="关键词或短句"
+              value={lookupQuery}
+              onChangeText={setLookupQuery}
+              placeholder="人物、地点或线索（最多80字）"
+              maxLength={80}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              onSubmitEditing={() => { void runBookLookup(); }}
+              hint="只做本地倒排检索，不向模型发送原文。"
+              testID="world-book-lookup-query"
+            />
+            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
+              命中内容先作为待发现的逐字原文摘录保存；只有确认后才会显示并记入当前角色知识。
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>
+              <Button
+                label={lookupBusy ? '正在准备…' : '本地查找并整理'}
+                onPress={() => { void runBookLookup(); }}
+                disabled={lookupBusy || !props.campaignId || !props.branchId || !lookupQuery.trim()}
+                testID="world-book-lookup-submit"
+              />
+              {lookupBusy && lookupAbort.current ? (
+                <Button label="取消查找" variant="secondary" onPress={() => lookupAbort.current?.abort()} />
+              ) : null}
+              {pendingSourceEntryIds.length > 0 ? (
+                <Button
+                  label={`记录为角色已知（${pendingSourceEntryIds.length}）`}
+                  variant="secondary"
+                  onPress={() => { void confirmBookLookup(); }}
+                  disabled={lookupBusy}
+                  testID="world-book-lookup-confirm"
+                />
+              ) : null}
+            </View>
+            {!props.campaignId || !props.branchId ? (
+              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
+                需要关联一条战役，摘录才会绑定到具体分支与角色。
+              </Text>
+            ) : null}
+            {lookupMessage ? <StatusBanner tone="info" message={lookupMessage} /> : null}
+          </Card>
+        ) : null}
+
         {editMode && packageRevision !== null ? (
           <WorldBooksEditor
             worldId={props.worldId}

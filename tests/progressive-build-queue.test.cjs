@@ -30,7 +30,7 @@ test('visible source scope comes only from published entry citations visible at 
     validTo: null, revealAt, sources: [{ chapterId: 'chapter-1', startOffset, endOffset: startOffset + 3 }] });
   const ranges = visibleEvidenceRanges(entries, [
     fact('safe', '1', 10), fact('clue', '1', 20), fact('secret', '1', 30), fact('future', '9', 40),
-  ], 1);
+  ], 1, new Set(['known-clue']));
   assert.deepEqual(ranges, [
     { chapterId: 'chapter-1', startCodePoint: 10, endCodePoint: 13 },
     { chapterId: 'chapter-1', startCodePoint: 20, endCodePoint: 23 },

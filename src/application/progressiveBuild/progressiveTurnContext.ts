@@ -12,8 +12,10 @@ export interface ProgressiveTurnLookupInput {
   sourceSha256: string;
   stateVersion: number;
   query: string;
-  /** Evidence cited by already player-visible package entries only. */
-  sourceRanges: readonly LocalSourceRange[];
+  /** Published player-visible evidence. Required for current-action/prefetch. */
+  sourceRanges?: readonly LocalSourceRange[];
+  /** Present only for an explicit user-initiated whole-book lookup. */
+  signal?: AbortSignal;
   isCurrent: () => boolean | Promise<boolean>;
 }
 
@@ -46,14 +48,15 @@ export class ProgressiveTurnContextService {
     priority: 'current_action' | 'near_domain' | 'active_book_lookup',
     topK: number,
   ): Promise<LocalSourceLookupResult | null> {
-    if (input.sourceRanges.length === 0 || !input.query.trim()) return null;
+    const wholeSourceLookup = priority === 'active_book_lookup' && input.sourceRanges === undefined;
+    if (!input.query.trim() || (!wholeSourceLookup && !input.sourceRanges?.length)) return null;
     const dedupeKey = JSON.stringify([
       priority,
       input.worldId,
       input.sourceSha256,
       input.stateVersion,
       input.query.trim(),
-      [...input.sourceRanges]
+      input.sourceRanges === undefined ? 'explicit-whole-source' : [...input.sourceRanges]
         .map(range => [range.chapterId, range.startCodePoint, range.endCodePoint])
         .sort((a, b) => String(a[0]).localeCompare(String(b[0])) || Number(a[1]) - Number(b[1])),
     ]);
@@ -66,6 +69,7 @@ export class ProgressiveTurnContextService {
       // Search indexes have their own source/alias/scope fingerprints. Do not
       // let a generic queue result cache bypass those invalidation checks.
       cacheResult: false,
+      signal: input.signal,
       isCurrent: input.isCurrent,
       run: async ({ signal }) => {
         const source = await this.sources.findActiveByRawHash(input.sourceSha256);
@@ -90,13 +94,14 @@ export class ProgressiveTurnContextService {
 
 /**
  * Build search scope exclusively from citations already referenced by
- * player-visible package entries. It does not scan the novel for a new fact;
- * unseen chapters and unreferenced future evidence stay outside Planner input.
+ * player-visible package entries. Only activeBookLookup, called from an
+ * explicit user search, may omit that scope and index the full source locally.
  */
 export function visibleEvidenceRanges(
   entries: readonly ContentEntry[],
   facts: readonly StoredFact[],
   worldTimeOrder: number,
+  discoveredEntryIds?: ReadonlySet<string>,
 ): LocalSourceRange[] {
   const referencedFactIds = new Set<string>();
   const directEvidenceRanges: LocalSourceRange[] = [];
@@ -123,6 +128,8 @@ export function visibleEvidenceRanges(
   };
   for (const entry of entries) {
     if (entry.visibility === 'gm') continue;
+    if (entry.visibility === 'discoverable' && discoveredEntryIds
+        && !discoveredEntryIds.has(entry.entryId)) continue;
     addFactIds(entry.provenance);
     for (const provenance of Object.values(entry.fieldProvenance ?? {})) addFactIds(provenance);
   }

@@ -266,12 +266,16 @@ export class CampaignSession {
     actionType: string;
     intent: string;
     settlement?: Partial<TurnSettlementPlan>;
+    expectedStateVersion?: number;
     updateState?: (state: GameStateSnapshot) => void;
     events?: Array<{ eventType: string; payload: unknown }>;
   }): Promise<void> {
     await this.assertCampaignBranch(input.campaignId, input.branchId);
     const state = await this.deps.turns.getState(input.branchId);
     if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
+    if (input.expectedStateVersion !== undefined && state.stateVersion !== input.expectedStateVersion) {
+      throw new Error('战役状态已变化，请重新确认这批主动查书摘录。');
+    }
     const turnId = `system-${input.actionType}-${String(state.stateVersion + 1).padStart(6, '0')}`;
     const emptyOutcome = { achieved: true, publicSummary: input.intent, effects: [] };
     const contract: ActionContract = {
@@ -717,6 +721,126 @@ export class CampaignSession {
       } }],
     });
     void communicationPath;
+  }
+
+  /** Record exact, user-confirmed local book-search excerpts as protagonist knowledge. */
+  async recordProgressiveSourceKnowledge(options: {
+    campaignId: string;
+    branchId: string;
+    entryIds: readonly string[];
+  }): Promise<void> {
+    const ids = [...new Set(options.entryIds)];
+    if (ids.length < 1 || ids.length > 3 || ids.length !== options.entryIds.length) {
+      throw new Error('一次只能确认一至三条不同的主动查书摘录。');
+    }
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    await this.assertNoActiveEncounter(options.branchId);
+    const summary = await this.getSummary(options.campaignId, options.branchId);
+    const state = summary.state;
+    const protagonist = state.party?.find(member => member.role === 'protagonist');
+    const player = summary.cards.find(card => card.controller === 'player');
+    if (!protagonist || !player || protagonist.actorId !== player.actorId) {
+      throw new Error('当前战役没有可记录主动查书知识的玩家角色。');
+    }
+    const playerState = state.actors[player.actorId];
+    if (!playerState || playerState.lifeStatus === 'critical' || playerState.lifeStatus === 'dead'
+        || playerState.conditions.includes('disabled')) {
+      throw new Error('角色当前无法接收新的已知资料。');
+    }
+    if ((state.discoveries ?? []).some(discovery => discovery.actorId === player.actorId
+        && ids.includes(discovery.entryId))) {
+      throw new Error('所选主动查书摘录已在当前分支记录为角色已知。');
+    }
+    const base = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+    if (!base || base.manifest.status !== 'published') throw new Error('战役锁定的已发布世界包无法读取。');
+    let manifest = state.contentManifest;
+    if (!manifest && await hasBranchContentManifestTable(this.deps.db)) {
+      manifest = await ensureBaseBranchContentManifest({
+        db: this.deps.db,
+        branchId: options.branchId,
+        worldId: summary.worldId,
+        stateVersion: state.stateVersion,
+        packageRevision: summary.packageRevision,
+        packageContentHash: base.manifest.contentHash,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    if (!manifest) throw new Error('当前存档不支持渐进内容清单，无法安全记录摘录。');
+    const deltas = await loadBranchDeltaEntries({
+      manifest,
+      worldId: summary.worldId,
+      branchId: options.branchId,
+      stateVersion: state.stateVersion,
+      baseRevision: summary.packageRevision,
+      baseContentHash: base.manifest.contentHash,
+      getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
+      sha256Hex: this.deps.hashProvider.sha256Hex,
+    });
+    const entries = [...base.entries, ...deltas.flatMap(delta => delta.entries)];
+    const byId = new Map(entries.map(entry => [entry.entryId, entry]));
+    const source = this.deps.sourceStore
+      ? await this.deps.sourceStore.findActiveByRawHash(base.manifest.sourceSha256)
+      : null;
+    if (!source || source.status !== 'active') throw new Error('主动查书原文来源当前不可用。');
+    const chapters = await this.deps.sourceStore!.getChapters(source.sourceId);
+    for (const entryId of ids) {
+      const entry = byId.get(entryId);
+      const text = (entry?.definition as { text?: unknown } | undefined)?.text;
+      const provenance = entry?.provenance;
+      const field = entry?.fieldProvenance?.['definition.text'];
+      const reference = provenance?.sourceRanges?.length === 1 ? provenance.sourceRanges[0] : undefined;
+      const fieldReference = field?.sourceRanges?.length === 1 ? field.sourceRanges[0] : undefined;
+      if (!entry || entry.kind !== 'lore' || entry.visibility !== 'discoverable'
+          || entry.revealPolicyId !== 'source-lookup-confirmation'
+          || provenance?.kind !== 'explicit' || provenance.policyId !== 'user-requested-source-lookup'
+          || provenance.sourceFactIds.length !== 0 || field?.policyId !== 'user-requested-source-lookup'
+          || !reference || !fieldReference || typeof text !== 'string'
+          || reference.chapterId !== fieldReference.chapterId
+          || reference.startCodePoint !== fieldReference.startCodePoint
+          || reference.endCodePoint !== fieldReference.endCodePoint
+          || reference.contentSha256.toLowerCase() !== fieldReference.contentSha256.toLowerCase()) {
+        throw new Error('所选条目不是经过验证的主动查书原文摘录。');
+      }
+      const chapter = chapters.find(item => item.chapterId === reference.chapterId);
+      if (!chapter || reference.startCodePoint < chapter.startOffset
+          || reference.endCodePoint > chapter.endOffset
+          || Array.from(text).length !== reference.endCodePoint - reference.startCodePoint) {
+        throw new Error('主动查书摘录的原文范围与章节不匹配。');
+      }
+      const exact = await this.deps.sourceStore!.readRange(source.sourceId,
+        reference.startCodePoint, reference.endCodePoint);
+      if (exact !== text || (await this.deps.hashProvider.sha256Hex(exact)).toLowerCase()
+          !== reference.contentSha256.toLowerCase()) {
+        throw new Error('主动查书摘录未通过原文完整性复核。');
+      }
+    }
+    const nextVersion = state.stateVersion + 1;
+    await this.commitLifecycleAction({
+      campaignId: options.campaignId,
+      branchId: options.branchId,
+      actorId: player.actorId,
+      actionType: 'source_knowledge_recorded',
+      intent: `玩家确认 ${ids.length} 条主动查书摘录为角色已知资料。`,
+      expectedStateVersion: state.stateVersion,
+      updateState: next => {
+        next.discoveries ??= [];
+        for (const entryId of ids) {
+          next.discoveries.push({
+            entryId,
+            actorId: player.actorId,
+            knownAtStateVersion: nextVersion,
+            sourceTurnId: `system-source_knowledge_recorded-${String(nextVersion).padStart(6, '0')}`,
+            knownVia: 'told',
+          });
+        }
+      },
+      events: ids.map(entryId => ({ eventType: 'knowledge_discovered', payload: {
+        entryId,
+        actorId: player.actorId,
+        knownVia: 'told',
+        source: 'user_confirmed_source_lookup',
+      } })),
+    });
   }
 
   async transferItem(options: {
@@ -1242,7 +1366,7 @@ export class CampaignSession {
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, facts,
     );
-    const visibleSourceRanges = visibleEvidenceRanges(entries, facts, worldTimeOrder);
+    const visibleSourceRanges = visibleEvidenceRanges(entries, facts, worldTimeOrder, knownEntryIds);
     let sourceHash: string | null = null;
     let safeSourceContext = '';
     if (this.deps.progressiveTurnContext && visibleSourceRanges.length > 0) {

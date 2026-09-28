@@ -21,6 +21,7 @@ export interface LocalSourceRange {
 export interface LocalSourcePassage {
   paragraphId: string;
   chapterId: string;
+  chapterTitle: string;
   startCodePoint: number;
   endCodePoint: number;
   text: string;
@@ -58,15 +59,19 @@ export class LocalSourceSearchService {
   }): Promise<LocalSourceLookupResult> {
     const index = await this.getOrBuildIndex(input.sourceId, input.worldId, input.sourceRanges, input.signal);
     const result = searchLocalSource(index, { query: input.query, topK: input.topK, adjacentPrefetch: 2 });
+    const chapters = await this.sources.getChapters(input.sourceId);
+    const chapterTitles = new Map(chapters.map(chapter => [chapter.chapterId, chapter.title]));
     const passages = await Promise.all(result.hits.map(async hit => ({
       paragraphId: hit.paragraphId,
       chapterId: hit.chapterId,
+      chapterTitle: chapterTitles.get(hit.chapterId) ?? hit.chapterId,
       startCodePoint: hit.startCodePoint,
       endCodePoint: hit.endCodePoint,
       text: await readRange(this.sources, input.sourceId, hit.startCodePoint, hit.endCodePoint, input.signal),
     })));
     const adjacentPrefetch = await Promise.all(result.adjacentPrefetch.map(async neighbor => ({
       ...neighbor,
+      chapterTitle: chapterTitles.get(neighbor.chapterId) ?? neighbor.chapterId,
       text: await readRange(this.sources, input.sourceId, neighbor.startCodePoint, neighbor.endCodePoint, input.signal),
     })));
     return { result, passages, adjacentPrefetch };

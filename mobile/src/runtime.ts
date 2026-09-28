@@ -3,16 +3,16 @@ import { RejectionSamplingRandomSource } from '../../src/domain/rules/random';
 // lazy-fetch at play time (lazy group requests can fail on device networks).
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import type { ApiProfile } from '../../src/application/llm/types';
-import { CampaignSession, type PlayTurnResult } from '../../src/application/campaign/session';
+import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
 import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
-import type { BookSection, BranchContentManifest, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
-import { entriesVisibleAtAnchor } from '../../src/application/campaign/recruitment';
+import type { BookName, BookSection, BranchContentManifest, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
 import { createBaseContentManifest, loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
 import { FetchHttpTransport } from './fetchTransport';
 import { getDatabaseRuntime } from './database';
 import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
 import { KeychainSecretStore } from './secureKeyStore';
+import { publishUserRequestedSourceLookupDelta } from '../../src/application/worldPackage/progressiveDelta';
 
 export type { PlayTurnResult };
 
@@ -401,6 +401,122 @@ export interface WorldBookProjection {
   anchorWorldTimeOrder: number | null;
 }
 
+export interface ProgressiveBookLookupResult {
+  status: 'found' | 'not_found' | 'review_required';
+  entryIds: string[];
+  count: number;
+  message: string;
+}
+
+/** Explicit, local-only full-source lookup. Results return IDs/count only so
+ * the UI cannot reveal a passage until the player confirms it as known. */
+export async function lookupProgressiveBookSource(input: {
+  worldId: string;
+  campaignId: string;
+  branchId: string;
+  book: BookName;
+  query: string;
+  signal?: AbortSignal;
+}): Promise<ProgressiveBookLookupResult> {
+  const query = input.query.trim();
+  if (!query || Array.from(query).length > 80) throw new Error('查书词句需为一至八十个字符。');
+  const runtime = await getDatabaseRuntime();
+  const session = await createReadOnlySession();
+  const summary = await session.getSummary(input.campaignId, input.branchId);
+  if (summary.worldId !== input.worldId || summary.packageRevision < 1) {
+    throw new Error('所选战役与当前世界不匹配，或尚未锁定开局世界包。');
+  }
+  const base = await runtime.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+  if (!base || base.manifest.status !== 'published') throw new Error('战役锁定的已发布世界包无法读取。');
+  const activeSource = await runtime.sourceStore.findActiveByRawHash(base.manifest.sourceSha256);
+  if (!activeSource || activeSource.status !== 'active') throw new Error('当前没有可用于本地查书的已导入原文。');
+  const isCurrent = async (): Promise<boolean> =>
+    (await runtime.turns.getState(input.branchId))?.stateVersion === summary.state.stateVersion;
+  const lookup = await runtime.progressiveTurnContext.activeBookLookup({
+    campaignId: input.campaignId,
+    branchId: input.branchId,
+    worldId: input.worldId,
+    sourceSha256: base.manifest.sourceSha256,
+    stateVersion: summary.state.stateVersion,
+    query,
+    isCurrent,
+    signal: input.signal,
+  });
+  if (!lookup || lookup.passages.length === 0) {
+    return {
+      status: 'not_found', entryIds: [], count: 0,
+      message: '本地索引没有匹配；这不表示原著中不存在相关内容。',
+    };
+  }
+  if (input.signal?.aborted || !await isCurrent()) {
+    const error = new Error('查书期间战役状态发生变化，请重新查询。');
+    error.name = input.signal?.aborted ? 'AbortError' : 'StaleProgressiveBuildError';
+    throw error;
+  }
+  const manifest = summary.state.contentManifest ?? createBaseContentManifest({
+    worldId: summary.worldId,
+    branchId: input.branchId,
+    stateVersion: summary.state.stateVersion,
+    basePackage: { revision: summary.packageRevision, contentHash: base.manifest.contentHash },
+  });
+  const activeDeltas = await loadBranchDeltaEntries({
+    manifest,
+    worldId: summary.worldId,
+    branchId: input.branchId,
+    stateVersion: summary.state.stateVersion,
+    baseRevision: summary.packageRevision,
+    baseContentHash: base.manifest.contentHash,
+    getDelta: deltaId => runtime.worldStore.getProgressiveDeltaPackage(deltaId),
+    sha256Hex: nativeSha256.sha256Hex,
+  });
+  const existingEntryIds = new Set([
+    ...base.entries.map(entry => entry.entryId),
+    ...activeDeltas.flatMap(delta => delta.entries.map(entry => entry.entryId)),
+  ]);
+  const publication = await publishUserRequestedSourceLookupDelta({
+    db: runtime.db,
+    worldStore: runtime.worldStore,
+    sourceStore: runtime.sourceStore,
+    sha256Hex: nativeSha256.sha256Hex,
+    worldId: summary.worldId,
+    branchId: input.branchId,
+    stateVersion: summary.state.stateVersion,
+    baseRevision: summary.packageRevision,
+    sourceSha256: base.manifest.sourceSha256,
+    book: input.book,
+    passages: lookup.passages,
+    existingEntryIds,
+    createdAt: new Date().toISOString(),
+    signal: input.signal,
+  });
+  if (publication.status === 'needs_review') {
+    return { status: 'review_required', entryIds: [], count: 0,
+      message: '查书命中未通过发布校验，已留待复核，当前不会显示或记入角色知识。' };
+  }
+  const availableIds = new Set(existingEntryIds);
+  if (publication.status === 'published') {
+    for (const entry of publication.publication?.delta.entries ?? []) availableIds.add(entry.entryId);
+  }
+  const entryIds = publication.entryIds.filter(entryId => availableIds.has(entryId));
+  if (entryIds.length !== publication.entryIds.length) {
+    throw new Error('查书增量尚未进入当前分支清单，请重新查询后再确认。');
+  }
+  return {
+    status: 'found', entryIds, count: entryIds.length,
+    message: `找到 ${entryIds.length} 条，已暂存为当前分支的待发现摘录；确认后才会记入角色已知。`,
+  };
+}
+
+/** Knowledge recording is a local lifecycle commit; the provider is never called. */
+export async function recordProgressiveSourceKnowledge(input: {
+  campaignId: string;
+  branchId: string;
+  entryIds: readonly string[];
+}): Promise<void> {
+  const session = await createSessionNoop();
+  await session.recordProgressiveSourceKnowledge(input);
+}
+
 /** Exact locked base + active branch deltas, filtered through the branch time anchor. */
 export async function getWorldBookProjection(input: {
   worldId: string;
@@ -418,6 +534,7 @@ export async function getWorldBookProjection(input: {
   let stateVersion: number | null = null;
   let contentManifest: BranchContentManifest | null = null;
   let anchorWorldTimeOrder: number | null = null;
+  let discoveredEntryIds = new Set<string>();
   if (input.campaignId && input.branchId) {
     const session = await createReadOnlySession();
     const summary = await session.getSummary(input.campaignId, input.branchId);
@@ -426,6 +543,10 @@ export async function getWorldBookProjection(input: {
     }
     stateVersion = summary.state.stateVersion;
     anchorWorldTimeOrder = summary.anchorWorldTimeOrder;
+    const playerActorId = summary.cards.find(card => card.controller === 'player')?.actorId;
+    discoveredEntryIds = new Set((summary.state.discoveries ?? [])
+      .filter(discovery => discovery.actorId === playerActorId)
+      .map(discovery => discovery.entryId));
     contentManifest = summary.state.contentManifest ?? createBaseContentManifest({
       worldId: input.worldId,
       branchId: input.branchId,
@@ -452,11 +573,16 @@ export async function getWorldBookProjection(input: {
     }
   }
   const facts = await runtime.worldStore.listFacts(input.worldId);
-  const visibleAtAnchor = entriesVisibleAtAnchor(entries, facts,
-    anchorWorldTimeOrder === null ? undefined : anchorWorldTimeOrder);
-  if (new Set(visibleAtAnchor.map(entry => entry.entryId)).size !== visibleAtAnchor.length) {
+  if (new Set(entries.map(entry => entry.entryId)).size !== entries.length) {
     throw new Error('当前世界书投影含有冲突的不可变条目 ID。');
   }
+  const visibleAtAnchor = projectPlayerEntriesAtAnchor(entries, facts,
+    anchorWorldTimeOrder === null ? undefined : anchorWorldTimeOrder, discoveredEntryIds);
+  const visibleEntryIds = new Set(visibleAtAnchor.map(entry => entry.entryId));
+  sections = sections.map(section => ({
+    ...section,
+    entryIds: section.entryIds.filter(entryId => visibleEntryIds.has(entryId)),
+  })).filter(section => section.entryIds.length > 0);
   return {
     entries: visibleAtAnchor,
     sections,

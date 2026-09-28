@@ -1,5 +1,6 @@
 import type {
   BookSection,
+  BookName,
   BranchContentManifest,
   ContentEntry,
   ProgressiveDeltaPackage,
@@ -17,6 +18,8 @@ import { computePackageContentHash, validatePackage } from './validate';
 import { isFactVisibleAtAnchor } from '../world/opening';
 import { visibleEvidenceRanges } from '../progressiveBuild/progressiveTurnContext';
 
+const USER_LOOKUP_PROVENANCE_RATIONALE = '用户主动本地查书后暂存的逐字摘录；未添加总结、解释或规则数值。';
+
 export interface PublishProgressiveDeltaInput {
   db: SqliteDatabase;
   worldStore: SqliteWorldStore;
@@ -33,6 +36,9 @@ export interface PublishProgressiveDeltaInput {
   /** Only sections/entry links introduced by this delta. Existing section ids are appended. */
   sections: readonly BookSection[];
   sourceRanges: WorldPackageBuildScope['sourceRanges'];
+  /** Bypasses visible-citation scope only for constrained, exact-quote lookup deltas. */
+  purpose?: 'player_requested_book_lookup';
+  signal?: AbortSignal;
   createdAt: string;
 }
 
@@ -40,6 +46,145 @@ export interface PublishProgressiveDeltaResult {
   delta: ProgressiveDeltaPackage;
   status: ProgressiveDeltaPackage['status'];
   activeManifest: BranchContentManifest | null;
+}
+
+export interface PublishUserRequestedSourceLookupInput {
+  db: SqliteDatabase;
+  worldStore: SqliteWorldStore;
+  sourceStore: Pick<SourceStore, 'findActiveByRawHash' | 'readRange' | 'getChapters'>;
+  sha256Hex: Sha256HexProvider['sha256Hex'];
+  worldId: string;
+  branchId: string;
+  stateVersion: number;
+  baseRevision: number;
+  sourceSha256: string;
+  book: BookName;
+  passages: readonly {
+    chapterId: string;
+    chapterTitle: string;
+    startCodePoint: number;
+    endCodePoint: number;
+    text: string;
+  }[];
+  existingEntryIds: ReadonlySet<string>;
+  createdAt: string;
+  signal?: AbortSignal;
+}
+
+export interface PublishUserRequestedSourceLookupResult {
+  status: 'published' | 'needs_review' | 'already_published';
+  /** IDs only; callers must not display passage content before explicit confirmation. */
+  entryIds: string[];
+  publication: PublishProgressiveDeltaResult | null;
+}
+
+/** Store explicitly requested local-search hits as exact, hidden lore quotes.
+ * This fixed-template path cannot create rules, public entries or summaries. */
+export async function publishUserRequestedSourceLookupDelta(
+  input: PublishUserRequestedSourceLookupInput,
+): Promise<PublishUserRequestedSourceLookupResult> {
+  throwIfAborted(input.signal);
+  const base = await input.worldStore.getWorldPackage(input.worldId, input.baseRevision);
+  if (!base || base.manifest.status !== 'published') {
+    throw new Error('Source lookup requires the campaign locked package.');
+  }
+  const baseSection = base.sections.find(item => item.book === input.book);
+  if (!baseSection) throw new Error('The locked package has no section for the selected book.');
+  const entries: ContentEntry[] = [];
+  const ranges: WorldPackageBuildScope['sourceRanges'][number][] = [];
+  const entryIds: string[] = [];
+  const seen = new Set<string>();
+  let totalCodePoints = 0;
+  for (const passage of input.passages.slice(0, 3)) {
+    throwIfAborted(input.signal);
+    const length = codePointLength(passage.text);
+    if (!passage.chapterId || !passage.chapterTitle || !Number.isSafeInteger(passage.startCodePoint)
+      || !Number.isSafeInteger(passage.endCodePoint) || passage.startCodePoint < 0
+      || length <= 0 || length > 1_200 || length !== passage.endCodePoint - passage.startCodePoint
+      || totalCodePoints + length > 3_600) continue;
+    const contentSha256 = (await input.sha256Hex(passage.text)).toLowerCase();
+    throwIfAborted(input.signal);
+    const rangeKey = `${passage.chapterId}:${passage.startCodePoint}:${passage.endCodePoint}:${contentSha256}`;
+    if (seen.has(rangeKey)) continue;
+    seen.add(rangeKey);
+    totalCodePoints += length;
+    const entryId = `source-lookup-${(await input.sha256Hex(`${input.book}:${rangeKey}`)).slice(0, 28)}`;
+    throwIfAborted(input.signal);
+    entryIds.push(entryId);
+    if (input.existingEntryIds.has(entryId)) continue;
+    const sourceRange = {
+      chapterId: passage.chapterId,
+      startCodePoint: passage.startCodePoint,
+      endCodePoint: passage.endCodePoint,
+      contentSha256,
+    };
+    const provenance = {
+      kind: 'explicit' as const,
+      sourceFactIds: [] as string[],
+      sourceRanges: [sourceRange],
+      policyId: 'user-requested-source-lookup',
+      rationale: USER_LOOKUP_PROVENANCE_RATIONALE,
+    };
+    entries.push({
+      entryId,
+      kind: 'lore',
+      revision: input.baseRevision,
+      provenance,
+      fieldProvenance: { 'definition.text': provenance },
+      visibility: 'discoverable',
+      revealPolicyId: 'source-lookup-confirmation',
+      dependencyIds: [],
+      definition: { name: '原著摘录', title: passage.chapterTitle, text: passage.text },
+    });
+    ranges.push({
+      startCodePoint: passage.startCodePoint,
+      endCodePoint: passage.endCodePoint,
+      contentSha256,
+    });
+  }
+  if (entryIds.length === 0) return { status: 'already_published', entryIds: [], publication: null };
+  if (entries.length === 0) return { status: 'already_published', entryIds, publication: null };
+  const deltaId = `source-lookup-${(await input.sha256Hex(
+    `${input.sourceSha256}:${input.branchId}:${input.stateVersion}:${input.book}:${entries.map(entry => entry.entryId).join(',')}`,
+  )).slice(0, 32)}`;
+  throwIfAborted(input.signal);
+  const previousAttempt = await input.db.queryOne<{ status: string }>(
+    'SELECT status FROM progressive_world_deltas WHERE delta_id = ?', [deltaId],
+  );
+  throwIfAborted(input.signal);
+  if (previousAttempt) {
+    return { status: 'needs_review', entryIds: [], publication: null };
+  }
+  const publication = await publishProgressiveDelta({
+    db: input.db,
+    worldStore: input.worldStore,
+    sourceStore: input.sourceStore,
+    sha256Hex: input.sha256Hex,
+    deltaId,
+    worldId: input.worldId,
+    branchId: input.branchId,
+    stateVersion: input.stateVersion,
+    baseRevision: input.baseRevision,
+    sourceSha256: input.sourceSha256,
+    mappingVersion: base.manifest.mappingVersion,
+    entries,
+    sections: [{
+      book: input.book,
+      sectionKey: 'source-lookup-excerpts',
+      title: '主动查书摘录',
+      entryIds: entries.map(entry => entry.entryId),
+      position: baseSection.position + 1,
+    }],
+    sourceRanges: ranges,
+    purpose: 'player_requested_book_lookup',
+    signal: input.signal,
+    createdAt: input.createdAt,
+  });
+  return {
+    status: publication.status,
+    entryIds: publication.status === 'published' ? entryIds : [],
+    publication,
+  };
 }
 
 /** Persist exact player-visible source passages encountered during a turn as
@@ -137,6 +282,7 @@ export async function publishSourceEvidenceExcerptDelta(input: {
  * structural/provenance/review gates as a full package. Conflicts remain
  * immutable `needs_review` artifacts; fixes require a new delta id. */
 export async function publishProgressiveDelta(input: PublishProgressiveDeltaInput): Promise<PublishProgressiveDeltaResult> {
+  throwIfAborted(input.signal);
   if (!input.deltaId.trim() || input.deltaId.length > 160 || !/^[a-zA-Z0-9._:-]+$/.test(input.deltaId)) {
     throw new Error('Progressive delta id is invalid.');
   }
@@ -203,9 +349,15 @@ export async function publishProgressiveDelta(input: PublishProgressiveDeltaInpu
   }
   const anchor = JSON.parse(String(branch.anchor_json ?? '{}')) as { worldTimeOrder?: number };
   const facts = await input.worldStore.listFacts(input.worldId);
-  validateAllowedDeltaSourceRanges(input.sourceRanges, visibleEvidenceRanges(
-    [...base.entries, ...activeDeltas.flatMap(delta => delta.entries)], facts, anchor.worldTimeOrder ?? 0,
-  ), errors);
+  const priorEntries = [...base.entries, ...activeDeltas.flatMap(delta => delta.entries)];
+  if (input.purpose === 'player_requested_book_lookup') {
+    await validateUserRequestedLookupDelta(input, sourceManifest, sourceChapters, errors);
+  } else {
+    validateAllowedDeltaSourceRanges(input.sourceRanges, visibleEvidenceRanges(
+      priorEntries, facts, anchor.worldTimeOrder ?? 0,
+      await readBranchDiscoveredEntryIds(input.db, input.branchId, input.stateVersion),
+    ), errors);
+  }
   validateDeltaEvidence(additions, input.sourceRanges, sourceChapters, facts, anchor.worldTimeOrder, errors);
   await validateNoDeadNpcRevival(input.db, input.branchId, input.stateVersion, additions, errors);
   const mergedSections = mergeSections(
@@ -253,7 +405,9 @@ export async function publishProgressiveDelta(input: PublishProgressiveDeltaInpu
       }, input.sha256Hex)
     : null;
 
+  throwIfAborted(input.signal);
   await input.db.transaction(async tx => {
+    throwIfAborted(input.signal);
     const current = await tx.queryOne<SqliteRow>(
       `SELECT b.state_version, c.world_id, c.package_revision
          FROM branches b JOIN campaigns c ON c.campaign_id = b.campaign_id
@@ -314,6 +468,127 @@ function mergeSections(base: readonly BookSection[], additions: readonly BookSec
     current.entryIds = [...current.entryIds, ...addition.entryIds];
   }
   return result;
+}
+
+async function validateUserRequestedLookupDelta(
+  input: PublishProgressiveDeltaInput,
+  sourceManifest: SourceManifest,
+  chapters: Awaited<ReturnType<SourceStore['getChapters']>>,
+  errors: string[],
+): Promise<void> {
+  const section = input.sections.length === 1 ? input.sections[0] : undefined;
+  if (!section || !['player_handbook', 'gm_guide', 'monster_manual'].includes(section.book)
+      || section.sectionKey !== 'source-lookup-excerpts' || section.title !== '主动查书摘录'
+      || section.entryIds.length !== input.entries.length
+      || input.entries.some(entry => !section.entryIds.includes(entry.entryId))) {
+    errors.push('User-requested source lookup deltas must use one dedicated selected-book excerpt section.');
+  }
+  const requestedRanges = new Set<string>();
+  for (const range of input.sourceRanges) {
+    const key = `${range.startCodePoint}:${range.endCodePoint}:${range.contentSha256.toLowerCase()}`;
+    if (requestedRanges.has(key)) errors.push('User-requested lookup delta contains duplicate source ranges.');
+    requestedRanges.add(key);
+  }
+  const usedRanges = new Set<string>();
+  for (const entry of input.entries) {
+    const definition = entry.definition as { name?: unknown; title?: unknown; text?: unknown } | null;
+    const provenance = entry.provenance;
+    const fieldProvenance = entry.fieldProvenance ?? {};
+    const field = fieldProvenance['definition.text'];
+    const shapeErrors: string[] = [];
+    if (!provenance || typeof provenance !== 'object') shapeErrors.push('missing provenance');
+    if (entry.kind !== 'lore' || entry.visibility !== 'discoverable'
+        || entry.revealPolicyId !== 'source-lookup-confirmation') shapeErrors.push('not hidden lore');
+    if (!Array.isArray(entry.dependencyIds) || entry.dependencyIds.length !== 0) shapeErrors.push('has dependencies');
+    if (Object.keys(entry).sort().join(',') !== 'definition,dependencyIds,entryId,fieldProvenance,kind,provenance,revealPolicyId,revision,visibility') {
+      shapeErrors.push('unexpected entry fields');
+    }
+    if (!definition || typeof definition.text !== 'string' || definition.name !== '原著摘录'
+        || typeof definition.title !== 'string' || Object.keys(definition).sort().join(',') !== 'name,text,title') {
+      shapeErrors.push('not an exact excerpt definition');
+    }
+    if (Object.keys(fieldProvenance).sort().join(',') !== 'definition.text' || !field) {
+      shapeErrors.push('missing field provenance');
+    }
+    if (provenance && typeof provenance === 'object'
+        && (Object.keys(provenance).sort().join(',') !== 'kind,policyId,rationale,sourceFactIds,sourceRanges'
+          || !Array.isArray(provenance.sourceFactIds) || provenance.sourceFactIds.length !== 0
+          || !Array.isArray(provenance.sourceRanges) || provenance.sourceRanges.length !== 1
+          || provenance.kind !== 'explicit' || provenance.policyId !== 'user-requested-source-lookup'
+          || provenance.rationale !== USER_LOOKUP_PROVENANCE_RATIONALE)) {
+      shapeErrors.push('invalid exact-source provenance');
+    }
+    if (field && typeof field === 'object'
+        && (Object.keys(field).sort().join(',') !== 'kind,policyId,rationale,sourceFactIds,sourceRanges'
+          || field.kind !== 'explicit' || field.policyId !== 'user-requested-source-lookup'
+          || !Array.isArray(field.sourceFactIds) || field.sourceFactIds.length !== 0
+          || !Array.isArray(field.sourceRanges) || field.sourceRanges.length !== 1
+          || field.rationale !== USER_LOOKUP_PROVENANCE_RATIONALE)) {
+      shapeErrors.push('invalid field provenance');
+    }
+    if (shapeErrors.length > 0) {
+      errors.push(`${entry.entryId}: source lookup delta ${shapeErrors.join('; ')}.`);
+      continue;
+    }
+    const validProvenance = provenance!;
+    const validField = field!;
+    const validDefinition = definition as { title: string; text: string };
+    const reference = validProvenance.sourceRanges![0]!;
+    const fieldReference = validField.sourceRanges![0]!;
+    if (reference.chapterId !== fieldReference.chapterId
+        || reference.startCodePoint !== fieldReference.startCodePoint
+        || reference.endCodePoint !== fieldReference.endCodePoint
+        || reference.contentSha256.toLowerCase() !== fieldReference.contentSha256.toLowerCase()) {
+      errors.push(`${entry.entryId}: source lookup field provenance does not match its entry provenance.`);
+      continue;
+    }
+    const key = `${reference.startCodePoint}:${reference.endCodePoint}:${reference.contentSha256.toLowerCase()}`;
+    const chapter = chapters.find(item => item.chapterId === reference.chapterId);
+    if (!requestedRanges.has(key) || usedRanges.has(key) || !chapter
+        || validDefinition.title !== chapter.title
+        || reference.startCodePoint < chapter.startOffset || reference.endCodePoint > chapter.endOffset
+        || reference.endCodePoint - reference.startCodePoint !== codePointLength(validDefinition.text)) {
+      errors.push(`${entry.entryId}: source lookup quote has no unique, chapter-bound verified source range.`);
+      continue;
+    }
+    usedRanges.add(key);
+    try {
+      const sourceText = await input.sourceStore.readRange(sourceManifest.sourceId,
+        reference.startCodePoint, reference.endCodePoint);
+      if (sourceText !== validDefinition.text || (await input.sha256Hex(sourceText)).toLowerCase()
+          !== reference.contentSha256.toLowerCase()) {
+        errors.push(`${entry.entryId}: source lookup quote is not an exact match for the imported novel.`);
+      }
+    } catch {
+      errors.push(`${entry.entryId}: source lookup quote could not be verified against the imported novel.`);
+    }
+  }
+  if (usedRanges.size !== requestedRanges.size) {
+    errors.push('Every source range in a user-requested lookup delta must back exactly one exact quote.');
+  }
+}
+
+async function readBranchDiscoveredEntryIds(
+  db: Pick<SqliteDatabase, 'queryOne'>,
+  branchId: string,
+  stateVersion: number,
+): Promise<ReadonlySet<string>> {
+  const row = await db.queryOne<{ snapshot_json: string }>(
+    'SELECT snapshot_json FROM snapshots WHERE branch_id = ? AND state_version = ?', [branchId, stateVersion],
+  );
+  if (!row) return new Set();
+  try {
+    const snapshot = JSON.parse(row.snapshot_json) as {
+      party?: Array<{ role?: string; actorId?: string }>;
+      discoveries?: Array<{ actorId?: string; entryId?: string }>;
+    };
+    const protagonistId = snapshot.party?.find(member => member.role === 'protagonist')?.actorId;
+    return new Set((snapshot.discoveries ?? [])
+      .filter(discovery => discovery.actorId === protagonistId && typeof discovery.entryId === 'string')
+      .map(discovery => discovery.entryId!));
+  } catch {
+    return new Set();
+  }
 }
 
 function validateDeltaEvidence(
@@ -437,4 +712,11 @@ async function verifySourceRanges(
     }
   }
   return source;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Progressive source lookup was canceled.');
+  error.name = 'AbortError';
+  throw error;
 }

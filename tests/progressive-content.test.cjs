@@ -11,10 +11,16 @@ const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
 const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeStore');
 const { CampaignSession } = require('../dist/application/campaign/session');
+const { projectPlayerEntriesAtAnchor } = require('../dist/application/campaign/session');
 const { createCampaign } = require('../dist/application/campaign/createCampaign');
 const { compileProgressiveOpeningPackage } = require('../dist/application/worldPackage/progressiveOpening');
 const { publishProgressiveDelta } = require('../dist/application/worldPackage/progressiveDelta');
+const { publishUserRequestedSourceLookupDelta } = require('../dist/application/worldPackage/progressiveDelta');
 const { visibleEvidenceRanges } = require('../dist/application/progressiveBuild/progressiveTurnContext');
+const { LocalSourceSearchService } = require('../dist/application/search/localSourceSearch');
+const { ProgressiveBuildQueue } = require('../dist/application/progressiveBuild/progressiveBuildQueue');
+const { ProgressiveTurnContextService } = require('../dist/application/progressiveBuild/progressiveTurnContext');
+const { assembleBook } = require('../dist/application/worldPackage/publish');
 const { encodeWorldPackageArchive, decodeWorldPackageArchive, importProgressiveBranchContentArchive } = require('../dist/application/export/worldPackageArchive');
 const { exportSave, restoreSave, validateSaveJson } = require('../dist/application/export/saveFile');
 const { loadBranchDeltaEntries } = require('../dist/application/worldPackage/contentManifest');
@@ -72,9 +78,12 @@ async function makeFixture() {
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
   const sourceStore = new SqliteSourceStore(adapter);
-  const sourceText = '巷口的灯还亮着。远处传来脚步声。她循声望去。';
+  const openingText = '巷口的灯还亮着。远处传来脚步声。她循声望去。';
+  const laterText = '后来，白衣客把密信藏在北桥石狮下。';
+  const sourceText = `${openingText}\n${laterText}`;
   const sourceHash = sha.sha256Hex(sourceText);
   const end = Array.from(sourceText).length;
+  const openingEnd = Array.from(openingText).length;
   const range = { startCodePoint: 0, endCodePoint: end, contentSha256: sourceHash };
   await worldStore.createWorld({ worldId: 'w-progressive-content', title: '渐进内容测试',
     sourceSha256: 'a'.repeat(64), sourceBytes: 100, normalizeVersion: 'n1', chapterSplitVersion: 'c1',
@@ -98,11 +107,12 @@ async function makeFixture() {
   await sourceStore.activateSource({
     manifest: { ...sourceManifest, status: 'active' },
     chapters: [{ chapterId: 'opening', index: 0, title: '开篇', startOffset: 0, endOffset: end, charCount: end, contentHash: sourceHash }],
-    chunks: [],
+    chunks: [{ chunkId: 'chunk-progressive-content', chapterId: 'opening', chunkIndex: 0,
+      startOffset: 0, endOffset: end, charCount: end, contentHash: sourceHash }],
   });
   const published = await compileProgressiveOpeningPackage({
     worldStore, sha256Hex: sha.sha256Hex, worldId: 'w-progressive-content', sourceSha256: 'a'.repeat(64),
-    sourceExcerpt: sourceText, sourceEndCodePoint: end, chapters: [chapter], dossier: dossier(),
+    sourceExcerpt: openingText, sourceEndCodePoint: openingEnd, chapters: [chapter], dossier: dossier(),
     requestMetrics: [{ attempt: 1, durationMs: 20, httpStatus: 200, outcome: 'completed' }],
     usage: { inputTokens: 20, outputTokens: 20, reasoningTokens: 0, estimated: false },
     extractionMs: 20, createdAt: 't0',
@@ -167,6 +177,201 @@ test('migration 15 creates append-only progressive content projections without r
     assert.ok(await adapter.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='branch_content_manifests'"));
     assert.ok(await adapter.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='progressive_world_deltas'"));
   } finally { db.close(); }
+});
+
+test('explicit whole-source lookup publishes exact discoverable quotes and records knowledge on the branch', async () => {
+  const fixture = await makeFixture();
+  try {
+    const context = new ProgressiveTurnContextService(
+      fixture.sourceStore,
+      new LocalSourceSearchService(fixture.sourceStore, fixture.worldStore),
+      new ProgressiveBuildQueue(),
+    );
+    const lookupInput = {
+      campaignId: fixture.opening.campaignId,
+      branchId: fixture.campaign.branchId,
+      worldId: fixture.opening.worldId,
+      sourceSha256: fixture.pkg.manifest.sourceSha256,
+      stateVersion: 0,
+      query: '北桥密信',
+      isCurrent: async () => true,
+    };
+    assert.equal(await context.currentAction(lookupInput), null,
+      'current-action retrieval cannot turn an unscoped request into a whole-novel scan');
+    const lookup = await context.activeBookLookup(lookupInput);
+    assert.equal(lookup.passages.length, 1);
+    assert.equal(lookup.passages[0].chapterTitle, '开篇');
+    assert.equal(lookup.passages[0].text, '后来，白衣客把密信藏在北桥石狮下。');
+    const facts = await fixture.worldStore.listFacts(fixture.opening.worldId);
+    const visibleRanges = visibleEvidenceRanges(fixture.pkg.entries, facts, 1);
+    assert.ok(!visibleRanges.some(range => range.startCodePoint <= lookup.passages[0].startCodePoint
+      && range.endCodePoint >= lookup.passages[0].endCodePoint),
+    'the hit comes from source text outside the opening package citations');
+
+    const passage = lookup.passages[0];
+    const exactHash = sha.sha256Hex(passage.text);
+    const invalidEntry = {
+      ...lore('unscoped-public-quote', passage.text),
+      provenance: { kind: 'explicit', sourceFactIds: [], sourceRanges: [{ chapterId: passage.chapterId,
+        startCodePoint: passage.startCodePoint, endCodePoint: passage.endCodePoint, contentSha256: exactHash }],
+      policyId: 'user-requested-source-lookup', rationale: 'unapproved public quote' },
+      visibility: 'public',
+    };
+    const playerSection = fixture.pkg.sections.find(section => section.book === 'player_handbook');
+    const outsideRange = { startCodePoint: passage.startCodePoint, endCodePoint: passage.endCodePoint,
+      contentSha256: exactHash };
+    const generic = await publishProgressiveDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, deltaId: 'unscoped-public-quote-delta', worldId: fixture.opening.worldId,
+      branchId: fixture.campaign.branchId, stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, mappingVersion: fixture.pkg.manifest.mappingVersion,
+      entries: [invalidEntry], sections: [{ book: playerSection.book, sectionKey: playerSection.sectionKey,
+        title: playerSection.title, entryIds: [invalidEntry.entryId], position: playerSection.position }],
+      sourceRanges: [outsideRange], createdAt: 'lookup-test',
+    });
+    assert.equal(generic.status, 'needs_review', 'ordinary delta publication cannot cite unexplored source');
+    assert.equal(generic.activeManifest, null);
+
+    const unsafePurpose = await publishProgressiveDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, deltaId: 'unsafe-lookup-purpose-delta', worldId: fixture.opening.worldId,
+      branchId: fixture.campaign.branchId, stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, mappingVersion: fixture.pkg.manifest.mappingVersion,
+      entries: [{ ...invalidEntry, entryId: 'unsafe-rule', kind: 'skill', visibility: 'discoverable',
+        revealPolicyId: 'source-lookup-confirmation' }],
+      sections: [{ book: playerSection.book, sectionKey: 'source-lookup-excerpts', title: '主动查书摘录',
+        entryIds: ['unsafe-rule'], position: playerSection.position + 1 }],
+      sourceRanges: [outsideRange], purpose: 'player_requested_book_lookup', createdAt: 'lookup-test',
+    });
+    assert.equal(unsafePurpose.status, 'needs_review', 'lookup purpose cannot publish rules or public content');
+    assert.equal(unsafePurpose.activeManifest, null);
+
+    const lateCancel = new AbortController();
+    const cancelingHash = async value => {
+      lateCancel.abort();
+      return sha.sha256Hex(value);
+    };
+    await assert.rejects(() => publishUserRequestedSourceLookupDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: cancelingHash, worldId: fixture.opening.worldId, branchId: fixture.campaign.branchId,
+      stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, book: 'player_handbook', passages: lookup.passages,
+      existingEntryIds: new Set(), createdAt: 'canceled-lookup', signal: lateCancel.signal,
+    }), { name: 'AbortError' });
+
+    const published = await publishUserRequestedSourceLookupDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, worldId: fixture.opening.worldId, branchId: fixture.campaign.branchId,
+      stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, book: 'player_handbook', passages: lookup.passages,
+      existingEntryIds: new Set(fixture.pkg.entries.map(entry => entry.entryId)), createdAt: 'lookup-test',
+    });
+    assert.equal(published.status, 'published', JSON.stringify(published.publication?.delta.validation.errors));
+    assert.equal(published.entryIds.length, 1);
+    const excerpt = published.publication.delta.entries[0];
+    assert.equal(excerpt.kind, 'lore');
+    assert.equal(excerpt.visibility, 'discoverable');
+    assert.equal(excerpt.revealPolicyId, 'source-lookup-confirmation');
+    assert.equal(excerpt.definition.text, passage.text);
+    assert.deepEqual(excerpt.provenance.sourceRanges[0], {
+      chapterId: passage.chapterId, startCodePoint: passage.startCodePoint,
+      endCodePoint: passage.endCodePoint, contentSha256: exactHash,
+    });
+    const leakedPublic = {
+      ...lore('public-from-hidden-quote', passage.text),
+      provenance: { kind: 'explicit', sourceFactIds: [], sourceRanges: [{ chapterId: passage.chapterId,
+        startCodePoint: passage.startCodePoint, endCodePoint: passage.endCodePoint, contentSha256: exactHash }],
+      rationale: 'must not promote an unconfirmed hidden quote' },
+      visibility: 'public',
+    };
+    const hiddenQuoteReuse = await publishProgressiveDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, deltaId: 'public-from-hidden-quote-delta', worldId: fixture.opening.worldId,
+      branchId: fixture.campaign.branchId, stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, mappingVersion: fixture.pkg.manifest.mappingVersion,
+      entries: [leakedPublic], sections: [{ book: playerSection.book, sectionKey: playerSection.sectionKey,
+        title: playerSection.title, entryIds: [leakedPublic.entryId], position: playerSection.position }],
+      sourceRanges: [outsideRange], createdAt: 'lookup-test',
+    });
+    assert.equal(hiddenQuoteReuse.status, 'needs_review',
+      'a hidden lookup excerpt cannot become evidence for an ordinary public expansion');
+
+    const combined = {
+      entries: [...fixture.pkg.entries, ...published.publication.delta.entries],
+      sections: [...fixture.pkg.sections, ...published.publication.delta.sections],
+    };
+    const hidden = assembleBook(combined, 'player_handbook', {
+      includeGm: false, knowledge: { discoveredEntryIds: new Set() },
+    });
+    assert.ok(!hidden.flatMap(group => group.entries).some(entry => entry.entryId === excerpt.entryId),
+      'an unconfirmed exact quote stays hidden from the player book');
+    assert.ok(!projectPlayerEntriesAtAnchor(combined.entries, facts, 1, new Set())
+      .some(entry => entry.entryId === excerpt.entryId),
+    'the planner/player projection also withholds undiscovered source lookups');
+
+    const secondPublish = await publishUserRequestedSourceLookupDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, worldId: fixture.opening.worldId, branchId: fixture.campaign.branchId,
+      stateVersion: 0, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, book: 'player_handbook', passages: lookup.passages,
+      existingEntryIds: new Set([...fixture.pkg.entries.map(entry => entry.entryId), excerpt.entryId]), createdAt: 'lookup-test',
+    });
+    assert.equal(secondPublish.status, 'already_published');
+    assert.deepEqual(secondPublish.entryIds, [excerpt.entryId]);
+
+    const turns = new SqliteTurnStore(fixture.adapter);
+    const session = new CampaignSession({
+      db: fixture.adapter, turns, game: new SqliteGameStore(fixture.adapter), worldStore: fixture.worldStore,
+      narratives: new SqliteNarrativeStore(fixture.adapter), sourceStore: fixture.sourceStore,
+      hashProvider: sha, random: { nextBytes: async length => new Uint8Array(length).fill(9) },
+    }, { complete: async () => { throw new Error('source knowledge confirmation must not call a model'); } },
+    { model: 'test', id: 'test', name: 'test', endpoint: 'http://localhost', keyRef: 'unused',
+      capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: false, contextWindow: 8000, maxOutputTokens: 1000 } });
+    await session.recordProgressiveSourceKnowledge({ campaignId: fixture.opening.campaignId,
+      branchId: fixture.campaign.branchId, entryIds: published.entryIds });
+    const knownState = await turns.getState(fixture.campaign.branchId);
+    assert.equal(knownState.stateVersion, 1);
+    assert.ok(knownState.discoveries.some(item => item.entryId === excerpt.entryId
+      && item.actorId === 'actor-player' && item.knownVia === 'told'));
+    const known = assembleBook(combined, 'player_handbook', {
+      includeGm: false, knowledge: { discoveredEntryIds: new Set([excerpt.entryId]) },
+    });
+    assert.ok(known.flatMap(group => group.entries).some(entry => entry.entryId === excerpt.entryId));
+    assert.ok(projectPlayerEntriesAtAnchor(combined.entries, facts, 1, new Set([excerpt.entryId]))
+      .some(entry => entry.entryId === excerpt.entryId));
+
+    const nowKnownEntry = {
+      ...lore('public-after-source-discovery', `基于已发现摘录继续编排。`),
+      provenance: { kind: 'explicit', sourceFactIds: [], sourceRanges: [{ chapterId: passage.chapterId,
+        startCodePoint: passage.startCodePoint, endCodePoint: passage.endCodePoint, contentSha256: exactHash }],
+      rationale: 'only permitted after the branch records the discovery' },
+    };
+    const afterKnown = await publishProgressiveDelta({
+      db: fixture.adapter, worldStore: fixture.worldStore, sourceStore: fixture.sourceStore,
+      sha256Hex: sha.sha256Hex, deltaId: 'public-after-source-discovery-delta', worldId: fixture.opening.worldId,
+      branchId: fixture.campaign.branchId, stateVersion: 1, baseRevision: fixture.pkg.manifest.revision,
+      sourceSha256: fixture.pkg.manifest.sourceSha256, mappingVersion: fixture.pkg.manifest.mappingVersion,
+      entries: [nowKnownEntry], sections: [{ book: playerSection.book, sectionKey: playerSection.sectionKey,
+        title: playerSection.title, entryIds: [nowKnownEntry.entryId], position: playerSection.position }],
+      sourceRanges: [outsideRange], createdAt: 'lookup-test',
+    });
+    assert.equal(afterKnown.status, 'published', 'the branch may extend only after knowledge is confirmed');
+
+    const save = await exportSave({ db: fixture.adapter, sha256Hex: sha.sha256Hex,
+      campaignId: fixture.opening.campaignId, branchId: fixture.campaign.branchId, createdAt: 'lookup-save' });
+    assert.ok(save.save.contentDeltas.some(delta => delta.deltaId === published.publication.delta.deltaId));
+    assert.equal((await validateSaveJson(save.json, sha.sha256Hex)).ok, true);
+    const rewound = await session.rewind({ campaignId: fixture.opening.campaignId,
+      sourceBranchId: fixture.campaign.branchId, atStateVersion: 0, newBranchId: 'camp-progressive-lookup-rewind' });
+    const rewindState = await turns.getState(rewound.branchId);
+    assert.equal(rewindState.stateVersion, 0);
+    assert.ok(!rewindState.discoveries.some(item => item.entryId === excerpt.entryId),
+      'rewind removes the later knowledge confirmation');
+    assert.ok(rewindState.contentManifest.deltas.some(delta => delta.deltaId === published.publication.delta.deltaId),
+      'the immutable source package survives rewind without keeping the character discovery');
+    assert.ok(!rewindState.contentManifest.deltas.some(delta => delta.deltaId === afterKnown.delta.deltaId),
+      'rewinding before the confirmation excludes expansions made in a later branch state');
+  } finally { fixture.db.close(); }
 });
 
 test('branch delta publication, frozen Planner dependency, fork/save/archive restore and review isolation', async () => {
