@@ -12,8 +12,8 @@
 | 四主题截图 | 每主题 书库+我的 两屏共 8 张 | `screens/theme-{ink,fantasy,manga,scifi}-{library,profile}.png` |
 | 四主题对比度 | 由 tokens 计算 WCAG：primary ≥ **15.29:1**，secondary ≥ **6.37:1**，manga 卡内文字 18.88:1（要求 ≥4.5:1） | tokens.ts 值计算 |
 | 真实模型窗口探测 | 240k 字符载荷 200 接受 → 保守取 120k tokens（不猜窗口） | full-build metrics |
-| 全文真实模型构建 | **运行中**：白篱梦 3,065,535 bytes / 965,458 码点 / 300 章 / 944 块 → 30 分片（916ms）→ **15 组**；已完成组零失败 | `.tmp/full-build/`（完成后归档指标入 docs） |
-| 双模型长程 | **已排队**：全文包发布后自动执行 2×60 回合（探索/社交/战斗/休整/训练轮换 + 中途分叉） | `scripts/dual-model-longrun.cjs` |
+| 全文真实模型构建 | **已按用户指示终止**（2026-09-28）：终止时 **4/15 组完成、零失败**（每组约 6 分钟实测）；已抽取成果保留在 `.tmp/full-build/shineword.db`，重跑 `scripts/full-novel-build.cjs` 可从断点续建（租约过期后自动接管）；未发布全文包 | `.tmp/full-build/`、metrics.jsonl |
+| 双模型长程 | **已按用户指示终止**（尚在等待全文包阶段，未产生回合）；harness 就绪：`scripts/dual-model-longrun.cjs` | — |
 | Release v14 | 含 fate 集成重建（versionCode 14） | 构建后台任务 |
 
 ## 修正的缺陷（第二轮发现）
