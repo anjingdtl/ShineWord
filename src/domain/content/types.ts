@@ -173,6 +173,22 @@ export interface ActorTemplateDefinition {
   lootPolicy: string;
   /** Published item entry IDs granted once if this actor is defeated. */
   lootItemIds?: string[];
+  /** Items initially owned by this actor when a campaign instance is created. */
+  startingItems?: string[];
+  /**
+   * Recruitment is an explicit world rule. A visible template without this
+   * policy is never a player-selectable companion; opening eligibility also
+   * requires a published starting relationship that meets minimumCloseness.
+   */
+  recruitment?: {
+    recruitable: boolean;
+    openingEligible?: boolean;
+    minimumCloseness?: number;
+    validFromOrder?: number;
+    validToOrder?: number;
+    requiredQuestIds?: string[];
+    openingRelationship?: { stance: string; closeness: number };
+  };
   threat: {
     damage: number;
     durability: number;
@@ -345,6 +361,54 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
       }
       if (typeof def.defense !== 'number' || (def.defense as number) <= 0) {
         errors.push('actor_template: defense must be a positive number.');
+      }
+      if (def.startingItems !== undefined && (!Array.isArray(def.startingItems)
+        || def.startingItems.some(itemId => typeof itemId !== 'string' || itemId.trim() === ''))) {
+        errors.push('actor_template: startingItems must be an array of item entry ids.');
+      }
+      if (def.recruitment !== undefined) {
+        if (typeof def.recruitment !== 'object' || def.recruitment === null || Array.isArray(def.recruitment)) {
+          errors.push('actor_template: recruitment must be an object.');
+        } else {
+          const policy = def.recruitment as Record<string, unknown>;
+          if (typeof policy.recruitable !== 'boolean') {
+            errors.push('actor_template: recruitment.recruitable must be a boolean.');
+          }
+          if (policy.openingEligible !== undefined && typeof policy.openingEligible !== 'boolean') {
+            errors.push('actor_template: recruitment.openingEligible must be a boolean.');
+          }
+          for (const key of ['minimumCloseness', 'validFromOrder', 'validToOrder']) {
+            const value = policy[key];
+            if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) {
+              errors.push(`actor_template: recruitment.${key} must be a finite number.`);
+            }
+          }
+          const minimum = typeof policy.minimumCloseness === 'number' ? policy.minimumCloseness : 0;
+          if (!Number.isInteger(minimum) || minimum < 0 || minimum > 100) errors.push('actor_template: recruitment.minimumCloseness must be an integer between 0 and 100.');
+          if (typeof policy.validFromOrder === 'number' && typeof policy.validToOrder === 'number'
+            && policy.validFromOrder > policy.validToOrder) {
+            errors.push('actor_template: recruitment.validFromOrder must not exceed validToOrder.');
+          }
+          if (policy.requiredQuestIds !== undefined && (!Array.isArray(policy.requiredQuestIds)
+            || policy.requiredQuestIds.some(id => typeof id !== 'string' || id.trim() === ''))) {
+            errors.push('actor_template: recruitment.requiredQuestIds must be quest entry ids.');
+          }
+          if (policy.openingEligible === true) {
+            if (Array.isArray(policy.requiredQuestIds) && policy.requiredQuestIds.length > 0) {
+              errors.push('actor_template: openingEligible recruitment cannot require quests that have not run yet.');
+            }
+            const relationship = policy.openingRelationship;
+            if (typeof relationship !== 'object' || relationship === null || Array.isArray(relationship)
+              || typeof (relationship as Record<string, unknown>).stance !== 'string'
+              || !(relationship as Record<string, unknown>).stance
+              || typeof (relationship as Record<string, unknown>).closeness !== 'number'
+              || !Number.isInteger((relationship as Record<string, unknown>).closeness)
+              || ((relationship as Record<string, unknown>).closeness as number) < minimum
+              || ((relationship as Record<string, unknown>).closeness as number) > 100) {
+              errors.push('actor_template: openingEligible recruitment requires an openingRelationship meeting minimumCloseness.');
+            }
+          }
+        }
       }
       break;
     }

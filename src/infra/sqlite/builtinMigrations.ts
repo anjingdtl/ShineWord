@@ -618,6 +618,12 @@ CREATE TABLE IF NOT EXISTS world_package_drafts (
 );
 `;
 
+const PARTY_LIFECYCLE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+-- Party groups make splits explicit while preserving branch-local membership history.
+ALTER TABLE party_members ADD COLUMN party_group_id TEXT NOT NULL DEFAULT 'main';
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -628,4 +634,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 7, name: 'combat_economy', sql: COMBAT_ECONOMY_SCHEMA_SQL },
   { version: 8, name: 'knowledge_quests', sql: KNOWLEDGE_QUEST_SCHEMA_SQL },
   { version: 9, name: 'world_package_drafts', sql: WORLD_PACKAGE_DRAFTS_SCHEMA_SQL },
+  { version: 10, name: 'party_lifecycle', sql: PARTY_LIFECYCLE_SCHEMA_SQL },
 ];

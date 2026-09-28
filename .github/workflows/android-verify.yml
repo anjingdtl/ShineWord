@@ -45,12 +45,11 @@ jobs:
       - name: Install mobile dependencies
         working-directory: mobile
         run: |
-          npm install --no-audit --no-fund
-          node scripts/patch-sqlite-storage-gradle.js
+          npm ci --no-audit --no-fund
 
       - name: Typecheck mobile
         working-directory: mobile
         run: npm run typecheck
 
       - name: Build Android debug APK
-        run: gradle -p mobile/android :app:assembleDebug --stacktrace
+        run: bash mobile/android/gradlew -p mobile/android :app:assembleDebug --stacktrace

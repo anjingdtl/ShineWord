@@ -10,6 +10,36 @@ react {
     autolinkLibrariesWithApp()
 }
 
+def releaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase().contains("release")
+}
+
+def releaseSigningVariableNames = [
+    "SHINE_WRITER_RELEASE_STORE_FILE",
+    "SHINE_WRITER_RELEASE_STORE_PASSWORD",
+    "SHINE_WRITER_RELEASE_KEY_ALIAS",
+    "SHINE_WRITER_RELEASE_KEY_PASSWORD",
+]
+def releaseSigningValues = releaseSigningVariableNames.collectEntries { name ->
+    [name, System.getenv(name)]
+}
+
+if (releaseBuildRequested) {
+    def missingReleaseSigningValues = releaseSigningValues.findAll { name, value ->
+        value == null || value.trim().isEmpty()
+    }.keySet()
+    if (!missingReleaseSigningValues.isEmpty()) {
+        throw new GradleException(
+            "Release signing requires environment variable(s): ${missingReleaseSigningValues.join(', ')}. " +
+            "Debug builds do not require release signing secrets."
+        )
+    }
+    def releaseStoreFile = file(releaseSigningValues["SHINE_WRITER_RELEASE_STORE_FILE"])
+    if (!releaseStoreFile.exists()) {
+        throw new GradleException("Release signing keystore not found: ${releaseStoreFile.absolutePath}")
+    }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -29,28 +59,26 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (releaseBuildRequested) {
+                storeFile file(releaseSigningValues["SHINE_WRITER_RELEASE_STORE_FILE"])
+                storePassword releaseSigningValues["SHINE_WRITER_RELEASE_STORE_PASSWORD"]
+                keyAlias releaseSigningValues["SHINE_WRITER_RELEASE_KEY_ALIAS"]
+                keyPassword releaseSigningValues["SHINE_WRITER_RELEASE_KEY_PASSWORD"]
+            }
+        }
+    }
+
     buildTypes {
         debug {
             debuggable true
         }
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            // Independent ShineWord signing; credentials arrive via
-            // SHINEWORD_RELEASE_* env vars (never committed).
-            def ksFile = file("../keystores/shineword-release.keystore")
-            if (ksFile.exists() && System.getenv("SHINEWORD_RELEASE_STORE_PASS") != null) {
-                signingConfigs {
-                    release {
-                        storeFile ksFile
-                        storePassword System.getenv("SHINEWORD_RELEASE_STORE_PASS")
-                        keyAlias "shineword"
-                        keyPassword System.getenv("SHINEWORD_RELEASE_KEY_PASS")
-                    }
-                }
-                signingConfig signingConfigs.release
-            }
         }
     }
 

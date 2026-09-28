@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShineWord · 四主题原型（角色卡版）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#111; font-family:"PingFang SC","Microsoft YaHei",sans-serif; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:24px 12px; color:#ccc; }
+  h1 { font-size:18px; font-weight:600; margin-bottom:4px; color:#eee; }
+  .hint { font-size:12px; color:#888; margin-bottom:18px; }
+
+  .switcher { display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; justify-content:center; }
+  .switcher button { padding:9px 18px; border-radius:999px; border:1px solid #444; background:#1c1c1c; color:#bbb; font-size:13px; cursor:pointer; transition:all .2s; }
+  .switcher button.active { background:#eee; color:#111; border-color:#eee; font-weight:600; }
+  .viewswitch { display:flex; gap:0; margin-bottom:22px; border:1px solid #444; border-radius:8px; overflow:hidden; }
+  .viewswitch button { padding:7px 22px; border:none; background:#1c1c1c; color:#999; font-size:12px; cursor:pointer; }
+  .viewswitch button.active { background:#333; color:#fff; font-weight:600; }
+
+  .phone { width:384px; height:780px; border-radius:28px; overflow:hidden; position:relative; border:6px solid #2a2a2a; display:flex; flex-direction:column; }
+
+  /* ============ 主题变量 ============ */
+  .phone[data-theme="ink"] {
+    --bg:#12100C; --raised:#1D1913; --overlay:#2A241B; --text:#EFE6D0; --text2:#A99E86;
+    --accent:#C8442F; --accent2:#C9A063; --good:#7FA05A; --bad:#C8442F;
+    --line:#3A3226; --card-border:1px solid var(--line);
+    --narr-font:Georgia,"Songti SC","SimSun",serif; --ui-font:"PingFang SC","Microsoft YaHei",sans-serif;
+    --num-font:Georgia,"Songti SC",serif; --radius:3px;
+    background:var(--bg); color:var(--text);
+  }
+  .phone[data-theme="fantasy"] {
+    --bg:#0A0E1A; --raised:#101828; --overlay:#1A2438; --text:#F1F5F9; --text2:#A8B8C6;
+    --accent:#D9A441; --accent2:#91B6D7; --good:#79C99E; --bad:#FF9B9B;
+    --line:#263A4D; --card-border:1px solid var(--line);
+    --narr-font:Georgia,"Songti SC",serif; --ui-font:"PingFang SC","Microsoft YaHei",sans-serif;
+    --num-font:Georgia,serif; --radius:10px;
+    background:var(--bg); color:var(--text);
+  }
+  .phone[data-theme="manga"] {
+    --bg:#16161E; --raised:#FFFFFF; --overlay:#FFFDF5; --text:#F5F5F5; --text2:#9a9aa5;
+    --cardtext:#111111; --cardtext2:#555;
+    --accent:#FF4757; --accent2:#3B82F6; --accent3:#FACC15; --good:#2ED573; --bad:#FF4757;
+    --card-border:3px solid #000;
+    --narr-font:"PingFang SC","Microsoft YaHei",sans-serif; --ui-font:"PingFang SC","Microsoft YaHei",sans-serif;
+    --num-font:"Arial Black",sans-serif; --radius:6px;
+    background:var(--bg); color:var(--text);
+    background-image:radial-gradient(circle,#2b2b37 1.1px,transparent 1.2px); background-size:13px 13px;
+  }
+  .phone[data-theme="scifi"] {
+    --bg:#05070D; --raised:#0B101B; --overlay:#111A2B; --text:#D7E6F5; --text2:#7D93AC;
+    --accent:#35E0FF; --accent2:#FF3DF0; --good:#35E0FF; --bad:#FF3DF0;
+    --line:rgba(53,224,255,.22); --card-border:1px solid var(--line);
+    --narr-font:"PingFang SC","Microsoft YaHei",sans-serif; --ui-font:"PingFang SC","Microsoft YaHei",sans-serif;
+    --num-font:"SF Mono",Consolas,monospace; --radius:2px;
+    background:var(--bg); color:var(--text);
+  }
+  .phone[data-theme="scifi"]::after { content:""; position:absolute; inset:0; pointer-events:none; z-index:5;
+    background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(53,224,255,.028) 2px 4px); }
+
+  /* manga 白卡上的文字色统一 */
+  .phone[data-theme="manga"] .oncard { color:var(--cardtext); }
+  .phone[data-theme="manga"] .oncard2 { color:var(--cardtext2); }
+
+  /* ============ 布局 ============ */
+  .topbar { display:flex; align-items:center; justify-content:space-between; padding:12px 14px 10px;
+    border-bottom:1px solid var(--line); font-family:var(--ui-font); flex-shrink:0; background:var(--bg); z-index:2; }
+  .topbar .wt { font-size:15px; font-weight:600; font-family:var(--narr-font); letter-spacing:2px; }
+  .topbar .br { font-size:10px; color:var(--text2); margin-top:2px; letter-spacing:1px; }
+  .topbar .ic { width:30px; height:30px; display:flex; align-items:center; justify-content:center;
+    border:var(--card-border); border-radius:var(--radius); font-size:13px; color:var(--accent); background:var(--raised); }
+  .phone[data-theme="manga"] .topbar .ic { border:2.5px solid #000; color:#111; box-shadow:2px 2px 0 #000; }
+
+  .view { flex:1; display:none; flex-direction:column; min-height:0; z-index:1; }
+  .view.active { display:flex; }
+  .stream { flex:1; overflow-y:auto; padding:16px 14px; display:flex; flex-direction:column; gap:14px; }
+  .stream::-webkit-scrollbar { width:0; }
+  .phone[data-theme="ink"] .stream { background-image:repeating-linear-gradient(90deg,transparent 0 46px,rgba(201,160,99,.05) 46px 47px); }
+
+  .narr { background:var(--raised); border:var(--card-border); border-radius:var(--radius);
+    padding:16px 15px; font-family:var(--narr-font); font-size:13.5px; line-height:1.9; position:relative; }
+  .phone[data-theme="manga"] .narr { color:var(--cardtext); box-shadow:4px 4px 0 #000; }
+  .phone[data-theme="manga"] .narr.speech::before { content:""; position:absolute; left:24px; bottom:-12px; width:15px; height:15px;
+    background:var(--raised); border-right:3px solid #000; border-bottom:3px solid #000; transform:rotate(45deg); }
+  .phone[data-theme="ink"] .narr { border-left:2px solid var(--accent2); }
+  .phone[data-theme="fantasy"] .narr { box-shadow:inset 0 0 0 1px var(--bg), inset 0 0 0 2px var(--line); }
+  .phone[data-theme="scifi"] .narr { clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px)); }
+
+  .orn { display:none; position:absolute; pointer-events:none; }
+  .orn svg { display:block; }
+  .orn.tl { top:5px; left:5px; } .orn.tr { top:5px; right:5px; transform:scaleX(-1); }
+  .orn.bl { bottom:5px; left:5px; transform:scaleY(-1); } .orn.br2 { bottom:5px; right:5px; transform:scale(-1,-1); }
+  .phone[data-theme="ink"] .orn.ink, .phone[data-theme="fantasy"] .orn.fantasy,
+  .phone[data-theme="manga"] .orn.manga, .phone[data-theme="scifi"] .orn.scifi { display:block; }
+
+  .dice { display:flex; align-items:center; gap:8px; padding:9px 12px; background:var(--overlay);
+    border:var(--card-border); border-radius:var(--radius); font-family:var(--num-font); font-size:11.5px; position:relative; }
+  .phone[data-theme="manga"] .dice { color:var(--cardtext); box-shadow:3px 3px 0 #000; font-weight:700; }
+  .dice .tag { padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; background:var(--accent); color:var(--bg); font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .dice .tag { color:#fff; border:2px solid #000; border-radius:0; transform:rotate(-2deg); }
+  .dice .lv { margin-left:auto; color:var(--accent); font-weight:700; }
+  .phone[data-theme="scifi"] .dice .lv { color:var(--accent2); }
+  .dice .vals { color:var(--text2); }
+  .phone[data-theme="manga"] .dice .vals { color:var(--cardtext2); }
+  .burst { position:absolute; right:-8px; top:-14px; display:none; z-index:3; }
+  .phone[data-theme="manga"] .burst { display:block; }
+
+  .sys { font-size:11px; color:var(--text2); text-align:center; font-family:var(--ui-font); }
+  .sys b { color:var(--accent2); font-weight:600; }
+  .seal { display:inline-block; padding:1px 5px; font-size:9px; border:1px solid var(--accent); color:var(--accent); border-radius:2px; margin-right:6px; font-family:var(--ui-font); vertical-align:2px; }
+
+  /* 队伍条 */
+  .party { display:flex; gap:10px; padding:8px 14px 4px; background:var(--bg); flex-shrink:0; z-index:2; }
+  .pmate { display:flex; flex-direction:column; align-items:center; gap:3px; width:44px; }
+  .pmate .ava { width:34px; height:34px; border-radius:50%; border:var(--card-border); background:var(--raised);
+    display:flex; align-items:center; justify-content:center; font-size:13px; color:var(--accent2); font-family:var(--narr-font); position:relative; }
+  .phone[data-theme="manga"] .pmate .ava { border:2.5px solid #000; color:#111; }
+  .pmate .hp { width:34px; height:3px; background:var(--overlay); border-radius:2px; overflow:hidden; }
+  .phone[data-theme="manga"] .pmate .hp { background:#ddd; border:1px solid #000; }
+  .pmate .hp i { display:block; height:100%; background:var(--good); }
+  .pmate .nm { font-size:9px; color:var(--text2); }
+  .pmate .dir { position:absolute; right:-4px; bottom:-4px; width:14px; height:14px; border-radius:50%;
+    background:var(--accent2); color:var(--bg); font-size:8px; display:flex; align-items:center; justify-content:center; font-weight:700; }
+  .pmate.me .ava { border-color:var(--accent); }
+
+  .chips { display:flex; gap:8px; padding:8px 14px 6px; overflow-x:auto; flex-shrink:0; z-index:2; background:var(--bg); scrollbar-width:none; }
+  .chips::-webkit-scrollbar { display:none; }
+  .chip { flex-shrink:0; padding:8px 14px; font-size:12px; border-radius:999px; border:var(--card-border);
+    background:var(--raised); color:var(--text); font-family:var(--ui-font); cursor:pointer; white-space:nowrap; }
+  .phone[data-theme="manga"] .chip { border:2.5px solid #000; color:var(--cardtext); box-shadow:2px 2px 0 #000; font-weight:600; }
+  .chip.hot { border-color:var(--accent); color:var(--accent); }
+  .phone[data-theme="manga"] .chip.hot { background:var(--accent3); color:#111; border-color:#000; }
+
+  .inputbar { display:flex; gap:8px; padding:10px 12px 14px; border-top:1px solid var(--line); background:var(--bg); flex-shrink:0; z-index:2; }
+  .inputbar .field { flex:1; background:var(--raised); border:var(--card-border); border-radius:var(--radius);
+    padding:10px 12px; font-size:12.5px; color:var(--text2); font-family:var(--ui-font); display:flex; align-items:center; }
+  .phone[data-theme="manga"] .inputbar .field { color:var(--cardtext2); }
+  .inputbar .btn { width:42px; border-radius:var(--radius); border:var(--card-border); background:var(--raised);
+    display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer; color:var(--text); }
+  .inputbar .send { background:var(--accent); color:var(--bg); border:none; font-weight:700; font-size:13px; width:48px; }
+  .phone[data-theme="manga"] .inputbar .send { color:#fff; border:2.5px solid #000; box-shadow:2px 2px 0 #000; }
+
+  /* ============ 角色卡 ============ */
+  .ccard-scroll { flex:1; overflow-y:auto; padding:14px; scrollbar-width:none; }
+  .ccard-scroll::-webkit-scrollbar { display:none; }
+  .proj-toggle { display:flex; gap:0; margin:0 0 12px; border:var(--card-border); border-radius:var(--radius); overflow:hidden; flex-shrink:0; }
+  .proj-toggle button { flex:1; padding:7px; border:none; background:var(--raised); font-size:11px; cursor:pointer; font-family:var(--ui-font); color:var(--text2); }
+  .phone[data-theme="manga"] .proj-toggle button { color:var(--cardtext2); }
+  .proj-toggle button.active { background:var(--accent); color:var(--bg); font-weight:700; }
+  .phone[data-theme="manga"] .proj-toggle button.active { color:#fff; }
+
+  .ccard { background:var(--raised); border:var(--card-border); border-radius:var(--radius); position:relative; overflow:hidden; }
+  .phone[data-theme="manga"] .ccard { box-shadow:5px 5px 0 #000; }
+  .phone[data-theme="fantasy"] .ccard { box-shadow:inset 0 0 0 1px var(--bg), inset 0 0 0 2px var(--line); }
+  .phone[data-theme="scifi"] .ccard { clip-path:polygon(0 0,calc(100% - 18px) 0,100% 18px,100% 100%,18px 100%,0 calc(100% - 18px)); }
+  .phone[data-theme="ink"] .ccard { border-top:2px solid var(--accent2); }
+
+  .chead { padding:16px 16px 12px; display:flex; gap:13px; align-items:flex-start; border-bottom:1px solid var(--line); position:relative; }
+  .emblem { width:58px; height:58px; border-radius:50%; border:1.5px solid var(--accent); flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; background:var(--overlay); position:relative; }
+  .phone[data-theme="manga"] .emblem { border:3px solid #000; box-shadow:2px 2px 0 #000; }
+  .cname { font-size:17px; font-weight:700; font-family:var(--narr-font); letter-spacing:1px; }
+  .phone[data-theme="manga"] .cname { color:var(--cardtext); }
+  .csub { font-size:10.5px; color:var(--text2); margin-top:3px; font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .csub { color:var(--cardtext2); }
+  .cbadges { display:flex; gap:5px; margin-top:7px; flex-wrap:wrap; }
+  .cbadge { font-size:9px; padding:2px 7px; border-radius:3px; border:1px solid var(--accent2); color:var(--accent2); font-family:var(--ui-font); }
+  .cbadge.tier { border-color:var(--accent); color:var(--accent); }
+  .phone[data-theme="manga"] .cbadge { border:2px solid #000; color:#111; font-weight:700; border-radius:0; }
+  .phone[data-theme="manga"] .cbadge.tier { background:var(--accent3); }
+
+  .csec { padding:12px 16px; border-bottom:1px solid var(--line); }
+  .csec:last-child { border-bottom:none; }
+  .csec-t { font-size:11px; font-weight:700; color:var(--accent2); letter-spacing:3px; margin-bottom:10px; font-family:var(--ui-font); display:flex; align-items:center; gap:8px; }
+  .phone[data-theme="manga"] .csec-t { color:var(--cardtext); letter-spacing:1px; }
+  .csec-t::after { content:""; flex:1; height:1px; background:var(--line); }
+  .phone[data-theme="manga"] .csec-t::after { height:2px; background:#ddd; }
+
+  .cols2 { display:grid; grid-template-columns:1fr 1fr; gap:4px 18px; }
+  .arow { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:11.5px; font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .arow { color:var(--cardtext); }
+  .arow .alabel { width:34px; color:var(--text2); flex-shrink:0; }
+  .phone[data-theme="manga"] .arow .alabel { color:var(--cardtext2); }
+  .pips { display:flex; gap:3px; }
+  .pip { width:16px; height:6px; border-radius:2px; background:var(--overlay); border:1px solid var(--line); }
+  .phone[data-theme="manga"] .pip { border:1.5px solid #000; background:#eee; }
+  .pip.on { background:var(--accent); border-color:var(--accent); }
+  .phone[data-theme="manga"] .pip.on { background:#111; }
+  .phone[data-theme="ink"] .pip.on, .phone[data-theme="fantasy"] .pip.on { background:var(--accent2); border-color:var(--accent2); }
+  .pip.half { background:linear-gradient(90deg,var(--accent2) 50%,var(--overlay) 50%); }
+
+  .srow { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:11.5px; font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .srow { color:var(--cardtext); }
+  .die { width:26px; height:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+    font-size:8.5px; font-weight:700; color:var(--bg); font-family:var(--num-font); background:var(--accent2);
+    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); }
+  .phone[data-theme="manga"] .die { background:#111; color:#fff; }
+  .sname { width:40px; flex-shrink:0; }
+  .srank { font-size:9.5px; color:var(--text2); width:30px; flex-shrink:0; }
+  .phone[data-theme="manga"] .srow .srank { color:var(--cardtext2); }
+
+  .bar-row { display:flex; align-items:center; gap:9px; margin-bottom:9px; font-size:11px; font-family:var(--ui-font); }
+  .bar-row .blabel { width:44px; color:var(--text2); display:flex; align-items:center; gap:4px; flex-shrink:0; }
+  .phone[data-theme="manga"] .bar-row .blabel { color:var(--cardtext2); }
+  .bar { flex:1; height:8px; background:var(--overlay); border-radius:4px; overflow:hidden; border:1px solid var(--line); }
+  .phone[data-theme="manga"] .bar { border:2px solid #000; background:#eee; border-radius:0; }
+  .bar i { display:block; height:100%; }
+  .bar.hp i { background:var(--accent); }
+  .phone[data-theme="ink"] .bar.hp i, .phone[data-theme="fantasy"] .bar.hp i { background:linear-gradient(90deg,var(--accent2),var(--accent)); }
+  .bar.st i { background:var(--accent2); }
+  .phone[data-theme="scifi"] .bar.st i { background:var(--good); }
+  .bval { font-family:var(--num-font); font-size:10px; color:var(--text2); width:38px; text-align:right; flex-shrink:0; }
+  .phone[data-theme="manga"] .bval { color:var(--cardtext2); }
+
+  .conds { display:flex; gap:6px; flex-wrap:wrap; }
+  .cond { font-size:9.5px; padding:3px 8px; border-radius:999px; font-family:var(--ui-font); border:1px solid; }
+  .cond.bad { color:var(--bad); border-color:var(--bad); }
+  .cond.good { color:var(--good); border-color:var(--good); }
+  .phone[data-theme="manga"] .cond { border:2px solid; border-radius:0; font-weight:700; }
+
+  .slots { display:flex; gap:8px; }
+  .slot { flex:1; aspect-ratio:1; border:var(--card-border); border-radius:var(--radius); background:var(--overlay);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; position:relative; font-size:9px; color:var(--text2); font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .slot { color:var(--cardtext2); box-shadow:2px 2px 0 #000; }
+  .slot.empty { opacity:.4; border-style:dashed; }
+  .slot .cd { position:absolute; top:2px; right:3px; font-size:8px; color:var(--bad); font-weight:700; font-family:var(--num-font); }
+  .slot svg { width:20px; height:20px; }
+
+  .rel-row { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:11px; font-family:var(--ui-font); }
+  .phone[data-theme="manga"] .rel-row { color:var(--cardtext); }
+  .rel-row .rname { width:76px; flex-shrink:0; }
+  .rel-row .rstance { font-size:9px; color:var(--accent2); width:34px; flex-shrink:0; }
+  .unknown { border:1.5px dashed var(--line); border-radius:var(--radius); padding:14px; text-align:center;
+    font-size:10.5px; color:var(--text2); font-family:var(--ui-font); letter-spacing:2px; }
+
+  .hexbg { position:absolute; inset:0; display:none; z-index:0; opacity:.5; }
+  .phone[data-theme="scifi"] .hexbg { display:block; }
+  .footnote { margin-top:16px; font-size:11px; color:#666; }
+</style>
+</head>
+<body>
+  <h1>ShineWord · 四主题原型（角色卡版）</h1>
+  <div class="hint">切换皮肤 / 切换「游玩页 · 角色卡」/ 角色卡可切「玩家 · NPC 投影」 · 数据全部来自规则域真实字段</div>
+
+  <div class="switcher">
+    <button data-t="ink" class="active">中国古典 · 墨</button>
+    <button data-t="fantasy">欧洲奇幻 · 烛</button>
+    <button data-t="manga">日本漫画 · 漫</button>
+    <button data-t="scifi">未来科技 · 梭</button>
+  </div>
+  <div class="viewswitch">
+    <button id="vPlay" class="active" onclick="setView('play')">游玩页</button>
+    <button id="vCard" onclick="setView('card')">角色卡</button>
+  </div>
+
+  <svg width="0" height="0" style="position:absolute"><defs>
+    <g id="c-ink"><path d="M2 30 V14 Q2 2 14 2 H30" fill="none" stroke="#C9A063" stroke-width="1.4"/><path d="M8 30 V17 Q8 8 17 8 H30" fill="none" stroke="#C9A063" stroke-width="1" opacity=".55"/><circle cx="13" cy="13" r="2.2" fill="none" stroke="#C8442F" stroke-width="1.2"/></g>
+    <g id="c-fantasy"><path d="M3 27 C3 12 12 3 27 3" fill="none" stroke="#D9A441" stroke-width="1.3"/><path d="M3 27 C8 22 8 15 4 12 M27 3 C22 8 15 8 12 4" fill="none" stroke="#D9A441" stroke-width="1" opacity=".6"/><circle cx="10" cy="10" r="1.6" fill="#D9A441"/></g>
+    <g id="c-manga"><path d="M4 4 L20 4 M4 4 L4 20 M8 8 L26 4 M4 8 L4 26 M4 4 L16 16" stroke="#000" stroke-width="2.4" fill="none"/></g>
+    <g id="c-scifi"><path d="M2 30 V8 L8 2 H30" fill="none" stroke="#35E0FF" stroke-width="1.3"/><path d="M14 2 v4 M20 2 v4 M26 2 v4" stroke="#35E0FF" stroke-width="1" opacity=".7"/><circle cx="8" cy="8" r="1.5" fill="#FF3DF0"/></g>
+    <g id="i-sword"><path d="M4 20 L16 8 M14 6 l4 4 M18 4 l2 2 M4 20 l-1.5 4.5 L7 23 M12 12 l4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></g>
+    <g id="i-armor"><path d="M12 3 l7 3 v6 c0 5 -3 8 -7 9 c-4 -1 -7 -4 -7 -9 V6 Z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></g>
+    <g id="i-cloak"><path d="M8 4 h8 l3 16 h-14 Z M8 4 q4 3 8 0" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></g>
+    <g id="i-ring"><circle cx="12" cy="14" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M9 6 l3 -3 l3 3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></g>
+    <g id="i-potion"><path d="M10 3 h4 M11 3 v5 l-5 9 a3 3 0 0 0 3 4 h6 a3 3 0 0 0 3 -4 l-5 -9 V3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M8 15 h8" stroke="currentColor" stroke-width="1.4"/></g>
+    <g id="i-eye"><path d="M2 12 q10 -8 20 0 q-10 8 -20 0 Z" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/></g>
+  </defs></svg>
+
+  <div class="phone" data-theme="ink" id="phone">
+    <svg class="hexbg" width="100%" height="100%"><defs>
+      <pattern id="hex" width="28" height="24" patternUnits="userSpaceOnUse">
+        <path d="M7 1 L21 1 L28 12 L21 23 L7 23 L0 12 Z" fill="none" stroke="rgba(53,224,255,.09)" stroke-width="1"/>
+      </pattern></defs><rect width="100%" height="100%" fill="url(#hex)"/>
+    </svg>
+
+    <div class="topbar">
+      <div class="ic">‹</div>
+      <div style="text-align:center">
+        <div class="wt" id="wtTitle">长安诡事录</div>
+        <div class="br" id="wtSub">卷三 · 主线分支 α · 戌时</div>
+      </div>
+      <div class="ic">☰</div>
+    </div>
+
+    <!-- ========== 游玩页视图 ========== -->
+    <div class="view active" id="viewPlay">
+      <div class="stream">
+        <div class="narr speech">
+          <span class="orn tl ink"><svg width="30" height="30"><use href="#c-ink"/></svg></span>
+          <span class="orn tr ink"><svg width="30" height="30"><use href="#c-ink"/></svg></span>
+          <span class="orn bl ink"><svg width="30" height="30"><use href="#c-ink"/></svg></span>
+          <span class="orn br2 ink"><svg width="30" height="30"><use href="#c-ink"/></svg></span>
+          <span class="orn tl fantasy"><svg width="30" height="30"><use href="#c-fantasy"/></svg></span>
+          <span class="orn tr fantasy"><svg width="30" height="30"><use href="#c-fantasy"/></svg></span>
+          <span class="orn bl fantasy"><svg width="30" height="30"><use href="#c-fantasy"/></svg></span>
+          <span class="orn br2 fantasy"><svg width="30" height="30"><use href="#c-fantasy"/></svg></span>
+          <span class="orn tl manga"><svg width="30" height="30"><use href="#c-manga"/></svg></span>
+          <span class="orn br2 manga"><svg width="30" height="30"><use href="#c-manga"/></svg></span>
+          <span class="orn tl scifi"><svg width="30" height="30"><use href="#c-scifi"/></svg></span>
+          <span class="orn tr scifi"><svg width="30" height="30"><use href="#c-scifi"/></svg></span>
+          <span class="orn bl scifi"><svg width="30" height="30"><use href="#c-scifi"/></svg></span>
+          <span class="orn br2 scifi"><svg width="30" height="30"><use href="#c-scifi"/></svg></span>
+          <span class="seal" id="seal">卷三</span>雨敲在青瓦上，碎成一片白噪音。你推门进去时，管家正把一封火漆信往袖子里塞。他抬头的瞬间，你注意到他右手虎口有一层新鲜的墨迹——和书房里那封「失踪人口名册」上的印泥，是同一个色号。
+        </div>
+        <div class="dice">
+          <span class="tag">侦察</span><span>2d8 取高</span><span class="vals">[6, 3]</span><span class="lv" id="diceLv">◆ 成功</span>
+          <span class="burst"><svg width="52" height="40" viewBox="0 0 52 40"><polygon points="26,0 30,10 40,4 37,14 50,12 40,20 50,28 37,26 40,36 30,30 26,40 22,30 12,36 15,26 2,28 12,20 2,12 15,14 12,4 22,10" fill="#FACC15" stroke="#000" stroke-width="2"/><text x="26" y="24" text-anchor="middle" font-size="9" font-weight="900" fill="#000">成功!</text></svg></span>
+        </div>
+        <div class="narr">他没有立刻否认，反而给你倒了杯茶。「大人既然看出来了，」他把茶壶放下，声音压得很低，「那这府里的事，您打算管到什么程度？」</div>
+        <div class="sys">获得知识 · <b>管家的秘密</b> ｜ 技能成长 · 侦察 +1 练习点</div>
+        <div class="narr speech">茶是上好的明前龙井，可杯底沉着一点未化开的白色粉末。你的心跳漏了半拍——现在，是喝，还是不喝？</div>
+      </div>
+
+      <div class="party">
+        <div class="pmate me"><div class="ava">慕</div><div class="hp"><i style="width:70%"></i></div><div class="nm">你</div></div>
+        <div class="pmate"><div class="ava">苓<span class="dir">援</span></div><div class="hp"><i style="width:90%"></i></div><div class="nm">茯苓</div></div>
+        <div class="pmate"><div class="ava">石<span class="dir">护</span></div><div class="hp"><i style="width:45%"></i></div><div class="nm">石敢当</div></div>
+      </div>
+
+      <div class="chips">
+        <div class="chip hot" onclick="fill(this)">假装喝茶，伺机吐掉</div>
+        <div class="chip" onclick="fill(this)">直接质问他粉末是什么</div>
+        <div class="chip" onclick="fill(this)">借口透风，察看门外动静</div>
+        <div class="chip" onclick="fill(this)">用银针试毒</div>
+      </div>
+      <div class="inputbar">
+        <div class="btn">⚄</div>
+        <div class="field" id="field">输入你的行动……</div>
+        <div class="btn send">发送</div>
+      </div>
+    </div>
+
+    <!-- ========== 角色卡视图 ========== -->
+    <div class="view" id="viewCard">
+      <div class="ccard-scroll">
+        <div class="proj-toggle">
+          <button id="pPlayer" class="active" onclick="setProj('player')">玩家角色</button>
+          <button id="pNpc" onclick="setProj('npc')">NPC 投影</button>
+        </div>
+        <div class="ccard oncard" id="ccard"></div>
+        <div style="height:14px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">角色卡数据映射：ActorCard（属性/技能/能力/资源上限）· ActorState（当前资源/状态）· SkillSnapshot（练习点 5/10/20/40 阈值）· Relationship（立场+亲密度）· itemOwners（装备）</div>
+
+<script>
+  const phone = document.getElementById('phone');
+  const field = document.getElementById('field');
+  const seal = document.getElementById('seal');
+  const lv = document.getElementById('diceLv');
+  const wt = document.getElementById('wtTitle');
+  const ws = document.getElementById('wtSub');
+  let theme = 'ink', proj = 'player';
+
+  const titles = {
+    ink:['长安诡事录','卷三 · 主线分支 α · 戌时'],
+    fantasy:['Chronicle of Aldermoor','Chapter III · Branch α'],
+    manga:['影の学園','第3話 · ルートα'],
+    scifi:['DEEP SPACE ECHO','SEC-03 · BRANCH α']
+  };
+
+  const pips = (on, total, half) => `<span class="pips">${Array.from({length:total},(_,i)=>`<span class="pip${i<on?' on':(half&&i===on?' half':'')}"></span>`).join('')}</span>`;
+  const icon = (id,color) => `<svg viewBox="0 0 24 24" style="color:${color}"><use href="#${id}"/></svg>`;
+
+  const DATA = {
+    player: t => ({
+      ink:     {name:'李慕白', sub:'出身 · 没落将门 ／ 道途 · 游侠', b1:'原创角色', b2:'凡俗等阶', rel:'福伯'},
+      fantasy: {name:'Kaelen', sub:'Origin · Fallen Noble ／ Path · Ranger', b1:'Original', b2:'Ordinary', rel:'Alric'},
+      manga:   {name:'影山 莲', sub:'出身 · 转学生 ／ 道途 · 剑道部', b1:'原创角色', b2:'凡俗等阶', rel:'班长'},
+      scifi:   {name:'K-77 "Vex"', sub:'Origin · Derelict ／ Path · Drifter', b1:'Original', b2:'Ordinary', rel:'Unit-5'}
+    }[t]),
+    npc: t => ({
+      ink:     {name:'福伯', sub:'沈府老管家 · 原著角色', b1:'NPC', b2:'凡俗等阶', desc:'伺候沈家三十年的老仆，谈吐得体，袖口总有一股陈年墨香。你总觉得他知道得比说出来的多。', stance:'戒备', close:32, morale:'稳健', retreat:'30%'},
+      fantasy: {name:'Alric', sub:'Manor Steward · Canon', b1:'NPC', b2:'Ordinary', desc:'Steward of the Aldermoor estate for three decades. Polite, measured, and smells faintly of old sealing wax.', stance:'Wary', close:32, morale:'Steady', retreat:'30%'},
+      manga:   {name:'班长', sub:'二年三班 · 原著角色', b1:'NPC', b2:'凡俗等阶', desc:'成绩年级第一，眼镜反光时让人看不清眼神。似乎在每个社团的名单上都出现过。', stance:'戒备', close:45, morale:'稳健', retreat:'30%'},
+      scifi:   {name:'Unit-5', sub:'Station Caretaker · Canon', b1:'NPC', b2:'Ordinary', desc:'Caretaker android of Relay Station 9. Maintenance logs show gaps exactly matching the blackout windows.', stance:'WARY', close:32, morale:'STEADY', retreat:'30%'}
+    }[t])
+  };
+
+  const attrs = t => t==='fantasy'||t==='scifi' ? ['PHY','AGI','INS','KNO','WIL','SOC'] : ['体魄','敏捷','洞察','学识','意志','交涉'];
+  const attrVals = [3,2,3,1,2,2];
+
+  function cardPlayer() {
+    const d = DATA.player(theme), an = attrs(theme), A = theme==='manga'?'#111':'var(--accent2)';
+    const skills = [
+      {n: theme==='ink'?'剑术':'Blade', die:'d8', rank: theme==='ink'?'熟练':'Trained', on:7, tot:10},
+      {n: theme==='ink'?'侦察':'Scout', die:'d6', rank: theme==='ink'?'入门':'Novice', on:3, tot:5},
+      {n: theme==='ink'?'潜行':'Stealth', die:'d6', rank: theme==='ink'?'入门':'Novice', on:4, tot:5},
+    ];
+    return `
+    <div class="chead">
+      <div class="emblem"><svg viewBox="0 0 24 24" width="26" height="26" style="color:var(--accent)"><use href="#i-sword"/></svg></div>
+      <div style="flex:1">
+        <div class="cname">${d.name}</div>
+        <div class="csub">${d.sub}</div>
+        <div class="cbadges"><span class="cbadge tier">${d.b1}</span><span class="cbadge">${d.b2}</span><span class="cbadge">${theme==='ink'?'防御 2':'DEF 2'}</span></div>
+      </div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'属性':'ATTRIBUTES'}</div>
+      <div class="cols2">${an.map((a,i)=>`<div class="arow"><span class="alabel">${a}</span>${pips(attrVals[i],3)}</div>`).join('')}</div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'技能 · 练习点':'SKILLS'}</div>
+      ${skills.map(s=>`<div class="srow"><span class="die">${s.die}</span><span class="sname">${s.n}</span><span class="srank">${s.rank}</span>${pips(s.on,s.tot)}</div>`).join('')}
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'资源':'RESOURCES'}</div>
+      <div class="bar-row"><span class="blabel">${theme==='ink'?'气血':'HP'}</span><span class="bar hp"><i style="width:70%"></i></span><span class="bval">7/10</span></div>
+      <div class="bar-row"><span class="blabel">${theme==='ink'?'体力':'STAMINA'}</span><span class="bar st"><i style="width:100%"></i></span><span class="bval">10/10</span></div>
+      <div class="conds"><span class="cond bad">${theme==='ink'?'中毒':'POISONED'}</span><span class="cond good">${theme==='ink'?'鼓舞':'INSPIRED'}</span></div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'能力 · 四槽':'ABILITIES'}</div>
+      <div class="slots">
+        <div class="slot">${icon('i-sword',A)}${theme==='ink'?'剑舞':'Flurry'}<span class="cd">2</span></div>
+        <div class="slot">${icon('i-eye',A)}${theme==='ink'?'洞察':'Read'}</div>
+        <div class="slot empty">—</div><div class="slot empty">—</div>
+      </div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'装备':'EQUIPMENT'}</div>
+      <div class="slots">
+        <div class="slot">${icon('i-sword',A)}${theme==='ink'?'横刀':'Blade'}</div>
+        <div class="slot">${icon('i-armor',A)}${theme==='ink'?'皮甲':'Leather'}</div>
+        <div class="slot">${icon('i-cloak',A)}${theme==='ink'?'夜行衣':'Cloak'}</div>
+        <div class="slot">${icon('i-ring',A)}${theme==='ink'?'家徽戒':'Signet'}</div>
+        <div class="slot">${icon('i-potion',A)}${theme==='ink'?'金疮药':'Salve'}</div>
+      </div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'关系':'RELATIONS'}</div>
+      <div class="rel-row"><span class="rname">${d.rel}</span><span class="rstance">${theme==='ink'?'戒备':'WARY'}</span><span class="bar"><i style="width:32%;background:var(--accent2)"></i></span><span class="bval">32</span></div>
+      <div class="rel-row"><span class="rname">${theme==='ink'?'茯苓':'F. Ling'}</span><span class="rstance">${theme==='ink'?'信赖':'TRUST'}</span><span class="bar"><i style="width:78%;background:var(--good)"></i></span><span class="bval">78</span></div>
+    </div>`;
+  }
+
+  function cardNpc() {
+    const d = DATA.npc(theme), A = theme==='manga'?'#111':'var(--accent2)';
+    const un = theme==='ink'?'未 探 明':theme==='scifi'?'[ UNKNOWN ]':'UNKNOWN';
+    return `
+    <div class="chead">
+      <div class="emblem"><svg viewBox="0 0 24 24" width="26" height="26" style="color:var(--accent2)"><use href="#i-eye"/></svg></div>
+      <div style="flex:1">
+        <div class="cname">${d.name}</div>
+        <div class="csub">${d.sub}</div>
+        <div class="cbadges"><span class="cbadge tier">${d.b1}</span><span class="cbadge">${d.b2}</span></div>
+      </div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'已知印象':'PROFILE'}</div>
+      <div style="font-size:11.5px;line-height:1.8;font-family:var(--narr-font)" class="oncard2">${d.desc}</div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'关系 · 战斗倾向':'DISPOSITION'}</div>
+      <div class="rel-row"><span class="rname">${theme==='ink'?'对你':'To you'}</span><span class="rstance">${d.stance}</span><span class="bar"><i style="width:${d.close}%;background:var(--accent2)"></i></span><span class="bval">${d.close}</span></div>
+      <div class="rel-row"><span class="rname">${theme==='ink'?'士气':'Morale'}</span><span class="rstance">${d.morale}</span><span style="font-size:10px" class="oncard2">${theme==='ink'?'撤退阈值':'Retreat at'} ${d.retreat}</span></div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'已观察技能':'OBSERVED'}</div>
+      <div class="srow"><span class="die">d8</span><span class="sname">${theme==='ink'?'洞察':'Insight'}</span><span class="srank">${theme==='ink'?'目击':'seen'}</span></div>
+    </div>
+    <div class="csec"><div class="csec-t oncard">${theme==='ink'?'属性 · 装备 · 能力':'HIDDEN'}</div>
+      <div class="unknown">${un}</div>
+    </div>`;
+  }
+
+  function renderCard() {
+    document.getElementById('ccard').innerHTML = proj==='player' ? cardPlayer() : cardNpc();
+    document.getElementById('pPlayer').classList.toggle('active', proj==='player');
+    document.getElementById('pNpc').classList.toggle('active', proj==='npc');
+  }
+  function setProj(p) { proj = p; renderCard(); }
+  function setView(v) {
+    document.getElementById('viewPlay').classList.toggle('active', v==='play');
+    document.getElementById('viewCard').classList.toggle('active', v==='card');
+    document.getElementById('vPlay').classList.toggle('active', v==='play');
+    document.getElementById('vCard').classList.toggle('active', v==='card');
+  }
+  document.querySelectorAll('.switcher button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('.switcher button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      theme = b.dataset.t;
+      phone.dataset.theme = theme;
+      wt.textContent = titles[theme][0];
+      ws.textContent = titles[theme][1];
+      seal.style.display = theme === 'ink' ? 'inline-block' : 'none';
+      lv.textContent = theme==='manga' ? '★ 成功!' : theme==='scifi' ? '» SUCCESS' : theme==='fantasy' ? '✦ Success' : '◆ 成功';
+      renderCard();
+    };
+  });
+  function fill(chip) { field.textContent = chip.textContent; field.style.color = 'var(--text)'; }
+  renderCard();
+</script>
+</body>
+</html>

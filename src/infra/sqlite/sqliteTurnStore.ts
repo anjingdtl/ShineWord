@@ -509,6 +509,23 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         [branchId, rel.relId, rel.fromActorId, rel.toActorId, rel.stance, rel.closeness, rel.updatedTurnId, stateVersion],
       );
     }
+    if (await this.hasProjectionTables()) {
+      for (const actorId of settlement.partyDeletes ?? []) {
+        await tx.execute('DELETE FROM party_members WHERE branch_id = ? AND actor_id = ?', [branchId, actorId]);
+      }
+      for (const member of settlement.partyUpserts ?? []) {
+        await tx.execute(
+          `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at, party_group_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(branch_id, actor_id) DO UPDATE SET
+             controller = excluded.controller,
+             role = excluded.role,
+             joined_at = excluded.joined_at,
+             party_group_id = excluded.party_group_id`,
+          [branchId, member.actorId, member.controller, member.role, member.joinedAt, member.groupId ?? 'main'],
+        );
+      }
+    }
     // Card projections (training/equipment changes) land in the same
     // transaction so the snapshot stamped below is consistent with the card
     // table (P2 acceptance A02/A03).
@@ -541,6 +558,12 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           throw new Error(`Item ${grant.itemId} already has an owner (${existingOwner}); unique items grant once.`);
         }
         input.nextState.itemOwners[grant.itemId] = grant.actorId;
+        input.nextState.itemSources ??= {};
+        input.nextState.itemSources[grant.itemId] = {
+          kind: 'encounter_loot',
+          sourceId: settlement.encounterId,
+          obtainedAtStateVersion: input.nextState.stateVersion,
+        };
       }
     }
   }
@@ -589,6 +612,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     };
     if (snapshotPayload?.cards) state.cards = snapshotPayload.cards;
     if (snapshotPayload?.party) state.party = snapshotPayload.party;
+    if (snapshotPayload?.itemSources) state.itemSources = snapshotPayload.itemSources;
     if (snapshotPayload?.encounters) state.encounters = snapshotPayload.encounters;
     if (snapshotPayload?.discoveries) state.discoveries = snapshotPayload.discoveries;
     if (snapshotPayload?.questProgress) state.questProgress = snapshotPayload.questProgress;
@@ -608,6 +632,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           row.conditions_json,
           'actor_states.conditions_json',
         ),
+        ...(snapshotPayload?.actors?.[row.actor_id]?.lifeStatus
+          ? { lifeStatus: snapshotPayload.actors[row.actor_id]!.lifeStatus }
+          : {}),
         ...(abilityCooldowns
           ? { abilityCooldowns: { ...abilityCooldowns } }
           : {}),
@@ -630,11 +657,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       state.cards = cardRows.map(row => ({ actorId: row.actor_id, card: parseJson<unknown>(row.card_json, 'actor_cards.card_json') }));
     }
     if (projectionsAvailable && !state.party) {
-      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
-        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string; party_group_id: string }>(
+        'SELECT actor_id, controller, role, joined_at, party_group_id FROM party_members WHERE branch_id = ? ORDER BY actor_id',
         [branchId],
       );
-      state.party = partyRows.map(row => ({ actorId: row.actor_id, controller: row.controller, role: row.role, joinedAt: row.joined_at }));
+      state.party = partyRows.map(row => ({ actorId: row.actor_id, controller: row.controller, role: row.role, joinedAt: row.joined_at, groupId: row.party_group_id }));
     }
 
     // Hydrate the current skill and relationship projections so consumers
@@ -889,8 +916,8 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         actorId: row.actor_id,
         card: parseJson<SqliteRow>(row.card_json, 'actor_cards.card_json'),
       }));
-      const partyRows = await tx.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
-        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+      const partyRows = await tx.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string; party_group_id: string }>(
+        'SELECT actor_id, controller, role, joined_at, party_group_id FROM party_members WHERE branch_id = ? ORDER BY actor_id',
         [state.branchId],
       );
       const snapParty = partyRows.map(row => ({
@@ -898,6 +925,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         controller: row.controller,
         role: row.role,
         joinedAt: row.joined_at,
+        groupId: row.party_group_id,
       }));
       snapshotPayload = {
         ...state,

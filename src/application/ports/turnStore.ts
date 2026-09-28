@@ -2,6 +2,7 @@ import type { RollGrade, RollRecord } from '../../domain/rules/types';
 import type { EffectOperation } from '../../domain/turns/types';
 import type {
   GameStateSnapshot,
+  PartySnapshotEntry,
   RelationshipSnapshotEntry,
   SkillSnapshotEntry,
 } from '../../domain/state/types';
@@ -42,6 +43,9 @@ export interface TurnSettlementPlan {
   cardUpserts?: Array<{ actorId: string; card: unknown }>;
   /** Remove temporary projections in the same commit that ends an encounter. */
   cardDeletes?: string[];
+  /** Explicit party lifecycle changes share the turn transaction and snapshot. */
+  partyUpserts?: PartySnapshotEntry[];
+  partyDeletes?: string[];
   /** Engine-side loot grants (encounter end); applied before the snapshot. */
   loot?: Array<{ itemId: string; actorId: string }>;
 }

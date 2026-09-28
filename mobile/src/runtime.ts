@@ -5,6 +5,7 @@ import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompat
 import type { ApiProfile } from '../../src/application/llm/types';
 import { CampaignSession, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
+import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
 import type { BookSection, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
 import { FetchHttpTransport } from './fetchTransport';
 import { getDatabaseRuntime } from './database';
@@ -86,11 +87,17 @@ export interface CampaignPlayState {
   worldId: string;
   goal: string;
   stateVersion: number;
+  anchorWorldTimeOrder: number | null;
   locationId: string;
   clockMinutes: number;
   playerCard: ActorCard | null;
   playerResources: Record<string, number>;
+  playerLifeStatus: string;
+  playerConditions: string[];
+  partyStatuses: Record<string, { lifeStatus: string; conditions: string[] }>;
   cards: ActorCard[];
+  party: PartySnapshotEntry[];
+  items: Array<{ itemId: string; ownerActorId: string; source: ItemSourceSnapshotEntry | null }>;
   packageRevision: number;
   playerActorId: string | null;
   discoveredEntryIds: string[];
@@ -103,6 +110,9 @@ export async function getCampaignState(
   const session = await createSessionNoop();
   const summary = await session.getSummary(campaignId, branchId);
   const playerCard = summary.cards.find(card => card.controller === 'player') ?? null;
+  const playerGroupId = summary.state.party?.find(member => member.role === 'protagonist')?.groupId ?? 'main';
+  const visiblePartyIds = new Set((summary.state.party ?? [])
+    .filter(member => (member.groupId ?? 'main') === playerGroupId).map(member => member.actorId));
   return {
     campaignId: summary.campaignId,
     branchId: summary.branchId,
@@ -111,13 +121,24 @@ export async function getCampaignState(
     packageRevision: summary.packageRevision,
     goal: summary.goal,
     stateVersion: summary.state.stateVersion,
-    locationId: Object.values(summary.state.actors)[0]?.locationId ?? 'unknown',
+    anchorWorldTimeOrder: summary.anchorWorldTimeOrder,
+    locationId: playerCard ? summary.state.actors[playerCard.actorId]?.locationId ?? 'unknown' : 'unknown',
     clockMinutes: summary.state.clockMinutes,
     playerCard,
     playerResources: playerCard
       ? summary.state.actors[playerCard.actorId]?.resources ?? {}
       : {},
+    playerLifeStatus: playerCard ? summary.state.actors[playerCard.actorId]?.lifeStatus ?? 'active' : 'active',
+    playerConditions: playerCard ? [...(summary.state.actors[playerCard.actorId]?.conditions ?? [])] : [],
+    partyStatuses: Object.fromEntries([...visiblePartyIds].flatMap(actorId => {
+      const actor = summary.state.actors[actorId];
+      return actor ? [[actorId, { lifeStatus: actor.lifeStatus ?? 'active', conditions: [...actor.conditions] }]] : [];
+    })),
     cards: summary.cards,
+    party: summary.state.party ?? [],
+    items: Object.entries(summary.state.itemOwners)
+      .filter(([, ownerActorId]) => visiblePartyIds.has(ownerActorId))
+      .map(([itemId, ownerActorId]) => ({ itemId, ownerActorId, source: summary.state.itemSources?.[itemId] ?? null })),
     playerActorId: playerCard?.actorId ?? null,
     discoveredEntryIds: summary.state.discoveries
       ?.filter(discovery => discovery.actorId === playerCard?.actorId)

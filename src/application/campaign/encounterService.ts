@@ -22,6 +22,7 @@ import {
   compileAttack,
   buildEncounterRewards,
   decideNpcAction,
+  explainNpcDecision,
   distanceBetweenZones,
   freezeInitiative,
   type Combatant,
@@ -477,12 +478,20 @@ export class EncounterService {
     const templates = templateMap(ctx.entries);
     const catalog = packageIndexes(ctx.entries).catalog;
     const combatants = allCombatants(encounter, cards, zoneMap, templates, ctx.entries);
+    const npcActor = combatantFor(currentActorId, encounter, cards, zoneMap, templates, ctx.entries);
     const decision = decideNpcAction({
-      actor: combatantFor(currentActorId, encounter, cards, zoneMap, templates, ctx.entries),
+      actor: npcActor,
       encounter,
       combatants,
       catalog,
       zones: ctx.zones,
+    });
+    const decisionBasis = explainNpcDecision({
+      actor: npcActor,
+      encounter,
+      combatants,
+      zones: ctx.zones,
+      decision,
     });
 
     if (decision.kind === 'retreat') {
@@ -491,9 +500,9 @@ export class EncounterService {
         expectedStateVersion: ctx.state.stateVersion,
         actorId: currentActorId,
         actionType: 'retreat',
-        intent: `${actorCard.name} 撤离战斗`,
+        intent: `${actorCard.name} 撤离战斗。依据：${decisionBasis}`,
         eventType: 'encounter_actor_retreat',
-        summary: `${actorCard.name} 撤离战斗`,
+        summary: `${actorCard.name} 撤离战斗。依据：${decisionBasis}`,
       });
       const result = await this.applyAction(input.branchId, ctx, contract, null, undefined, {
         consumeMainAction: true,
@@ -501,7 +510,7 @@ export class EncounterService {
         retreatActorId: currentActorId,
       });
       return this.buildView(result.encounter, result.zones, result.exits, result.zoneMap,
-        `${actorCard.name} 撤离了战斗。`, null, result.cards, result.stateVersion);
+        `${actorCard.name} 撤离了战斗。依据：${decisionBasis}`, null, result.cards, result.stateVersion);
     }
     if (decision.kind === 'guard') {
       const contract = engineActionContract({
@@ -509,16 +518,16 @@ export class EncounterService {
         expectedStateVersion: ctx.state.stateVersion,
         actorId: currentActorId,
         actionType: 'guard',
-        intent: `${actorCard.name} 保持戒备`,
+        intent: `${actorCard.name} 保持戒备。依据：${decisionBasis}`,
         eventType: 'combat_action_passed',
-        summary: `${actorCard.name} 依据当前策略保持戒备并结束行动`,
+        summary: `${actorCard.name} 依据当前策略保持戒备并结束行动。${decisionBasis}`,
       });
       const result = await this.applyAction(input.branchId, ctx, contract, null, undefined, {
         consumeMainAction: true,
         advanceActor: true,
       });
       return this.buildView(result.encounter, result.zones, result.exits, result.zoneMap,
-        `${actorCard.name} 保持戒备，结束本回合。`, null, result.cards, result.stateVersion);
+        `${actorCard.name} 保持戒备，结束本回合。依据：${decisionBasis}`, null, result.cards, result.stateVersion);
     }
     if (decision.kind === 'rescue') {
       const targetCard = cards.find(card => card.actorId === decision.targetId);
@@ -537,7 +546,7 @@ export class EncounterService {
         targetId: decision.targetId,
         evidenceIds: [`encounter:${input.encounterId}`],
         requiresRoll: false,
-        intent: `援救 ${targetCard.name}`,
+        intent: `援救 ${targetCard.name}。依据：${decisionBasis}`,
         timeCostMinutes: 0,
         resourcePreconditions: [],
         outcomes: {
@@ -552,7 +561,7 @@ export class EncounterService {
         advanceActor: true,
       });
       return this.buildView(result.encounter, result.zones, result.exits, result.zoneMap,
-        `${actorCard.name} 支援并救回了 ${targetCard.name}。`, null, result.cards, result.stateVersion);
+        `${actorCard.name} 支援并救回了 ${targetCard.name}。依据：${decisionBasis}`, null, result.cards, result.stateVersion);
     }
     if (decision.kind === 'move') {
       const mover = combatantFor(currentActorId, encounter, cards, zoneMap, templates, ctx.entries);
@@ -565,32 +574,32 @@ export class EncounterService {
           expectedStateVersion: ctx.state.stateVersion,
           actorId: currentActorId,
           actionType: 'guard',
-          intent: `${actorCard.name} 保持戒备`,
+          intent: `${actorCard.name} 保持戒备。依据：${decisionBasis}`,
           eventType: 'combat_action_passed',
-          summary: `${actorCard.name} 无可用移动，保持戒备`,
+          summary: `${actorCard.name} 无可用移动，保持戒备。${decisionBasis}`,
         });
         const result = await this.applyAction(input.branchId, ctx, contract, null, undefined, {
           consumeMainAction: true,
           advanceActor: true,
         });
         return this.buildView(result.encounter, result.zones, result.exits, result.zoneMap,
-          `${actorCard.name} 保持戒备，结束本回合。`, null, result.cards, result.stateVersion);
+          `${actorCard.name} 保持戒备，结束本回合。依据：${decisionBasis}`, null, result.cards, result.stateVersion);
       }
       const contract = engineActionContract({
         turnId: requestTurnId(input.encounterId, input.requestId) ?? `enc:${input.encounterId}:${currentActorId}:move:${ctx.state.stateVersion}`,
         expectedStateVersion: ctx.state.stateVersion,
         actorId: currentActorId,
         actionType: 'move',
-        intent: `${actorCard.name} 向 ${toward.card.name} 逼近`,
+        intent: `${actorCard.name} 向 ${toward.card.name} 逼近。依据：${decisionBasis}`,
         eventType: 'combat_moved',
-        summary: `${actorCard.name} 移动到 ${nextZone}`,
+        summary: `${actorCard.name} 移动到 ${nextZone}。${decisionBasis}`,
       });
       const result = await this.applyAction(input.branchId, ctx, contract, null, undefined, {
         consumeMovement: true,
         moveActorTo: nextZone,
       });
       return this.buildView(result.encounter, result.zones, result.exits, result.zoneMap,
-        `${actorCard.name} 向 ${toward.card.name} 逼近。`, null, result.cards, result.stateVersion);
+        `${actorCard.name} 向 ${toward.card.name} 逼近。依据：${decisionBasis}`, null, result.cards, result.stateVersion);
     }
 
     const attacker = combatantFor(currentActorId, encounter, cards, zoneMap, templates, ctx.entries);
@@ -610,6 +619,11 @@ export class EncounterService {
       zones: ctx.zones,
       attackRange: attackRangeOf(attacker, skillId, templates),
     });
+    contract.intent = `${contract.intent}。依据：${decisionBasis}`;
+    contract.outcomes.full_success.publicSummary += `。${decisionBasis}`;
+    contract.outcomes.success.publicSummary += `。${decisionBasis}`;
+    contract.outcomes.failure.publicSummary += `。${decisionBasis}`;
+    contract.outcomes.severe_failure.publicSummary += `。${decisionBasis}`;
     contract.turnId = requestTurnId(input.encounterId, input.requestId) ?? contract.turnId;
     const rollRecord = await this.stageAndRoll(input.branchId, contract, attacker.card, catalog, skillId);
     const settlement = actorCard.controller === 'companion'
@@ -630,7 +644,7 @@ export class EncounterService {
     });
     return this.buildView(
       result.encounter, result.zones, result.exits, result.zoneMap,
-      `${attacker.card.name} 攻击 ${target.card.name}：${rollRecord.grade}`,
+      `${attacker.card.name} 攻击 ${target.card.name}：${rollRecord.grade}。依据：${decisionBasis}`,
       diceText(rollRecord), result.cards, result.stateVersion,
     );
   }
@@ -881,10 +895,13 @@ export class EncounterService {
 
   private async loadCampaign(campaignId: string, branchId: string) {
     const row = await this.deps.db.queryOne<SqliteRow>(
-      'SELECT world_id, package_revision FROM campaigns WHERE campaign_id = ?',
-      [campaignId],
+      `SELECT c.world_id, c.package_revision
+         FROM campaigns c
+         JOIN branches b ON b.campaign_id = c.campaign_id
+        WHERE c.campaign_id = ? AND b.branch_id = ?`,
+      [campaignId, branchId],
     );
-    if (!row) throw new Error(`Unknown campaign: ${campaignId}.`);
+    if (!row) throw new Error(`Branch ${branchId} does not belong to campaign ${campaignId}.`);
     const state = await this.deps.turns.getState(branchId);
     if (!state) throw new Error(`Branch has no state: ${branchId}.`);
     return {

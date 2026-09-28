@@ -28,6 +28,14 @@ export interface PartySnapshotEntry {
   controller: string;
   role: string;
   joinedAt: string;
+  /** Branch-local squad membership; separated members do not share context. */
+  groupId?: string;
+}
+
+export interface ItemSourceSnapshotEntry {
+  kind: 'starting_loadout' | 'recruitment' | 'quest_reward' | 'encounter_loot' | 'transfer';
+  sourceId: string;
+  obtainedAtStateVersion: number;
 }
 
 /** Full immutable encounter projection at a branch state version. */
@@ -80,6 +88,8 @@ export interface ActorState {
   zoneId?: string;
   resources: Record<string, number>;
   conditions: string[];
+  /** Zero HP is a recoverable critical state until an explicit rule resolves it. */
+  lifeStatus?: 'active' | 'incapacitated' | 'critical' | 'dead';
   /** Ability cooldown expiry expressed as a state version, restored with snapshots. */
   abilityCooldowns?: Record<string, number>;
 }
@@ -93,6 +103,8 @@ export interface GameStateSnapshot {
   clockMinutes: number;
   actors: Record<string, ActorState>;
   itemOwners: Record<string, string>;
+  /** Item lineage is branch state and travels with snapshots, forks and saves. */
+  itemSources?: Record<string, ItemSourceSnapshotEntry>;
   /**
    * Complete-snapshot fields. Written by every commit since Phase 2; absent in
    * legacy pre-Phase-2 snapshots, where historical restore must refuse instead
@@ -158,12 +170,16 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
           ...(actor.zoneId ? { zoneId: actor.zoneId } : {}),
           resources: { ...actor.resources },
           conditions: [...actor.conditions],
+          ...(actor.lifeStatus ? { lifeStatus: actor.lifeStatus } : {}),
           ...(actor.abilityCooldowns ? { abilityCooldowns: { ...actor.abilityCooldowns } } : {}),
         },
       ]),
     ),
     itemOwners: { ...state.itemOwners },
   };
+  if (state.itemSources) {
+    cloned.itemSources = Object.fromEntries(Object.entries(state.itemSources).map(([itemId, source]) => [itemId, { ...source }]));
+  }
   if (state.skills) {
     cloned.skills = state.skills.map(skill => ({
       ...skill,

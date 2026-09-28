@@ -44,7 +44,11 @@ import type {
   SkillDefinition,
   QuestDefinition,
 } from '../../domain/content/types';
+import type { CompanionDirective } from '../../domain/characters/card';
+import type { PartySnapshotEntry, RelationshipSnapshotEntry } from '../../domain/state/types';
 import { assembleBook } from '../worldPackage/publish';
+import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAtAnchor, openingRelationshipFor, meetsRecruitmentRelationship } from './recruitment';
+import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { forkBranch } from '../branch/fork';
@@ -76,6 +80,7 @@ export interface CampaignSummary {
   packageRevision: number;
   goal: string;
   rulesetVersion: string;
+  anchorWorldTimeOrder: number | null;
   state: GameStateSnapshot;
   cards: ActorCard[];
 }
@@ -145,13 +150,40 @@ export class CampaignSession {
 
   async getSummary(campaignId: string, branchId: string): Promise<CampaignSummary> {
     const row = await this.deps.db.queryOne<SqliteRow>(
-      'SELECT campaign_id, title, world_id, package_revision, ruleset_version, opening_json FROM campaigns WHERE campaign_id = ?',
+      'SELECT campaign_id, title, world_id, package_revision, ruleset_version, opening_json, anchor_json FROM campaigns WHERE campaign_id = ?',
       [campaignId],
     );
     if (!row) throw new Error(`Unknown campaign: ${campaignId}.`);
+    await this.assertCampaignBranch(campaignId, branchId);
     const state = await this.deps.turns.getState(branchId);
     if (!state) throw new Error(`Branch has no state: ${branchId}.`);
-    const cards = await this.listCards(branchId);
+    const allCards = await this.loadAllCards(branchId);
+    const leaderId = (state.party ?? []).find(member => member.role === 'protagonist')?.actorId;
+    const viewerGroupId = (state.party ?? []).find(member => member.actorId === leaderId)?.groupId ?? 'main';
+    const partyIds = new Set((state.party ?? []).filter(member => (member.groupId ?? 'main') === viewerGroupId)
+      .map(member => member.actorId));
+    const cards = !state.party
+      ? allCards // legacy records remain readable
+      : allCards.filter(card => partyIds.has(card.actorId));
+    if (state.party && state.encounters) {
+      const activeEncounterIds = new Set(state.encounters.filter(item => item.state.status === 'active')
+        .flatMap(item => Object.keys(item.state.actors)));
+      for (const card of allCards) {
+        if (partyIds.has(card.actorId) || !activeEncounterIds.has(card.actorId)) continue;
+        // Encounter participants are present to the player, but hidden combat
+        // parameters remain server-only. The live EncounterView owns combat UI.
+        cards.push({
+          actorId: card.actorId,
+          name: card.name,
+          kind: 'creature',
+          controller: 'gm',
+          attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 },
+          skills: {}, abilities: [], preparedAbilities: [], resourceMax: {}, defense: 1,
+          powerTier: 'ordinary', rulesetId: card.rulesetId, rulesetVersion: card.rulesetVersion,
+          worldId: card.worldId, worldPackageRevision: card.worldPackageRevision, cardRevision: 0,
+        });
+      }
+    }
     const opening = JSON.parse(String(row.opening_json ?? '{}')) as { goal?: string };
     return {
       campaignId: String(row.campaign_id),
@@ -162,6 +194,12 @@ export class CampaignSession {
         ? 0
         : Number(row.package_revision),
       rulesetVersion: String(row.ruleset_version ?? ''),
+      anchorWorldTimeOrder: (() => {
+        try {
+          const anchor = JSON.parse(String(row.anchor_json ?? '{}')) as { worldTimeOrder?: number };
+          return Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : null;
+        } catch { return null; }
+      })(),
       goal: opening.goal ?? '',
       state,
       cards,
@@ -169,6 +207,16 @@ export class CampaignSession {
   }
 
   async listCards(branchId: string): Promise<ActorCard[]> {
+    const state = await this.deps.turns.getState(branchId);
+    if (!state?.party) return this.loadAllCards(branchId); // readable legacy projection
+    const leaderId = state.party.find(member => member.role === 'protagonist')?.actorId;
+    const viewerGroupId = state.party.find(member => member.actorId === leaderId)?.groupId ?? 'main';
+    const partyIds = new Set(state.party.filter(member => (member.groupId ?? 'main') === viewerGroupId)
+      .map(member => member.actorId));
+    return (await this.loadAllCards(branchId)).filter(card => partyIds.has(card.actorId));
+  }
+
+  private async loadAllCards(branchId: string): Promise<ActorCard[]> {
     const rows = await this.deps.db.queryAll<{ card_json: string }>(
       'SELECT card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
       [branchId],
@@ -177,12 +225,532 @@ export class CampaignSession {
   }
 
   async getCard(branchId: string, actorId: string): Promise<ActorCard> {
+    const state = await this.deps.turns.getState(branchId);
+    const leaderId = state?.party?.find(member => member.role === 'protagonist')?.actorId;
+    const viewerGroupId = state?.party?.find(member => member.actorId === leaderId)?.groupId ?? 'main';
+    if (state?.party && !state.party.some(member => member.actorId === actorId
+      && (member.groupId ?? 'main') === viewerGroupId)) {
+      throw new Error(`角色 ${actorId} 不在当前队伍的玩家可见投影中。`);
+    }
     const row = await this.deps.db.queryOne<{ card_json: string }>(
       'SELECT card_json FROM actor_cards WHERE branch_id = ? AND actor_id = ?',
       [branchId, actorId],
     );
     if (!row) throw new Error(`Actor card not found: ${branchId}/${actorId}.`);
     return JSON.parse(row.card_json) as ActorCard;
+  }
+
+  private async commitLifecycleAction(input: {
+    campaignId: string;
+    branchId: string;
+    actorId: string;
+    actionType: string;
+    intent: string;
+    settlement?: Partial<TurnSettlementPlan>;
+    updateState?: (state: GameStateSnapshot) => void;
+    events?: Array<{ eventType: string; payload: unknown }>;
+  }): Promise<void> {
+    await this.assertCampaignBranch(input.campaignId, input.branchId);
+    const state = await this.deps.turns.getState(input.branchId);
+    if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
+    const turnId = `system-${input.actionType}-${String(state.stateVersion + 1).padStart(6, '0')}`;
+    const emptyOutcome = { achieved: true, publicSummary: input.intent, effects: [] };
+    const contract: ActionContract = {
+      protocolVersion: '1.0',
+      turnId,
+      expectedStateVersion: state.stateVersion,
+      actorId: input.actorId,
+      actionType: input.actionType,
+      evidenceIds: [],
+      requiresRoll: false,
+      intent: input.intent,
+      timeCostMinutes: 0,
+      resourcePreconditions: [],
+      outcomes: {
+        full_success: emptyOutcome,
+        success: emptyOutcome,
+        failure: emptyOutcome,
+        severe_failure: emptyOutcome,
+      },
+    };
+    const settlement: TurnSettlementPlan = {
+      encounterId: `${input.actionType}:${input.branchId}:${state.stateVersion + 1}`,
+      skillUpserts: [],
+      rewardLedger: [],
+      relationships: [],
+      ...input.settlement,
+    };
+    await commitResolvedTurn({
+      store: this.deps.turns,
+      branchId: input.branchId,
+      contract,
+      contractHash: await this.deps.hashProvider.sha256Hex(JSON.stringify(contract)),
+      contractOrigin: 'engine',
+      outcomeGrade: 'success',
+      settlement,
+      updateNextState: input.updateState,
+      events: input.events,
+      committedAt: new Date().toISOString(),
+    });
+  }
+
+  private async campaignAnchor(campaignId: string): Promise<{ worldId: string; packageRevision: number; worldTimeOrder: number }> {
+    const row = await this.deps.db.queryOne<SqliteRow>(
+      'SELECT world_id, package_revision, anchor_json FROM campaigns WHERE campaign_id = ?', [campaignId],
+    );
+    if (!row) throw new Error(`Unknown campaign: ${campaignId}.`);
+    const anchor = JSON.parse(String(row.anchor_json ?? '{}')) as { worldTimeOrder?: number };
+    return {
+      worldId: String(row.world_id),
+      packageRevision: Number(row.package_revision ?? 0),
+      worldTimeOrder: Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0,
+    };
+  }
+
+  private async assertCampaignBranch(campaignId: string, branchId: string): Promise<void> {
+    const row = await this.deps.db.queryOne<{ campaign_id: string }>(
+      'SELECT campaign_id FROM branches WHERE branch_id = ?', [branchId],
+    );
+    if (!row || row.campaign_id !== campaignId) {
+      throw new Error(`Branch ${branchId} does not belong to campaign ${campaignId}.`);
+    }
+  }
+
+  private async recruitmentReason(
+    campaignId: string,
+    state: GameStateSnapshot,
+    cards: readonly ActorCard[],
+    actorId: string,
+  ): Promise<{ entry: ContentEntry; card: ActorCard; partyEntry: PartySnapshotEntry; relationship: RelationshipSnapshotEntry } | { reason: string }> {
+    const actorCard = cards.find(card => card.actorId === actorId);
+    const partyEntry = state.party?.find(member => member.actorId === actorId);
+    if (!actorCard || actorCard.kind !== 'npc' || actorCard.controller !== 'gm' || partyEntry) {
+      return { reason: '目标不是当前可招募的在场人物。' };
+    }
+    const anchor = await this.campaignAnchor(campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const entry = entries.find(item => item.kind === 'actor_template' && item.entryId === actorCard.templateId);
+    const leader = cards.find(card => card.controller === 'player');
+    if (!entry || entry.visibility !== 'public' || !leader) return { reason: '目标不可公开招募。' };
+    const discovered = (state.discoveries ?? []).some(item => item.actorId === leader.actorId && item.entryId === entry.entryId);
+    if (!isPlayerRecruitmentCandidate(entry, facts, anchor.worldTimeOrder, discovered)) {
+      return { reason: '目标缺少当前锚点有效的公开招募资格。' };
+    }
+    const actorState = state.actors[actorId];
+    const leaderState = state.actors[leader.actorId];
+    if (!leaderState || leaderState.lifeStatus === 'critical' || leaderState.lifeStatus === 'dead'
+      || leaderState.conditions.includes('disabled')) {
+      return { reason: '队伍领队目前失能或濒危，不能确认招募。' };
+    }
+    if (!actorState || !leaderState || actorState.locationId !== leaderState.locationId) {
+      return { reason: '招募需要目标与队伍领队位于同一地点。' };
+    }
+    if (actorState.lifeStatus === 'critical' || actorState.lifeStatus === 'dead' || actorState.conditions.includes('disabled')) {
+      return { reason: '目标目前失能，不能执行招募。' };
+    }
+    const definition = entry.definition as import('../../domain/content/types').ActorTemplateDefinition;
+    const policy = definition.recruitment!;
+    for (const questId of policy.requiredQuestIds ?? []) {
+      if (state.questProgress?.find(progress => progress.questId === questId)?.status !== 'succeeded') {
+        return { reason: `尚未完成招募前置任务 ${questId}。` };
+      }
+    }
+    const relationship = state.relationships?.find(rel => rel.fromActorId === actorId && rel.toActorId === leader.actorId);
+    if (!relationship || !meetsRecruitmentRelationship(entry, state.relationships ?? [], actorId, leader.actorId)) {
+      return { reason: `关系尚不足：当前 ${relationship?.closeness ?? 0}，要求至少 ${policy.minimumCloseness ?? 0}。` };
+    }
+    const companionCount = (state.party ?? []).filter(member => member.role === 'companion').length;
+    if (companionCount >= 2) return { reason: '队伍已达到最多两名同伴的上限。' };
+    return { entry, card: actorCard, partyEntry: {
+      actorId,
+      controller: 'companion',
+      role: 'companion',
+      joinedAt: new Date().toISOString(),
+      groupId: 'main',
+    }, relationship };
+  }
+
+  /** Safe player-facing roster of publicly present NPCs and current eligibility basis. */
+  async getRecruitmentOptions(campaignId: string, branchId: string): Promise<Array<{
+    actorId: string; name: string; eligible: boolean; reason: string | null;
+  }>> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const state = await this.deps.turns.getState(branchId);
+    if (!state) throw new Error(`Unknown branch: ${branchId}.`);
+    const cards = await this.loadAllCards(branchId);
+    const anchor = await this.campaignAnchor(campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const leader = cards.find(card => card.controller === 'player');
+    if (!leader) return [];
+    const leaderState = state.actors[leader.actorId];
+    const templates = new Map(entries.filter(entry => entry.kind === 'actor_template').map(entry => [entry.entryId, entry]));
+    const output = [];
+    for (const card of cards.filter(item => item.kind === 'npc' && item.controller === 'gm')) {
+      const template = templates.get(card.templateId ?? '');
+      const actorState = state.actors[card.actorId];
+      if (!template || template.visibility !== 'public' || !actorState || actorState.locationId !== leaderState?.locationId) continue;
+      const result = await this.recruitmentReason(campaignId, state, cards, card.actorId);
+      output.push({ actorId: card.actorId, name: card.name,
+        eligible: !('reason' in result), reason: 'reason' in result ? result.reason : null });
+    }
+    return output;
+  }
+
+  async getRejoinOptions(campaignId: string, branchId: string): Promise<Array<{
+    actorId: string; name: string; eligible: boolean; reason: string | null;
+  }>> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const state = await this.deps.turns.getState(branchId);
+    if (!state) throw new Error(`Unknown branch: ${branchId}.`);
+    const cards = await this.loadAllCards(branchId);
+    const anchor = await this.campaignAnchor(campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const leader = cards.find(card => card.controller === 'player');
+    const leaderState = leader ? state.actors[leader.actorId] : undefined;
+    const companionCount = (state.party ?? []).filter(member => member.role === 'companion').length;
+    const result = [];
+    for (const card of cards.filter(item => item.kind === 'companion')) {
+      const member = state.party?.find(item => item.actorId === card.actorId);
+      if (member?.groupId === 'main') continue;
+      const template = entries.find(item => item.kind === 'actor_template' && item.entryId === card.templateId);
+      const actor = state.actors[card.actorId];
+      if (!template || template.visibility !== 'public' || !actor || !leader || !leaderState) continue;
+      const discovered = (state.discoveries ?? []).some(item => item.actorId === leader.actorId && item.entryId === template.entryId);
+      const visible = isPlayerRecruitmentCandidate(template, facts, anchor.worldTimeOrder, discovered);
+      const relationship = meetsRecruitmentRelationship(template, state.relationships ?? [], card.actorId, leader.actorId);
+      const atRisk = actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled');
+      const leaderAtRisk = leaderState.lifeStatus === 'critical' || leaderState.lifeStatus === 'dead'
+        || leaderState.conditions.includes('disabled');
+      const colocated = actor.locationId === leaderState.locationId;
+      const definition = template.definition as import('../../domain/content/types').ActorTemplateDefinition;
+      const questsOk = (definition.recruitment?.requiredQuestIds ?? []).every(questId =>
+        state.questProgress?.find(progress => progress.questId === questId)?.status === 'succeeded');
+      const reason = !visible ? '当前锚点的公开资格不再有效。'
+        : atRisk ? '失能或濒危状态尚未解除。'
+          : leaderAtRisk ? '队伍领队目前失能或濒危。'
+          : !colocated ? '需要先在同一地点重逢。'
+            : !relationship ? '关系条件不再满足。'
+              : !questsOk ? '招募前置任务尚未完成。'
+                : companionCount >= 2 && !member ? '主队已达到最多两名同伴的上限。' : null;
+      result.push({ actorId: card.actorId, name: card.name, eligible: reason === null, reason });
+    }
+    return result;
+  }
+
+  /** Recruitment is an engine decision; template IDs alone cannot bypass presence, time, quest, relationship or roster checks. */
+  async recruitCompanion(options: {
+    campaignId: string; branchId: string; actorId: string; directive?: CompanionDirective;
+  }): Promise<void> {
+    await this.assertNoActiveEncounter(options.branchId);
+    if (options.directive && !['follow', 'support', 'protect', 'conserve', 'retreat'].includes(options.directive)) {
+      throw new Error(`未知的同伴指令：${String(options.directive)}。`);
+    }
+    const state = await this.deps.turns.getState(options.branchId);
+    if (!state) throw new Error(`Unknown branch: ${options.branchId}.`);
+    const cards = await this.loadAllCards(options.branchId);
+    const qualification = await this.recruitmentReason(options.campaignId, state, cards, options.actorId);
+    if ('reason' in qualification) throw new Error(`招募被拒绝：${qualification.reason}`);
+    const card = { ...qualification.card, kind: 'companion' as const, controller: 'companion' as const,
+      companionLeaderActorId: cards.find(item => item.controller === 'player')!.actorId,
+      ...(options.directive ? { companionDirective: options.directive } : {}) };
+    const entry = qualification.entry;
+    const definition = entry.definition as import('../../domain/content/types').ActorTemplateDefinition;
+    const world = await this.campaignAnchor(options.campaignId);
+    const pkgEntries = await this.loadPackageEntries(world.worldId, world.packageRevision);
+    const worldFacts = await this.deps.worldStore.listFacts(world.worldId);
+    const itemOwners = { ...state.itemOwners };
+    const itemSources = { ...(state.itemSources ?? {}) };
+    for (const itemId of definition.startingItems ?? []) {
+      const item = pkgEntries.find(candidate => candidate.entryId === itemId);
+      if (!item || item.kind !== 'item' || item.visibility !== 'public'
+        || !isEntryVisibleAtAnchor(item, worldFacts, world.worldTimeOrder)) {
+        throw new Error(`招募被拒绝：起始物品 ${itemId} 不存在或不可公开。`);
+      }
+      if (itemOwners[itemId] !== undefined) throw new Error(`招募被拒绝：起始物品 ${itemId} 已归属 ${itemOwners[itemId]}。`);
+      itemOwners[itemId] = options.actorId;
+      itemSources[itemId] = { kind: 'recruitment', sourceId: options.actorId, obtainedAtStateVersion: state.stateVersion + 1 };
+    }
+    await this.commitLifecycleAction({
+      ...options,
+      actorId: cards.find(item => item.controller === 'player')!.actorId,
+      actionType: 'companion_recruited',
+      intent: `${card.name} 加入队伍。`,
+      settlement: {
+        partyUpserts: [qualification.partyEntry],
+        cardUpserts: [{ actorId: card.actorId, card }],
+      },
+      updateState: next => {
+        next.party = [...(next.party ?? []), qualification.partyEntry];
+        next.cards = [...(next.cards ?? []).filter(item => item.actorId !== card.actorId), { actorId: card.actorId, card }];
+        next.itemOwners = itemOwners;
+        next.itemSources = itemSources;
+      },
+      events: [{ eventType: 'companion_recruited', payload: {
+        actorId: card.actorId, templateId: card.templateId, relationshipId: qualification.relationship.relId,
+      } }],
+    });
+  }
+
+  async setCompanionDirective(options: {
+    campaignId: string; branchId: string; actorId: string; directive: CompanionDirective;
+  }): Promise<void> {
+    await this.assertNoActiveEncounter(options.branchId);
+    if (!['follow', 'support', 'protect', 'conserve', 'retreat'].includes(options.directive)) {
+      throw new Error(`未知的同伴指令：${String(options.directive)}。`);
+    }
+    const state = await this.deps.turns.getState(options.branchId);
+    const card = await this.getCard(options.branchId, options.actorId);
+    const member = state?.party?.find(item => item.actorId === options.actorId);
+    if (!state || card.kind !== 'companion' || !member) throw new Error('只能为当前队伍中的同伴设置指令。');
+    const nextCard = { ...card, companionDirective: options.directive };
+    const nextMember = { ...member };
+    await this.commitLifecycleAction({
+      ...options,
+      actorId: state.party?.find(item => item.role === 'protagonist')?.actorId ?? options.actorId,
+      actionType: 'companion_directive_changed',
+      intent: `${card.name} 的指令改为 ${options.directive}。`,
+      settlement: { cardUpserts: [{ actorId: card.actorId, card: nextCard }], partyUpserts: [nextMember] },
+      updateState: next => { next.cards = [...(next.cards ?? []).filter(item => item.actorId !== card.actorId), { actorId: card.actorId, card: nextCard }]; },
+      events: [{ eventType: 'companion_directive_changed', payload: { actorId: card.actorId, directive: options.directive } }],
+    });
+  }
+
+  async leaveCompanion(options: { campaignId: string; branchId: string; actorId: string }): Promise<void> {
+    await this.assertNoActiveEncounter(options.branchId);
+    const state = await this.deps.turns.getState(options.branchId);
+    const member = state?.party?.find(item => item.actorId === options.actorId);
+    const actor = state?.actors[options.actorId];
+    if (!state || !member || member.role !== 'companion') throw new Error('目标不是当前队伍同伴。');
+    if (actor?.lifeStatus === 'critical' || actor?.lifeStatus === 'dead' || actor?.conditions.includes('disabled')) {
+      throw new Error('拒绝让失能或濒危同伴退出队伍；需要先处理援救/结局风险。');
+    }
+    const card = await this.getCard(options.branchId, options.actorId);
+    if (card.kind !== 'companion') throw new Error('目标不是当前队伍同伴。');
+    await this.commitLifecycleAction({
+      ...options,
+      actorId: (state.party ?? []).find(item => item.role === 'protagonist')?.actorId ?? options.actorId,
+      actionType: 'companion_left', intent: `${card.name} 退出队伍。`,
+      settlement: { partyDeletes: [card.actorId] },
+      updateState: next => { next.party = (next.party ?? []).filter(item => item.actorId !== card.actorId); },
+      events: [{ eventType: 'companion_left', payload: { actorId: card.actorId, reason: 'player_decision' } }],
+    });
+  }
+
+  async splitCompanions(options: {
+    campaignId: string; branchId: string; actorIds: string[]; groupId: string;
+  }): Promise<void> {
+    await this.assertNoActiveEncounter(options.branchId);
+    if (!/^group-[A-Za-z0-9_-]{1,32}$/.test(options.groupId) || options.groupId === 'group-main') {
+      throw new Error('分队 ID 必须是安全的 group- 前缀标识，且不能使用主队标识。');
+    }
+    if (options.actorIds.length === 0 || new Set(options.actorIds).size !== options.actorIds.length) {
+      throw new Error('分队必须包含至少一名不重复同伴。');
+    }
+    const state = await this.deps.turns.getState(options.branchId);
+    if (!state) throw new Error(`Unknown branch: ${options.branchId}.`);
+    const cards = await this.loadAllCards(options.branchId);
+    const members = options.actorIds.map(actorId => state.party?.find(item => item.actorId === actorId));
+    if (members.some(member => !member || member.role !== 'companion' || (member.groupId ?? 'main') !== 'main')) {
+      throw new Error('只能从主队中选择当前在队的同伴分队。');
+    }
+    for (const actorId of options.actorIds) {
+      const actor = state.actors[actorId];
+      if (!actor || actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) {
+        throw new Error(`拒绝让失能/濒危同伴 ${actorId} 执行分队。`);
+      }
+    }
+    const upserts = members.map(member => ({ ...member!, groupId: options.groupId }));
+    const actorId = (state.party ?? []).find(item => item.role === 'protagonist')?.actorId ?? options.actorIds[0]!;
+    await this.commitLifecycleAction({
+      ...options, actorId, actionType: 'party_split', intent: `同伴分队：${options.actorIds.join(', ')}。`,
+      settlement: { partyUpserts: upserts },
+      updateState: next => { next.party = (next.party ?? []).map(member => upserts.find(item => item.actorId === member.actorId) ?? member); },
+      events: [{ eventType: 'party_split', payload: { actorIds: options.actorIds, groupId: options.groupId } }],
+    });
+    void cards;
+  }
+
+  async rejoinCompanion(options: { campaignId: string; branchId: string; actorId: string }): Promise<void> {
+    await this.assertNoActiveEncounter(options.branchId);
+    const state = await this.deps.turns.getState(options.branchId);
+    if (!state) throw new Error(`Unknown branch: ${options.branchId}.`);
+    const cards = await this.loadAllCards(options.branchId);
+    const card = cards.find(item => item.actorId === options.actorId);
+    if (!card || card.kind !== 'companion') throw new Error('目标不是已建立关系的同伴。');
+    const currentMember = state.party?.find(member => member.actorId === options.actorId);
+    if (currentMember?.groupId === 'main') throw new Error('同伴已经在主队中。');
+    const actor = state.actors[options.actorId];
+    if (!actor || actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) {
+      throw new Error('失能或濒危同伴不能自行重入队伍；需要先处理援救/结局风险。');
+    }
+    // Existing companion cards are not NPC candidates; re-entry uses the
+    // original recruitment relationship and the same locked template policy.
+    const anchor = await this.campaignAnchor(options.campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const template = entries.find(item => item.kind === 'actor_template' && item.entryId === card.templateId);
+    const leader = cards.find(item => item.controller === 'player');
+    const visible = template && template.visibility === 'public'
+      && isPlayerRecruitmentCandidate(template, facts, anchor.worldTimeOrder,
+        (state.discoveries ?? []).some(item => item.actorId === leader?.actorId && item.entryId === template.entryId));
+    const leaderState = leader ? state.actors[leader.actorId] : undefined;
+    const leaderAtRisk = !leaderState || leaderState.lifeStatus === 'critical' || leaderState.lifeStatus === 'dead'
+      || leaderState.conditions.includes('disabled');
+    const relationshipOk = template && leader && meetsRecruitmentRelationship(template, state.relationships ?? [], card.actorId, leader.actorId);
+    const policy = template?.definition as import('../../domain/content/types').ActorTemplateDefinition | undefined;
+    const questsOk = (policy?.recruitment?.requiredQuestIds ?? []).every(questId =>
+      state.questProgress?.find(progress => progress.questId === questId)?.status === 'succeeded');
+    if (!visible || !relationshipOk || !questsOk || !leader || !leaderState || leaderAtRisk
+      || leaderState.locationId !== actor.locationId) {
+      throw new Error('同伴重入被拒绝：公开招募资格或关系条件已不满足。');
+    }
+    if (!currentMember && (state.party ?? []).filter(member => member.role === 'companion').length >= 2) {
+      throw new Error('主队已达到最多两名同伴的上限。');
+    }
+    const member: PartySnapshotEntry = {
+      actorId: card.actorId, controller: 'companion', role: 'companion',
+      joinedAt: new Date().toISOString(), groupId: 'main',
+    };
+    const nextCard = { ...card, controller: 'companion' as const, companionLeaderActorId: leader!.actorId };
+    await this.commitLifecycleAction({
+      ...options, actorId: leader!.actorId, actionType: 'companion_rejoined', intent: `${card.name} 重回主队。`,
+      settlement: { partyUpserts: [member], cardUpserts: [{ actorId: card.actorId, card: nextCard }] },
+      updateState: next => {
+        next.party = [...(next.party ?? []).filter(item => item.actorId !== card.actorId), member];
+        next.cards = [...(next.cards ?? []).filter(item => item.actorId !== card.actorId), { actorId: card.actorId, card: nextCard }];
+      },
+      events: [{ eventType: 'companion_rejoined', payload: { actorId: card.actorId } }],
+    });
+  }
+
+  async shareKnowledge(options: {
+    campaignId: string; branchId: string; sourceActorId: string; recipientActorId: string;
+    entryId: string; channel: 'conversation' | 'signal';
+  }): Promise<void> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    await this.assertNoActiveEncounter(options.branchId);
+    if (options.channel !== 'conversation' && options.channel !== 'signal') {
+      throw new Error('通信方式必须明确选择 conversation 或 signal。');
+    }
+    const state = await this.deps.turns.getState(options.branchId);
+    if (!state) throw new Error(`Unknown branch: ${options.branchId}.`);
+    const partyIds = new Set((state.party ?? []).map(member => member.actorId));
+    if (!partyIds.has(options.sourceActorId) || !partyIds.has(options.recipientActorId)) {
+      throw new Error('知识传播只允许由当前战役中的队伍角色显式传递；NPC 与敌人的知识不会被直接改写。');
+    }
+    const source = state.actors[options.sourceActorId];
+    const recipient = state.actors[options.recipientActorId];
+    if (!source || !recipient) throw new Error('通信对象不在当前战役。');
+    for (const [actorId, actor] of [[options.sourceActorId, source], [options.recipientActorId, recipient]] as const) {
+      if (actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) {
+        throw new Error(`角色 ${actorId} 失能，无法完成通信。`);
+      }
+    }
+    let communicationPath = false;
+    if (options.channel === 'conversation') {
+      communicationPath = source.locationId === recipient.locationId;
+      if (!communicationPath) throw new Error('交谈通信要求双方位于同一地点。');
+    } else {
+      const anchor = await this.campaignAnchor(options.campaignId);
+      const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+      const scenes = (await this.loadPackageEntries(anchor.worldId, anchor.packageRevision))
+        .filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
+          && isEntryVisibleAtAnchor(entry, facts, anchor.worldTimeOrder))
+        .map(entry => entry.definition as SceneDefinition);
+      if (source.locationId !== recipient.locationId) throw new Error('信号通信要求双方位于同一地点的可连通场景。');
+      const scene = scenes.find(item => item.locationId === source.locationId);
+      const sourceZone = source.zoneId;
+      const recipientZone = recipient.zoneId;
+      const zone = scene?.zones.find(item => item.zoneId === sourceZone);
+      communicationPath = sourceZone === recipientZone || Boolean(zone?.exits.includes(recipientZone ?? ''));
+      if (!communicationPath) throw new Error('信号通信要求同区或相邻区域，且场景定义中有明确出口。');
+    }
+    const anchor = await this.campaignAnchor(options.campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const targetEntry = entries.find(item => item.entryId === options.entryId);
+    if (!targetEntry || targetEntry.visibility === 'gm' || !isEntryVisibleAtAnchor(targetEntry, facts, anchor.worldTimeOrder)) {
+      throw new Error('不能传递不存在、GM 专属或时间锚点尚不可见的信息。');
+    }
+    if (!(state.discoveries ?? []).some(item => item.actorId === options.sourceActorId && item.entryId === options.entryId)) {
+      throw new Error('信息来源角色尚未获知该条目，不能传递。');
+    }
+    if ((state.discoveries ?? []).some(item => item.actorId === options.recipientActorId && item.entryId === options.entryId)) {
+      throw new Error('接收角色已经知道该条目。');
+    }
+    await this.commitLifecycleAction({
+      ...options, actorId: options.sourceActorId, actionType: 'knowledge_shared', intent: `通过${options.channel}将 ${options.entryId} 传递给指定角色。`,
+      updateState: next => {
+        next.discoveries ??= [];
+        next.discoveries.push({
+          entryId: options.entryId, actorId: options.recipientActorId,
+          knownAtStateVersion: next.stateVersion + 1,
+          sourceTurnId: `system-knowledge_shared-${String(next.stateVersion + 1).padStart(6, '0')}`,
+          knownVia: 'told',
+        });
+      },
+      events: [{ eventType: 'knowledge_shared', payload: {
+        entryId: options.entryId, sourceActorId: options.sourceActorId,
+        recipientActorId: options.recipientActorId, channel: options.channel,
+      } }],
+    });
+    void communicationPath;
+  }
+
+  async transferItem(options: {
+    campaignId: string; branchId: string; itemId: string; fromActorId: string; toActorId: string;
+  }): Promise<void> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    await this.assertNoActiveEncounter(options.branchId);
+    const state = await this.deps.turns.getState(options.branchId);
+    if (!state) throw new Error(`Unknown branch: ${options.branchId}.`);
+    if (options.fromActorId === options.toActorId) throw new Error('物品转移必须改变持有人。');
+    if (state.itemOwners[options.itemId] !== options.fromActorId) {
+      throw new Error(`物品转移被拒绝：${options.itemId} 当前归属 ${state.itemOwners[options.itemId] ?? '无人'}。`);
+    }
+    const members = new Map((state.party ?? []).map(member => [member.actorId, member]));
+    const fromMember = members.get(options.fromActorId);
+    const toMember = members.get(options.toActorId);
+    const fromState = state.actors[options.fromActorId];
+    const toState = state.actors[options.toActorId];
+    const leader = state.party?.find(member => member.role === 'protagonist');
+    const leaderGroup = leader?.groupId ?? 'main';
+    if (!fromMember || !toMember || (fromMember.groupId ?? 'main') !== leaderGroup
+      || (toMember.groupId ?? 'main') !== leaderGroup || !fromState || !toState
+      || fromState.locationId !== toState.locationId) {
+      throw new Error('物品转移要求双方都在主队、同一地点且通信/交接可达。');
+    }
+    for (const actor of [fromState, toState]) {
+      if (actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) {
+        throw new Error('物品转移要求双方清醒且未失能。');
+      }
+    }
+    const anchor = await this.campaignAnchor(options.campaignId);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const item = entries.find(entry => entry.entryId === options.itemId);
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    if (!item || item.kind !== 'item' || item.visibility !== 'public'
+      || !isEntryVisibleAtAnchor(item, facts, anchor.worldTimeOrder)) {
+      throw new Error('物品转移被拒绝：物品不存在、未公开或在开局时间尚不可用。');
+    }
+    const nextOwners = { ...state.itemOwners, [options.itemId]: options.toActorId };
+    const nextSources = { ...(state.itemSources ?? {}), [options.itemId]: {
+      kind: 'transfer' as const,
+      sourceId: `system-item_transferred-${String(state.stateVersion + 1).padStart(6, '0')}`,
+      obtainedAtStateVersion: state.stateVersion + 1,
+    } };
+    await this.commitLifecycleAction({
+      ...options, actorId: leader?.actorId ?? options.fromActorId,
+      actionType: 'item_transferred', intent: `${options.itemId} 从 ${options.fromActorId} 转给 ${options.toActorId}。`,
+      updateState: next => { next.itemOwners = nextOwners; next.itemSources = nextSources; },
+      events: [{ eventType: 'item_transferred', payload: {
+        itemId: options.itemId, fromActorId: options.fromActorId, toActorId: options.toActorId,
+        sourceId: nextSources[options.itemId]!.sourceId,
+      } }],
+    });
   }
 
   private async loadPackageEntries(
@@ -245,14 +813,17 @@ export class CampaignSession {
     memories: ReadonlyArray<{ memoryId: string; summary: string; fromStateVersion: number; toStateVersion: number; invalidAt: number | null }> = [],
     queryText = '',
     viewerActorId = '',
+    worldTimeOrder = 0,
+    facts: Awaited<ReturnType<SqliteWorldStore['listFacts']>> = [],
   ): string {
     const parts: string[] = [];
     for (const entry of entries) {
+      if (!isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)) continue;
       if (entry.kind === 'lore' && entry.visibility === 'public') {
         const lore = entry.definition as LoreDefinition;
         parts.push(`【世界】${lore.name}: ${lore.text}`);
       }
-      if (entry.kind === 'constraint' && entry.visibility !== 'gm') {
+      if (entry.kind === 'constraint' && entry.visibility === 'public') {
         const constraint = entry.definition as ConstraintDefinition;
         parts.push(`【世界规则】${constraint.name}: ${constraint.description}`);
       }
@@ -269,9 +840,23 @@ export class CampaignSession {
         return `${entry.entryId}:${clue.name ?? clue.title ?? entry.entryId}`;
       }).join('、')}。仅在观察、交互或相关检定成功且引用对应 ID 时记录为角色已知。`);
     }
+    const viewerGroupId = (state.party ?? []).find(member => member.actorId === viewerActorId)?.groupId ?? 'main';
+    const visiblePartyIds = new Set((state.party ?? [])
+      .filter(member => (member.groupId ?? 'main') === viewerGroupId)
+      .map(member => member.actorId));
+    const visibleNpcTemplateIds = new Set(entries.filter(entry => entry.kind === 'actor_template'
+      && entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+      && isTemplateValidAtAnchor(entry, worldTimeOrder))
+      .map(entry => entry.entryId));
     for (const card of cards) {
       const actor = state.actors[card.actorId];
       if (!actor) continue;
+      if (!visiblePartyIds.has(card.actorId)) {
+        if (card.kind !== 'npc' || !visibleNpcTemplateIds.has(card.templateId ?? '') || actor.locationId !== currentLocation) continue;
+        parts.push(`【可见人物】${card.actorId}(${card.name}) 位于当前位置。`);
+        continue;
+      }
+      if (actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) continue;
       const resources = Object.entries(actor.resources)
         .map(([key, value]) => `${key}:${value}/${card.resourceMax[key] ?? '?'}`)
         .join(' ');
@@ -307,7 +892,7 @@ export class CampaignSession {
       viewerActorId,
       branchId: state.branchId,
       worldTimeOrder: state.stateVersion,
-      queryText: `${queryText} ${goal} ${Object.values(state.actors).map(actor => actor.locationId).join(' ')}`,
+      queryText: `${queryText} ${goal} ${currentLocation ?? ''}`,
       limit: 8,
     });
     if (retrieved.items.length > 0) {
@@ -336,6 +921,7 @@ export class CampaignSession {
     contract: ActionContract,
     grade: RollGrade,
     entries: readonly ContentEntry[],
+    cards: readonly ActorCard[],
     sourceLocationId: string,
   ): Array<{ eventType: string; payload: unknown }> {
     const events: Array<{ eventType: string; payload: unknown }> = [];
@@ -360,6 +946,36 @@ export class CampaignSession {
         actor.abilityCooldowns ??= {};
         actor.abilityCooldowns[contract.abilityId] = nextState.stateVersion + 1 + cooldownRounds;
       }
+    }
+
+    const relationship = this.socialRelationshipDelta(nextState, contract, grade, entries, cards);
+    if (relationship) {
+      nextState.relationships = [...(nextState.relationships ?? []).filter(item =>
+        !(item.fromActorId === relationship.fromActorId && item.toActorId === relationship.toActorId)), relationship];
+      events.push({ eventType: 'relationship_changed', payload: {
+        relId: relationship.relId, fromActorId: relationship.fromActorId,
+        toActorId: relationship.toActorId, closeness: relationship.closeness,
+        sourceTurnId: contract.turnId,
+      } });
+    }
+
+    for (const effect of contract.outcomes[grade]?.effects ?? []) {
+      if (effect.op !== 'transferItem') continue;
+      const fromMember = nextState.party?.find(member => member.actorId === effect.fromActorId);
+      const toMember = nextState.party?.find(member => member.actorId === effect.toActorId);
+      const fromState = nextState.actors[effect.fromActorId];
+      const toState = nextState.actors[effect.toActorId];
+      if (!fromMember || !toMember || (fromMember.groupId ?? 'main') !== (toMember.groupId ?? 'main')
+        || !fromState || !toState || fromState.locationId !== toState.locationId
+        || fromState.lifeStatus === 'critical' || fromState.lifeStatus === 'dead'
+        || toState.lifeStatus === 'critical' || toState.lifeStatus === 'dead'
+        || nextState.itemOwners[effect.itemId] !== effect.toActorId) {
+        throw new Error('物品转移被拒绝：双方必须同组、同地且清醒，物品归属必须匹配。');
+      }
+      nextState.itemSources ??= {};
+      nextState.itemSources[effect.itemId] = {
+        kind: 'transfer', sourceId: contract.turnId, obtainedAtStateVersion: nextState.stateVersion + 1,
+      };
     }
 
     if (grade !== 'success' && grade !== 'full_success') return events;
@@ -450,6 +1066,12 @@ export class CampaignSession {
           const existingOwner = nextState.itemOwners[itemId];
           const granted = existingOwner === undefined;
           if (granted) nextState.itemOwners[itemId] = contract.actorId;
+          if (granted) {
+            nextState.itemSources ??= {};
+            nextState.itemSources[itemId] = {
+              kind: 'quest_reward', sourceId: questEntry.entryId, obtainedAtStateVersion: eventVersion,
+            };
+          }
           nextState.questRewards.push({
             questId: questEntry.entryId,
             rewardId,
@@ -463,6 +1085,34 @@ export class CampaignSession {
       }
     }
     return events;
+  }
+
+  private socialRelationshipDelta(
+    state: GameStateSnapshot,
+    contract: ActionContract,
+    grade: RollGrade,
+    entries: readonly ContentEntry[],
+    cards: readonly ActorCard[],
+  ): RelationshipSnapshotEntry | null {
+    if (contract.actionType !== 'skill_check' || !contract.targetId || !contract.skillId) return null;
+    const skillId = contract.skillId.replace(/^skill-/, '');
+    const skill = entries.find(entry => entry.kind === 'skill'
+      && (entry.entryId === contract.skillId || entry.entryId.replace(/^skill-/, '') === skillId));
+    if (!skill || (skill.definition as SkillDefinition).usage !== 'social') return null;
+    const target = cards.find(card => card.actorId === contract.targetId);
+    const sourceState = state.actors[contract.actorId];
+    const targetState = state.actors[contract.targetId];
+    if (!target || (target.kind !== 'npc' && target.kind !== 'companion') || !sourceState || !targetState
+      || sourceState.locationId !== targetState.locationId) return null;
+    const relation = state.relationships?.find(item => item.fromActorId === target.actorId && item.toActorId === contract.actorId);
+    if (!relation) return null;
+    const delta = grade === 'full_success' ? 2 : grade === 'success' ? 1 : grade === 'severe_failure' ? -1 : 0;
+    if (delta === 0) return null;
+    return {
+      ...relation,
+      closeness: Math.max(0, Math.min(100, relation.closeness + delta)),
+      updatedTurnId: contract.turnId,
+    };
   }
 
   /**
@@ -496,10 +1146,39 @@ export class CampaignSession {
           '历史与存档保持可读；请从世界书架用当前三宝书重新开局。',
       );
     }
-    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision);
-    const { catalog, abilities, scenes, constraints } = packageIndexes(entries);
+    const allEntries = await this.loadPackageEntries(summary.worldId, summary.packageRevision);
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
+    const playerState = summary.state.actors[playerCard.actorId];
+    if (!playerState || playerState.lifeStatus === 'critical' || playerState.lifeStatus === 'dead'
+      || playerState.conditions.includes('disabled')) {
+      throw new Error('失能或濒危角色不能提交新的自由行动；需要先处理援救或结局风险。');
+    }
+    const allCards = await this.loadAllCards(options.branchId);
+    const campaignAnchorRow = await this.deps.db.queryOne<{ anchor_json: string }>(
+      'SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [options.campaignId],
+    );
+    const anchor = campaignAnchorRow ? JSON.parse(campaignAnchorRow.anchor_json) as { worldTimeOrder?: number } : {};
+    const worldTimeOrder = Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0;
+    const facts = await this.deps.worldStore.listFacts(summary.worldId);
+    const knownEntryIds = new Set((summary.state.discoveries ?? [])
+      .filter(item => item.actorId === playerCard.actorId).map(item => item.entryId));
+    const entries = projectPlayerEntriesAtAnchor(allEntries, facts, worldTimeOrder, knownEntryIds);
+    // The local authority may resolve hidden clue/quest references, but this
+    // full time-valid package projection is never passed to the planner.
+    const authoritativeEntries = allEntries.filter(entry => isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+      && (entry.kind !== 'actor_template' || isTemplateValidAtAnchor(entry, worldTimeOrder)));
+    const { catalog, abilities, scenes, constraints } = packageIndexes(entries);
+    const partyGroupId = (summary.state.party ?? []).find(member => member.actorId === playerCard.actorId)?.groupId ?? 'main';
+    const sameGroupIds = new Set((summary.state.party ?? [])
+      .filter(member => (member.groupId ?? 'main') === partyGroupId).map(member => member.actorId));
+    const publicLocalNpcIds = new Set(allCards.filter(card => card.kind === 'npc'
+      && card.templateId && entries.some(entry => entry.kind === 'actor_template'
+        && entry.entryId === card.templateId && entry.visibility === 'public'
+        && isTemplateValidAtAnchor(entry, worldTimeOrder))
+      && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId)
+      .map(card => card.actorId));
+    const plannerCards = allCards.filter(card => sameGroupIds.has(card.actorId) || publicLocalNpcIds.has(card.actorId));
 
     const stateVersion = options.turnIdOverride
       ? Number.parseInt(options.turnIdOverride.replace(/^turn-/, ''), 10)
@@ -508,7 +1187,8 @@ export class CampaignSession {
     const recentHistory = await this.deps.turns.listCommittedTurns(options.branchId);
     const memories = await this.deps.game.listMemories(options.branchId);
     const worldContext = this.buildWorldContext(
-      entries, summary.cards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
+      entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
+      worldTimeOrder, facts,
     );
 
     let usageSeq = 0;
@@ -528,14 +1208,14 @@ export class CampaignSession {
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
         actingCard: playerCard,
-        cards: summary.cards,
+        cards: plannerCards,
         catalog,
         abilities,
         scenes,
         constraints,
         updateCommittedState: (nextState, contract, grade) => {
           const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
-          return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, entries, sourceLocationId);
+          return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
         },
         resolveRollSpec(contract: ActionContract) {
           // Card-driven: attributes and dice come from the character card and
@@ -550,29 +1230,34 @@ export class CampaignSession {
             (contract.difficultyBand ?? 'normal') as DifficultyBand,
           );
         },
-      async settlementFor(grade, contract) {
-        const actingActorId = contractActorId(contract, summary.cards);
-        const actingCard = summary.cards.find(card => card.actorId === (actingActorId ?? actorId));
+      settlementFor: async (grade, contract) => {
+        const actingActorId = contractActorId(contract, plannerCards);
+        const actingCard = plannerCards.find(card => card.actorId === (actingActorId ?? actorId));
         const storedSkillKey = contract.skillId && actingCard
           ? (resolveSkillKey(actingCard, contract.skillId) ?? contract.skillId)
           : contract.skillId;
         // Practice only for risky checks; automatic actions never award.
+        let plan: TurnSettlementPlan;
         if (!contract.requiresRoll || !storedSkillKey) {
-          return emptySettlement(options.encounterId ?? `auto-${options.branchId}-${turnId}`);
+          plan = emptySettlement(options.encounterId ?? `auto-${options.branchId}-${turnId}`);
+        } else {
+          const challengeId = options.encounterId
+            ?? await deriveChallengeId(gameStore, options.branchId, actingActorId ?? actorId, storedSkillKey);
+          plan = await buildTurnSettlement({
+            gameStore,
+            branchId: options.branchId,
+            turnId,
+            encounterId: challengeId,
+            actorId: actingActorId ?? actorId,
+            skillId: storedSkillKey,
+            outcomeGrade: grade,
+            stateVersion,
+            closeChallenge: !options.encounterId && (grade === 'full_success' || grade === 'success'),
+          });
         }
-        const challengeId = options.encounterId
-          ?? await deriveChallengeId(gameStore, options.branchId, actingActorId ?? actorId, storedSkillKey);
-        return buildTurnSettlement({
-          gameStore,
-          branchId: options.branchId,
-          turnId,
-          encounterId: challengeId,
-          actorId: actingActorId ?? actorId,
-          skillId: storedSkillKey,
-          outcomeGrade: grade,
-          stateVersion,
-          closeChallenge: !options.encounterId && (grade === 'full_success' || grade === 'success'),
-        });
+        const relationship = this.socialRelationshipDelta(summary.state, contract, grade, entries, plannerCards);
+        if (relationship) plan.relationships = [relationship];
+        return plan;
       },
         usageRecorder: record => {
           void this.deps.game.recordLlmUsage({
@@ -633,8 +1318,8 @@ export class CampaignSession {
     if (!playerCard) throw new Error('Campaign has no player character card.');
     const actor = summary.state.actors[playerCard.actorId];
     if (!actor) throw new Error('Player actor is missing from state.');
-    if (actor.conditions.includes('disabled')) {
-      throw new Error('A disabled character cannot rest; resolve the encounter first.');
+    if (actor.lifeStatus === 'critical' || actor.lifeStatus === 'dead' || actor.conditions.includes('disabled')) {
+      throw new Error('失能或濒危角色不能自行休整；需要先处理援救或结局风险。');
     }
 
     const minutes = options.kind === 'short' ? 30 : 8 * 60;
@@ -706,8 +1391,8 @@ export class CampaignSession {
 
     const actorState = state.actors[options.actorId];
     if (!actorState) throw new Error(`Actor ${options.actorId} is missing from the branch state.`);
-    if (actorState.conditions.includes('disabled')) {
-      throw new Error('A disabled character cannot train; resolve the encounter first.');
+    if (actorState.lifeStatus === 'critical' || actorState.lifeStatus === 'dead' || actorState.conditions.includes('disabled')) {
+      throw new Error('失能或濒危角色不能训练；需要先处理援救或结局风险。');
     }
 
     // --- Real condition queries (never UI booleans) ---
@@ -814,6 +1499,7 @@ export class CampaignSession {
     points: number;
     encounterId: string;
   }): Promise<{ granted: number; replayed: boolean }> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
     await this.assertNoActiveEncounter(options.branchId);
     const card = await this.getCard(options.branchId, options.actorId);
     const storedSkillKey = resolveSkillKey(card, options.skillId) ?? options.skillId;
@@ -889,7 +1575,7 @@ export class CampaignSession {
    * locations, playable canon characters and companion templates. Used
    * before any campaign exists; read-only over immutable data.
    */
-  async getWorldSetup(worldId: string): Promise<{
+  async getWorldSetup(worldId: string, worldTimeOrder?: number, lockedPackageRevision?: number): Promise<{
     packageRevision: number | null;
     rulesetVersion: string;
     skills: Array<{ entryId: string; name: string; attribute: string; allowUntrained: boolean }>;
@@ -898,17 +1584,20 @@ export class CampaignSession {
     locations: string[];
     canonCharacters: Array<{ entityId: string; name: string }>;
     companionTemplates: Array<{ entryId: string; name: string; description: string }>;
+    encounterTemplates: Array<{ entryId: string; name: string }>;
   }> {
-    const revision = await this.deps.worldStore.getPublishedPackageRevision(worldId);
+    const revision = lockedPackageRevision ?? await this.deps.worldStore.getPublishedPackageRevision(worldId);
     if (revision === null) {
       return {
         packageRevision: null, rulesetVersion: '', skills: [], lore: [],
-        anchorEvents: [], locations: [], canonCharacters: [], companionTemplates: [],
+        anchorEvents: [], locations: [], canonCharacters: [], companionTemplates: [], encounterTemplates: [],
       };
     }
     const entries = await this.loadPackageEntries(worldId, revision);
+    const facts = await this.deps.worldStore.listFacts(worldId);
     const skills = entries
-      .filter(entry => entry.kind === 'skill')
+      .filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
+        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
       .map(entry => {
         const def = entry.definition as { name?: string; attribute?: string; allowUntrained?: boolean };
         return {
@@ -919,13 +1608,15 @@ export class CampaignSession {
         };
       });
     const lore = entries
-      .filter(entry => entry.kind === 'lore' && entry.visibility !== 'gm')
+      .filter(entry => entry.kind === 'lore' && entry.visibility === 'public'
+        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
       .map(entry => {
         const def = entry.definition as { name?: string; text?: string };
         return { name: def.name ?? entry.entryId, text: def.text ?? '' };
       });
     const scenes = entries
-      .filter(entry => entry.kind === 'scene')
+      .filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
+        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
       .map(entry => entry.definition as SceneDefinition);
     // Locations come from package scene entries AND the novel's canon
     // location entities (the extractor always produces those) - a package
@@ -933,10 +1624,17 @@ export class CampaignSession {
     // instead of blocking the opening wizard (G02).
     const canonLocations = (await this.deps.worldStore.listEntities(worldId))
       .filter(entity => entity.type === 'location')
+      .filter(entity => facts.some(fact => fact.subjectEntityId === entity.entityId
+        && fact.status !== 'speculation' && fact.status !== 'conflict'
+        && (worldTimeOrder === undefined
+          ? fact.validFrom === null && fact.validTo === null && fact.revealAt === null
+          : isFactVisibleAtAnchor(fact, worldTimeOrder))))
       .map(entity => entity.name);
     const locations = [...new Set([...scenes.map(scene => scene.locationId), ...canonLocations])];
     const companionTemplates = entries
-      .filter(entry => entry.kind === 'actor_template')
+      .filter(entry => entry.visibility === 'public'
+        && isPlayerRecruitmentCandidate(entry, facts, worldTimeOrder)
+        && openingRelationshipFor(entry, worldTimeOrder ?? 0) !== null)
       .map(entry => {
         const def = entry.definition as { name?: string; description?: string };
         return {
@@ -945,6 +1643,14 @@ export class CampaignSession {
           description: def.description ?? '',
         };
       });
+    const encounterTemplates = entries
+      .filter(entry => entry.kind === 'actor_template' && entry.visibility === 'public'
+        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+        && isTemplateValidAtAnchor(entry, worldTimeOrder))
+      .map(entry => ({
+        entryId: entry.entryId,
+        name: (entry.definition as { name?: string }).name ?? entry.entryId,
+      }));
 
     // Anchor candidates: canon events in world-time order (the opening must
     // pick a REAL point in the story, not a fixed placeholder), plus the
@@ -952,6 +1658,7 @@ export class CampaignSession {
     const events = await this.deps.worldStore.listEvents(worldId);
     const anchorEvents = [...events]
       .filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
+      .filter(event => lockedPackageRevision === undefined || event.worldTimeOrder! <= (worldTimeOrder ?? 0))
       .sort((a, b) => (a.worldTimeOrder ?? 0) - (b.worldTimeOrder ?? 0))
       .slice(0, 40)
       .map(event => ({
@@ -963,6 +1670,11 @@ export class CampaignSession {
     const entities = await this.deps.worldStore.listEntities(worldId);
     const canonCharacters = entities
       .filter(entity => entity.type === 'character')
+      .filter(entity => facts.some(fact => fact.subjectEntityId === entity.entityId
+        && fact.status !== 'speculation' && fact.status !== 'conflict'
+        && (worldTimeOrder === undefined
+          ? fact.validFrom === null && fact.validTo === null && fact.revealAt === null
+          : isFactVisibleAtAnchor(fact, worldTimeOrder))))
       .slice(0, 60)
       .map(entity => ({ entityId: entity.entityId, name: entity.name }));
 
@@ -976,6 +1688,7 @@ export class CampaignSession {
       locations,
       canonCharacters,
       companionTemplates,
+      encounterTemplates,
     };
   }
 
@@ -1124,13 +1837,53 @@ function trainingSourceSatisfied(
 ): boolean {
   if (!definition || (definition.powerTier ?? 'ordinary') === 'ordinary') return true;
   const currentRank = card.skills[skillId] ?? 'untrained';
+  const traineeGroup = (state.party ?? []).find(member => member.actorId === card.actorId)?.groupId ?? 'main';
   return cards.some(other => {
     if (other.actorId === card.actorId) return false;
     if (other.controller === 'gm') return false;
+    const member = (state.party ?? []).find(item => item.actorId === other.actorId);
+    if (!member || (member.groupId ?? 'main') !== traineeGroup) return false;
     const otherState = state.actors[other.actorId];
-    if (!otherState || otherState.locationId !== actorState.locationId) return false;
+    if (!otherState || otherState.locationId !== actorState.locationId
+      || otherState.lifeStatus === 'critical' || otherState.lifeStatus === 'dead'
+      || otherState.conditions.includes('disabled')) return false;
     const otherRank = other.skills[skillId] ?? 'untrained';
     return SKILL_RANK_ORDER.indexOf(otherRank) > SKILL_RANK_ORDER.indexOf(currentRank);
+  });
+}
+
+/** Filter package entries and nested scene references before constructing any
+ * player or planner projection. A public scene must not reveal a private,
+ * undiscovered, or not-yet-valid actor/item/clue by embedding its id. */
+function projectPlayerEntriesAtAnchor(
+  allEntries: readonly ContentEntry[],
+  facts: readonly import('../ports/worldStore').StoredFact[],
+  worldTimeOrder: number,
+  discoveredEntryIds: ReadonlySet<string>,
+): ContentEntry[] {
+  const visible = allEntries.filter(entry => (entry.visibility === 'public'
+      || (entry.visibility === 'discoverable' && discoveredEntryIds.has(entry.entryId)))
+    && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+    && (entry.kind !== 'actor_template' || isTemplateValidAtAnchor(entry, worldTimeOrder)));
+  const visibleById = new Map(visible.map(entry => [entry.entryId, entry]));
+  return visible.map(entry => {
+    if (entry.kind !== 'scene') return entry;
+    const scene = entry.definition as SceneDefinition;
+    const refs = (ids: readonly string[] | undefined, kind?: ContentEntry['kind']): string[] =>
+      (ids ?? []).filter(id => {
+        const target = visibleById.get(id);
+        return Boolean(target && (kind === undefined || target.kind === kind));
+      });
+    return {
+      ...entry,
+      definition: {
+        ...scene,
+        actors: refs(scene.actors, 'actor_template'),
+        visibleItems: refs(scene.visibleItems, 'item'),
+        hazards: refs(scene.hazards),
+        clues: refs(scene.clues),
+      } satisfies SceneDefinition,
+    };
   });
 }
 

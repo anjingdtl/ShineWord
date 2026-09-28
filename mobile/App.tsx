@@ -871,6 +871,7 @@ interface WorldSetup {
   locations: string[];
   canonCharacters: Array<{ entityId: string; name: string }>;
   companionTemplates: Array<{ entryId: string; name: string; description: string }>;
+  encounterTemplates: Array<{ entryId: string; name: string }>;
 }
 
 function OpeningScreen(props: {
@@ -924,6 +925,27 @@ function OpeningScreen(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.worldId]);
 
+  useEffect(() => {
+    const anchorOrder = setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.worldTimeOrder;
+    if (anchorOrder === undefined) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await createSession(props.profile, await buildProvider(props.profile));
+        const anchored = await session.getWorldSetup(props.worldId, anchorOrder);
+        if (cancelled) return;
+        setSetup(current => current ? { ...anchored, anchorEvents: current.anchorEvents } : anchored);
+        if (!anchored.locations.includes(locationId) && anchored.locations[0]) setLocationId(anchored.locations[0]);
+        setCompanions(current => current.filter(id => anchored.companionTemplates.some(template => template.entryId === id)));
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+    // The selected anchor controls which time-bounded facts can enter the opening projection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.worldId, anchorEventId]);
+
   const spentTotal = ATTRIBUTES.reduce((sum, attr) => sum + (points[attr.key] - 1), 0);
 
   function bump(key: string, delta: number) {
@@ -958,11 +980,15 @@ function OpeningScreen(props: {
     setError(null);
     try {
       const session = await createSession(props.profile, await buildProvider(props.profile));
-      const worldSetup = await session.getWorldSetup(props.worldId);
+      const selectedAnchor = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+      const worldSetup = await session.getWorldSetup(props.worldId, selectedAnchor?.worldTimeOrder);
       if (worldSetup.packageRevision === null) throw new Error('世界包尚未发布。');
       if (worldSetup.locations.length === 0) throw new Error('这个世界没有可用的开局地点（场景条目缺失）。');
       const chosenLocation = locationId || worldSetup.locations[0];
       const anchorEvent = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
+      if (setup?.anchorEvents.length && !anchorEvent) throw new Error('开局锚点不在已发布原著事件中。');
+      const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
+      if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
       const actorName = name.trim() || '无名旅人';
       const campaignId = `camp-${Date.now().toString(36)}`;
       const runtime = await getDatabaseRuntime();
@@ -1194,6 +1220,12 @@ function PlayScreen(props: {
   const [encounter, setEncounter] = useState<EncounterView | null>(null);
   const [encounterTemplates, setEncounterTemplates] = useState<Array<{ entryId: string; name: string }>>([]);
   const [encounterTemplateId, setEncounterTemplateId] = useState<string>('');
+  const [recruitmentOptions, setRecruitmentOptions] = useState<Array<{
+    actorId: string; name: string; eligible: boolean; reason: string | null;
+  }>>([]);
+  const [rejoinOptions, setRejoinOptions] = useState<Array<{
+    actorId: string; name: string; eligible: boolean; reason: string | null;
+  }>>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -1203,6 +1235,23 @@ function PlayScreen(props: {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [props.campaignId, props.branchId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await createSession(props.profile, await buildProvider(props.profile));
+        const options = await session.getRecruitmentOptions(props.campaignId, props.branchId);
+        const rejoin = await session.getRejoinOptions(props.campaignId, props.branchId);
+        if (!cancelled) { setRecruitmentOptions(options); setRejoinOptions(rejoin); }
+      } catch {
+        if (!cancelled) { setRecruitmentOptions([]); setRejoinOptions([]); }
+      }
+    })();
+    return () => { cancelled = true; };
+    // Refresh after every committed state change; eligibility is derived from current location, quests and relationship.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.campaignId, props.branchId, state?.stateVersion]);
 
   useEffect(() => {
     refresh();
@@ -1231,10 +1280,12 @@ function PlayScreen(props: {
     (async () => {
       try {
         const session = await createSession(props.profile, await buildProvider(props.profile));
-        const setup = await session.getWorldSetup(state?.worldId ?? '');
-        if (!cancelled && setup.companionTemplates.length > 0) {
-          setEncounterTemplates(setup.companionTemplates.map(t => ({ entryId: t.entryId, name: t.name })));
-          setEncounterTemplateId(prev => prev || setup.companionTemplates[0].entryId);
+        const setup = await session.getWorldSetup(
+          state?.worldId ?? '', state?.anchorWorldTimeOrder ?? undefined, state?.packageRevision,
+        );
+        if (!cancelled && setup.encounterTemplates.length > 0) {
+          setEncounterTemplates(setup.encounterTemplates);
+          setEncounterTemplateId(prev => prev || setup.encounterTemplates[0]!.entryId);
         }
       } catch {
         // Encounter templates are optional; ignore load failures here.
@@ -1275,6 +1326,20 @@ function PlayScreen(props: {
       await refresh();
     } catch (e) {
       setIntent(value);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function partyCall(action: (session: Awaited<ReturnType<typeof createSession>>) => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await createSession(props.profile, await buildProvider(props.profile));
+      await action(session);
+      await refresh();
+    } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -1573,6 +1638,102 @@ function PlayScreen(props: {
         </View>
       ) : null}
 
+      {state?.playerCard ? (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>队伍、招募与通信</Text>
+          {state.cards.filter(card => card.kind === 'companion').map(card => {
+            const member = state.party.find(item => item.actorId === card.actorId);
+            const groupId = member?.groupId ?? 'main';
+            return (
+              <View key={card.actorId} style={styles.card}>
+                <Text style={styles.bodyText}>
+                  {card.name} · {groupId === 'main' ? '主队' : `分队 ${groupId}`}
+                  {state.partyStatuses[card.actorId]?.lifeStatus === 'critical' ? ' · 濒危待援救/处置' : ''}
+                  {state.partyStatuses[card.actorId]?.conditions.includes('disabled') ? ' · 失能' : ''}
+                </Text>
+                {groupId !== 'main' ? (
+                  <TouchableOpacity style={styles.secondary} disabled={busy} onPress={() => partyCall(s => s.rejoinCompanion({
+                    campaignId: props.campaignId, branchId: props.branchId, actorId: card.actorId,
+                  }))}>
+                    <Text style={styles.secondaryText}>重入主队</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.row}>
+                    {(['follow', 'support', 'protect', 'conserve', 'retreat'] as const).map(directive => (
+                      <TouchableOpacity key={directive} style={styles.secondary} disabled={busy}
+                        onPress={() => partyCall(s => s.setCompanionDirective({
+                          campaignId: props.campaignId, branchId: props.branchId, actorId: card.actorId, directive,
+                        }))}>
+                        <Text style={styles.secondaryText}>{directive}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity style={styles.secondary} disabled={busy} onPress={() => partyCall(s => s.splitCompanions({
+                      campaignId: props.campaignId, branchId: props.branchId,
+                      actorIds: [card.actorId], groupId: `group-${Date.now().toString(36)}`,
+                    }))}>
+                      <Text style={styles.secondaryText}>分队</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.secondary} disabled={busy} onPress={() => partyCall(s => s.leaveCompanion({
+                      campaignId: props.campaignId, branchId: props.branchId, actorId: card.actorId,
+                    }))}>
+                      <Text style={styles.secondaryText}>退出队伍</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {state.discoveredEntryIds.map(entryId => (
+                  <TouchableOpacity key={`${card.actorId}-${entryId}`} style={styles.secondary} disabled={busy}
+                    onPress={() => partyCall(s => s.shareKnowledge({
+                      campaignId: props.campaignId, branchId: props.branchId,
+                      sourceActorId: state.playerCard!.actorId, recipientActorId: card.actorId,
+                      entryId, channel: 'conversation',
+                    }))}>
+                    <Text style={styles.secondaryText}>当面分享已知信息：{entryId}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            );
+          })}
+          {recruitmentOptions.map(option => (
+            <View key={option.actorId} style={styles.row}>
+              <Text style={styles.bodyText}>{option.name}</Text>
+              <TouchableOpacity style={styles.secondary} disabled={busy || !option.eligible}
+                onPress={() => partyCall(s => s.recruitCompanion({
+                  campaignId: props.campaignId, branchId: props.branchId, actorId: option.actorId, directive: 'follow',
+                }))}>
+                <Text style={styles.secondaryText}>{option.eligible ? '招募' : option.reason ?? '暂不可招募'}</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+          {rejoinOptions.filter(option => !state.cards.some(card => card.actorId === option.actorId)).map(option => (
+            <View key={`rejoin-${option.actorId}`} style={styles.row}>
+              <Text style={styles.bodyText}>{option.name}（离队）</Text>
+              <TouchableOpacity style={styles.secondary} disabled={busy || !option.eligible}
+                onPress={() => partyCall(s => s.rejoinCompanion({
+                  campaignId: props.campaignId, branchId: props.branchId, actorId: option.actorId,
+                }))}>
+                <Text style={styles.secondaryText}>{option.eligible ? '重新招募' : option.reason ?? '暂不可重入'}</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+          {state.items.map(item => (
+            <View key={item.itemId} style={styles.row}>
+              <Text style={styles.muted}>
+                {item.itemId} · {state.cards.find(card => card.actorId === item.ownerActorId)?.name ?? item.ownerActorId} · {item.source?.kind ?? '来源未记录'}:{item.source?.sourceId ?? '—'}
+              </Text>
+              {state.cards.filter(card => card.actorId !== item.ownerActorId).map(card => (
+                <TouchableOpacity key={`${item.itemId}-${card.actorId}`} style={styles.secondary} disabled={busy}
+                  onPress={() => partyCall(s => s.transferItem({
+                    campaignId: props.campaignId, branchId: props.branchId,
+                    itemId: item.itemId, fromActorId: item.ownerActorId, toActorId: card.actorId,
+                  }))}>
+                  <Text style={styles.secondaryText}>交给 {card.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       <FlatList
         style={styles.story}
         data={turns}
@@ -1606,6 +1767,8 @@ function PlayScreen(props: {
           ))}
           <Text style={styles.tag}>
             HP {state.playerResources.hp ?? '?'} · 体力 {state.playerResources.stamina ?? '?'}
+            {state.playerLifeStatus === 'critical' ? ' · 濒危待援救/处置' : state.playerLifeStatus === 'dead' ? ' · 已结束' : ''}
+            {state.playerConditions.includes('disabled') ? ' · 失能' : ''}
           </Text>
         </View>
       ) : null}

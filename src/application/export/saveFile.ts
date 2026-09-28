@@ -90,7 +90,7 @@ export interface SaveFile {
   memories: Array<{ memoryId: string; kind: string; summary: string; fromStateVersion: number; toStateVersion: number }>;
   /** Character cards (full card JSON) — without them the game cannot continue. */
   cards: Array<{ actorId: string; cardJson: string }>;
-  party: Array<{ actorId: string; controller: string; role: string; joinedAt: string }>;
+  party: Array<{ actorId: string; controller: string; role: string; joinedAt: string; groupId?: string }>;
   /** Reward ledger — the hard dedup gate, restored so replays never double-award. */
   rewardLedger: Array<{ encounterId: string; actorId: string; skillId: string; rewardKind: string; grantedAt: string }>;
   /** Immutable branch event log (audit + derived-projection rebuild input). */
@@ -303,8 +303,8 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     'SELECT actor_id, card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
     [input.branchId],
   );
-  const party = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
-    'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+  const party = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string; party_group_id: string }>(
+    'SELECT actor_id, controller, role, joined_at, party_group_id FROM party_members WHERE branch_id = ? ORDER BY actor_id',
     [input.branchId],
   );
   const ledger = await db.queryAll<{ encounter_id: string; actor_id: string; skill_id: string; reward_kind: string; granted_at: string }>(
@@ -347,6 +347,7 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
       controller: member.controller,
       role: member.role,
       joinedAt: member.joined_at,
+      groupId: member.party_group_id,
     })),
     rewardLedger: ledger.map(row => ({
       encounterId: row.encounter_id,
@@ -799,9 +800,9 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
     }
     for (const member of save.party) {
       await tx.execute(
-        `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [input.newBranchId, member.actorId, member.controller, member.role, member.joinedAt],
+        `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at, party_group_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [input.newBranchId, member.actorId, member.controller, member.role, member.joinedAt, member.groupId ?? 'main'],
       );
     }
     await replaceEncounterSnapshots(tx, input.newBranchId, state.encounters ?? []);

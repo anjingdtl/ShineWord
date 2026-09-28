@@ -79,6 +79,28 @@ export async function commitResolvedTurn({
   const nextState = applyEffects(state, outcome.effects, contract.timeCostMinutes);
   updateNextState?.(nextState);
   const domainEvents = applyAuthoritativeState?.(nextState) ?? [];
+  const lifeEvents: Array<{ eventType: string; payload: unknown }> = [];
+  const actorIds = new Set([...Object.keys(state.actors), ...Object.keys(nextState.actors)]);
+  for (const actorId of actorIds) {
+    const before = state.actors[actorId];
+    const after = nextState.actors[actorId];
+    if (!after) continue;
+    const beforeStatus = before?.lifeStatus ?? ((before?.resources.hp ?? 1) <= 0 ? 'critical' : 'active');
+    const afterStatus = after.lifeStatus ?? ((after.resources.hp ?? 1) <= 0 ? 'critical' : 'active');
+    if (beforeStatus !== 'critical' && afterStatus === 'critical') {
+      lifeEvents.push({ eventType: 'actor_entered_critical_state', payload: {
+        actorId, actionType: contract.actionType, sourceTurnId: contract.turnId,
+      } });
+    } else if (beforeStatus === 'critical' && afterStatus === 'active') {
+      lifeEvents.push({ eventType: 'actor_recovered_from_critical', payload: {
+        actorId, actionType: contract.actionType, sourceTurnId: contract.turnId,
+      } });
+    } else if (beforeStatus !== 'dead' && afterStatus === 'dead') {
+      lifeEvents.push({ eventType: 'actor_death_resolved', payload: {
+        actorId, actionType: contract.actionType, sourceTurnId: contract.turnId,
+      } });
+    }
+  }
   nextState.stateVersion = state.stateVersion + 1;
 
   const committedTurn: CommittedTurn = {
@@ -102,7 +124,7 @@ export async function commitResolvedTurn({
     actionContractHash: contractHash,
     committedTurn,
     settlement,
-    events: [...(events ?? []), ...domainEvents],
+    events: [...(events ?? []), ...domainEvents, ...lifeEvents],
   });
 
   return { committedTurn: stored, replayed: false };

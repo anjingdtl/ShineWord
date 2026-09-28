@@ -16,6 +16,7 @@ const { SqliteWorldStore } = require('../dist/infra/sqlite/sqliteWorldStore');
 const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeStore');
 const { assembleBook } = require('../dist/application/worldPackage/publish');
 const { CampaignSession } = require('../dist/application/campaign/session');
+const { commitResolvedTurn } = require('../dist/application/turns/commitTurn');
 const {
   distanceBetweenZones, rangeCoversBand, decideNpcAction,
 } = require('../dist/application/campaign/encounterFlow');
@@ -60,7 +61,9 @@ function setupDb() {
 function entry(entryId, kind, definition, extra = {}) {
   return {
     entryId, kind, revision: 1,
-    provenance: { kind: 'rule_mapping', sourceFactIds: ['f-1'], rationale: '映射自原著表现' },
+    // Keep ordinary fixture entries independent of absent imported facts;
+    // provenance-gate tests seed real facts in their own setup.
+    provenance: { kind: 'design_fill', sourceFactIds: [], rationale: '测试夹具中的审定设定' },
     fieldProvenance: {}, visibility: 'public', dependencyIds: [], definition, ...extra,
   };
 }
@@ -74,6 +77,18 @@ const SKILL_SWORD = entry('sword', 'skill', {
   allowUntrained: false, requirements: [], powerTier: 'ordinary', usage: 'attack',
 });
 const LORE_RAIN = entry('lore-rain', 'lore', { name: '雨夜', title: '雨夜的书阁', text: '藏书阁雨夜有守卫巡逻。' });
+const OPENING_COURTYARD = entry('scene-open-courtyard', 'scene', {
+  name: '庭院', description: '测试世界公开开局地点。', locationId: 'courtyard',
+  zones: [
+    { zoneId: 'z-a', name: '庭院入口', cover: false, exits: ['z-b', 'courtyard-exit'] },
+    { zoneId: 'z-b', name: '井边', cover: true, exits: ['z-a', 'z-c', 'courtyard-exit'] },
+    { zoneId: 'z-c', name: '回廊', cover: false, exits: ['z-b', 'courtyard-exit'] },
+  ],
+  actors: ['guard-template'], visibleItems: [], hazards: [], clues: [],
+});
+const ITEM_KIT = entry('item-field-kit', 'item', {
+  name: '急救包', description: '测试用初始物品。', category: 'tool', effects: [], unique: true,
+});
 const ITEM_RELIC = entry('item-relic', 'item', {
   name: '旧铜令牌', description: '一枚旧铜令牌。', category: 'key', unique: true,
 }, { visibility: 'gm' });
@@ -85,6 +100,45 @@ const GUARD_TEMPLATE = entry('guard-template', 'actor_template', {
   abilities: [], behavior: { goal: '守住入口', retreatThreshold: 0.25, morale: 'steady' },
   lootPolicy: '无掉落', threat: { damage: 2, durability: 2, actions: 1, control: 0, environment: 0 },
 }, { visibility: 'gm' });
+const COMPANION_TEMPLATE = entry('companion-template', 'actor_template', {
+  ...GUARD_TEMPLATE.definition,
+  name: '同行守卫',
+  recruitment: {
+    recruitable: true, openingEligible: true, minimumCloseness: 5,
+    openingRelationship: { stance: 'friendly', closeness: 6 },
+  },
+  startingItems: ['item-field-kit'],
+});
+const FUTURE_COMPANION_TEMPLATE = entry('future-companion-template', 'actor_template', {
+  ...COMPANION_TEMPLATE.definition,
+  name: '未来同行者',
+  recruitment: {
+    recruitable: true, openingEligible: true, minimumCloseness: 5,
+    validFromOrder: 10, openingRelationship: { stance: 'friendly', closeness: 6 },
+  },
+  startingItems: [],
+});
+const SOCIAL_CHARM = entry('charm', 'skill', {
+  name: '说服', description: '以交涉改善关系', attribute: 'social',
+  allowUntrained: false, requirements: [], powerTier: 'ordinary', usage: 'social',
+});
+const CLUE_NOTE = entry('clue-note', 'lore', {
+  name: '暗号便笺', title: '暗号便笺', text: '守门人愿意协助携带者。',
+}, { visibility: 'discoverable' });
+const RECRUITABLE_NPC = entry('recruitable-npc', 'actor_template', {
+  ...GUARD_TEMPLATE.definition,
+  name: '谨慎的守门人',
+  recruitment: { recruitable: true, openingEligible: false, minimumCloseness: 2 },
+});
+const RECRUITMENT_SCENE = entry('scene-courtyard', 'scene', {
+  name: '庭院', description: '守门人驻守的庭院。', locationId: 'courtyard',
+  zones: [
+    { zoneId: 'gate', name: '门口', cover: false, exits: ['well'] },
+    { zoneId: 'well', name: '井边', cover: true, exits: ['gate', 'steps'] },
+    { zoneId: 'steps', name: '台阶', cover: false, exits: ['well'] },
+  ],
+  actors: ['recruitable-npc'], visibleItems: [], hazards: [], clues: ['clue-note'],
+});
 
 const RNG_MAX = { nextIntInclusive: (min, max) => max };
 const RNG_MIN = { nextIntInclusive: min => min };
@@ -116,7 +170,7 @@ async function seedWorld(db, worldStore, worldId = 'w-pkg') {
   });
 }
 
-async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], entryRevision = 1 } = {}) {
+async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], entryRevision = 1, includeRecruitmentScene = false } = {}) {
   const { publishWorldPackage } = require('../dist/application/worldPackage/publish');
   const guardTemplate = lootItemIds.length > 0
     ? {
@@ -125,13 +179,15 @@ async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], 
         dependencyIds: [...lootItemIds],
       }
     : GUARD_TEMPLATE;
-  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN,
+  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN, OPENING_COURTYARD, ITEM_KIT, COMPANION_TEMPLATE, FUTURE_COMPANION_TEMPLATE,
+    ...(includeRecruitmentScene ? [SOCIAL_CHARM, CLUE_NOTE, RECRUITABLE_NPC, RECRUITMENT_SCENE] : []),
     ...(lootItemIds.length > 0 ? [ITEM_RELIC] : []), guardTemplate]
     .map(item => ({ ...item, revision: entryRevision }));
   const sections = [
-    { book: 'player_handbook', sectionKey: 'skills', title: '技能', entryIds: ['stealth', 'sword'], position: 1 },
-    { book: 'player_handbook', sectionKey: 'world', title: '世界', entryIds: ['lore-rain'], position: 0 },
-    { book: 'monster_manual', sectionKey: 'humans', title: '人类对手', entryIds: ['guard-template'], position: 0 },
+    { book: 'player_handbook', sectionKey: 'skills', title: '技能', entryIds: ['stealth', 'sword', ...(includeRecruitmentScene ? ['charm'] : [])], position: 1 },
+    { book: 'player_handbook', sectionKey: 'world', title: '世界', entryIds: ['lore-rain', ...(includeRecruitmentScene ? ['clue-note', 'scene-courtyard'] : [])], position: 0 },
+    { book: 'player_handbook', sectionKey: 'items', title: '物品', entryIds: ['item-field-kit'], position: 3 },
+    { book: 'monster_manual', sectionKey: 'humans', title: '人类对手', entryIds: ['guard-template', 'companion-template', ...(includeRecruitmentScene ? ['recruitable-npc'] : [])], position: 0 },
   ];
   return publishWorldPackage({
     worldStore, sha256Hex: sha.sha256Hex, worldId, sourceSha256: 'a'.repeat(64),
@@ -139,11 +195,11 @@ async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], 
   });
 }
 
-async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], lootItemIds = [], companionDirective } = {}) {
+async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], lootItemIds = [], companionDirective, includeRecruitmentScene = false } = {}) {
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
   await seedWorld(db, worldStore);
-  const pub = await publishSample(worldStore, 'w-pkg', { lootItemIds });
+  const pub = await publishSample(worldStore, 'w-pkg', { lootItemIds, includeRecruitmentScene });
   const { createCampaign } = require('../dist/application/campaign/createCampaign');
   await createCampaign({
     db: adapter, worldStore, campaignId: 'camp-s', title: '雨夜潜入', worldId: 'w-pkg',
@@ -154,7 +210,7 @@ async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], 
       attributes: { physique: 1, agility: 3, insight: 2, knowledge: 1, willpower: 1, social: 1 },
       initialSkills,
     },
-    companions: [{ actorId: 'actor-su', templateId: 'guard-template', ...(companionDirective ? { directive: companionDirective } : {}) }],
+    companions: [{ actorId: 'actor-su', templateId: 'companion-template', ...(companionDirective ? { directive: companionDirective } : {}) }],
     goal: '进入藏书阁取回手稿', createdAt: 't0',
   });
   const provider = new ProposalProvider();
@@ -221,6 +277,267 @@ test('A01: a tampered planner response cannot push hp above the card maximum', a
   db.close();
 });
 
+test('A08: GM templates stay private and direct template IDs cannot bypass recruitment authority', async () => {
+  const db = setupDb();
+  const { session, adapter, worldStore, provider } = await makeSession(db);
+  const setup = await session.getWorldSetup('w-pkg', 5);
+  const openingIds = setup.companionTemplates.map(item => item.entryId);
+  assert.deepEqual(openingIds, ['companion-template']);
+  assert.ok(!JSON.stringify(setup).includes('guard-template'));
+  assert.ok(!JSON.stringify(setup).includes('藏书阁守卫'));
+  assert.ok(!setup.encounterTemplates.some(item => item.entryId === 'guard-template'),
+    'secret template IDs are also absent from the player encounter projection');
+  assert.ok(!setup.encounterTemplates.some(item => item.entryId === 'future-companion-template'),
+    'future templates stay outside the current time projection');
+  const futureSetup = await session.getWorldSetup('w-pkg', 10);
+  assert.ok(futureSetup.companionTemplates.some(item => item.entryId === 'future-companion-template'));
+  assert.ok(futureSetup.encounterTemplates.some(item => item.entryId === 'future-companion-template'));
+  assert.ok(!JSON.stringify(futureSetup).includes('guard-template'));
+
+  const { createCampaign } = require('../dist/application/campaign/createCampaign');
+  const packageRevision = await worldStore.getPublishedPackageRevision('w-pkg');
+  await assert.rejects(() => createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-gm-bypass', title: '越权开局', worldId: 'w-pkg',
+    packageRevision, anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
+    protagonist: { actorId: 'player-bypass', kind: 'original', name: '越权者',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
+    companions: [{ actorId: 'hidden-ally', templateId: 'guard-template' }], goal: '绕过 UI', createdAt: 'test',
+  }), /不可招募|公开的资格/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM campaigns WHERE campaign_id='camp-gm-bypass'").get().n, 0,
+    'server refusal leaves no partial campaign rows');
+  await assert.rejects(() => session.recruitCompanion({
+    campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'guard-template',
+  }), /招募被拒绝/);
+  assert.ok(!(await session.getSummary('camp-s', 'camp-s-main')).cards.some(card => card.kind === 'npc'));
+  await assert.rejects(() => session.getCard('camp-s-main', 'npc-guard-template'), /玩家可见投影/);
+
+  let plannerPayload = '';
+  const complete = provider.complete.bind(provider);
+  provider.complete = async request => {
+    if (request.role === 'Planner') plannerPayload = request.user;
+    return complete(request);
+  };
+  await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '查看庭院环境' });
+  assert.ok(!plannerPayload.includes('guard-template') && !plannerPayload.includes('藏书阁守卫'),
+    'a public scene cannot leak a GM template through nested actor references or planner cards');
+
+  await assert.rejects(() => createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-future-bypass', title: '越时开局', worldId: 'w-pkg',
+    packageRevision, anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
+    protagonist: { actorId: 'player-future', kind: 'original', name: '越时者',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
+    companions: [{ actorId: 'future-ally', templateId: 'future-companion-template' }],
+    goal: '越过故事时间资格', createdAt: 'test',
+  }), /不可招募|公开的资格/);
+
+  await createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-other', title: '另一战役', worldId: 'w-pkg',
+    packageRevision, anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
+    protagonist: { actorId: 'player-other', kind: 'original', name: '另一主角',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
+    goal: '隔离战役验证', createdAt: 'test',
+  });
+  await assert.rejects(() => session.getSummary('camp-other', 'camp-s-main'), /does not belong/,
+    'a valid campaign id cannot authorize reads from another campaign branch');
+
+  const twoCompanions = await createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-two-companions', title: '双同伴开局', worldId: 'w-pkg',
+    packageRevision, anchor: { worldTimeOrder: 10, locationId: 'courtyard' },
+    protagonist: { actorId: 'player-two', kind: 'original', name: '同行者',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
+    companions: [
+      { actorId: 'ally-two-a', templateId: 'companion-template' },
+      { actorId: 'ally-two-b', templateId: 'future-companion-template' },
+    ],
+    goal: '验证每支队伍单人加两名同伴', createdAt: 'test',
+  });
+  assert.equal(twoCompanions.cards.filter(card => card.controller === 'companion').length, 2);
+  assert.equal(twoCompanions.snapshot.party.length, 3);
+
+  await worldStore.upsertEntity({ worldId: 'w-pkg', entityId: 'canon-person', type: 'character',
+    name: '锚点人物', firstSeenChapterId: null, aliases: [] }, 'test');
+  const canonFacts = [
+    { worldId: 'w-pkg', factId: 'canon-location', subjectEntityId: 'canon-person', predicate: 'current_location',
+      value: { location: 'courtyard' }, status: 'explicit', confidence: 1, validFrom: null, validTo: null,
+      revealAt: null, scope: 'world', sources: [] },
+    { worldId: 'w-pkg', factId: 'canon-skill', subjectEntityId: 'canon-person', predicate: 'skill',
+      value: { skill: '潜行' }, status: 'explicit', confidence: 1, validFrom: null, validTo: null,
+      revealAt: null, scope: 'world', sources: [] },
+  ];
+  for (const fact of canonFacts) await worldStore.saveFact(fact, 'test');
+  await worldStore.saveRuleMapping({ worldId: 'w-pkg', mappingId: 'canon-stealth', targetEntityId: 'canon-person',
+    mappingKind: 'skill', mapping: { skillId: 'stealth', rank: 'trained' }, evidenceRefs: ['canon-skill'],
+    rulesetVersion: '0.2.0', status: 'active' }, 'test');
+  const canonCampaign = await createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-canon', title: '原著开局', worldId: 'w-pkg', packageRevision,
+    anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
+    protagonist: { actorId: 'player-canon', kind: 'canon', name: '锚点人物', canonEntityId: 'canon-person' },
+    goal: '检查锚点人物开局', createdAt: 'test',
+  });
+  assert.equal(canonCampaign.cards.find(card => card.controller === 'player').kind, 'canon');
+  assert.equal(canonCampaign.cards.find(card => card.controller === 'player').skills.stealth, 'trained');
+  assert.equal(canonCampaign.snapshot.actors['player-canon'].locationId, 'courtyard');
+  db.close();
+});
+
+test('A11: recruitment, relationship, party lifecycle, knowledge and item lineage are versioned together', async () => {
+  const db = setupDb();
+  const { session, adapter, provider } = await makeSession(db, {
+    initialSkills: ['charm'], includeRecruitmentScene: true,
+  });
+  const options0 = await session.getRecruitmentOptions('camp-s', 'camp-s-main');
+  assert.equal(options0.length, 1);
+  assert.equal(options0[0].eligible, false);
+  assert.match(options0[0].reason, /关系尚不足/);
+  await assert.rejects(() => session.recruitCompanion({
+    campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'recruitable-npc',
+  }), /招募被拒绝/);
+  await assert.rejects(() => session.recruitCompanion({
+    campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'npc-recruitable-npc',
+  }), /关系尚不足/);
+
+  provider.override = payload => ({
+    proposalVersion: '2.0', turnId: payload.turnId, expectedStateVersion: payload.expectedStateVersion,
+    actorId: 'actor-shen', actionKind: 'skill_check', skillId: 'charm', difficultyBand: 'normal',
+    targetId: 'npc-recruitable-npc', evidenceIds: [], intent: payload.playerIntent,
+  });
+  await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '礼貌交涉一次' });
+  await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '继续交涉' });
+  assert.ok((await session.getRecruitmentOptions('camp-s', 'camp-s-main'))[0].eligible,
+    'a successful social skill action advances the local relationship threshold');
+  await session.recruitCompanion({
+    campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'npc-recruitable-npc', directive: 'follow',
+  });
+  let summary = await session.getSummary('camp-s', 'camp-s-main');
+  const turnStore = new SqliteTurnStore(adapter);
+  let state = await turnStore.getState('camp-s-main');
+  const makeEngineContract = (turnId, actorId, effect) => {
+    const outcome = { achieved: true, publicSummary: 'test engine state', effects: effect ? [effect] : [] };
+    return { protocolVersion: '1.0', turnId, expectedStateVersion: state.stateVersion, actorId,
+      actionType: 'test_state', evidenceIds: [], requiresRoll: false, intent: 'test state', timeCostMinutes: 0,
+      resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } };
+  };
+  const commitEngine = async (contract, updateNextState) => commitResolvedTurn({ store: turnStore, branchId: 'camp-s-main', contract,
+    contractHash: sha.sha256Hex(JSON.stringify(contract)), contractOrigin: 'engine', outcomeGrade: 'success', updateNextState });
+  assert.ok(summary.state.party.some(member => member.actorId === 'npc-recruitable-npc' && member.role === 'companion'));
+  assert.equal(summary.state.itemOwners['item-field-kit'], 'actor-su');
+  assert.equal(summary.state.itemSources['item-field-kit'].kind, 'starting_loadout');
+  assert.ok(!summary.cards.some(card => card.kind === 'npc'), 'full NPC card never enters the player projection');
+
+  provider.override = payload => ({
+    proposalVersion: '2.0', turnId: payload.turnId, expectedStateVersion: payload.expectedStateVersion,
+    actorId: 'actor-shen', actionKind: 'observe', evidenceIds: ['clue-note'], intent: payload.playerIntent,
+  });
+  await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '调查便笺' });
+  summary = await session.getSummary('camp-s', 'camp-s-main');
+  assert.ok(summary.state.discoveries.some(item => item.actorId === 'actor-shen' && item.entryId === 'clue-note'));
+  assert.ok(!summary.state.discoveries.some(item => item.actorId === 'actor-su' && item.entryId === 'clue-note'),
+    'discoveries are not implicitly copied to companions');
+  await assert.rejects(() => session.shareKnowledge({ campaignId: 'camp-s', branchId: 'camp-s-main',
+    sourceActorId: 'actor-shen', recipientActorId: 'npc-guard-template', entryId: 'clue-note', channel: 'conversation' }), /队伍角色显式传递/,
+    'a direct actor ID cannot grant a player discovery to a GM-controlled NPC');
+  const versionBeforeInvalidShare = summary.state.stateVersion;
+  await assert.rejects(() => session.shareKnowledge({ campaignId: 'camp-s', branchId: 'camp-s-main',
+    sourceActorId: 'actor-shen', recipientActorId: 'actor-su', entryId: 'clue-note', channel: 'broadcast' }), /通信方式必须明确/);
+  assert.equal((await session.getSummary('camp-s', 'camp-s-main')).state.stateVersion, versionBeforeInvalidShare,
+    'an unrecognized communication channel has no state effect');
+  state = await turnStore.getState('camp-s-main');
+  await commitEngine(makeEngineContract('test-signal-out-of-range', 'actor-shen'),
+    next => { next.actors['actor-su'].zoneId = 'z-c'; });
+  await assert.rejects(() => session.shareKnowledge({ campaignId: 'camp-s', branchId: 'camp-s-main',
+    sourceActorId: 'actor-shen', recipientActorId: 'actor-su', entryId: 'clue-note', channel: 'signal' }), /同区或相邻区域/);
+  state = await turnStore.getState('camp-s-main');
+  await commitEngine(makeEngineContract('test-signal-return', 'actor-shen'),
+    next => { next.actors['actor-su'].zoneId = 'z-a'; });
+  await session.shareKnowledge({ campaignId: 'camp-s', branchId: 'camp-s-main', sourceActorId: 'actor-shen',
+    recipientActorId: 'actor-su', entryId: 'clue-note', channel: 'conversation' });
+  summary = await session.getSummary('camp-s', 'camp-s-main');
+  assert.ok(summary.state.discoveries.some(item => item.actorId === 'actor-su' && item.entryId === 'clue-note' && item.knownVia === 'told'));
+
+  await session.setCompanionDirective({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su', directive: 'protect' });
+  await session.splitCompanions({ campaignId: 'camp-s', branchId: 'camp-s-main', actorIds: ['actor-su'], groupId: 'group-scout' });
+  summary = await session.getSummary('camp-s', 'camp-s-main');
+  const splitVersion = summary.state.stateVersion;
+  assert.equal(summary.state.party.find(member => member.actorId === 'actor-su').groupId, 'group-scout');
+  assert.equal(JSON.parse(db.prepare("SELECT card_json FROM actor_cards WHERE branch_id='camp-s-main' AND actor_id='actor-su'").get().card_json).companionDirective, 'protect');
+  await assert.rejects(() => session.getCard('camp-s-main', 'actor-su'), /玩家可见投影/,
+    'the separated companion card is hidden from the main group view');
+
+  await session.rewind({ campaignId: 'camp-s', sourceBranchId: 'camp-s-main', atStateVersion: splitVersion, newBranchId: 'camp-s-rewound' });
+  const rewound = await session.getSummary('camp-s', 'camp-s-rewound');
+  assert.equal(rewound.state.party.find(member => member.actorId === 'actor-su').groupId, 'group-scout');
+  assert.equal(rewound.state.itemSources['item-field-kit'].sourceId, 'companion-template');
+  await session.rejoinCompanion({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su' });
+
+  state = await turnStore.getState('camp-s-main');
+  const companionHp = state.actors['actor-su'].resources.hp;
+  await commitEngine(makeEngineContract('test-companion-critical', 'actor-shen', {
+    op: 'consumeResource', actorId: 'actor-su', resourceId: 'hp', amount: companionHp,
+  }));
+  state = await turnStore.getState('camp-s-main');
+  assert.equal(state.actors['actor-su'].lifeStatus, 'critical', 'zero HP is a persisted critical state');
+  await assert.rejects(() => session.leaveCompanion({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su' }), /失能或濒危/);
+  await commitEngine(makeEngineContract('test-companion-rescued', 'actor-shen', {
+    op: 'restoreResource', actorId: 'actor-su', resourceId: 'hp', amount: 1, cap: 6,
+  }));
+  state = await turnStore.getState('camp-s-main');
+  assert.equal(state.actors['actor-su'].lifeStatus, 'active', 'explicit HP rescue returns the actor to active');
+
+  await session.leaveCompanion({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su' });
+  const rejoinOption = (await session.getRejoinOptions('camp-s', 'camp-s-main')).find(item => item.actorId === 'actor-su');
+  assert.equal(rejoinOption.eligible, true);
+  await session.rejoinCompanion({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su' });
+  summary = await session.getSummary('camp-s', 'camp-s-main');
+  assert.equal(summary.state.party.find(member => member.actorId === 'actor-su').groupId, 'main');
+  await session.transferItem({ campaignId: 'camp-s', branchId: 'camp-s-main', itemId: 'item-field-kit',
+    fromActorId: 'actor-su', toActorId: 'actor-shen' });
+  summary = await session.getSummary('camp-s', 'camp-s-main');
+  assert.equal(summary.state.itemOwners['item-field-kit'], 'actor-shen');
+  assert.equal(summary.state.itemSources['item-field-kit'].kind, 'transfer');
+  await assert.rejects(() => session.transferItem({ campaignId: 'camp-s', branchId: 'camp-s-main', itemId: 'item-field-kit',
+    fromActorId: 'actor-su', toActorId: 'actor-shen' }), /当前归属 actor-shen/);
+  state = await turnStore.getState('camp-s-main');
+  const playerHp = state.actors['actor-shen'].resources.hp;
+  await commitEngine(makeEngineContract('test-player-critical', 'actor-shen', {
+    op: 'consumeResource', actorId: 'actor-shen', resourceId: 'hp', amount: playerHp,
+  }));
+  state = await turnStore.getState('camp-s-main');
+  const criticalVersion = state.stateVersion;
+  assert.equal(state.actors['actor-shen'].lifeStatus, 'critical');
+  await assert.rejects(() => session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '濒危时继续行动' }), /失能或濒危/);
+  await assert.rejects(() => session.rest({ campaignId: 'camp-s', branchId: 'camp-s-main', kind: 'long' }), /失能或濒危/);
+  await assert.rejects(() => session.trainSkill({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-shen', skillId: 'charm' }), /失能或濒危/);
+  assert.equal((await turnStore.getState('camp-s-main')).stateVersion, criticalVersion,
+    'critical-state refusals do not commit actions or advance time');
+  await commitEngine(makeEngineContract('test-companion-death-resolved', 'actor-shen'), next => {
+    next.actors['actor-su'].resources.hp = 0;
+    next.actors['actor-su'].conditions = ['disabled'];
+    next.actors['actor-su'].lifeStatus = 'dead';
+  });
+  state = await turnStore.getState('camp-s-main');
+  assert.equal(state.actors['actor-su'].lifeStatus, 'dead');
+  await assert.rejects(() => session.leaveCompanion({ campaignId: 'camp-s', branchId: 'camp-s-main', actorId: 'actor-su' }), /失能或濒危/);
+  const deadVersion = state.stateVersion;
+  await assert.rejects(() => commitEngine(makeEngineContract('test-no-ordinary-revival', 'actor-shen', {
+    op: 'restoreResource', actorId: 'actor-su', resourceId: 'hp', amount: 1, cap: 6,
+  })), /Dead actor/);
+  assert.equal((await turnStore.getState('camp-s-main')).stateVersion, deadVersion,
+    'an ordinary healing effect cannot reverse a resolved death or partially commit');
+  assert.deepEqual(new Set(db.prepare("SELECT event_type FROM branch_events WHERE branch_id='camp-s-main'").all().map(row => row.event_type)),
+    new Set(['relationship_changed', 'companion_recruited', 'knowledge_discovered', 'knowledge_shared', 'companion_directive_changed',
+      'party_split', 'companion_left', 'companion_rejoined', 'item_transferred', 'consumeResource', 'restoreResource',
+      'actor_entered_critical_state', 'actor_recovered_from_critical', 'actor_death_resolved']));
+
+  const exported = await exportSave({ db: adapter, sha256Hex: sha.sha256Hex, campaignId: 'camp-s', branchId: 'camp-s-main', createdAt: 'lifecycle' });
+  await restoreSave({ db: adapter, save: exported.save, newCampaignId: 'camp-lifecycle-copy', newBranchId: 'branch-lifecycle-copy', createdAt: 'lifecycle' });
+  const restored = await session.getSummary('camp-lifecycle-copy', 'branch-lifecycle-copy');
+  assert.equal(restored.state.itemSources['item-field-kit'].kind, 'transfer');
+  assert.equal(restored.state.party.find(member => member.actorId === 'actor-su').groupId, 'main');
+  assert.equal(restored.state.actors['actor-su'].lifeStatus, 'dead', 'death-risk outcome is in the save snapshot');
+  assert.ok(restored.state.discoveries.some(item => item.actorId === 'actor-su' && item.entryId === 'clue-note' && item.knownVia === 'told'));
+  db.close();
+});
+
 test('A01: compiled ability healing carries the engine cap even when hp is low', async () => {
   const db = setupDb();
   const adapter = new NodeSqliteAdapter(db);
@@ -234,7 +551,10 @@ test('A01: compiled ability healing carries the engine cap even when hp is low',
     requiresRoll: false, effects: [{ op: 'heal', amount: 99 }],
     cooldownRounds: 1, passive: false, powerTier: 'ordinary',
   });
-  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN, GUARD_TEMPLATE, HEAL];
+  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN, OPENING_COURTYARD, GUARD_TEMPLATE, HEAL]
+    .map(item => item.entryId === 'scene-open-courtyard'
+      ? { ...item, definition: { ...item.definition, locationId: 'camp' } }
+      : item);
   const pub = await publishWorldPackage({
     worldStore, sha256Hex: sha.sha256Hex, worldId: 'w-pkg', sourceSha256: 'a'.repeat(64),
     mappingVersion: 'map-1', entries,
@@ -721,6 +1041,8 @@ test('Phase 2: neutral encounter actors persist as neutral and commit a no-targe
   view = await session.encounterNpcTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId, requestId: 'neutral-safe-turn' });
   assert.equal(view.lastDice, null, 'the neutral guard action does not secretly attack or roll');
   assert.match(view.lastAction, /戒备/);
+  assert.match(view.lastAction, /依据：中立阵营不会自动选择敌对目标/,
+    'the committed player-facing event states why the neutral actor passed');
   const resumed = await session.getActiveEncounter('camp-s', 'camp-s-main');
   assert.equal(resumed.actors.find(actor => actor.actorId === neutral.actorId).side, 'neutral',
     'the reloaded active encounter retains the neutral side');
@@ -747,6 +1069,8 @@ test('Phase 2: support instruction commits a legal companion rescue', async () =
   assert.equal(rescued.resources.hp, 1);
   assert.deepEqual(rescued.conditions, []);
   assert.match(view.lastAction, /援救|救回/);
+  assert.match(view.lastAction, /依据：遵循支援指令/,
+    'the committed rescue explains the directive and eligibility basis');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM branch_events WHERE branch_id = 'camp-s-main' AND event_type = 'recordEvent' AND payload_json LIKE '%ally_rescued%'").get().n, 1,
     'the rescue is a single committed event in the action transaction');
   db.close();
@@ -1551,7 +1875,12 @@ test('discovering an in-scene clue advances a quest, grants an item and survives
     zones: [{ zoneId: 'shelves', name: '书架', cover: true, exits: [] }],
     actors: [], visibleItems: [], hazards: [], clues: ['clue-secret'],
   }, { visibility: 'gm', dependencyIds: ['clue-secret', 'quest-hidden-room'] });
-  const entries = [SKILL_STEALTH, clue, item, quest, scene];
+  const publicStart = entry('scene-public-library', 'scene', {
+    name: '藏书阁', description: '公共开局区域。', locationId: 'camp',
+    zones: [{ zoneId: 'entrance', name: '入口', cover: false, exits: [] }],
+    actors: [], visibleItems: [], hazards: [], clues: [],
+  });
+  const entries = [SKILL_STEALTH, clue, item, quest, publicStart, scene];
   const sections = [
     { book: 'player_handbook', sectionKey: 'clues', title: '线索', entryIds: ['clue-secret', 'stealth'], position: 0 },
     { book: 'gm_guide', sectionKey: 'quests', title: '任务', entryIds: ['quest-hidden-room', 'scene-library'], position: 0 },

@@ -251,18 +251,20 @@ export const DEFAULT_REST_POLICY: RestOutcomePolicy = {
  * retreat through a REAL scene exit when morale breaks. No LLM call per
  * mechanical turn, and utility skills are never selected as weapons.
  */
+export type NpcActionDecision =
+  | { kind: 'attack'; targetId: string; skillId: string }
+  | { kind: 'move'; towardActorId: string }
+  | { kind: 'retreat'; exitId: string }
+  | { kind: 'rescue'; targetId: string }
+  | { kind: 'guard' };
+
 export function decideNpcAction(options: {
   actor: Combatant;
   encounter: EncounterState;
   combatants: readonly Combatant[];
   catalog: SkillCatalog;
   zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>;
-}):
-  | { kind: 'attack'; targetId: string; skillId: string }
-  | { kind: 'move'; towardActorId: string }
-  | { kind: 'retreat'; exitId: string }
-  | { kind: 'rescue'; targetId: string }
-  | { kind: 'guard' } {
+}): NpcActionDecision {
   const { actor, combatants, catalog, zones } = options;
   const hpOf = (actorId: string): number => options.encounter.actors[actorId]?.hp ?? 0;
   const actorState = options.encounter.actors[actor.actorId];
@@ -350,6 +352,57 @@ export function decideNpcAction(options: {
   if (directive === 'conserve') return { kind: 'guard' };
   const nearest = directive === 'follow' && leader ? leader : orderedEnemies[0]!;
   return { kind: 'move', towardActorId: nearest.actorId };
+}
+
+/** Stable explanation for an automatic action or a command that cannot be followed. */
+export function explainNpcDecision(options: {
+  actor: Combatant;
+  encounter: EncounterState;
+  combatants: readonly Combatant[];
+  zones: ReadonlyArray<{ zoneId: string; exits: readonly string[] }>;
+  decision: NpcActionDecision;
+}): string {
+  const { actor, encounter, combatants, zones, decision } = options;
+  const actorState = encounter.actors[actor.actorId];
+  const directive = actor.card.controller === 'companion' ? actor.card.companionDirective : undefined;
+  const actorZone = zones.find(zone => zone.zoneId === actor.zoneId);
+  const exitId = actorZone?.exits.find(exit => encounter.scene.exitIds.includes(exit));
+  const consciousEnemies = combatants.filter(candidate => candidate.side !== actor.side && candidate.side !== 'neutral'
+    && (encounter.actors[candidate.actorId]?.hp ?? 0) > 0);
+  const leaderId = actor.card.companionLeaderActorId
+    ?? combatants.find(candidate => candidate.side === 'party' && candidate.card.controller === 'player')?.actorId;
+  const leader = leaderId ? combatants.find(candidate => candidate.actorId === leaderId) : undefined;
+  if (actor.side === 'neutral') return '中立阵营不会自动选择敌对目标，本轮保持中立。';
+  if (decision.kind === 'retreat') {
+    return directive === 'retreat'
+      ? `遵循撤退指令，通过当前场景的有效出口 ${decision.exitId} 撤离。`
+      : `生命值低于模板士气阈值，并存在有效出口 ${decision.exitId}，因此撤离。`;
+  }
+  if (directive === 'retreat' && !exitId) return '撤退指令未能执行：当前位置没有通往场景出口的有效路径，因此暂时守卫。';
+  if (directive === 'support') {
+    const needsAid = combatants.some(candidate => candidate.side === actor.side && candidate.actorId !== actor.actorId
+      && (encounter.actors[candidate.actorId]?.hp ?? 0) <= 0
+      && encounter.actors[candidate.actorId]?.conditions.includes('disabled')
+      && candidate.zoneId === actor.zoneId);
+    if (decision.kind === 'rescue') return '遵循支援指令：同一区域有失能队友，执行援救。';
+    if (!needsAid) return '支援指令未触发：同一区域没有满足规则的失能队友。';
+  }
+  if (directive === 'follow' && leader) {
+    if (decision.kind === 'move' && decision.towardActorId === leader.actorId) return `遵循跟随指令：沿场景路径靠近队长 ${leader.card.name}。`;
+    if (leader.zoneId === actor.zoneId) return '跟随指令已满足：与队长处于同一区域。';
+    if (actorState?.movedThisRound) return '跟随指令暂缓：本轮标准移动已用完。';
+  }
+  if (directive === 'protect' && decision.kind === 'attack' && leader) return `遵循保护指令：优先处理靠近队长 ${leader.card.name} 的合法威胁。`;
+  if (decision.kind === 'guard') {
+    if (consciousEnemies.length === 0) return '没有清醒的敌对目标，本轮保持戒备。';
+    if (directive === 'conserve') return '遵循节省资源指令：当前没有必须立即使用资源的行动，本轮保持戒备。';
+    if (actorState?.movedThisRound && directive === 'follow') return '跟随移动已用完且没有可执行的近战攻击，本轮结束行动。';
+    return '当前不存在满足武器、距离和状态规则的合法攻击或移动，保持戒备。';
+  }
+  if (decision.kind === 'rescue') return '援救目标符合失能状态和同区域条件。';
+  if (decision.kind === 'move') return '没有处于已声明攻击范围内的合法目标，按确定性策略靠近目标。';
+  if (decision.kind === 'attack') return '目标满足敌对关系、存活状态、已声明攻击技能和距离条件。';
+  return '按已保存指令与当前可执行动作规则处理。';
 }
 
 /** Default attack range for a combatant's attack skill (templates declare their own). */

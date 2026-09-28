@@ -52,15 +52,25 @@ export function applyEffects(
           );
         }
         actor.resources[effect.resourceId] = newAmount;
+        if (effect.resourceId === 'hp' && newAmount <= 0 && actor.lifeStatus !== 'dead') {
+          actor.lifeStatus = 'critical';
+        }
         break;
       }
       case 'restoreResource': {
         const actor = requireActor(next, effect.actorId);
+        if (actor.lifeStatus === 'dead') {
+          throw new Error(`Dead actor ${effect.actorId} cannot be restored by an ordinary resource effect.`);
+        }
         const currentAmount = actor.resources[effect.resourceId] ?? 0;
         // Restores clamp at the declared cap (the card's effective maximum);
         // resources never exceed their maximum through healing or rest.
         const target = effect.cap !== undefined ? Math.min(effect.cap, currentAmount + effect.amount) : currentAmount + effect.amount;
         actor.resources[effect.resourceId] = target;
+        if (effect.resourceId === 'hp' && target > 0 && actor.lifeStatus === 'critical'
+          && !actor.conditions.includes('disabled')) {
+          actor.lifeStatus = 'active';
+        }
         break;
       }
       case 'changeLocation': {
@@ -72,11 +82,17 @@ export function applyEffects(
         if (!actor.conditions.includes(effect.conditionId)) {
           actor.conditions.push(effect.conditionId);
         }
+        if (effect.conditionId === 'disabled' && (actor.resources.hp ?? 0) <= 0 && actor.lifeStatus !== 'dead') {
+          actor.lifeStatus = 'critical';
+        }
         break;
       }
       case 'removeCondition': {
         const actor = requireActor(next, effect.actorId);
         actor.conditions = actor.conditions.filter(condition => condition !== effect.conditionId);
+        if (effect.conditionId === 'disabled' && (actor.resources.hp ?? 0) > 0 && actor.lifeStatus === 'critical') {
+          actor.lifeStatus = 'active';
+        }
         break;
       }
       case 'advanceClock':
@@ -93,6 +109,12 @@ export function applyEffects(
           );
         }
         next.itemOwners[effect.itemId] = effect.toActorId;
+        next.itemSources ??= {};
+        next.itemSources[effect.itemId] = {
+          kind: 'transfer',
+          sourceId: `state-${current.stateVersion + 1}`,
+          obtainedAtStateVersion: current.stateVersion + 1,
+        };
         break;
       }
       case 'grantItem': {
@@ -104,6 +126,12 @@ export function applyEffects(
           throw new Error(`Item ${effect.itemId} already owned by ${owner}.`);
         }
         next.itemOwners[effect.itemId] = effect.actorId;
+        next.itemSources ??= {};
+        next.itemSources[effect.itemId] = {
+          kind: 'encounter_loot',
+          sourceId: `state-${current.stateVersion + 1}`,
+          obtainedAtStateVersion: current.stateVersion + 1,
+        };
         break;
       }
       case 'recordEvent':

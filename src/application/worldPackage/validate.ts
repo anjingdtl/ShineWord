@@ -128,6 +128,28 @@ export function validatePackage(
         }
       }
     }
+    if (def.startingItems !== undefined) {
+      if (!Array.isArray(def.startingItems)) {
+        errors.push(`${entry.entryId}: startingItems must be an array of item entry ids.`);
+      } else {
+        for (const itemId of new Set(def.startingItems as string[])) {
+          if (byId.get(itemId)?.kind !== 'item') {
+            errors.push(`${entry.entryId}: starting item ${itemId} must reference a published item entry.`);
+          }
+        }
+      }
+    }
+    const recruitment = def.recruitment as Record<string, unknown> | undefined;
+    if (recruitment?.openingEligible === true && entry.visibility !== 'public') {
+      errors.push(`${entry.entryId}: opening-eligible companions must have public visibility.`);
+    }
+    if (Array.isArray(recruitment?.requiredQuestIds)) {
+      for (const questId of new Set(recruitment.requiredQuestIds as string[])) {
+        if (byId.get(questId)?.kind !== 'quest') {
+          errors.push(`${entry.entryId}: recruitment requirement ${questId} must reference a published quest entry.`);
+        }
+      }
+    }
   }
 
   // Three books must reference entries of the same revision, without ghosts.

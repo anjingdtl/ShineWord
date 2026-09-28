@@ -120,7 +120,6 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
 
   switch (proposal.actionKind) {
     case 'observe':
-    case 'talk':
     case 'interact': {
       const minutes = GENERIC_ACTION_MINUTES[proposal.actionKind];
       const label = { observe: '观察周围', talk: '交谈', interact: '与环境互动' }[proposal.actionKind];
@@ -136,6 +135,26 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
             success: automaticOutcome(true, summaryFor(proposal, 'success', `${label}完成。`), []),
             failure: automaticOutcome(false, summaryFor(proposal, 'failure', `${label}没有产生效果。`), []),
             severe_failure: automaticOutcome(false, summaryFor(proposal, 'severe_failure', `${label}没有产生效果。`), []),
+          },
+        },
+        storedSkillKey: null,
+      };
+    }
+    case 'talk': {
+      const targetId = resolveSocialTarget(proposal, actingCard, cards, state);
+      return {
+        contract: {
+          ...base,
+          actionType: 'talk',
+          ...(targetId ? { targetId } : {}),
+          requiresRoll: false,
+          timeCostMinutes: GENERIC_ACTION_MINUTES.talk,
+          resourcePreconditions: [],
+          outcomes: {
+            full_success: automaticOutcome(true, summaryFor(proposal, 'full_success', '交谈完成。'), []),
+            success: automaticOutcome(true, summaryFor(proposal, 'success', '交谈完成。'), []),
+            failure: automaticOutcome(false, summaryFor(proposal, 'failure', '交谈没有产生效果。'), []),
+            severe_failure: automaticOutcome(false, summaryFor(proposal, 'severe_failure', '交谈没有产生效果。'), []),
           },
         },
         storedSkillKey: null,
@@ -183,6 +202,14 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
       );
       void spec;
       const storedSkillKey = resolveSkillKey(actingCard, skillId) ?? skillId;
+      let socialTargetId: string | undefined;
+      if (proposal.targetId) {
+        const skillDefinition = catalog[skillId] ?? catalog[`skill-${skillId.replace(/^skill-/, '')}`];
+        if (skillDefinition?.usage !== 'social') {
+          throw new ProposalRejectedError('只有世界目录标记为 social 的技能检定才能影响关系；请使用交谈行动。');
+        }
+        socialTargetId = resolveSocialTarget(proposal, actingCard, cards, state);
+      }
 
       // A skill check may move the actor on success; the destination is
       // validated exactly like a move action.
@@ -206,6 +233,7 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
           ...base,
           actionType: 'skill_check',
           skillId: storedSkillKey,
+          ...(socialTargetId ? { targetId: socialTargetId } : {}),
           difficultyBand: proposal.difficultyBand ?? 'normal',
           requiresRoll: true,
           timeCostMinutes: GENERIC_ACTION_MINUTES.skill_check,
@@ -226,6 +254,32 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
     default:
       throw new ProposalRejectedError(`Unsupported action kind: ${String(proposal.actionKind)}.`);
   }
+}
+
+function resolveSocialTarget(
+  proposal: PlannerProposal,
+  actingCard: ActorCard,
+  cards: readonly ActorCard[],
+  state: GameStateSnapshot,
+): string | undefined {
+  const targetId = proposal.targetId;
+  if (!targetId) return undefined;
+  if (targetId === actingCard.actorId) throw new ProposalRejectedError('不能把自己作为交谈对象。');
+  const targetCard = cardFor(cards, targetId);
+  const source = state.actors[actingCard.actorId];
+  const target = state.actors[targetId];
+  if (!targetCard || !target || !source) throw new ProposalRejectedError(`交谈对象「${targetId}」不在当前战役。`);
+  if (targetCard.controller === 'player') throw new ProposalRejectedError('交谈目标必须是可交互的 NPC 或同伴。');
+  if (targetCard.kind !== 'npc' && targetCard.kind !== 'companion') {
+    throw new ProposalRejectedError('该角色类型不支持社交交互。');
+  }
+  if (source.locationId !== target.locationId) {
+    throw new ProposalRejectedError('交谈需要双方位于同一地点；当前没有可验证的跨地点通信路径。');
+  }
+  if (target.lifeStatus === 'critical' || target.lifeStatus === 'dead' || target.conditions.includes('disabled')) {
+    throw new ProposalRejectedError('交谈对象目前失能，无法回应。');
+  }
+  return targetId;
 }
 
 function compileAbilityAction(input: CompileProposalInput): CompiledAction {

@@ -5,7 +5,10 @@
   "scripts": {
     "start": "react-native start",
     "android": "react-native run-android",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "apk:debug": "node scripts/build-apk.js debug",
+    "apk:release": "node scripts/build-apk.js release",
+    "postinstall": "node scripts/patch-sqlite-storage-gradle.js && node scripts/patch-deps.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^3.1.0",

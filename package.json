@@ -7,7 +7,9 @@
     "build:core": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:core && node --test tests/*.test.cjs",
-    "verify:core": "npm run typecheck && npm test"
+    "verify:core": "npm run typecheck && npm test",
+    "apk:debug": "npm --prefix mobile run apk:debug",
+    "apk:release": "npm --prefix mobile run apk:release"
   },
   "devDependencies": {
     "typescript": "5.8.3"

@@ -119,8 +119,8 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         actorId: row.actor_id,
         card: JSON.parse(row.card_json) as unknown,
       }));
-      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string }>(
-        'SELECT actor_id, controller, role, joined_at FROM party_members WHERE branch_id = ? ORDER BY actor_id',
+      const partyRows = await db.queryAll<{ actor_id: string; controller: string; role: string; joined_at: string; party_group_id: string }>(
+        'SELECT actor_id, controller, role, joined_at, party_group_id FROM party_members WHERE branch_id = ? ORDER BY actor_id',
         [input.sourceBranchId],
       );
       party = partyRows.map(row => ({
@@ -128,6 +128,7 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         controller: row.controller,
         role: row.role,
         joinedAt: row.joined_at,
+        groupId: row.party_group_id,
       }));
     }
   }
@@ -182,9 +183,9 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     }
     for (const member of party) {
       await tx.execute(
-        `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [input.targetBranchId, member.actorId, member.controller, member.role, member.joinedAt],
+        `INSERT INTO party_members (branch_id, actor_id, controller, role, joined_at, party_group_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [input.targetBranchId, member.actorId, member.controller, member.role, member.joinedAt, member.groupId ?? 'main'],
       );
     }
     await replaceEncounterSnapshots(tx, input.targetBranchId, snapshot.encounters ?? []);

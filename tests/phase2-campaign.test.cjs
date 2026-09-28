@@ -60,7 +60,10 @@ function setupDb() {
 function entry(entryId, kind, definition, extra = {}) {
   return {
     entryId, kind, revision: 1,
-    provenance: { kind: 'rule_mapping', sourceFactIds: ['f-1'], rationale: '映射自原著表现' },
+    // These package fixtures represent reviewed design-fill with no imported
+    // novel fact dependency. Tests that exercise provenance visibility seed
+    // actual StoredFact rows explicitly.
+    provenance: { kind: 'design_fill', sourceFactIds: [], rationale: '测试夹具中的审定设定' },
     fieldProvenance: {},
     visibility: 'public',
     dependencyIds: [],
@@ -80,23 +83,44 @@ const SKILL_SWORD = entry('sword', 'skill', {
 const LORE_RAIN = entry('lore-rain', 'lore', {
   name: '雨夜', title: '雨夜的书阁', text: '藏书阁雨夜有守卫巡逻。',
 });
+const OPENING_COURTYARD = entry('scene-open-courtyard', 'scene', {
+  name: '庭院', description: '测试世界公开开局地点。', locationId: 'courtyard',
+  zones: [
+    { zoneId: 'z-a', name: '庭院入口', cover: false, exits: ['z-b', 'courtyard-exit'] },
+    { zoneId: 'z-b', name: '井边', cover: true, exits: ['z-a', 'z-c', 'courtyard-exit'] },
+    { zoneId: 'z-c', name: '回廊', cover: false, exits: ['z-b', 'courtyard-exit'] },
+  ],
+  actors: [], visibleItems: [], hazards: [], clues: [],
+});
 
 function sampleEntries() {
+  const guard = {
+    name: '藏书阁守卫', category: 'human', description: '巡逻守卫',
+    attributes: { physique: 2, agility: 1, insight: 1 },
+    skills: { sword: 'trained' }, hp: 6, stamina: 4, defense: 3,
+    attacks: [{ name: '长刀', skillId: 'sword', damage: 2, range: 'touch' }],
+    abilities: [], behavior: { goal: '守住入口', retreatThreshold: 0.25, morale: 'steady' },
+    lootPolicy: '无掉落',
+    threat: { damage: 2, durability: 2, actions: 1, control: 0, environment: 0 },
+  };
   return [
     SKILL_STEALTH,
     SKILL_SWORD,
     LORE_RAIN,
-    entry('guard-template', 'actor_template', {
-      name: '藏书阁守卫', category: 'human', description: '巡逻守卫',
-      attributes: { physique: 2, agility: 1, insight: 1 },
-      skills: { sword: 'trained' },
-      hp: 6, stamina: 4, defense: 3,
-      attacks: [{ name: '长刀', skillId: 'sword', damage: 2, range: 'touch' }],
-      abilities: [],
-      behavior: { goal: '守住入口', retreatThreshold: 0.25, morale: 'steady' },
-      lootPolicy: '无掉落',
-      threat: { damage: 2, durability: 2, actions: 1, control: 0, environment: 0 },
-    }, { visibility: 'gm' }),
+    OPENING_COURTYARD,
+    entry('companion-template', 'actor_template', {
+      ...guard, name: '同行守卫', recruitment: {
+        recruitable: true, openingEligible: true, minimumCloseness: 5,
+        openingRelationship: { stance: 'friendly', closeness: 6 },
+      },
+    }),
+    entry('guard-template', 'actor_template', guard, { visibility: 'gm' }),
+    entry('future-companion-template', 'actor_template', {
+      ...guard, name: '未来同行者', recruitment: {
+        recruitable: true, openingEligible: true, minimumCloseness: 5,
+        validFromOrder: 10, openingRelationship: { stance: 'friendly', closeness: 6 },
+      },
+    }),
   ];
 }
 
@@ -304,7 +328,7 @@ async function createSampleCampaign(db, adapter, worldStore, campaignId, initial
       attributes: { physique: 1, agility: 3, insight: 2, knowledge: 1, willpower: 1, social: 1 },
       initialSkills,
     },
-    companions: [{ actorId: 'actor-su', templateId: 'guard-template' }],
+    companions: [{ actorId: 'actor-su', templateId: 'companion-template' }],
     goal: '进入藏书阁取回手稿',
     createdAt: 't0',
   });
