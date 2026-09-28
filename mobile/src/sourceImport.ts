@@ -12,6 +12,7 @@ import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore';
 import { createExtractionRun, executeRun, type UnitExtractor } from '../../src/application/worldBuild/coordinator';
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
+import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import type { ApiProfile } from '../../src/application/llm/types';
 import { KeychainSecretStore } from './secureKeyStore';
@@ -145,7 +146,7 @@ export async function importNovelStreaming(
     return provider.complete(request);
   });
   await createExtractionRun(
-    { sourceStore, runStore, worldStore: runtime.worldStore },
+    { sourceStore, runStore, worldStore: runtime.worldStore, sha256Hex: async input => nativeSha256.sha256Hex(input) },
     {
       runId,
       worldId,
@@ -153,6 +154,9 @@ export async function importNovelStreaming(
       modelFingerprint: `${profile.endpoint}#${profile.model}`,
       title: manifest.title ?? fileName,
       extractorVersion: extractor.version,
+      // C3 group mode: consecutive chunks packed into budget-bounded
+      // requests with the segment protocol.
+      mode: 'group',
     },
   );
   return {
@@ -168,6 +172,7 @@ export async function importNovelStreaming(
 }
 
 /** Adapter from the chunk extractor to the run coordinator's unit contract. */
+/** Single-chunk fallback extractor (used when a split reduces to one chunk). */
 export function coordinatorExtractor(profile: ApiProfile): UnitExtractor {
   const provider = new OpenAICompatibleProvider(
     profile,
@@ -184,6 +189,17 @@ export function coordinatorExtractor(profile: ApiProfile): UnitExtractor {
       worldId: input.worldId,
     }),
   };
+}
+
+/** C3 group extractor over the same provider. */
+export function coordinatorGroupExtractor(profile: ApiProfile): LlmGroupExtractor {
+  const provider = new OpenAICompatibleProvider(
+    profile,
+    new KeychainSecretStore(),
+    new FetchHttpTransport(),
+    300_000,
+  );
+  return new LlmGroupExtractor(request => provider.complete(request));
 }
 
 /** Drives an existing run to completion (used by the UI now, C5 runner later). */
@@ -209,6 +225,7 @@ export async function runExtraction(
       runStore,
       worldStore: runtime.worldStore,
       extractor: coordinatorExtractor(profile),
+      groupExtractor: coordinatorGroupExtractor(profile),
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       owner: 'ui',
       onUnitDone: info => {

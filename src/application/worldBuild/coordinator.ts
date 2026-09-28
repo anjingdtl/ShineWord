@@ -15,9 +15,12 @@ import type { BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/wo
 import type { WorldStore, WorldRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
+import { planExtractGroups, type ModelBudget } from './groupPlanner';
+import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 
-export const PIPELINE_VERSION = 'pipeline-closeout-c2';
-export const PLAN_VERSION = 'plan-chunk-1';
+export const PIPELINE_VERSION = 'pipeline-closeout-c3';
+export const PLAN_VERSION_CHUNK = 'plan-chunk-1';
+export const PLAN_VERSION_GROUP = 'plan-group-1';
 
 /** Extracts one planned unit (a chunk in C2; a segment group from C3 on). */
 export interface UnitExtractor {
@@ -35,6 +38,8 @@ export interface CoordinatorDeps {
   runStore: BuildRunStore;
   worldStore: WorldStore;
   extractor: UnitExtractor;
+  /** Group-mode extractor (closeout C3); required when the run plans groups. */
+  groupExtractor?: LlmGroupExtractor;
   sha256Hex: Sha256Hex;
   now?: () => string;
   /** Lease TTL in ms; renewals happen between units. */
@@ -52,6 +57,9 @@ export interface CreateRunInput {
   title: string;
   /** Extractor version baked into unit config fingerprints. */
   extractorVersion: string;
+  /** C3 group mode: pack chunks into budget-bounded multi-chunk requests. */
+  mode?: 'chunk' | 'group';
+  budget?: ModelBudget;
 }
 
 function chunkJobId(chunkId: string): string {
@@ -59,12 +67,12 @@ function chunkJobId(chunkId: string): string {
 }
 
 /**
- * Plans one extract unit per persisted chunk, in reading order. C3's group
- * planner will replace this with model-budget-driven groups while keeping
- * the same unit contract.
+ * Plans extraction units. 'chunk' keeps one unit per chunk (C2 baseline);
+ * 'group' packs consecutive chunks into model-budget-bounded groups whose
+ * coverage ledger is exactly the ordered chunk list (closeout C3).
  */
 export async function createExtractionRun(
-  deps: Pick<CoordinatorDeps, 'sourceStore' | 'runStore' | 'worldStore' | 'now'>,
+  deps: Pick<CoordinatorDeps, 'sourceStore' | 'runStore' | 'worldStore' | 'now' | 'sha256Hex'>,
   input: CreateRunInput,
 ): Promise<BuildRunRecord> {
   const now = deps.now ?? (() => new Date().toISOString());
@@ -76,32 +84,70 @@ export async function createExtractionRun(
   if (chunks.length === 0) {
     throw new Error(`Source ${input.sourceId} has no chunks.`);
   }
+  const mode = input.mode ?? 'chunk';
   const configFingerprint = `${PIPELINE_VERSION}#${input.extractorVersion}#${input.modelFingerprint}`;
   const createdAt = now();
-  const units: BuildUnitRecord[] = chunks.map((chunk, ord) => ({
-    unitId: `${input.runId}-u${String(ord + 1).padStart(4, '0')}`,
-    runId: input.runId,
-    kind: 'extract_group' as const,
-    sourceRangesJson: JSON.stringify([{
-      chunkId: chunk.chunkId,
-      chapterId: chunk.chapterId,
-      startCp: chunk.startOffset,
-      endCp: chunk.endOffset,
-    }]),
-    inputHash: chunk.contentHash,
-    configFingerprint,
-    parentUnitId: null,
-    ord,
-    status: 'queued' as const,
-    attempt: 0,
-    retryAt: null,
-    resultRef: null,
-    usageJson: null,
-    errorCode: null,
-    errorMessage: null,
-    createdAt,
-    updatedAt: createdAt,
-  }));
+
+  const units: BuildUnitRecord[] = [];
+  if (mode === 'group') {
+    const groups = planExtractGroups(chunks, input.budget);
+    for (const group of groups) {
+      const inputHash = await deps.sha256Hex(
+        group.segments.map(segment => `${segment.chunkId}:${segment.startCp}-${segment.endCp}`).join('|'),
+      );
+      units.push({
+        unitId: `${input.runId}-g${String(group.ord + 1).padStart(4, '0')}`,
+        runId: input.runId,
+        kind: 'extract_group' as const,
+        sourceRangesJson: JSON.stringify(group.segments.map(segment => ({
+          chunkId: segment.chunkId,
+          chapterId: segment.chapterId,
+          startCp: segment.startCp,
+          endCp: segment.endCp,
+        }))),
+        inputHash,
+        configFingerprint,
+        parentUnitId: null,
+        ord: group.ord,
+        status: 'queued' as const,
+        attempt: 0,
+        retryAt: null,
+        resultRef: null,
+        usageJson: null,
+        errorCode: null,
+        errorMessage: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
+  } else {
+    chunks.forEach((chunk, ord) => {
+      units.push({
+        unitId: `${input.runId}-u${String(ord + 1).padStart(4, '0')}`,
+        runId: input.runId,
+        kind: 'extract_group' as const,
+        sourceRangesJson: JSON.stringify([{
+          chunkId: chunk.chunkId,
+          chapterId: chunk.chapterId,
+          startCp: chunk.startOffset,
+          endCp: chunk.endOffset,
+        }]),
+        inputHash: chunk.contentHash,
+        configFingerprint,
+        parentUnitId: null,
+        ord,
+        status: 'queued' as const,
+        attempt: 0,
+        retryAt: null,
+        resultRef: null,
+        usageJson: null,
+        errorCode: null,
+        errorMessage: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    });
+  }
 
   const run: BuildRunRecord = {
     runId: input.runId,
@@ -109,7 +155,7 @@ export async function createExtractionRun(
     sourceId: input.sourceId,
     sourceSnapshotHash: `${manifest.rawSha256Hex}:${manifest.normalizedTreeHash}`,
     pipelineVersion: PIPELINE_VERSION,
-    planVersion: PLAN_VERSION,
+    planVersion: mode === 'group' ? PLAN_VERSION_GROUP : PLAN_VERSION_CHUNK,
     modelFingerprint: input.modelFingerprint,
     phase: 'extracting',
     status: 'queued',
@@ -221,102 +267,131 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       const claimed = await deps.runStore.claimUnit(unit.unitId, now());
       if (!claimed) continue;
 
-      const range = JSON.parse(unit.sourceRangesJson)[0] as
-        | { chunkId: string; chapterId: string; startCp: number; endCp: number }
-        | undefined;
-      if (!range) {
+      const ranges = JSON.parse(unit.sourceRangesJson) as Array<
+        { chunkId: string; chapterId: string; startCp: number; endCp: number }
+      >;
+      if (ranges.length === 0) {
         await deps.runStore.completeUnit({
           unitId: unit.unitId, fencingToken, status: 'failed_terminal',
           errorCode: 'bad_range', errorMessage: 'Unit has no source range.', now: now(),
         });
         continue;
       }
-      const chunk = chunksByRange.get(range.chunkId);
-      if (!chunk || chunk.contentHash !== unit.inputHash) {
-        await deps.runStore.completeUnit({
-          unitId: unit.unitId, fencingToken, status: 'needs_review',
-          errorCode: 'source_changed', errorMessage: 'Chunk no longer matches the planned input hash.', now: now(),
-        });
-        continue;
-      }
-
-      // Idempotent fast path: the world-side chunk already finished under the
-      // same content hash and config fingerprints (C1 guards).
-      const job = await deps.worldStore.getJob(run.worldId, chunkJobId(chunk.chunkId));
-      if (
-        job?.status === 'done' && job.contentHash === chunk.contentHash
-        && job.extractorVersion === deps.extractor.version
-        && (job.modelFingerprint ?? null) === run.modelFingerprint
-      ) {
-        await deps.runStore.completeUnit({
-          unitId: unit.unitId, fencingToken, status: 'completed',
-          resultRef: job.jobId, usageJson: job.usageJson, now: now(),
-        });
-        continue;
-      }
 
       try {
-        const chunkText = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
-        const extraction = await deps.extractor.extract({
-          unitId: unit.unitId, chunk, chunkText, worldId: run.worldId,
-        });
-        const resolved = await applyExtraction({
-          worldId: run.worldId,
-          source: evidenceSource,
-          extraction,
-          createdAt: now(),
-          sha256Hex: deps.sha256Hex,
-        });
-        const eventProposals = resolved.events.map(event => ({
-          chunkId: chunk.chunkId,
-          eventId: eventIdFor(run.worldId, event.eventKey),
-          title: event.title,
-          summary: event.summary,
-          worldTimeOrder: event.worldTimeOrder ?? null,
-          narrativeChapterId: event.narrativeChapterId ?? null,
-          dependsOnEventKeys: event.dependsOnEventKeys ?? [],
-        }));
-        let factCounter = 0;
-        const factsWithIds = resolved.facts.map(fact => {
-          factCounter += 1;
-          return { ...fact, factId: `fact-${run.worldId}-${chunk.chunkId}-${factCounter}` };
-        });
-        await deps.worldStore.commitChunkResult({
-          worldId: run.worldId,
-          chunkId: chunk.chunkId,
-          entities: resolved.entities,
-          facts: factsWithIds,
-          eventProposals,
-          job: {
-            worldId: run.worldId,
-            jobId: chunkJobId(chunk.chunkId),
-            kind: 'extract_chunk',
-            targetId: chunk.chunkId,
-            status: 'done',
-            attempts: (job?.attempts ?? 0) + 1,
-            contentHash: chunk.contentHash,
-            extractorVersion: deps.extractor.version,
-            modelFingerprint: run.modelFingerprint,
-            usageJson: JSON.stringify({ entities: resolved.entities.length, facts: resolved.facts.length }),
-            resultJson: JSON.stringify({ ok: true, unitId: unit.unitId }),
-            error: null,
-            createdAt: job?.createdAt ?? now(),
-            updatedAt: now(),
-          },
-          createdAt: now(),
-          updatedAt: now(),
-        });
-        const ok = await deps.runStore.completeUnit({
-          unitId: unit.unitId, fencingToken, status: 'completed',
-          resultRef: chunkJobId(chunk.chunkId), now: now(),
-        });
-        if (!ok) {
-          lostLease = true;
-          break;
+        const unitChunks: SourceChunk[] = [];
+        let sourceDrifted = false;
+        for (const range of ranges) {
+          const chunk = chunksByRange.get(range.chunkId);
+          if (!chunk) {
+            sourceDrifted = true;
+            break;
+          }
+          unitChunks.push(chunk);
+        }
+        if (sourceDrifted) {
+          await deps.runStore.completeUnit({
+            unitId: unit.unitId, fencingToken, status: 'needs_review',
+            errorCode: 'source_changed', errorMessage: 'A planned chunk no longer exists.', now: now(),
+          });
+          continue;
+        }
+
+        // Idempotent fast path per chunk: world-side done under the same
+        // content hash and config fingerprints (C1 guards) needs no LLM call.
+        const pendingChunks: SourceChunk[] = [];
+        for (const chunk of unitChunks) {
+          if (!(await isChunkDone(deps, run, chunk))) pendingChunks.push(chunk);
+        }
+        if (pendingChunks.length === 0) {
+          const ok = await deps.runStore.completeUnit({
+            unitId: unit.unitId, fencingToken, status: 'completed',
+            resultRef: ranges.map(range => chunkJobId(range.chunkId)).join(','), now: now(),
+          });
+          if (!ok) { lostLease = true; break; }
+          continue;
+        }
+
+        if (ranges.length === 1) {
+          const chunk = pendingChunks[0]!;
+          const chunkText = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
+          const extraction = await deps.extractor.extract({
+            unitId: unit.unitId, chunk, chunkText, worldId: run.worldId,
+          });
+          const committed = await commitExtractionForChunks(
+            deps, run, [chunk], extraction, evidenceSource,
+          );
+          if (!committed) { lostLease = true; break; }
+          const ok = await deps.runStore.completeUnit({
+            unitId: unit.unitId, fencingToken, status: 'completed',
+            resultRef: chunkJobId(chunk.chunkId), now: now(),
+          });
+          if (!ok) { lostLease = true; break; }
+        } else {
+          // Closeout C3 group path: one budget-bounded request over segments.
+          if (!deps.groupExtractor) {
+            throw new Error('Group unit planned but no group extractor was provided.');
+          }
+          const titleByChapter = new Map(chapters.map(chapter => [chapter.chapterId, chapter.title]));
+          const segments: GroupSegmentInput[] = [];
+          for (const chunk of pendingChunks) {
+            const text = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
+            segments.push({
+              chunkId: chunk.chunkId,
+              chapterId: chunk.chapterId,
+              chapterTitle: titleByChapter.get(chunk.chapterId) ?? chunk.chapterId,
+              startCp: chunk.startOffset,
+              text,
+            });
+          }
+          const group = await deps.groupExtractor.extract({
+            unitId: unit.unitId, segments, worldId: run.worldId,
+          });
+          await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
+          const ok = await deps.runStore.completeUnit({
+            unitId: unit.unitId, fencingToken, status: 'completed',
+            usageJson: JSON.stringify({ rejectedQuotes: group.rejectedQuotes }),
+            resultRef: pendingChunks.map(chunk => chunkJobId(chunk.chunkId)).join(','),
+            now: now(),
+          });
+          if (!ok) { lostLease = true; break; }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const classification = classifyExtractionError(message);
+        if (classification === 'truncation' && ranges.length > 1) {
+          // Transactional split (plan §7.2): replace the oversized group with
+          // halved child units; the parent is canceled and never counts.
+          const mid = Math.floor(ranges.length / 2);
+          const childDefs = [ranges.slice(0, mid), ranges.slice(mid)];
+          const children = [];
+          for (let index = 0; index < childDefs.length; index += 1) {
+            const half = childDefs[index]!;
+            children.push({
+              unitId: `${unit.unitId}-s${index + 1}`,
+              kind: 'extract_group' as const,
+              sourceRangesJson: JSON.stringify(half),
+              inputHash: await deps.sha256Hex(half.map(range => `${range.chunkId}:${range.startCp}-${range.endCp}`).join('|')),
+              configFingerprint: unit.configFingerprint,
+            parentUnitId: unit.unitId,
+            ord: unit.ord,
+            status: 'queued' as const,
+            attempt: 0,
+            retryAt: null,
+            resultRef: null,
+            usageJson: null,
+            errorCode: null,
+            errorMessage: null,
+              createdAt: now(),
+              updatedAt: now(),
+            });
+          }
+          const replaced = await deps.runStore.replaceUnitWithChildren({
+            unitId: unit.unitId, fencingToken, children, now: now(),
+          });
+          if (!replaced) { lostLease = true; break; }
+          continue;
+        }
         const backoffMs = classification === 'config' ? 0 : 5_000 * Math.min(unit.attempt, 6);
         await deps.runStore.completeUnit({
           unitId: unit.unitId,
@@ -370,6 +445,140 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
 }
 
 type ErrorClass = 'network' | 'rate_limit' | 'config' | 'truncation' | 'unknown';
+
+/** World-side done check (C1 guards) for one chunk. */
+async function isChunkDone(
+  deps: Pick<CoordinatorDeps, 'worldStore' | 'extractor'>,
+  run: BuildRunRecord,
+  chunk: SourceChunk,
+): Promise<boolean> {
+  const job = await deps.worldStore.getJob(run.worldId, chunkJobId(chunk.chunkId));
+  return job?.status === 'done'
+    && job.contentHash === chunk.contentHash
+    && job.extractorVersion === deps.extractor.version
+    && (job.modelFingerprint ?? null) === run.modelFingerprint;
+}
+
+/**
+ * Validates + commits one extraction result covering the given chunks. Each
+ * chunk's facts/entities/event proposals land through the C1 atomic chunk
+ * commit, so partial group commits are still crash-safe per chunk.
+ */
+async function commitExtractionForChunks(
+  deps: CoordinatorDeps,
+  run: BuildRunRecord,
+  chunks: readonly SourceChunk[],
+  extraction: ExtractionResult,
+  evidenceSource: EvidenceSource,
+): Promise<boolean> {
+  const now = deps.now ?? (() => new Date().toISOString());
+  for (const chunk of chunks) {
+    const resolved = await applyExtraction({
+      worldId: run.worldId,
+      source: evidenceSource,
+      extraction,
+      createdAt: now(),
+      sha256Hex: deps.sha256Hex,
+    });
+    await commitResolvedChunk(deps, run, chunk, resolved);
+  }
+  return true;
+}
+
+/**
+ * Commits a C3 group result: facts/events are partitioned by the chunk each
+ * evidence quote came from; entities go with every chunk commit (the store
+ * dedupes). Group-level events whose chunk is already done are attributed to
+ * the first still-pending chunk so they are never lost.
+ */
+async function commitGroupResult(
+  deps: CoordinatorDeps,
+  run: BuildRunRecord,
+  chunks: readonly SourceChunk[],
+  group: GroupExtractionResult,
+  evidenceSource: EvidenceSource,
+): Promise<void> {
+  const now = deps.now ?? (() => new Date().toISOString());
+  const fallbackChunk = chunks[0]!;
+  for (const chunk of chunks) {
+    const facts = group.facts.filter(fact => fact.chunkId === chunk.chunkId);
+    const events = group.events.filter(event => event.chunkId === chunk.chunkId);
+    const extraction: ExtractionResult = {
+      entities: group.entities,
+      facts: facts.map(({ chunkId: _chunkId, ...fact }) => fact),
+      events: events.length > 0 || chunk === fallbackChunk
+        ? (chunk === fallbackChunk
+          ? [
+            ...events.map(({ chunkId: _chunkId, ...event }) => event),
+            ...group.events
+              .filter(event => event.chunkId !== chunk.chunkId && !chunks.some(c => c.chunkId === event.chunkId))
+              .map(({ chunkId: _chunkId, ...event }) => event),
+          ]
+          : events.map(({ chunkId: _chunkId, ...event }) => event))
+        : [],
+      ruleMappings: group.ruleMappings,
+    };
+    if (facts.length === 0 && extraction.events.length === 0 && group.entities.length === 0) continue;
+    const resolved = await applyExtraction({
+      worldId: run.worldId,
+      source: evidenceSource,
+      extraction,
+      createdAt: now(),
+      sha256Hex: deps.sha256Hex,
+    });
+    await commitResolvedChunk(deps, run, chunk, resolved);
+  }
+}
+
+/** Shared C1 atomic commit for already-resolved extraction output. */
+async function commitResolvedChunk(
+  deps: CoordinatorDeps,
+  run: BuildRunRecord,
+  chunk: SourceChunk,
+  resolved: Awaited<ReturnType<typeof applyExtraction>>,
+): Promise<void> {
+  const now = deps.now ?? (() => new Date().toISOString());
+  const eventProposals = resolved.events.map(event => ({
+    chunkId: chunk.chunkId,
+    eventId: eventIdFor(run.worldId, event.eventKey),
+    title: event.title,
+    summary: event.summary,
+    worldTimeOrder: event.worldTimeOrder ?? null,
+    narrativeChapterId: event.narrativeChapterId ?? null,
+    dependsOnEventKeys: event.dependsOnEventKeys ?? [],
+  }));
+  const existing = await deps.worldStore.getJob(run.worldId, chunkJobId(chunk.chunkId));
+  let factCounter = 0;
+  const factsWithIds = resolved.facts.map(fact => {
+    factCounter += 1;
+    return { ...fact, factId: `fact-${run.worldId}-${chunk.chunkId}-${factCounter}` };
+  });
+  await deps.worldStore.commitChunkResult({
+    worldId: run.worldId,
+    chunkId: chunk.chunkId,
+    entities: resolved.entities,
+    facts: factsWithIds,
+    eventProposals,
+    job: {
+      worldId: run.worldId,
+      jobId: chunkJobId(chunk.chunkId),
+      kind: 'extract_chunk',
+      targetId: chunk.chunkId,
+      status: 'done',
+      attempts: (existing?.attempts ?? 0) + 1,
+      contentHash: chunk.contentHash,
+      extractorVersion: deps.extractor.version,
+      modelFingerprint: run.modelFingerprint,
+      usageJson: JSON.stringify({ entities: resolved.entities.length, facts: resolved.facts.length }),
+      resultJson: JSON.stringify({ ok: true }),
+      error: null,
+      createdAt: existing?.createdAt ?? now(),
+      updatedAt: now(),
+    },
+    createdAt: now(),
+    updatedAt: now(),
+  });
+}
 
 function classifyExtractionError(message: string): ErrorClass {
   const lower = message.toLowerCase();

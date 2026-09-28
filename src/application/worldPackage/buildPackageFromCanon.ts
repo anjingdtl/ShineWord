@@ -614,6 +614,9 @@ async function requestMappingProposals(
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
   mappedFactCount: number;
   batches: number;
+  /** Closeout C3: per-batch usage plus cache-hit accounting. */
+  usagePerBatch: Array<unknown | null>;
+  skippedBatches: number;
 }> {
   // Batched mapping (P2 acceptance G04): EVERY mappable fact is offered to the
   // mapper — a single 800-fact call used to silently drop the rest and still
@@ -630,9 +633,46 @@ async function requestMappingProposals(
   const actorTemplates: RawActorTemplate[] = [];
   const items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
   const allRejected: Array<{ kind: string; id: string; reasons: string[] }> = [];
-  let usage: unknown | null = null;
+  const usagePerBatch: Array<unknown | null> = [];
   let mappedFactCount = 0;
-  const seenEntryIds = new Set<string>();
+  let skippedBatches = 0;
+  // Closeout C3: entries are keyed for MERGE, not first-wins — a later batch
+  // extending an existing entryId unions its fact provenance; incompatible
+  // definitions surface as review rejections instead of silent drops.
+  const entriesById = new Map<string, ContentEntry>();
+  const templatesById = new Map<string, RawActorTemplate>();
+  const itemsById = new Map<string, { entry: ContentEntry; weaponSkillId: string | null }>();
+
+  const mergeEntry = (entry: ContentEntry | null, kind: 'skill' | 'constraint' | 'lore'): void => {
+    if (!entry) return;
+    const existing = entriesById.get(entry.entryId);
+    if (!existing) {
+      entriesById.set(entry.entryId, entry);
+      if (kind === 'skill') skills.push(entry);
+      else if (kind === 'constraint') constraints.push(entry);
+      else lore.push(entry);
+      return;
+    }
+    const mergedFactIds = new Set([...existing.provenance.sourceFactIds, ...entry.provenance.sourceFactIds]);
+    const sameDefinition = JSON.stringify(existing.definition) === JSON.stringify(entry.definition);
+    if (sameDefinition || existing.revision === entry.revision) {
+      existing.provenance = {
+        ...existing.provenance,
+        sourceFactIds: [...mergedFactIds],
+      };
+      return;
+    }
+    // Incompatible redefinition of the same entryId across batches: keep the
+    // first definition and record the conflict for review - never silently
+    // overwrite (plan §7.3).
+    allRejected.push({
+      kind: 'conflict',
+      id: entry.entryId,
+      reasons: [`later batch redefined ${entry.entryId} with a different definition`],
+    });
+  };
+
+  const entityNameIndex = new Map(entities.map(entity => [entity.name, entity.entityId]));
 
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index]!;
@@ -640,10 +680,41 @@ async function requestMappingProposals(
       phase: 'mapping',
       message: `LLM 映射事实批次 ${index + 1}/${batches.length}（每批至多 ${MAX_PROMPT_FACTS} 条）`,
     });
+
+    // Closeout C3: resume - a batch already completed for the same fact set
+    // and mapping version is skipped instead of re-paying the request.
+    const batchHash = await input.sha256Hex(batch.map(fact => fact.factId).join("|"))
+    const batchJobId = `job-map-${input.worldId}-b${String(index + 1).padStart(4, '0')}`;
+    const doneJob = await input.worldStore.getJob(input.worldId, batchJobId);
+    if (doneJob?.status === 'done' && doneJob.contentHash === batchHash
+      && doneJob.extractorVersion === `mapper-${input.mappingVersion}`) {
+      skippedBatches += 1;
+      mappedFactCount += batch.length;
+      usagePerBatch.push(doneJob?.usageJson ? JSON.parse(doneJob.usageJson) : null);
+      continue;
+    }
+
+    // Closeout C3: per-batch context, not the whole world - subjects of this
+    // batch plus entities named inside fact values, plus a bounded event set.
+    const relatedIds = new Set<string>(batch.map(fact => fact.subjectEntityId));
+    for (const fact of batch) {
+      const valueJson = JSON.stringify(fact.value);
+      for (const [name, entityId] of entityNameIndex) {
+        if (relatedIds.has(entityId)) continue;
+        if (name.length >= 2 && valueJson.includes(name)) relatedIds.add(entityId);
+      }
+    }
+    const relatedEntities = entities.filter(entity => relatedIds.has(entity.entityId));
+    const relatedNames = new Set(relatedEntities.map(entity => entity.name));
+    const relatedEvents = events
+      .filter(event => [...relatedNames].some(name =>
+        name.length >= 2 && (event.title.includes(name) || event.summary.includes(name))))
+      .slice(0, 300);
+
     const response = await input.provider.complete({
       role: CANON_MAPPER_ROLE,
       system: MAPPER_SYSTEM,
-      user: buildMapperUserPrompt(batch, entities, events),
+      user: buildMapperUserPrompt(batch, relatedEntities, relatedEvents),
       maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
       jsonMode: true,
     });
@@ -652,46 +723,71 @@ async function requestMappingProposals(
     if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
       throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
     }
-    usage = response.usage ?? usage;
+    usagePerBatch.push(response.usage ?? null);
 
     const ctx: CleanContext = { knownFactIds, rejected: [] };
-    const pushUnique = (entry: ContentEntry | null): void => {
-      if (!entry) return;
-      if (seenEntryIds.has(entry.entryId)) return; // later batches never overwrite earlier ones
-      seenEntryIds.add(entry.entryId);
-      if (entry.kind === 'skill') skills.push(entry);
-      else if (entry.kind === 'constraint') constraints.push(entry);
-      else if (entry.kind === 'lore') lore.push(entry);
-    };
-    for (const candidate of Array.isArray(raw.skills) ? raw.skills : []) pushUnique(cleanSkill(candidate, ctx));
-    for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) pushUnique(cleanConstraint(candidate, ctx));
-    for (const candidate of Array.isArray(raw.lore) ? raw.lore : []) pushUnique(cleanLore(candidate, ctx));
+    for (const candidate of Array.isArray(raw.skills) ? raw.skills : []) mergeEntry(cleanSkill(candidate, ctx), 'skill');
+    for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) mergeEntry(cleanConstraint(candidate, ctx), 'constraint');
+    for (const candidate of Array.isArray(raw.lore) ? raw.lore : []) mergeEntry(cleanLore(candidate, ctx), 'lore');
     for (const candidate of Array.isArray(raw.actorTemplates) ? raw.actorTemplates : []) {
       const cleaned = cleanActorTemplate(candidate, ctx);
-      if (cleaned && !seenEntryIds.has(cleaned.entryId)) {
-        seenEntryIds.add(cleaned.entryId);
+      if (!cleaned) continue;
+      const existing = templatesById.get(cleaned.entryId);
+      if (!existing) {
+        templatesById.set(cleaned.entryId, cleaned);
         actorTemplates.push(cleaned);
+      } else {
+        const merged = new Set([...existing.entry.provenance.sourceFactIds, ...cleaned.entry.provenance.sourceFactIds]);
+        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged] };
       }
     }
     for (const candidate of Array.isArray(raw.items) ? raw.items : []) {
       const cleaned = cleanItem(candidate, ctx);
-      if (cleaned && !seenEntryIds.has(cleaned.entry.entryId)) {
-        seenEntryIds.add(cleaned.entry.entryId);
+      if (!cleaned) continue;
+      const existing = itemsById.get(cleaned.entry.entryId);
+      if (!existing) {
+        itemsById.set(cleaned.entry.entryId, cleaned);
         items.push(cleaned);
+      } else {
+        const merged = new Set([...existing.entry.provenance.sourceFactIds, ...cleaned.entry.provenance.sourceFactIds]);
+        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged] };
       }
     }
     mappedFactCount += batch.length;
     allRejected.push(...ctx.rejected);
+
+    // Persist the batch checkpoint AFTER its results are merged in memory;
+    // a crash before this write re-runs exactly this batch, nothing else.
+    await input.worldStore.upsertJob({
+      worldId: input.worldId,
+      jobId: batchJobId,
+      kind: 'rule_mapping',
+      targetId: null,
+      status: 'done',
+      attempts: (doneJob?.attempts ?? 0) + 1,
+      contentHash: batchHash,
+      extractorVersion: `mapper-${input.mappingVersion}`,
+      modelFingerprint: null,
+      usageJson: response.usage ? JSON.stringify(response.usage) : null,
+      resultJson: JSON.stringify({ facts: batch.length }),
+      error: null,
+      createdAt: doneJob?.createdAt ?? input.createdAt,
+      updatedAt: input.createdAt,
+    }, input.createdAt);
   }
 
   return {
     proposals: { skills, constraints, lore },
-    usage,
+    usage: usagePerBatch.filter(Boolean).length > 0
+      ? { batches: usagePerBatch, skippedBatches }
+      : null,
     actorTemplates,
     items,
     rejected: allRejected,
     mappedFactCount,
     batches: batches.length,
+    usagePerBatch,
+    skippedBatches,
   };
 }
 
@@ -806,7 +902,29 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   try {
     const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds);
     proposals = mapped.proposals;
-    mappingUsage = mapped.usage;
+    // Closeout C3: aggregate usage across batches (sum token counters,
+    // OR the estimated flags) instead of keeping only the last response.
+    const usages = (mapped.usagePerBatch ?? []).filter((u): u is Record<string, unknown> =>
+      typeof u === 'object' && u !== null);
+    if (usages.length === 1) {
+      mappingUsage = usages[0];
+    } else if (usages.length > 1) {
+      const aggregate: Record<string, unknown> = {};
+      for (const usage of usages) {
+        for (const [key, value] of Object.entries(usage)) {
+          if (typeof value === 'number' && typeof aggregate[key] === 'number') {
+            aggregate[key] = (aggregate[key] as number) + value;
+          } else if (typeof value === 'boolean') {
+            aggregate[key] = (aggregate[key] === true) || value;
+          } else if (!(key in aggregate)) {
+            aggregate[key] = value;
+          }
+        }
+      }
+      aggregate.batches = usages.length;
+      aggregate.skippedBatches = mapped.skippedBatches;
+      mappingUsage = aggregate;
+    }
     actorTemplates = mapped.actorTemplates;
     items = mapped.items;
     mappedFactCount = mapped.mappedFactCount;

@@ -369,9 +369,12 @@ export class SqliteBuildRunStore implements BuildRunStore {
       for (const child of input.children) {
         await tx.execute(insertUnitSql(), unitParams({ ...child, runId: unit.run_id }));
       }
+      // The canceled parent leaves the effective count: only the children
+      // remain as work, so a split must never inflate the total (plan 7.2 -
+      // parent and children must not both count).
       await tx.execute(
         `UPDATE world_build_runs SET units_total = units_total + ?, updated_at = ? WHERE run_id = ?`,
-        [input.children.length, input.now, unit.run_id],
+        [input.children.length - 1, input.now, unit.run_id],
       );
       return true;
     });
