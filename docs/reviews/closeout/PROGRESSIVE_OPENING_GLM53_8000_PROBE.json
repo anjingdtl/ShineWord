@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "mode": "opening-dossier",
+  "startedAt": "2026-09-28T21:44:31.280Z",
+  "model": "glm-5.3",
+  "reasoningPolicy": "enabled; no thinking opt-out sent",
+  "inputCodePoints": 8000,
+  "sourceBudgetCodePoints": 8000,
+  "maxOutputTokens": 8000,
+  "dossierValid": true,
+  "failureCategory": null,
+  "physicalRequests": 2,
+  "requestCap": 2,
+  "requestTimeoutMs": 120000,
+  "totalDeadlineMs": 300000,
+  "totalElapsedMs": 88281,
+  "samples": [
+    {
+      "sample": "opening-dossier-1",
+      "inputCodePoints": 8000,
+      "requestBodyBytes": 25140,
+      "physicalRequests": 1,
+      "status": 200,
+      "connectionReused": false,
+      "failureCategory": null,
+      "timingsMs": {
+        "localQueue": 16,
+        "dns": 26,
+        "tcp": 1,
+        "tls": 181,
+        "responseHeaders": 1136,
+        "firstReasoningDelta": 1137,
+        "firstTextToken": 62023,
+        "completeResponse": 63388,
+        "providerQueue": null
+      },
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 6014,
+        "outputTokens": 6346,
+        "reasoningTokens": 6109
+      },
+      "outputChars": 395,
+      "reasoningChars": 15148,
+      "jsonParsed": false,
+      "simpleJsonValid": null,
+      "schemaShapeValid": false,
+      "evidenceQuoteCount": 0,
+      "evidenceExactHits": 0,
+      "protocolErrors": 0,
+      "businessTextBytes": 859
+    },
+    {
+      "sample": "opening-dossier-2",
+      "inputCodePoints": 8000,
+      "requestBodyBytes": 26167,
+      "physicalRequests": 1,
+      "status": 200,
+      "connectionReused": true,
+      "failureCategory": null,
+      "timingsMs": {
+        "localQueue": 0,
+        "dns": null,
+        "tcp": null,
+        "tls": null,
+        "responseHeaders": 4728,
+        "firstReasoningDelta": 4728,
+        "firstTextToken": 23599,
+        "completeResponse": 24893,
+        "providerQueue": null
+      },
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 6246,
+        "outputTokens": 2608,
+        "reasoningTokens": 2388
+      },
+      "outputChars": 397,
+      "reasoningChars": 5743,
+      "jsonParsed": true,
+      "simpleJsonValid": null,
+      "schemaShapeValid": true,
+      "evidenceQuoteCount": 4,
+      "evidenceExactHits": 4,
+      "protocolErrors": 0,
+      "businessTextBytes": 877
+    }
+  ],
+  "redaction": "Only redacted timing/usage/schema checks persisted; no source, prompt, key, response text, or Authorization."
+}

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "mode": "opening-dossier",
+  "startedAt": "2026-09-28T21:43:11.887Z",
+  "model": "glm-5.3",
+  "reasoningPolicy": "enabled; no thinking opt-out sent",
+  "inputCodePoints": 8000,
+  "sourceBudgetCodePoints": 8000,
+  "maxOutputTokens": 4096,
+  "dossierValid": false,
+  "failureCategory": "empty_completion",
+  "physicalRequests": 1,
+  "requestCap": 2,
+  "requestTimeoutMs": 120000,
+  "totalDeadlineMs": 300000,
+  "totalElapsedMs": 34189,
+  "samples": [
+    {
+      "sample": "opening-dossier-1",
+      "inputCodePoints": 8000,
+      "requestBodyBytes": 25140,
+      "physicalRequests": 1,
+      "status": 200,
+      "connectionReused": false,
+      "failureCategory": null,
+      "timingsMs": {
+        "localQueue": 17,
+        "dns": 24,
+        "tcp": 1,
+        "tls": 193,
+        "responseHeaders": 2753,
+        "firstReasoningDelta": 2753,
+        "firstTextToken": null,
+        "completeResponse": 34188,
+        "providerQueue": null
+      },
+      "finishReason": "length",
+      "usage": {
+        "inputTokens": 6014,
+        "outputTokens": 4096,
+        "reasoningTokens": 4061
+      },
+      "outputChars": 0,
+      "reasoningChars": 7479,
+      "jsonParsed": false,
+      "simpleJsonValid": null,
+      "schemaShapeValid": false,
+      "evidenceQuoteCount": 0,
+      "evidenceExactHits": 0,
+      "protocolErrors": 0,
+      "businessTextBytes": 0
+    }
+  ],
+  "redaction": "Only redacted timing/usage/schema checks persisted; no source, prompt, key, response text, or Authorization."
+}

@@ -9,7 +9,8 @@ const fs = require('node:fs');
 const https = require('node:https');
 const path = require('node:path');
 
-const MODEL = 'GLM-5.3-Flash';
+const DEFAULT_MODEL = 'GLM-5.3-Flash';
+let MODEL = DEFAULT_MODEL;
 const ENDPOINT = 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions';
 const MAX_ATTEMPTS_PER_SAMPLE = 1;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
@@ -274,6 +275,10 @@ function safeSummary(samples, startedAt, totalMs) {
 async function main() {
   const args = argsOf(process.argv);
   if (!args.config || !args.source || !args.out) throw new Error('usage');
+  if (args.model !== undefined) {
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(args.model)) throw new Error('usage');
+    MODEL = args.model;
+  }
   const key = readKey(args.config);
   if (args['opening-dossier'] === 'true') {
     const { extractOpeningDossier } = require('../dist/application/worldPackage/progressiveOpening');
