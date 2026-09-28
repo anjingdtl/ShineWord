@@ -7,8 +7,8 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { EncounterView } from '../../../../runtime';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 export function ZoneTrack(props: { encounter: EncounterView }): React.JSX.Element {
   const { theme } = useTheme();

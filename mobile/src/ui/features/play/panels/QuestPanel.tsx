@@ -6,12 +6,12 @@
  */
 import React from 'react';
 import { Text, View } from 'react-native';
-import type { QuestProgressView } from '../../../../../src/application/campaign/playProjection';
-import { Card } from '../../components/Card';
-import { EmptyState } from '../../components/EmptyState';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import type { QuestProgressView } from '../../../../../../src/application/campaign/playProjection';
+import { Card } from '../../../components/Card';
+import { EmptyState } from '../../../components/EmptyState';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 const STATUS_LABEL: Record<QuestProgressView['status'], string> = {
   available: '可接取',

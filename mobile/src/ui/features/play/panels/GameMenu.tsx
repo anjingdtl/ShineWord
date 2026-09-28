@@ -14,13 +14,13 @@
  */
 import React from 'react';
 import { Text, View } from 'react-native';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { SectionHeader } from '../../components/SectionHeader';
-import { StatusBanner } from '../../components/StatusBanner';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
-import { THEMES } from '../../theme/tokens';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { StatusBanner } from '../../../components/StatusBanner';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
+import { THEMES } from '../../../theme/tokens';
 import { PlayPanel } from './PlayPanel';
 import type { PlayController } from '../hooks/usePlayController';
 

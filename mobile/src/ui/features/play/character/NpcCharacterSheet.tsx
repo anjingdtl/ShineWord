@@ -8,14 +8,14 @@
  */
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { NpcPublicProjection } from '../../../../../src/application/campaign/playProjection';
+import type { NpcPublicProjection } from '../../../../../../src/application/campaign/playProjection';
 import { getNpcPublicProjection } from '../../../../playProjection';
-import { Bar } from '../../components/Bar';
-import { Card } from '../../components/Card';
-import { SectionHeader } from '../../components/SectionHeader';
-import { StatusBanner } from '../../components/StatusBanner';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Bar } from '../../../components/Bar';
+import { Card } from '../../../components/Card';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { StatusBanner } from '../../../components/StatusBanner';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 const MORALE_LABEL: Record<string, string> = {
   low: '怯战',

@@ -8,12 +8,12 @@
  */
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { SectionHeader } from '../../components/SectionHeader';
-import { StatusBanner } from '../../components/StatusBanner';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { StatusBanner } from '../../../components/StatusBanner';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 import { CombatActions } from './CombatActions';
 import { CombatantCard } from './CombatantCard';
 import { InitiativeStrip } from './InitiativeStrip';

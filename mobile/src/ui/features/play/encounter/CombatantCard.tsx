@@ -8,9 +8,9 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { EncounterView } from '../../../../runtime';
-import { Bar } from '../../components/Bar';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Bar } from '../../../components/Bar';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 type EncounterActor = EncounterView['actors'][number];
 

@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useRoute, type RouteProp } from '@react-navigation/native';
-import type { PlayUiProjection } from '../../../../../src/application/campaign/playProjection';
+import type { PlayUiProjection } from '../../../../../../src/application/campaign/playProjection';
 import {
   buildProvider,
   createSession,

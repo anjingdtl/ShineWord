@@ -7,7 +7,7 @@
  * history table does not store it (plan §18.1: 不伪造).
  */
 import React from 'react';
-import { Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { Card } from '../../components/Card';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';

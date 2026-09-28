@@ -10,9 +10,9 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Button } from '../../components/Button';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Button } from '../../../components/Button';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 import type { PlayController } from '../hooks/usePlayController';
 
 export function CombatActions(props: { controller: PlayController }): React.JSX.Element | null {

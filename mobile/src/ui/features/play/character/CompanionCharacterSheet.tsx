@@ -9,8 +9,8 @@ import React from 'react';
 import type {
   ActorUiProjection,
   PlayUiProjection,
-} from '../../../../../src/application/campaign/playProjection';
-import type { CompanionDirective } from '../../../../../src/domain/characters/card';
+} from '../../../../../../src/application/campaign/playProjection';
+import type { CompanionDirective } from '../../../../../../src/domain/characters/card';
 import { CharacterSheet } from './CharacterSheet';
 import {
   AbilitySlots,

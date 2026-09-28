@@ -11,11 +11,11 @@
  */
 import React, { useState } from 'react';
 import { Text, View } from 'react-native';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { SegmentedControl } from '../../components/SegmentedControl';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { SegmentedControl } from '../../../components/SegmentedControl';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 import { CompanionCharacterSheet } from '../character/CompanionCharacterSheet';
 import { NpcCharacterSheet } from '../character/NpcCharacterSheet';
 import { PlayerCharacterSheet } from '../character/PlayerCharacterSheet';

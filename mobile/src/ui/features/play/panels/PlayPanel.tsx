@@ -17,8 +17,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 export function PlayPanel(props: {
   visible: boolean;

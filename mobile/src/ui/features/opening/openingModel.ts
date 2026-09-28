@@ -5,7 +5,7 @@
  * `createCampaign`; every limit here mirrors the rule domain (4 free points,
  * 3 starting skills, at most 2 companions) and is not re-implemented in UI.
  */
-import type { CompanionDirective } from '../../../../src/domain/characters/card';
+import type { CompanionDirective } from '../../../../../src/domain/characters/card';
 
 /** Projection returned by `session.getWorldSetup()`. */
 export interface OpeningWorldSetup {

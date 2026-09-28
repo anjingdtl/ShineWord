@@ -7,13 +7,13 @@
  */
 import React from 'react';
 import { Text, View } from 'react-native';
-import type { CompanionDirective } from '../../../../../src/domain/characters/card';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { Chip } from '../../components/Chip';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import type { CompanionDirective } from '../../../../../../src/domain/characters/card';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { Chip } from '../../../components/Chip';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 import type { PlayController } from '../hooks/usePlayController';
 
 const DIRECTIVES: ReadonlyArray<{ value: CompanionDirective; label: string }> = [

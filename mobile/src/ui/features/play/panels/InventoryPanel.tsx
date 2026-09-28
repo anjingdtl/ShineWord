@@ -6,12 +6,12 @@
  */
 import React from 'react';
 import { Text, View } from 'react-native';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { EmptyState } from '../../components/EmptyState';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { EmptyState } from '../../../components/EmptyState';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 import type { PlayController } from '../hooks/usePlayController';
 
 const SOURCE_LABEL: Record<string, string> = {

@@ -8,13 +8,13 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { ActorUiProjection } from '../../../../../src/application/campaign/playProjection';
-import type { CompanionDirective } from '../../../../../src/domain/characters/card';
-import { Bar } from '../../components/Bar';
-import { Card } from '../../components/Card';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import type { ActorUiProjection } from '../../../../../../src/application/campaign/playProjection';
+import type { CompanionDirective } from '../../../../../../src/domain/characters/card';
+import { Bar } from '../../../components/Bar';
+import { Card } from '../../../components/Card';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 const KIND_LABEL: Record<string, string> = {
   canon: '原著角色',

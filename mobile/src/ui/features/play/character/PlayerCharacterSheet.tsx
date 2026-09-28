@@ -7,7 +7,7 @@
  * a button on the main play surface.
  */
 import React from 'react';
-import type { PlayUiProjection } from '../../../../../src/application/campaign/playProjection';
+import type { PlayUiProjection } from '../../../../../../src/application/campaign/playProjection';
 import { CharacterSheet } from './CharacterSheet';
 import {
   AbilitySlots,

@@ -17,16 +17,16 @@ import type {
   ActorUiProjection,
   InventoryView,
   RelationshipView,
-} from '../../../../../src/application/campaign/playProjection';
-import type { CompanionDirective } from '../../../../../src/domain/characters/card';
-import { Bar, DieBadge } from '../../components/Bar';
-import { Button } from '../../components/Button';
-import { Card } from '../../components/Card';
-import { Chip } from '../../components/Chip';
-import { PipTrack } from '../../components/PipTrack';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+} from '../../../../../../src/application/campaign/playProjection';
+import type { CompanionDirective } from '../../../../../../src/domain/characters/card';
+import { Bar, DieBadge } from '../../../components/Bar';
+import { Button } from '../../../components/Button';
+import { Card } from '../../../components/Card';
+import { Chip } from '../../../components/Chip';
+import { PipTrack } from '../../../components/PipTrack';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 const RANK_LABEL: Record<string, string> = {
   untrained: '未受训',

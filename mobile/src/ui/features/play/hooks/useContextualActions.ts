@@ -6,7 +6,7 @@
  * status, quests). Clicking one only fills the composer — it never submits.
  */
 import { useMemo } from 'react';
-import type { PlayUiProjection } from '../../../../../src/application/campaign/playProjection';
+import type { PlayUiProjection } from '../../../../../../src/application/campaign/playProjection';
 import type { EncounterView } from '../../../../runtime';
 
 /** Explorer-state actions; always available while not in combat. */

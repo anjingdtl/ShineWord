@@ -14,7 +14,7 @@ import { TextField } from '../../components/TextField';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import { ATTRIBUTES, MAX_SKILLS, directiveLabel } from './openingModel';
-import type { CompanionDirective } from '../../../../src/domain/characters/card';
+import type { CompanionDirective } from '../../../../../src/domain/characters/card';
 import type { OpeningWorldSetup } from './openingModel';
 
 function Row(props: { label: string; value: string }): React.JSX.Element {

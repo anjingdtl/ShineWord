@@ -7,12 +7,12 @@
  */
 import React from 'react';
 import { Text, View } from 'react-native';
-import type { DiscoveryView } from '../../../../../src/application/campaign/playProjection';
-import { Card } from '../../components/Card';
-import { EmptyState } from '../../components/EmptyState';
-import { SectionHeader } from '../../components/SectionHeader';
-import { typeStyle } from '../../components/typography';
-import { useTheme } from '../../theme/ThemeContext';
+import type { DiscoveryView } from '../../../../../../src/application/campaign/playProjection';
+import { Card } from '../../../components/Card';
+import { EmptyState } from '../../../components/EmptyState';
+import { SectionHeader } from '../../../components/SectionHeader';
+import { typeStyle } from '../../../components/typography';
+import { useTheme } from '../../../theme/ThemeContext';
 
 const KNOWN_VIA: Record<DiscoveryView['knownVia'], { label: string; glyph: string }> = {
   witnessed: { label: '亲眼所见', glyph: '👁' },

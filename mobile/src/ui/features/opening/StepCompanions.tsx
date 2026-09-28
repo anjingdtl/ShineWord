@@ -13,7 +13,7 @@ import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import { ChoiceCard } from './ChoiceCard';
 import { COMPANION_DIRECTIVES, MAX_COMPANIONS, type OpeningWorldSetup } from './openingModel';
-import type { CompanionDirective } from '../../../../src/domain/characters/card';
+import type { CompanionDirective } from '../../../../../src/domain/characters/card';
 
 export function StepCompanions(props: {
   setup: OpeningWorldSetup | null;
