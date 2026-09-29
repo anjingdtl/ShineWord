@@ -50,7 +50,7 @@ import { freezeRunConfig, reviveRunConfig, providerProfileFromFrozen } from '../
 import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { activatePendingStages } from '../../src/application/worldPackage/stageActivation';
-import { startBuildService } from './buildServiceBridge';
+import { startBuildService, requestRunControl } from './buildServiceBridge';
 
 /** Unified-build import summary (P3): stage plan + first queued runs. */
 export interface UnifiedImportSummary {
@@ -816,9 +816,18 @@ const activeRuns = new Map<string, { aborted: boolean }>();
 
 export function pauseRun(runId: string): boolean {
   const signal = activeRuns.get(runId);
-  if (!signal) return false;
-  signal.aborted = true;
+  if (signal) signal.aborted = true;
+  // Cross-process (P4): a headless-executed run reads the persisted flag
+  // between units; a same-process run also gets the immediate signal above.
+  void requestRunControl(runId, 'pause').catch(() => undefined);
   return true;
+}
+
+/** Cross-process cancel (P4): the coordinator marks the run canceled between units. */
+export async function cancelRun(runId: string): Promise<void> {
+  const signal = activeRuns.get(runId);
+  if (signal) signal.aborted = true;
+  await requestRunControl(runId, 'cancel').catch(() => undefined);
 }
 
 export function isRunActive(runId: string): boolean {

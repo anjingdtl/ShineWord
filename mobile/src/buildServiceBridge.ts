@@ -7,6 +7,7 @@ interface WorldBuildServiceNative {
   startService(runId: string): Promise<boolean>;
   stopService(): Promise<boolean>;
   notifyBuildProgress(runId: string, done: number, total: number): Promise<boolean>;
+  requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Promise<boolean>;
 }
 
 function native(): WorldBuildServiceNative | null {
@@ -38,6 +39,20 @@ export async function notifyBuildProgress(runId: string, done: number, total: nu
   if (!module) return false;
   try {
     return await module.notifyBuildProgress(runId, done, total);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Native control channel (unified P4): notification actions and the UI share
+ * one persisted pause/cancel flag that the coordinator polls between units.
+ */
+export async function requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Promise<boolean> {
+  const module = native();
+  if (!module?.requestRunControl) return false;
+  try {
+    return await module.requestRunControl(runId, kind);
   } catch {
     return false;
   }

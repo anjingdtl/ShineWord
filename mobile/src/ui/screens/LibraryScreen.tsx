@@ -18,7 +18,7 @@ import {
   type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelUnified, runExtraction, pauseRun } from '../../sourceImport';
+import { importNovelUnified, runExtraction, pauseRun, cancelRun } from '../../sourceImport';
 import type { BuildMode } from '../features/library/ImportNovelCard';
 import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import { startBuildService } from '../../buildServiceBridge';
@@ -86,6 +86,24 @@ export function LibraryScreen(): React.JSX.Element {
   useFocusEffect(
     useCallback(() => {
       refresh();
+      // App-open recovery (P4): runs interrupted by system recycling (not
+      // user force-stop, which cannot run code until the user reopens) resume
+      // through the same service entry. User-paused/needs-review runs wait
+      // for an explicit tap.
+      (async () => {
+        try {
+          const open = await listOpenBuildTasks();
+          const recoverable = open.filter(task =>
+            task.status === 'queued' || task.status === 'running'
+            || task.status === 'waiting_network' || task.status === 'failed_retryable');
+          for (const task of recoverable) {
+            if (task.status === 'running' && task.leaseHeld) continue; // live executor
+            await startBuildService(task.runId);
+          }
+        } catch {
+          // recovery is best-effort; the task card still offers manual resume
+        }
+      })();
     }, [refresh]),
   );
 
@@ -225,6 +243,7 @@ export function LibraryScreen(): React.JSX.Element {
               busy={taskBusy}
               onResume={runId => resumeTask(runId)}
               onPause={runId => { pauseRun(runId); }}
+              onCancel={runId => { void cancelRun(runId).then(refresh); }}
             />
           ))
         ) : null}
