@@ -246,3 +246,55 @@ test('progressive opening compiles, publishes with a hashed partial scope, creat
   importedDb.close();
   db.close();
 });
+
+test('anchor-less world setup still exposes the compiled opening location and lore (r7 D3)', async () => {
+  // Device regression (2026-09-29 r7): a world without canon anchor events asks
+  // for its setup with NO worldTimeOrder; opening facts written with
+  // revealAt:'1' were hidden to that query, emptying `locations` and
+  // dead-ending the opening wizard on a published package.
+  const db = dbWithSchema();
+  const adapter = new NodeSqliteAdapter(db);
+  const worldStore = new SqliteWorldStore(adapter);
+  const text = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。';
+  const chapter = { worldId: 'w-anchorless', chapterId: 'chapter-opening', index: 0,
+    title: '开篇', startOffset: 0, endOffset: Array.from(text).length,
+    charCount: Array.from(text).length, contentHash: sha.sha256Hex(text) };
+  await worldStore.createWorld({ worldId: 'w-anchorless', title: '无锚点开局', sourceSha256: 'b'.repeat(64),
+    sourceBytes: 100, normalizeVersion: 'normalize-1', chapterSplitVersion: 'chapter-split-1',
+    buildStatus: 'extracting', createdAt: 'now', updatedAt: 'now' });
+  await worldStore.saveImportedSource('w-anchorless', {
+    encoding: 'utf-8', sourceSha256Hex: 'b'.repeat(64), sourceByteLength: 100,
+    normalizeVersion: 'normalize-1', chapterSplitVersion: 'chapter-split-1', splitStrategy: 'standard',
+    text: '', codePointCount: Array.from(text).length, chapters: [chapter], chunks: [],
+  }, 'now');
+  const published = await compileProgressiveOpeningPackage({
+    worldStore, sha256Hex: sha.sha256Hex, worldId: 'w-anchorless', sourceSha256: 'b'.repeat(64),
+    sourceExcerpt: text, sourceEndCodePoint: Array.from(text).length, chapters: [chapter],
+    dossier: JSON.parse(dossierJson()),
+    requestMetrics: [{ attempt: 1, durationMs: 100, httpStatus: 200, outcome: 'completed' }],
+    usage: null, extractionMs: 90, createdAt: 'now',
+  });
+  assert.ok(published.manifest.revision >= 1);
+
+  const { CampaignSession } = require('../dist/application/campaign/session');
+  const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
+  const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
+  const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeStore');
+  const session = new CampaignSession({
+    db: adapter,
+    turns: new SqliteTurnStore(adapter),
+    game: new SqliteGameStore(adapter),
+    worldStore,
+    narratives: new SqliteNarrativeStore(adapter),
+    hashProvider: sha,
+    random: () => 0.5,
+  }, { complete: async () => ({ text: '', requestMetrics: [] }) },
+  { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
+
+  const setup = await session.getWorldSetup('w-anchorless');
+  assert.equal(setup.packageRevision, published.manifest.revision);
+  assert.ok(setup.locations.length > 0, `locations must not be empty for an anchor-less world, got ${JSON.stringify(setup.locations)}`);
+  assert.ok(setup.locations.includes('opening-location'));
+  assert.ok(setup.lore.some(item => item.name === '开局资料'));
+  db.close();
+});

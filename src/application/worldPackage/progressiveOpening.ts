@@ -314,7 +314,12 @@ export async function compileProgressiveOpeningPackage(input: {
       confidence: fact.status === 'explicit' ? 1 : 0.75,
       validFrom: null,
       validTo: null,
-      revealAt: '1',
+      // Opening facts describe the world's starting state, so they must stay
+      // visible to anchor-less queries too: a world with no canon anchor
+      // events asks for its setup without a worldTimeOrder, and `revealAt`
+      // values other than null hide the backing facts there — which emptied
+      // `locations` and dead-ended the opening wizard (device r7, D3).
+      revealAt: null,
       scope: 'opening',
       sources: [fact.source],
     }, timestamp);
