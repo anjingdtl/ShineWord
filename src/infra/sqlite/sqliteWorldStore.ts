@@ -493,7 +493,20 @@ export class SqliteWorldStore implements WorldStore {
         return 'duplicate';
       }
       if (existing.value_key === valueKey && fact.status === 'explicit') {
-        await this.insertFact(tx, { ...fact, status: 'conflict' }, createdAt);
+        // A conflicting explicit fact keeps BOTH rows, but replays (another
+        // run over the same world) must not collide on the deterministic
+        // base factId - suffix until unique.
+        let conflictId = fact.factId;
+        let suffix = 1;
+        while (await tx.queryOne(
+          'SELECT 1 FROM canon_facts WHERE world_id = ? AND fact_id = ?',
+          [fact.worldId, conflictId],
+        )) {
+          conflictId = `${fact.factId}-c${suffix}`;
+          suffix += 1;
+          if (suffix > 100) break;
+        }
+        await this.insertFact(tx, { ...fact, factId: conflictId, status: 'conflict' }, createdAt);
         return 'conflict';
       }
     }
@@ -731,7 +744,11 @@ export class SqliteWorldStore implements WorldStore {
   }
 
   async saveRuleMapping(mapping: StoredRuleMapping, createdAt: string): Promise<void> {
-    await this.db.execute(
+    await this.db.transaction(async tx => this.saveRuleMappingTx(tx, mapping, createdAt));
+  }
+
+  private async saveRuleMappingTx(tx: SqliteTransaction, mapping: StoredRuleMapping, createdAt: string): Promise<void> {
+    await tx.execute(
       `INSERT INTO world_rule_mappings
         (world_id, mapping_id, target_entity_id, mapping_kind, mapping_json,
          evidence_refs_json, ruleset_version, status, created_at)
@@ -914,6 +931,11 @@ export class SqliteWorldStore implements WorldStore {
             input.updatedAt,
           ],
         );
+      }
+      // 1M plan P4: rule mappings land in the SAME single transaction; the
+      // stable mappingId makes replayed/duplicate commits idempotent.
+      for (const mapping of input.ruleMappings ?? []) {
+        await this.saveRuleMappingTx(tx, mapping, input.createdAt);
       }
       await tx.execute(
         `UPDATE source_chunks SET extraction_status = 'extracted' WHERE world_id = ? AND chunk_id = ?`,

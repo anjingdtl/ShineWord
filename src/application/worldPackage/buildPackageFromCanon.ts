@@ -1,5 +1,7 @@
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
-import type { StoredEntity, StoredEvent, StoredFact } from '../../application/ports/worldStore';
+import type { StoredEntity, StoredEvent, StoredFact, StoredRuleMapping } from '../../application/ports/worldStore';
+import { SHINEWORD_RULESET_VERSION } from '../../domain/rules/ruleset';
+import { ruleMappingIdFor } from '../world/extraction';
 import { parseStrictJsonObject } from '../llm/json';
 import type {
   BookSection,
@@ -48,6 +50,14 @@ export interface BuildPackageInput {
   /** Exact normalized source chunks, supplied only after every chunk extracted. */
   sourceRanges?: WorldPackageBuildScope['sourceRanges'];
   sourceCodePointCount?: number;
+  /**
+   * WorldMapper V2 (1M plan P4): map with WHOLE-BOOK vision - every fact in
+   * ONE request (the 800-fact input truncation is lifted), full entity and
+   * event context, and the mapper additionally proposes ruleMappings that
+   * land through the same evidence-verified store path. Windowed runs keep
+   * the existing batched mapping untouched.
+   */
+  resident?: boolean;
   signal?: { aborted: boolean };
   onProgress?(info: { phase: string; message?: string }): void;
 }
@@ -132,6 +142,8 @@ const MORALE = ['low', 'steady', 'fierce'];
 /** Facts per mapping call; truncation keeps the prompt bounded and evidence ids valid. */
 const MAX_PROMPT_FACTS = 800;
 const MAPPING_MAX_OUTPUT_TOKENS = 6000;
+/** Whole-book mapping output budget (1M plan §3.2: GLM high / 16k content). */
+const RESIDENT_MAPPING_MAX_OUTPUT_TOKENS = 16_384;
 export const CANON_MAPPER_ROLE = 'WorldMapper';
 
 const MAPPER_SYSTEM = [
@@ -140,7 +152,8 @@ const MAPPER_SYSTEM = [
   '"constraints":[{"id":string,"name":string,"description":string,"enforcement":"block_action|block_effect|audit","pattern":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"lootItemIds":string[],"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
-  '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}]}',
+  '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"ruleMappings":[{"target":string,"kind":"attribute|skill|power_tier|resource","mapping":object,"evidenceFactIds":string[]}]}',
   'Rules:',
   '- attribute MUST be exactly one of: physique, agility, insight, knowledge, willpower, social.',
   '- powerTier MUST be exactly one of: ordinary, enhanced, supernatural. Use ordinary for anything a normal person can learn.',
@@ -150,6 +163,7 @@ const MAPPER_SYSTEM = [
   '- Every id must be a short stable english token (letters, digits, dash). attack skillId and weaponSkillId must reference a proposed skill id.',
   '- lootItemIds may list only ids of items proposed in this same package; leave it empty when the evidence does not define loot.',
   '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
+  '- ruleMappings target MUST be the name of an entity from the provided entities list; kind MUST be one of attribute, skill, power_tier, resource; evidenceFactIds must reference provided fact ids. Mappings without verified evidence are dropped.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -420,6 +434,41 @@ function cleanConstraint(raw: unknown, ctx: CleanContext): ContentEntry | null {
   return makeEntry({ entryId: `constraint-${id}`, kind: 'constraint', provenance, definition });
 }
 
+/**
+ * WorldMapper V2 rule-mapping cleaning (1M plan P4): the target must be a
+ * known entity name, the kind whitelisted, and every evidenceFactId must be
+ * a fact id from the provided list - the same evidence discipline as
+ * cleanProvenance. A mapping without surviving evidence is rejected whole.
+ */
+function cleanRuleMapping(
+  raw: unknown,
+  ctx: CleanContext,
+  entityNameIndex: Map<string, string>,
+  worldId: string,
+): StoredRuleMapping | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const target = asString(record.target);
+  const kind = asString(record.kind);
+  if (!target || !kind) return null;
+  if (!['attribute', 'skill', 'power_tier', 'resource'].includes(kind)) return null;
+  const targetEntityId = entityNameIndex.get(target);
+  if (!targetEntityId) return null;
+  const evidenceRefs = asStringArray(record.evidenceFactIds).filter(id => ctx.knownFactIds.has(id));
+  if (evidenceRefs.length === 0) return null;
+  const mapping = asRecord(record.mapping) ?? {};
+  return {
+    worldId,
+    mappingId: ruleMappingIdFor(worldId, targetEntityId, kind as StoredRuleMapping['mappingKind'], mapping),
+    targetEntityId,
+    mappingKind: kind as StoredRuleMapping['mappingKind'],
+    mapping,
+    evidenceRefs,
+    rulesetVersion: SHINEWORD_RULESET_VERSION,
+    status: 'active',
+  };
+}
+
 function cleanItemEffects(raw: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) return [];
   const effects: Array<Record<string, unknown>> = [];
@@ -673,14 +722,23 @@ async function requestMappingProposals(
   /** Closeout C3: per-batch usage plus cache-hit accounting. */
   usagePerBatch: Array<unknown | null>;
   skippedBatches: number;
+  /** WorldMapper V2: rule mappings that passed evidence checks (plan P4). */
+  ruleMappingCount: number;
 }> {
   // Batched mapping (P2 acceptance G04): EVERY mappable fact is offered to the
   // mapper — a single 800-fact call used to silently drop the rest and still
   // publish "complete" books. Batches run sequentially; each failure fails the
   // whole mapping honestly instead of pretending coverage.
+  // WorldMapper V2 (1M plan P4): a resident run maps with WHOLE-BOOK vision -
+  // one batch with every fact (the 800-fact truncation lifts), full entity
+  // and event context, rule-mapping proposals included.
   const batches: Array<readonly StoredFact[]> = [];
-  for (let offset = 0; offset < facts.length; offset += MAX_PROMPT_FACTS) {
-    batches.push(facts.slice(offset, offset + MAX_PROMPT_FACTS));
+  if (input.resident) {
+    batches.push(facts);
+  } else {
+    for (let offset = 0; offset < facts.length; offset += MAX_PROMPT_FACTS) {
+      batches.push(facts.slice(offset, offset + MAX_PROMPT_FACTS));
+    }
   }
 
   const skills: ContentEntry[] = [];
@@ -692,6 +750,7 @@ async function requestMappingProposals(
   const usagePerBatch: Array<unknown | null> = [];
   let mappedFactCount = 0;
   let skippedBatches = 0;
+  let ruleMappingCount = 0;
   // Closeout C3: entries are keyed for MERGE, not first-wins — a later batch
   // extending an existing entryId unions its fact provenance; incompatible
   // definitions surface as review rejections instead of silent drops.
@@ -735,7 +794,9 @@ async function requestMappingProposals(
     const batch = batches[index]!;
     input.onProgress?.({
       phase: 'mapping',
-      message: `LLM 映射事实批次 ${index + 1}/${batches.length}（每批至多 ${MAX_PROMPT_FACTS} 条）`,
+      message: input.resident
+        ? `LLM 全书视野规则映射 ${index + 1}/${batches.length}（单批 ${batch.length} 条事实）`
+        : `LLM 映射事实批次 ${index + 1}/${batches.length}（每批至多 ${MAX_PROMPT_FACTS} 条）`,
     });
 
     // Closeout C3: resume - a batch already completed for the same fact set
@@ -751,28 +812,36 @@ async function requestMappingProposals(
       continue;
     }
 
-    // Closeout C3: per-batch context, not the whole world - subjects of this
-    // batch plus entities named inside fact values, plus a bounded event set.
-    const relatedIds = new Set<string>(batch.map(fact => fact.subjectEntityId));
-    for (const fact of batch) {
-      const valueJson = JSON.stringify(fact.value);
-      for (const [name, entityId] of entityNameIndex) {
-        if (relatedIds.has(entityId)) continue;
-        if (name.length >= 2 && valueJson.includes(name)) relatedIds.add(entityId);
+    let relatedEntities: readonly StoredEntity[];
+    let relatedEvents: readonly StoredEvent[];
+    if (input.resident) {
+      // Whole-book vision: no trimming (1M plan P4).
+      relatedEntities = entities;
+      relatedEvents = events;
+    } else {
+      // Closeout C3: per-batch context, not the whole world - subjects of this
+      // batch plus entities named inside fact values, plus a bounded event set.
+      const relatedIds = new Set<string>(batch.map(fact => fact.subjectEntityId));
+      for (const fact of batch) {
+        const valueJson = JSON.stringify(fact.value);
+        for (const [name, entityId] of entityNameIndex) {
+          if (relatedIds.has(entityId)) continue;
+          if (name.length >= 2 && valueJson.includes(name)) relatedIds.add(entityId);
+        }
       }
+      relatedEntities = entities.filter(entity => relatedIds.has(entity.entityId));
+      const relatedNames = new Set(relatedEntities.map(entity => entity.name));
+      relatedEvents = events
+        .filter(event => [...relatedNames].some(name =>
+          name.length >= 2 && (event.title.includes(name) || event.summary.includes(name))))
+        .slice(0, 300);
     }
-    const relatedEntities = entities.filter(entity => relatedIds.has(entity.entityId));
-    const relatedNames = new Set(relatedEntities.map(entity => entity.name));
-    const relatedEvents = events
-      .filter(event => [...relatedNames].some(name =>
-        name.length >= 2 && (event.title.includes(name) || event.summary.includes(name))))
-      .slice(0, 300);
 
     const response = await input.provider.complete({
       role: CANON_MAPPER_ROLE,
       system: MAPPER_SYSTEM,
       user: buildMapperUserPrompt(batch, relatedEntities, relatedEvents),
-      maxOutputTokens: MAPPING_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: input.resident ? RESIDENT_MAPPING_MAX_OUTPUT_TOKENS : MAPPING_MAX_OUTPUT_TOKENS,
       jsonMode: true,
     });
     if (input.signal?.aborted) throw new Error('World package mapping canceled.');
@@ -784,6 +853,20 @@ async function requestMappingProposals(
     usagePerBatch.push(response.usage ?? null);
 
     const ctx: CleanContext = { knownFactIds, rejected: [] };
+    // WorldMapper V2 (plan P4): evidence-verified rule mappings land through
+    // the store's idempotent path; rejects surface in the review queue.
+    if (Array.isArray(raw.ruleMappings)) {
+      for (const candidate of raw.ruleMappings) {
+        const mapping = cleanRuleMapping(candidate, ctx, entityNameIndex, input.worldId);
+        if (!mapping) {
+          rejectEntry(ctx, 'rule_mapping', String((asRecord(candidate) ?? {}).target ?? '?'),
+            ['unknown target, kind, or no verified evidenceFactIds.']);
+          continue;
+        }
+        await input.worldStore.saveRuleMapping(mapping, input.createdAt);
+        ruleMappingCount += 1;
+      }
+    }
     for (const candidate of Array.isArray(raw.skills) ? raw.skills : []) mergeEntry(cleanSkill(candidate, ctx), 'skill');
     for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) mergeEntry(cleanConstraint(candidate, ctx), 'constraint');
     for (const candidate of Array.isArray(raw.lore) ? raw.lore : []) mergeEntry(cleanLore(candidate, ctx), 'lore');
@@ -846,6 +929,7 @@ async function requestMappingProposals(
     batches: batches.length,
     usagePerBatch,
     skippedBatches,
+    ruleMappingCount,
   };
 }
 

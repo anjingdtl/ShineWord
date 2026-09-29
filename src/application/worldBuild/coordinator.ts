@@ -946,6 +946,11 @@ async function commitGroupResult(
 ): Promise<void> {
   const now = deps.now ?? (() => new Date().toISOString());
   const fallbackChunk = chunks[0]!;
+  // Group-level rule mappings may cite evidence from ANY member chunk, so the
+  // verbatim-verified quotes travel with the commit (1M plan P4); mappings
+  // themselves ride the FIRST chunk commit only - the store dedupes by stable
+  // mappingId on replay.
+  const groupVerifiedQuotes = group.facts.map(fact => fact.evidence.quote);
   for (const chunk of chunks) {
     const facts = group.facts.filter(fact => fact.chunkId === chunk.chunkId);
     const events = group.events.filter(event => event.chunkId === chunk.chunkId);
@@ -962,15 +967,17 @@ async function commitGroupResult(
           ]
           : events.map(({ chunkId: _chunkId, ...event }) => event))
         : [],
-      ruleMappings: group.ruleMappings,
+      ruleMappings: chunk === fallbackChunk ? group.ruleMappings : [],
     };
-    if (facts.length === 0 && extraction.events.length === 0 && group.entities.length === 0) continue;
+    if (facts.length === 0 && extraction.events.length === 0 && group.entities.length === 0
+      && extraction.ruleMappings.length === 0) continue;
     const resolved = await applyExtraction({
       worldId: run.worldId,
       source: evidenceSource,
       extraction,
       createdAt: now(),
       sha256Hex: deps.sha256Hex,
+      additionalVerifiedQuotes: groupVerifiedQuotes,
     });
     await commitResolvedChunk(deps, run, chunk, resolved);
   }
@@ -1005,6 +1012,7 @@ async function commitResolvedChunk(
     entities: resolved.entities,
     facts: factsWithIds,
     eventProposals,
+    ruleMappings: resolved.ruleMappings,
     job: {
       worldId: run.worldId,
       jobId: chunkJobId(chunk.chunkId),

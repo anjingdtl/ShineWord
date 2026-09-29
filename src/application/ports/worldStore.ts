@@ -112,8 +112,10 @@ export interface StoredEventProposal {
 
 /**
  * Single-transaction chunk commit (closeout C1): entities, deduplicated facts,
- * event proposals, chunk extraction status and the done-job marker either all
- * land or none do. A write failure must never leave a chunk marked done.
+ * event proposals, rule mappings, chunk extraction status and the done-job
+ * marker either all land or none do. A write failure must never leave a chunk
+ * marked done. Rule mappings land in the SAME transaction with stable
+ * mappingIds so concurrent/duplicate commits stay idempotent (1M plan P4).
  */
 export interface CommitChunkResultInput {
   worldId: string;
@@ -121,6 +123,7 @@ export interface CommitChunkResultInput {
   entities: readonly StoredEntity[];
   facts: readonly StoredFact[];
   eventProposals: readonly Omit<StoredEventProposal, 'worldId' | 'status'>[];
+  ruleMappings?: readonly StoredRuleMapping[];
   job: WorldJobRecord;
   createdAt: string;
   updatedAt: string;

@@ -5,7 +5,8 @@ import type {
   FactProposal,
 } from '../../domain/world/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
-import type { StoredEntity, StoredFact } from '../ports/worldStore';
+import { SHINEWORD_RULESET_VERSION } from '../../domain/rules/ruleset';
+import type { StoredEntity, StoredFact, StoredRuleMapping } from '../ports/worldStore';
 
 export type Sha256Hex = Sha256HexProvider['sha256Hex'];
 
@@ -50,7 +51,7 @@ export async function checkEvidence(
 }
 
 export interface ExtractionValidationIssue {
-  kind: 'evidence' | 'entity' | 'dependency';
+  kind: 'evidence' | 'entity' | 'dependency' | 'rule_mapping';
   detail: string;
 }
 
@@ -58,11 +59,45 @@ export interface ResolvedExtraction {
   entities: StoredEntity[];
   facts: StoredFact[];
   events: Array<EventProposal & { resolvedDependsOnEventIds: string[] }>;
+  /**
+   * Rule mappings whose target resolved to a known entity AND whose every
+   * evidence quote is verified verbatim (1M plan P4). Rejected mappings
+   * never block the chunk's facts/events - they surface as issues.
+   */
+  ruleMappings: StoredRuleMapping[];
   rejected: ExtractionValidationIssue[];
 }
 
 function slug(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
+}
+
+/**
+ * Stable token for a rule mapping's skill/attribute/resource identity so the
+ * derived mappingId is idempotent across replays (plan P4: "mappingId 稳定派生
+ * 保证幂等"). Falls back to a canonical sorted-key rendering of the mapping.
+ */
+export function ruleMappingToken(mapping: Record<string, unknown>): string {
+  for (const field of ['skillId', 'attribute', 'resource', 'tier', 'name', 'id']) {
+    const value = mapping[field];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return slug(value);
+    }
+  }
+  const stable = Object.keys(mapping).sort()
+    .map(key => `${key}=${typeof mapping[key] === 'object' ? JSON.stringify(mapping[key]) : String(mapping[key])}`)
+    .join('&');
+  return slug(stable) || 'mapping';
+}
+
+/** Deterministic mapping identity: same target+kind+token -> same row. */
+export function ruleMappingIdFor(
+  worldId: string,
+  targetEntityId: string,
+  mappingKind: StoredRuleMapping['mappingKind'],
+  mapping: Record<string, unknown>,
+): string {
+  return `map-${worldId}-${targetEntityId}-${mappingKind}-${ruleMappingToken(mapping)}`;
 }
 
 export function entityIdFor(worldId: string, key: string): string {
@@ -79,6 +114,14 @@ export interface ApplyExtractionInput {
   extraction: ExtractionResult;
   createdAt: string;
   sha256Hex: Sha256Hex;
+  /**
+   * Quotes already verified verbatim elsewhere in the SAME group commit
+   * (other chunks' facts). Lets a group-level rule mapping cite evidence
+   * from any member chunk without weakening the verbatim guarantee -
+   * callers must only pass quotes the extractor located verbatim in the
+   * source. (1M plan P4.)
+   */
+  additionalVerifiedQuotes?: readonly string[];
 }
 
 /**
@@ -159,5 +202,45 @@ export async function applyExtraction(input: ApplyExtractionInput): Promise<Reso
     return { ...event, resolvedDependsOnEventIds: dependencies };
   });
 
-  return { entities, facts, events, rejected };
+  // P4 (1M plan): resolve rule mappings. The target must be a known entity
+  // key and EVERY evidence quote must match - verbatim - a quote that
+  // checkEvidence already verified for a fact of this extraction: the same
+  // "verbatim + code-point span" guarantee, never a relaxation. A failing
+  // mapping is rejected and recorded; it never blocks the chunk commit.
+  const verifiedQuotes = new Set<string>([
+    ...(facts.map(fact => fact.sources[0]?.quote).filter(Boolean) as string[]),
+    ...(input.additionalVerifiedQuotes ?? []),
+  ]);
+  const ruleMappings: StoredRuleMapping[] = [];
+  for (const proposal of extraction.ruleMappings ?? []) {
+    const target = entityByKey.get(proposal.targetKey);
+    if (!target) {
+      rejected.push({ kind: 'rule_mapping', detail: `unknown mapping target ${proposal.targetKey}` });
+      continue;
+    }
+    if (proposal.evidenceRefs.length === 0) {
+      rejected.push({ kind: 'rule_mapping', detail: `mapping ${proposal.targetKey}.${proposal.mappingKind} has no evidence` });
+      continue;
+    }
+    const unverified = proposal.evidenceRefs.filter(ref => !verifiedQuotes.has(ref));
+    if (unverified.length > 0) {
+      rejected.push({
+        kind: 'rule_mapping',
+        detail: `mapping ${proposal.targetKey}.${proposal.mappingKind} cites ${unverified.length} unverified quote(s)`,
+      });
+      continue;
+    }
+    ruleMappings.push({
+      worldId,
+      mappingId: ruleMappingIdFor(worldId, target.entityId, proposal.mappingKind, proposal.mapping),
+      targetEntityId: target.entityId,
+      mappingKind: proposal.mappingKind,
+      mapping: proposal.mapping,
+      evidenceRefs: [...proposal.evidenceRefs],
+      rulesetVersion: SHINEWORD_RULESET_VERSION,
+      status: 'active',
+    });
+  }
+
+  return { entities, facts, events, ruleMappings, rejected };
 }

@@ -715,8 +715,10 @@ export async function runExtraction(
         if (!world) throw new Error('世界记录已不可用，全文映射暂未发布。');
         let phaseWrites = Promise.resolve();
         await setPhase('mapping');
+        const residentMapping = run.planVersion === 'plan-resident-1';
         await buildPackageFromCanon({
           worldStore: runtime.worldStore,
+          resident: residentMapping,
           provider: {
             complete: async request => provider.complete({
               ...request,
@@ -727,7 +729,7 @@ export async function runExtraction(
           sha256Hex: nativeSha256.sha256Hex,
           worldId: run.worldId,
           sourceSha256: world.sourceSha256,
-          mappingVersion: `mapper-1#${profile.model}`,
+          mappingVersion: residentMapping ? `mapper-2#${profile.model}` : `mapper-1#${profile.model}`,
           createdAt: new Date().toISOString(),
           sourceRanges,
           sourceCodePointCount: sourceManifest.codePointCount,
