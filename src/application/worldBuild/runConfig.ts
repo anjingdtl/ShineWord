@@ -52,16 +52,9 @@ export interface FrozenRunConfig {
 
 /** Strips userinfo and query strings so a logged endpoint can't leak secrets. */
 export function sanitizeEndpoint(endpoint: string): string {
-  try {
-    const url = new URL(endpoint);
-    url.username = '';
-    url.password = '';
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return endpoint.split('?')[0] ?? endpoint;
-  }
+  const noQuery = endpoint.split('?')[0] ?? endpoint;
+  const noHash = noQuery.split('#')[0] ?? noQuery;
+  return noHash.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/@]+)@/, '$1');
 }
 
 export function freezeRunConfig(
