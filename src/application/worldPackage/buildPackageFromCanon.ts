@@ -64,6 +64,16 @@ export interface BuildPackageInput {
    * the existing batched mapping untouched.
    */
   resident?: boolean;
+  /**
+   * Stage scope (unified P3): publish a CUMULATIVE stage package covering the
+   * built prefix of the book instead of the whole source. `ranges` must be
+   * contiguous from code point 0; `coversWholeText` upgrades completeness to
+   * complete/whole_source. The same mapping/cleaning/quality gates apply.
+   */
+  stageScope?: {
+    ranges: ReadonlyArray<{ startCodePoint: number; endCodePoint: number; contentSha256: string }>;
+    coversWholeText: boolean;
+  };
   signal?: { aborted: boolean };
   onProgress?(info: { phase: string; message?: string }): void;
 }
@@ -1023,7 +1033,18 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   const { worldStore, worldId } = input;
   const progress = (phase: string, message?: string): void => input.onProgress?.({ phase, message });
 
-  if (input.sourceRanges?.length
+  if (input.stageScope) {
+    // Stage coverage: the built prefix must be contiguous from 0 with no
+    // holes; the whole-text guard below only applies to whole-source builds.
+    const stage = input.stageScope;
+    let cursor = 0;
+    for (const range of [...stage.ranges].sort((a, b) => a.startCodePoint - b.startCodePoint)) {
+      if (range.startCodePoint !== cursor) {
+        throw new Error('阶段来源范围不连续（起点必须为 0 且无缺口），不会发布阶段包。');
+      }
+      cursor = range.endCodePoint;
+    }
+  } else if (input.sourceRanges?.length
     && !sourceRangesCoverWholeText(input.sourceRanges, input.sourceCodePointCount ?? 0)) {
     throw new Error('无法证明已抽取的来源范围连续覆盖全文，因此不会发布全量精编包。');
   }
@@ -1035,8 +1056,19 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     worldStore.listEvents(worldId),
     worldStore.listEntities(worldId),
   ]);
-  const mappableFacts = allFacts.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
-  const conflictFacts = allFacts.filter(fact => fact.status === 'conflict');
+  // Stage scoping (unified P3): a stage package maps only facts whose
+  // evidence lies inside the built prefix. Facts without recorded spans are
+  // world-level synthetics (e.g. opening facts) and stay in scope.
+  const stageRanges = input.stageScope?.ranges;
+  const factInRange = (fact: typeof allFacts[number]): boolean => {
+    if (!stageRanges || stageRanges.length === 0) return true;
+    if (!fact.sources || fact.sources.length === 0) return true;
+    return fact.sources.some(span =>
+      stageRanges.some(range => span.endOffset > range.startCodePoint && span.startOffset < range.endCodePoint));
+  };
+  const scopedFacts = allFacts.filter(factInRange);
+  const mappableFacts = scopedFacts.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
+  const conflictFacts = scopedFacts.filter(fact => fact.status === 'conflict');
   const knownFactIds = new Set(allFacts.map(fact => fact.factId));
 
   let reviewIssueCount = 0;
@@ -1244,7 +1276,14 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     entries,
     sections,
     createdAt: input.createdAt,
-    ...(input.sourceRanges?.length ? {
+    ...(input.stageScope ? {
+      buildScope: {
+        strategy: 'progressive' as const,
+        scope: input.stageScope.coversWholeText ? 'whole_source' as const : 'incremental' as const,
+        completeness: input.stageScope.coversWholeText ? 'complete' as const : 'partial' as const,
+        sourceRanges: input.stageScope.ranges.map(range => ({ ...range })),
+      },
+    } : input.sourceRanges?.length ? {
       buildScope: {
         strategy: 'full' as const,
         scope: 'whole_source' as const,

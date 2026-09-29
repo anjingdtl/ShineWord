@@ -871,6 +871,49 @@ ALTER TABLE world_build_runs ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT
 ALTER TABLE world_build_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
 `;
 
+export const UNIFIED_BUILD_P3_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS world_stage_plans (
+  plan_id TEXT PRIMARY KEY,
+  world_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  strategy TEXT NOT NULL CHECK (strategy IN ('full', 'progressive')),
+  stages_json TEXT NOT NULL,
+  config_fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_world_stage_plans_world ON world_stage_plans(world_id);
+
+CREATE TABLE IF NOT EXISTS world_stage_states (
+  plan_id TEXT NOT NULL,
+  stage_index INTEGER NOT NULL CHECK (stage_index >= 0),
+  status TEXT NOT NULL CHECK (status IN (
+    'untriggered', 'queued', 'building', 'validating', 'built', 'pending_activation', 'activated',
+    'waiting_network', 'waiting_unlock', 'waiting_system', 'paused', 'failed')),
+  run_id TEXT,
+  package_revision INTEGER,
+  trigger_reason TEXT,
+  trigger_dedupe_key TEXT,
+  triggered_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, stage_index)
+);
+
+CREATE TABLE IF NOT EXISTS campaign_package_advances (
+  campaign_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL,
+  from_revision INTEGER NOT NULL,
+  to_revision INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (campaign_id, branch_id, state_version)
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_package_advances
+  ON campaign_package_advances(campaign_id, branch_id, state_version);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -889,4 +932,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 15, name: 'progressive_branch_content', sql: PROGRESSIVE_CONTENT_SCHEMA_SQL },
   { version: 16, name: 'interaction_orchestration', sql: INTERACTION_ORCHESTRATION_SCHEMA_SQL },
   { version: 17, name: 'unified_build_p1', sql: UNIFIED_BUILD_P1_SCHEMA_SQL },
+  { version: 18, name: 'unified_build_p3_stages', sql: UNIFIED_BUILD_P3_SCHEMA_SQL },
 ];

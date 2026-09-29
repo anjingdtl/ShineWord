@@ -18,7 +18,8 @@ import {
   type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelForOpeningStreaming, runExtraction, pauseRun } from '../../sourceImport';
+import { importNovelUnified, runExtraction, pauseRun } from '../../sourceImport';
+import type { BuildMode } from '../features/library/ImportNovelCard';
 import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import { startBuildService } from '../../buildServiceBridge';
 import {
@@ -53,6 +54,7 @@ export function LibraryScreen(): React.JSX.Element {
   const [summary, setSummary] = useState<BuiltWorldSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [buildMode, setBuildMode] = useState<BuildMode>('progressive');
   const [tasks, setTasks] = useState<BuildTaskView[]>([]);
   const [taskBusy, setTaskBusy] = useState(false);
 
@@ -125,20 +127,34 @@ export function LibraryScreen(): React.JSX.Element {
     setSummary(null);
     setPreview(null);
     try {
-      // Closeout C2: staged streaming import - the novel never crosses the
-      // bridge as one base64 payload and builds read from persisted shards.
+      // Unified build (P3): staged streaming import + persistent 30/30/40
+      // stage plan. Progressive queues only S1 (later stages wait for
+      // narrative triggers); full queues every stage. Both run through the
+      // same dataSync foreground service entry.
       const picked = await pickTextRef();
       if (!picked) return;
-      const imported = await importNovelForOpeningStreaming(
+      const imported = await importNovelUnified(
         picked.uri,
         picked.name,
         profile,
+        buildMode,
         p => {
           setProgress(p);
           if (p.phase === 'importing') setPreview(p.message ?? null);
         },
       );
-      setPreview(`已整理开局范围并发布三宝书 r${imported.packageRevision}；${imported.chapterCount} 章、${imported.chunkCount} 块已保存在本地，完整小说尚未整理。`);
+      for (const runId of imported.runIds) {
+        const started = await startBuildService(runId);
+        if (!started) {
+          await runExtraction(runId, profile, () => undefined);
+        }
+      }
+      const stageText = imported.stages.map(stage => `S${stage.index + 1}≈${Math.round(stage.ratio * 100)}%`).join(' / ');
+      setPreview(`已导入 ${imported.chapterCount} 章、${imported.chunkCount} 块；阶段计划 ${stageText}。${
+        imported.strategy === 'progressive'
+          ? '循序构建：首个阶段（约前 30%）构建发布后即可开局；后续阶段由剧情推进触发。'
+          : '完整构建：全书构建完成并发布后开局。'
+      }任务已在后台排队，可在下方任务卡查看进度。`);
       setSummary({
         worldId: imported.worldId,
         title: picked.name.replace(/\.txt$/i, ''),
@@ -149,16 +165,12 @@ export function LibraryScreen(): React.JSX.Element {
         eventCount: 0,
         failedChunks: 0,
         rejected: 0,
-        resumed: imported.alreadyPlayable,
-        packageRevision: imported.packageRevision,
+        resumed: imported.reusedSource,
+        packageRevision: 0,
         reviewIssues: 0,
         needsRetry: false,
       });
       await refresh();
-      navigation.navigate('Opening', {
-        worldId: imported.worldId,
-        title: picked.name.replace(/\.txt$/i, ''),
-      });
     } catch (e) {
       const detail = e instanceof Error
         ? `${e.message}\n${e.stack ?? ''}`
@@ -218,6 +230,8 @@ export function LibraryScreen(): React.JSX.Element {
         ) : null}
         <ImportNovelCard
           busy={busy}
+          mode={buildMode}
+          onModeChange={setBuildMode}
           onImportNovel={importAndBuild}
           onImportPackage={importWorldPackage}
         />

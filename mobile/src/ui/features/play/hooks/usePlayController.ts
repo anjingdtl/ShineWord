@@ -27,6 +27,7 @@ import {
   type EncounterView,
   type TurnView,
 } from '../../../../runtime';
+import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
@@ -129,6 +130,30 @@ export function usePlayController(): PlayController {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Between-turn stage maintenance (unified P3): every committed turn ends at
+  // a safe boundary, so pending stage packages activate here and the next
+  // stage's proximity/dependency triggers evaluate. Stage work runs in the
+  // dataSync service; play never waits on it (missing content shows as
+  // "资料准备中", never as invented narrative).
+  useEffect(() => {
+    const worldId = projection?.worldId;
+    if (!worldId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await tryActivateStagePackages(worldId);
+        // Proximity anchors and dependency entities are supplied by explicit
+        // narrative moments (the harness/test actions pass them); the passive
+        // hook evaluates without an anchor so long stays never sweep stages.
+        await checkStageTriggers({ worldId });
+      } catch {
+        // Stage maintenance must never block or crash play.
+      }
+      void cancelled;
+    })();
+    return () => { cancelled = true; };
+  }, [projection?.worldId, projection?.stateVersion]);
 
   // Recruitment eligibility is derived from current location, quests and
   // relationships, so it re-reads after every committed state change.
