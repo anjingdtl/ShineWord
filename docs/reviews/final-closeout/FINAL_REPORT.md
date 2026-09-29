@@ -106,6 +106,7 @@
 | [phase3-play-projection.test.cjs](file:///workspace/tests/phase3-play-projection.test.cjs) 新增 GM-only/Future 泄漏硬门禁用例 | NPC 公开投影的运行期/单元不泄漏证据（F2.4） |
 | [progressive-opening.test.cjs](file:///workspace/tests/progressive-opening.test.cjs) 新增分阶段错误码用例 | 4 类失败阶段的可回归证明（F3.1） |
 | 版本升级 → `0.3.0-progressive.2` / versionCode 16 | 情况 B 版本策略落地 |
+| 删除仓库根目录误入库的非产品artefact `clound` | 初始提交混入的会话内存导出 JSON，全仓无引用；清理以免内部元数据留在公开仓库 |
 
 **未触碰**：规则域写路径、骰点算法、成长阈值、ActionContract 语义、RollRecord 确定性、`applicationId`、`shineword.db`、存档 schema、旧存档/世界包格式、既有世界包内容。
 
