@@ -58,7 +58,8 @@ export interface LlmRequest {
   user: string;
   maxOutputTokens: number;
   jsonMode?: boolean;
-  /** Provider-specific request tuning; an explicit thinking opt-out. */
+  /** Provider-specific request tuning. (thinkingDisabled is OBSOLETE and
+   *  ignored: policy 2026-09-30 forbids disabling model thinking.) */
   vendorOptions?: {
     thinkingDisabled?: boolean;
   };
@@ -93,11 +94,7 @@ export interface ApiProfile {
   model: string;
   keyRef: string;
   capabilities: LlmProviderCapabilities;
-  /**
-   * EXPLICIT opt-out only (policy 2026-09-27): reasoning models run with
-   * reasoning ON; the provider retries reasoning-only completions with a
-   * grown budget instead of disabling thinking. Never auto-set.
-   */
+  /** OBSOLETE (policy 2026-09-30): thinking is never disabled; ignored. */
   thinkingDisabled?: boolean;
   /** Content output budget per request (1M plan §3.1); default 16,384. */
   contentOutputTokens?: number;

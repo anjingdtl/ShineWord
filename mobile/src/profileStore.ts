@@ -5,7 +5,7 @@ const PROFILE_KEY = 'shineword.api.profile.v1';
 
 /**
  * 1M-class model presets (resident-build plan §3/§1): DeepSeek V4.1 Flash
- * (non-thinking extraction, near-free prefix cache) and GLM-5.3-Flash
+ * (thinking low tier via thinking.budget_tokens) and GLM-5.3-Flash
  * (thinking cannot be disabled; low effort + 2048 CoT reserve; Bailian
  * TPM 3M). Context window 1,048,576; content output 16,384/request.
  * Probes may still override cache/ceiling findings at runtime.
@@ -20,7 +20,7 @@ export interface ModelPreset {
 export const MODEL_PRESETS: readonly ModelPreset[] = [
   {
     id: 'deepseek-v4.1-flash',
-    label: 'DeepSeek V4.1 Flash（1M · 非思考抽取）',
+    label: 'DeepSeek V4.1 Flash（1M · 思考 low 档）',
     model: 'DeepSeek-V4.1-Flash',
     profile: {
       capabilities: {
@@ -33,8 +33,10 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
         supportsPromptCache: true,
       },
       contentOutputTokens: 16_384,
-      reasoningReserveTokens: 0,
-      reasoningEffort: 'off',
+      // Policy 2026-09-30: thinking is never disabled. DeepSeek's tier rides
+      // thinking.budget_tokens (low=4096); the reserve keeps content room.
+      reasoningReserveTokens: 4_096,
+      reasoningEffort: 'low',
       concurrency: 3,
     },
   },

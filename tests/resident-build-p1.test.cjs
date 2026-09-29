@@ -63,7 +63,7 @@ function captureTransport(requests, extraUsage = {}) {
   };
 }
 
-test('T3 DeepSeek dialect: non-thinking switch, no reasoning_effort, content-only max_tokens', async () => {
+test('T3 DeepSeek dialect: thinking stays ENABLED with a tier budget; never disabled (policy 2026-09-30)', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('k.ds', 'sk');
   const requests = [];
@@ -74,8 +74,9 @@ test('T3 DeepSeek dialect: non-thinking switch, no reasoning_effort, content-onl
   });
   assert.equal(requests.length, 1);
   const body = JSON.parse(requests[0].body);
-  assert.deepEqual(body.thinking, { type: 'disabled' }, 'DeepSeek non-thinking switch');
-  assert.equal(body.reasoning_effort, undefined);
+  // 'off' degrades to the LOWEST tier - the disable switch is gone.
+  assert.deepEqual(body.thinking, { type: 'enabled', budget_tokens: 4_096 }, 'DeepSeek low-tier thinking budget');
+  assert.equal(body.reasoning_effort, undefined, 'DeepSeek tiers ride thinking.budget_tokens, not reasoning_effort');
   assert.equal(body.max_tokens, 16_384, 'content-only budget (reserve = 0)');
   assert.equal(result.usage.cachedInputTokens, 90);
   assert.equal(result.usage.reasoningTokens, 5);
@@ -98,15 +99,15 @@ test('T3 GLM dialect: reasoning_effort=low, clear_thinking=false, max_tokens = c
   assert.ok(131_072 - body.max_tokens >= 8_192);
 });
 
-test('no explicit effort sends no reasoning parameters (policy 2026-09-27 intact)', async () => {
+test('no explicit effort still sends the lowest thinking tier - never an opt-out (policy 2026-09-30)', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('k.glm', 'sk');
   const requests = [];
   const provider = new OpenAICompatibleProvider(glmProfile(), secrets, captureTransport(requests));
   await provider.complete({ role: 'Narrator', system: 's', user: 'u', maxOutputTokens: 500 });
   const body = JSON.parse(requests[0].body);
-  assert.equal(body.thinking, undefined, 'no automatic reasoning opt-out');
-  assert.equal(body.reasoning_effort, undefined);
+  assert.deepEqual(body.thinking, { clear_thinking: false }, 'thinking stays on');
+  assert.equal(body.reasoning_effort, 'low', 'lowest tier when effort is unset');
 });
 
 test('resident shape: followUpUserMessages append after the byte-stable system+user prefix', async () => {
