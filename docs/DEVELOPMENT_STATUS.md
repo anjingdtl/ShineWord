@@ -1,8 +1,30 @@
 # ShineWord 开发状态
 
-更新日期：2026-09-28（二期收尾建设后）。本轮逐阶段证据与最终结项矩阵见 [closeout/FINAL_REPORT.md](reviews/closeout/FINAL_REPORT.md)；此前 R6 基线保留为历史快照。
+更新日期：2026-09-29（最终收尾验收轮 F0–F6 后）。本轮逐项证据见 [final-closeout/FINAL_REPORT.md](reviews/final-closeout/FINAL_REPORT.md)；二/三期历史报告保留为快照。
 
-## 当前阶段（二期收尾 C0–C7 完成）
+## 当前阶段（最终收尾验收轮 F0–F6）
+
+版本：`0.3.0-progressive.2` / versionCode `16`（情况 B：工程绿、真实可玩外部阻断；非 Alpha）。
+
+### 本轮完成
+
+- **工程门禁全绿**：`npm run verify:core` **226 passed / 0 failed**（224 基线 + 2 新增）；`npm run typecheck`、`npm run typecheck --prefix mobile`、`git diff --check` 全 PASS；`:app:assembleDebug` BUILD SUCCESSFUL（Java 17）。
+- **F1 视觉/交互（代码级）**：新增 `accentOnBase` / `semanticText` token，修 14 个语义色文字槽；对比度审计 84 项文本/大字 **0 低于 WCAG 下限**；修复 3 处真实 <44dp 触控面（SegmentedControl compact / ProgressSteps / PartyStrip）。
+- **F2.4 NPC 公开投影安全**：新增 GM-only/Future 泄漏硬门禁用例（entityId、templateId、gm ability/quest、future lore、resourceMax），单元 PASS；UI 用「未探明」占位。
+- **F3.1 opening 诊断加固**：`OpeningPreparationError` 增加分阶段 `errorCode`（`json_parse` / `schema` / `citation` / `reference_closure` / `compile` / `publish`），脱敏（不含原文/响应/prompt/key）；单测覆盖 4 类阶段。
+- **F0/F5 基线**：沙箱无 `adb` / `emulator` / `/dev/kvm` / system-images / API Key → 设备与真实端点验收登记为外部阻断。
+
+### 三项结论
+
+1. 工程修复与核心规则/投影：**通过**（226/226，两处 typecheck，debug APK）。
+2. 第三期验收：**未通过**（四主题设备截图、键盘/SafeArea 实测、完整设备旅程、Release 签名-安装仍未取证）。
+3. Progressive 快速开局：**BLOCKED**（真实端点未产出可发布 dossier；无设备；TTFP 未测）。工程侧 **Progressive Engineering Ready / First Playable Acceptance Blocked**。
+
+完整未完成清单与外部阻断登记见 [final-closeout/FINAL_REPORT.md](reviews/final-closeout/FINAL_REPORT.md)。
+
+## 历史快照（二期收尾 C0–C7）
+
+更新日期：2026-09-28。逐阶段证据与结项矩阵见 [closeout/FINAL_REPORT.md](reviews/closeout/FINAL_REPORT.md)；此前 R6 基线保留为历史快照。
 
 ### 本轮完成（对应用户三大问题）
 

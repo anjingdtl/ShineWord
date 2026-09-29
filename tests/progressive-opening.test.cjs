@@ -109,6 +109,56 @@ test('opening evidence after the first-scene budget cannot be compiled or leaked
   assert.equal(calls, 2, 'one normal request plus exactly one repair attempt');
 });
 
+test('opening preparation failures expose a desensitized stage code for each failing gate', async () => {
+  const source = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。';
+  const answer = (text) => ({ complete: async () => ({ text }) });
+
+  await assert.rejects(
+    () => extractOpeningDossier({ sourceExcerpt: source, provider: answer('这不是 JSON') }),
+    error => error.errorCode === 'invalid_dossier:json_parse',
+  );
+
+  await assert.rejects(
+    () => extractOpeningDossier({ sourceExcerpt: source, provider: answer(dossierJson({ initialGoal: '' })) }),
+    error => error.errorCode === 'invalid_dossier:schema',
+  );
+
+  await assert.rejects(
+    () => extractOpeningDossier({
+      sourceExcerpt: source,
+      provider: answer(dossierJson({ locationQuote: '这条引文并不在原文里。' })),
+    }),
+    error => error.errorCode === 'invalid_dossier:citation',
+  );
+
+  // A quote that is present in the opening scene but not covered by any known
+  // chapter must be attributed to reference closure, not mistaken for publish.
+  const text = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。';
+  const chapter = { worldId: 'w-ref', chapterId: 'chapter-opening', index: 0, title: '开篇',
+    startOffset: 0, endOffset: Array.from(text).length, charCount: Array.from(text).length,
+    contentHash: sha.sha256Hex(text) };
+  const db = dbWithSchema();
+  const adapter = new NodeSqliteAdapter(db);
+  const worldStore = new SqliteWorldStore(adapter);
+  try {
+    await worldStore.createWorld({ worldId: 'w-ref', title: '引文闭包测试', sourceSha256: 'a'.repeat(64),
+      sourceBytes: 100, normalizeVersion: 'normalize-1', chapterSplitVersion: 'chapter-split-1',
+      buildStatus: 'extracting', createdAt: 'now', updatedAt: 'now' });
+    await assert.rejects(
+      () => compileProgressiveOpeningPackage({
+        worldStore, sha256Hex: sha.sha256Hex, worldId: 'w-ref', sourceSha256: 'a'.repeat(64),
+        sourceExcerpt: text, sourceEndCodePoint: Array.from(text).length,
+        chapters: [{ ...chapter, startOffset: 999, endOffset: 1000 }],
+        dossier: JSON.parse(dossierJson()),
+        requestMetrics: [], usage: null, extractionMs: 1, createdAt: 'now',
+      }),
+      error => error.errorCode === 'invalid_dossier:reference_closure',
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test('migration 14 upgrades an existing v2 package without changing its manifest semantics', async () => {
   const db = new DatabaseSync(':memory:');
   const adapter = new NodeSqliteAdapter(db);

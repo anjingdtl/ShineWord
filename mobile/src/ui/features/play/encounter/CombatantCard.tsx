@@ -29,10 +29,10 @@ export function CombatantCard(props: {
   const { actor } = props;
   const sideColor =
     actor.side === 'party'
-      ? theme.semantic.good
+      ? theme.semanticText.good
       : actor.side === 'hostile'
-        ? theme.semantic.bad
-        : theme.semantic.info;
+        ? theme.semanticText.bad
+        : theme.semanticText.info;
 
   return (
     <Pressable

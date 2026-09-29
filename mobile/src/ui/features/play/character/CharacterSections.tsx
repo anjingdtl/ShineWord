@@ -172,7 +172,7 @@ export function AbilitySlots(props: {
                 {ability ? ability.name : '空槽'}
               </Text>
               {cooling && ability?.cooldownExpiresAtVersion != null ? (
-                <Text style={[typeStyle(theme, theme.type.micro), { color: theme.semantic.warn }]}>
+                <Text style={[typeStyle(theme, theme.type.micro), { color: theme.semanticText.warn }]}>
                   冷却中 v{ability.cooldownExpiresAtVersion}
                 </Text>
               ) : null}

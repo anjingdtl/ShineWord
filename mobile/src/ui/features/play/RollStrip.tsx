@@ -54,7 +54,7 @@ export function RollStrip(props: { roll: TurnRollView }): React.JSX.Element {
   const { theme } = useTheme();
   const { roll } = props;
   const grade = GRADES[roll.grade] ?? { label: roll.grade, glyph: '·', good: true };
-  const color = grade.good ? theme.semantic.good : theme.semantic.bad;
+  const color = grade.good ? theme.semanticText.good : theme.semanticText.bad;
 
   return (
     <View

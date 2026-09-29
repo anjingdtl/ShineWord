@@ -264,7 +264,7 @@ export function WorldBooksEditor(props: {
             />
           </View>
 
-          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semantic.warn }]}>
+          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.warn }]}>
             ▲ 发布风险：新版本会立即成为该世界的最新三宝书；已有战役仍锁定创建时的旧版本。
           </Text>
 

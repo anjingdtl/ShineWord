@@ -74,7 +74,7 @@ export function WorldOverviewPanel(props: {
               : '暂无关联战役：三宝书按「未发现即隐藏」显示。'}
           </Text>
           {entry && entry.openReviewIssues > 0 ? (
-            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semantic.warn }]}>
+            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.warn }]}>
               ▲ 待审核 {entry.openReviewIssues} 项（见「审查」页）。
             </Text>
           ) : null}

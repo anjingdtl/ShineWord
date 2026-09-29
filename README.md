@@ -1,10 +1,10 @@
 # Shine-TRPG
 
-面向 Android 的 AI 驱动互动小说 TRPG（**Alpha；二阶段仍在验收，第三期建设中**）。
+面向 Android 的 AI 驱动互动小说 TRPG（**Alpha 前工程态；第三期已代码级验收，设备/视觉验收未通过**）。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过固定选项或自由行动推进自己的故事。LLM 负责主持与叙事，本地规则引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前状态：一期 M0～M5 完成；二期收尾建设（C0–C7）已完成工程修复——构建门禁、错误哈希、流式导入、真实进度、后台前台服务与命运状态机均已落地并通过回归（核心 188/188）。**第二/三期最终验收仍未通过**：全文真实模型构建、双模型长程、三题材标注召回、四主题与完整旅程的设备验收仍缺，详见[收尾最终报告](docs/reviews/closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
+> 当前状态：`0.3.0-progressive.2` / versionCode 16。工程门禁全绿（核心 226/226、两处 typecheck、debug APK）；第三期视觉/交互代码级验收（对比度 84 项达标、3 处 <44dp 触控面修复）与 NPC 公开投影安全门禁通过。**第三期设备级验收与 Progressive 首次真实可玩闭环未通过**：沙箱无 Android 设备与可用模型端点，四主题截图/完整旅程/真实 `TXT → 第一回合` 未取证，TTFP 未测。详见[最终收尾报告](docs/reviews/final-closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
 ## 核心特性
 
@@ -45,6 +45,7 @@ APK 输出到 dist/apk/{debug|release}/，不入库。本地已构建并签名�
 ## 进度与评审
 
 - 开发进度：[docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md)
+- 最终收尾验收：[docs/reviews/final-closeout/FINAL_REPORT.md](docs/reviews/final-closeout/FINAL_REPORT.md)
 - 第三期建设基线：[docs/Shine-TRPG_PHASE3_CONSTRUCTION_PLAN.md](docs/Shine-TRPG_PHASE3_CONSTRUCTION_PLAN.md)
 - 二阶段建设基线：[docs/PHASE2_CONSTRUCTION_PLAN.md](docs/PHASE2_CONSTRUCTION_PLAN.md)
 - 最新二阶段验收：[docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R6.md](docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R6.md)

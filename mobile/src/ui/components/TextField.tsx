@@ -83,7 +83,7 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
   const hostMuted = props.tone === 'base' ? theme.text.muted : theme.onRaised.secondary;
   // Comic (light) skins cannot carry a red error line at 4.5:1, so the error
   // uses the readable ink plus a glyph instead of relying on hue (§30).
-  const errorColor = theme.scheme === 'light' ? theme.onRaised.primary : theme.semantic.bad;
+  const errorColor = theme.scheme === 'light' ? theme.onRaised.primary : theme.semanticText.bad;
 
   return (
     <View style={[styles.root, { gap: theme.space.xs }, props.style]}>

@@ -44,6 +44,15 @@ export function ProgressSteps(props: {
             <Pressable
               onPress={reachable ? () => props.onStepPress?.(index) : undefined}
               disabled={!reachable}
+              // The step's press surface is the number circle (~24dp wide); the
+              // flex dividers between steps leave room for horizontal slop that
+              // lifts it to the 44dp floor without overlapping a neighbour.
+              hitSlop={{
+                top: 0,
+                bottom: 0,
+                left: Math.ceil((theme.touch.min - theme.space.xl) / 2),
+                right: Math.ceil((theme.touch.min - theme.space.xl) / 2),
+              }}
               accessibilityRole="button"
               accessibilityState={{ selected: active, disabled: !reachable }}
               accessibilityLabel={`第 ${index + 1} 步 ${step}${done ? '（已完成）' : active ? '（当前）' : ''}`}
@@ -63,7 +72,7 @@ export function ProgressSteps(props: {
                   style={[
                     typeStyle(theme, theme.type.label),
                     {
-                      color: active ? theme.onAccent : done ? theme.accentText : theme.text.muted,
+                      color: active ? theme.onAccent : done ? theme.accentOnBase : theme.text.muted,
                     },
                   ]}>
                   {done ? '✓' : String(index + 1)}

@@ -33,7 +33,7 @@ export function TurnCard(props: { turn: TurnView; index: number }): React.JSX.El
             {turn.text}
           </Text>
           {turn.resumed ? (
-            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semantic.info }]}>
+            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.info }]}>
               ⟲ 已从本地断点恢复（复用同一骰点）
             </Text>
           ) : null}

@@ -60,9 +60,9 @@ export function ReviewIssueCard(props: {
             {
               color:
                 issue.severity === 'blocking'
-                  ? theme.semantic.bad
+                  ? theme.semanticText.bad
                   : issue.severity === 'major'
-                    ? theme.semantic.warn
+                    ? theme.semanticText.warn
                     : theme.onRaised.secondary,
             },
           ]}>

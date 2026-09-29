@@ -144,6 +144,15 @@ const NPC_CARD = actorCard({
   combatBehavior: { retreatThreshold: 0.3, morale: 'steady' },
 });
 
+// GM-only world entries and future secrets that a public NPC view must never
+// surface, including through a referenced-but-private ability.
+const NPC_ENTRIES = [
+  ...ENTRIES.filter(item => item.entryId !== 'quest-main'),
+  entry('quest-main', 'quest', 'gm', { name: '查明失踪人口', trigger: {} }),
+  entry('ability-secret', 'ability', 'gm', { name: '袖里藏毒', attribute: 'knowledge', costs: {} }),
+  entry('lore-secret', 'lore', 'future', { name: '沈府灭门真相' }),
+];
+
 function projection(cards, state) {
   return buildPlayUiProjection({
     campaignId: 'camp-1',
@@ -336,4 +345,52 @@ test('unobserved NPCs expose no runtime state at all', () => {
   assert.deepEqual(view.visibleConditions, []);
   assert.equal(view.unknownSections.includes('conditions'), true);
   assert.equal(JSON.stringify(view).includes('critical'), false);
+});
+
+test('NPC public projection never surfaces GM-only world entries or future secrets', () => {
+  const state = baseState({
+    actors: {
+      'actor-player': {
+        actorId: 'actor-player',
+        locationId: 'loc-hall',
+        resources: { hp: 7, stamina: 9 },
+        conditions: [],
+        lifeStatus: 'active',
+      },
+      'actor-npc-1': {
+        actorId: 'actor-npc-1',
+        locationId: 'loc-hall',
+        resources: { hp: 8, stamina: 6 },
+        conditions: [],
+        lifeStatus: 'active',
+      },
+    },
+  });
+
+  // The card privately prepares a gm-only ability; the player must see neither
+  // the ability nor any GM/future world entry, only bounded public facts.
+  const card = { ...NPC_CARD, preparedAbilities: ['ability-secret'], abilities: ['ability-flurry', 'ability-secret'] };
+  const view = buildNpcPublicProjection({
+    actor: card,
+    state,
+    playerActorId: 'actor-player',
+    entries: NPC_ENTRIES,
+  });
+
+  const serialized = JSON.stringify(view);
+  for (const leak of [
+    'entity-steward', // entityId
+    'tpl-steward', // templateId
+    'ability-secret', // prepared/private ability id
+    '袖里藏毒', // gm-only ability name
+    '查明失踪人口', // gm-only quest entry
+    '沈府灭门真相', // future secret world entry
+  ]) {
+    assert.equal(serialized.includes(leak), false, `GM-only/Future content leaked: ${leak}`);
+  }
+  // resourceMax must not cross the boundary even as a key.
+  assert.equal(Object.keys(view).includes('resourceMax'), false);
+  // Unknown regions stay visible as 未探明 placeholders instead of vanishing.
+  assert.ok(view.unknownSections.length > 0);
+  assert.equal(view.unknownSections.includes('abilities'), true);
 });
