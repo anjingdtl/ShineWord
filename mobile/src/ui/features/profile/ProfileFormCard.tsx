@@ -5,13 +5,15 @@
  * plaintext never leaves Keychain (`useProfileForm` unchanged).
  */
 import React from 'react';
-import { View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { StatusBanner } from '../../components/StatusBanner';
 import { TextField } from '../../components/TextField';
 import { SectionHeader } from '../../components/SectionHeader';
+import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
+import { MODEL_PRESETS } from '../../../profileStore';
 import type { ProfileFormState } from './useProfileForm';
 
 export function ProfileFormCard(props: {
@@ -28,6 +30,29 @@ export function ProfileFormCard(props: {
         subtitle="OpenAI 兼容端点；密钥只写入系统 Keychain"
       />
       <View style={{ gap: theme.space.md }}>
+        <View style={{ gap: theme.space.sm }} testID="profile-presets">
+          {MODEL_PRESETS.map(preset => {
+            const selected = form.presetId === preset.id;
+            return (
+              <Pressable
+                key={preset.id}
+                onPress={() => (selected ? form.clearPreset() : form.choosePreset(preset.id))}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                testID={`preset-${preset.id}`}
+                style={{
+                  borderWidth: 1,
+                  borderColor: selected ? theme.accent.primary : theme.border.color,
+                  borderRadius: theme.radius.md,
+                  padding: theme.space.md,
+                }}>
+                <Text style={[typeStyle(theme, theme.type.body), { color: theme.text.primary }]}>
+                  {`${selected ? '✓ ' : ''}${preset.label}`}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
         <TextField
           label="模型端点"
           value={form.endpoint}

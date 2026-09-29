@@ -103,6 +103,12 @@ export interface CoordinatorDeps {
     contentHash: string;
     modelFingerprint: string;
   }) => Promise<string | undefined>;
+  /**
+   * Pass 3 (plan §4.3): whole-book timeline ordering/dependencies BEFORE the
+   * local resolver runs - the model proposes, resolveEventProposals stays as
+   * the floor for anything this pass misses. Failure is non-fatal.
+   */
+  onTimeline?: (input: { worldId: string; contentHash: string }) => Promise<void>;
   onUnitDone?: (info: { unitsDone: number; unitsTotal: number }) => void;
   /** Optional final publication runs under the same renewable build lease. */
   onFinalize?: (input: {
@@ -835,6 +841,20 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     // a unit that failed once and recovered on retry is not a final failure.
     const blocked = allUnits.filter(u => u.status === 'needs_review' || u.status === 'failed_terminal').length;
     if (!lostLease && pending === 0 && blocked === 0) {
+      // Pass 3 (plan §4.3): whole-book timeline proposals first - the model
+      // proposes, the LOCAL resolver below stays the authoritative floor.
+      if (deps.onTimeline) {
+        try {
+          const eventHash = await deps.sha256Hex(
+            allUnits.filter(u => u.status === 'completed')
+              .map(u => JSON.parse(u.sourceRangesJson).map((r: { chunkId: string }) => r.chunkId).join('+'))
+              .join('|'),
+          );
+          await deps.onTimeline({ worldId: run.worldId, contentHash: eventHash });
+        } catch {
+          // Non-fatal: the local resolver covers everything below.
+        }
+      }
       // Final event resolution replays from the persisted proposals (C1).
       await resolveEventProposals(deps, run.worldId);
       if (deps.onFinalize) {

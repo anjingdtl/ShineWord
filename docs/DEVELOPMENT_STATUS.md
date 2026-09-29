@@ -261,3 +261,15 @@
 - APK：现有 `dist/apk/debug/ShineWord-V0.2.0-p2.8-debug.apk`，SHA-256 `2C1E68CC41BB79B8289A90EA9A3C3AE03B9E23F3B4F679688BD3B9FDB8E293CF`。分钟投影修复后的 Gradle 封包在 JDK 17、21 下均被 Windows IPC 错误 `Unable to establish loopback connection` 阻断，未生成新 APK。5558 的 debug 客户端从当前工作树 Metro 运行本轮 JS；Metro bundle SHA-256 `45d1788f8e2bea8aa67fad9015ff4d53771ffadc0405d02113dfc59227e1a332`。
 - 设备截图与脱敏证据：`C:\Users\Administrator\AppData\Local\ShineWord\qa-evidence\p2.8\`，含援救/战斗恢复/攻击截图 42～45，以及杀进程重开后短休到 v34、原始快照 `clockSeconds=5436` 与 `clockMinutes=90` 一致的 53 号证据；快照 JSON SHA-256 `845e447570e396f354ca93e15d8077ae239529c7834da1f3c6e62a2a0c46c595`。测试数据库备份在本机 Temp。
 - 完整 G01～G06 编号与原方案章节映射、战斗事务/快照证明和逐项证据见 `docs/reviews/P2_ACCEPTANCE_CLOSEOUT_R5.md`。旧报告和第一轮/第二轮复现均保留。
+
+## §1M 全量构建（resident 模式）— 2026-09-29
+
+按 `docs/Shine-TRPG_1M_RESIDENT_BUILD_PLAN.md` 完成 P0–P5 施工（分支 `feature/1m-resident-build`）：
+
+- 打包器 v2：输出预算驱动（content×0.7/est，组上限 32 语义化为证据归属可靠性），在线校准 estOutputPerChunk；解除 8k 输出硬钳；GLM 不可关思考档强制 ≥8k 输出头寸。
+- provider：DeepSeek/GLM reasoning 方言透传（仅显式声明）；resident 三段消息（system + 全书 user + 范围指令）；probe v2（前缀缓存双发探测、输出上限探测）。
+- coordinator：`mode:'resident'`（85% 窗口 + 前缀缓存门，不满足事务性退化 windowed 并记录原因）；N worker 并发（默认 3，TPM×0.7 封顶）；claimUnit 原子条件 UPDATE；reasoning_only 先升预留重试再拆分。
+- Pass 0 全书实体注册表（幂等检查点、scope 注入）；Pass 2 WorldMapper V2（resident 单批全量 facts + ruleMappings，证据纪律同 checkEvidence，windowed 路径不变）；ruleMappings 经 applyExtraction→commitChunkResult 同事务落库，mappingId 稳定幂等；Pass 3 时间线（模型仅提议，本地 resolver 兜底）。
+- mobile：DeepSeek V4.1 Flash / GLM-5.3-Flash 预设（1M 窗口、16,384 内容输出、GLM low+2048 预留）。
+
+回归：`npm run verify:core` 266/266；mobile typecheck 通过。真实端点端到端指标（缓存命中率、耗时、费用）未验——见 `docs/reviews/1M_RESIDENT_BUILD_REVIEW.md` 未取证项清单。

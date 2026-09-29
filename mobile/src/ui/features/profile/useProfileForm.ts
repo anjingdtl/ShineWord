@@ -2,12 +2,13 @@
  * useProfileForm — the shared model-endpoint form state for the settings tab
  * and the first-run screen.
  *
- * P3.4 only moves this hook out of the screen file: the persistence path is
- * untouched (same `saveApiProfile`, same Keychain-only secret, the key is
- * never echoed back into the form after saving).
+ * Resident build (plan P5): adds the 1M preset selector. Choosing a preset
+ * pre-fills the model name and stores its capabilities/reasoning/concurrency
+ * profile; the persistence path and the Keychain-only secret handling are
+ * unchanged (the key is never echoed back into the form after saving).
  */
 import { useState } from 'react';
-import { saveApiProfile } from '../../../profileStore';
+import { MODEL_PRESETS, saveApiProfile } from '../../../profileStore';
 import { KeychainSecretStore } from '../../../secureKeyStore';
 import { useAppSession } from '../../state/AppSessionContext';
 
@@ -15,12 +16,15 @@ export interface ProfileFormState {
   endpoint: string;
   model: string;
   apiKey: string;
+  presetId: string | null;
   busy: boolean;
   error: string | null;
   notice: string | null;
   setEndpoint: (value: string) => void;
   setModel: (value: string) => void;
   setApiKey: (value: string) => void;
+  choosePreset: (presetId: string) => void;
+  clearPreset: () => void;
   submit: (onSaved: () => void) => void;
 }
 
@@ -29,9 +33,25 @@ export function useProfileForm(): ProfileFormState {
   const [endpoint, setEndpoint] = useState(profile?.endpoint ?? '');
   const [model, setModel] = useState(profile?.model ?? '');
   const [apiKey, setApiKey] = useState('');
+  const [presetId, setPresetId] = useState<string | null>(
+    profile?.capabilities?.contextWindow === 1_048_576
+      ? MODEL_PRESETS.find(p => p.model === profile?.model)?.id ?? null
+      : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  function choosePreset(id: string): void {
+    const preset = MODEL_PRESETS.find(item => item.id === id);
+    if (!preset) return;
+    setPresetId(preset.id);
+    setModel(preset.model);
+  }
+
+  function clearPreset(): void {
+    setPresetId(null);
+  }
 
   function submit(onSaved: () => void) {
     setBusy(true);
@@ -39,7 +59,7 @@ export function useProfileForm(): ProfileFormState {
     setNotice(null);
     void (async () => {
       try {
-        const saved = await saveApiProfile({ endpoint, model });
+        const saved = await saveApiProfile({ endpoint, model, presetId: presetId ?? undefined });
         const trimmedKey = apiKey.trim();
         const keyStore = new KeychainSecretStore();
         if (trimmedKey) {
@@ -60,5 +80,8 @@ export function useProfileForm(): ProfileFormState {
     })();
   }
 
-  return { endpoint, model, apiKey, busy, error, notice, setEndpoint, setModel, setApiKey, submit };
+  return {
+    endpoint, model, apiKey, presetId, busy, error, notice,
+    setEndpoint, setModel, setApiKey, choosePreset, clearPreset, submit,
+  };
 }

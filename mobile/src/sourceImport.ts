@@ -14,6 +14,7 @@ import { createExtractionRun, executeRun, type UnitExtractor } from '../../src/a
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
 import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
+import { runTimelinePass } from '../../src/application/world/timelinePass';
 import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import type { ApiProfile } from '../../src/application/llm/types';
@@ -664,6 +665,22 @@ export async function runExtraction(
           createdAt: new Date().toISOString(),
         });
         return registrySummaryFor(registry.entities);
+      },
+      onTimeline: async ({ worldId, contentHash }) => {
+        const provider = new OpenAICompatibleProvider(
+          profile,
+          new KeychainSecretStore(),
+          new FetchHttpTransport(),
+          300_000,
+        );
+        await runTimelinePass({
+          worldStore: runtime.worldStore,
+          complete: request => provider.complete(request),
+          worldId,
+          modelFingerprint: `${profile.endpoint}#${profile.model}`,
+          contentHash,
+          createdAt: new Date().toISOString(),
+        });
       },
       onUnitDone: info => {
         onProgress({

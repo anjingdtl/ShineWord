@@ -437,3 +437,80 @@ test('WorldMapper windowed path is untouched: >800 facts still batch', async () 
     db.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Pass 3 timeline (plan §4.3): model proposes, local resolver stays floor.
+// ---------------------------------------------------------------------------
+
+const { runTimelinePass } = require('../dist/application/world/timelinePass');
+
+test('timeline pass orders events with whole-book vision; unknown deps drop; local floor intact', async () => {
+  const db = setupDb();
+  try {
+    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    await worldStore.createWorld({
+      worldId: 'w-tl', title: 't', sourceSha256: 'b'.repeat(64), sourceBytes: 1,
+      normalizeVersion: 'n', chapterSplitVersion: 'c', buildStatus: 'ready',
+      createdAt: 't', updatedAt: 't',
+    });
+    // Two unresolved proposals, in reversed provisional order.
+    await worldStore.commitChunkResult({
+      worldId: 'w-tl', chunkId: 'c1',
+      entities: [], facts: [],
+      eventProposals: [
+        { chunkId: 'c1', eventId: 'evt-w-tl-opening', title: '开幕', summary: '大会开幕', worldTimeOrder: null, narrativeChapterId: 'ch-2', dependsOnEventKeys: ['宣布'] },
+        { chunkId: 'c1', eventId: 'evt-w-tl-announce', title: '宣布', summary: '江湖传言', worldTimeOrder: null, narrativeChapterId: 'ch-1', dependsOnEventKeys: [] },
+      ],
+      job: {
+        worldId: 'w-tl', jobId: 'j1', kind: 'extract_chunk', targetId: 'c1', status: 'done',
+        attempts: 1, contentHash: 'h', extractorVersion: 'v', modelFingerprint: 'm',
+        usageJson: null, resultJson: null, error: null, createdAt: 't', updatedAt: 't',
+      },
+      createdAt: 't', updatedAt: 't',
+    });
+    let calls = 0;
+    const provider = {
+      async complete(request) {
+        calls += 1;
+        assert.equal(request.reasoningEffort, 'high');
+        return {
+          text: JSON.stringify({
+            events: [
+              { key: 'evt-w-tl-announce', order: 1, dependsOn: [] },
+              { key: 'evt-w-tl-opening', order: 2, dependsOn: ['evt-w-tl-announce', 'evt-w-tl-ghost'] },
+            ],
+          }),
+        };
+      },
+    };
+    const result = await runTimelinePass({
+      worldStore, complete: provider.complete,
+      worldId: 'w-tl', modelFingerprint: 'm', createdAt: 't2', contentHash: 'ev-1',
+    });
+    assert.equal(result.updated, 2);
+    assert.equal(calls, 1);
+
+    const events = await worldStore.listEvents('w-tl');
+    const byId = new Map(events.map(event => [event.eventId, event]));
+    assert.equal(byId.get('evt-w-tl-announce')?.worldTimeOrder, 1, 'chronology from the proposal');
+    assert.equal(byId.get('evt-w-tl-opening')?.worldTimeOrder, 2);
+    // Unknown dependency (ghost) dropped; the known one resolved.
+    assert.deepEqual(
+      [...byId.get('evt-w-tl-opening')?.dependsOnEventIds ?? []],
+      ['evt-w-tl-announce'],
+    );
+    // Proposals consumed; the local floor sees nothing left.
+    assert.equal((await worldStore.listEventProposals('w-tl')).length, 0);
+
+    // Idempotency: the same event set never re-pays the request - with all
+    // proposals resolved the pass skips outright; either way calls stay 1.
+    const again = await runTimelinePass({
+      worldStore, complete: provider.complete,
+      worldId: 'w-tl', modelFingerprint: 'm', createdAt: 't3', contentHash: 'ev-1',
+    });
+    assert.equal(again.reused || again.skipped, true);
+    assert.equal(calls, 1);
+  } finally {
+    db.close();
+  }
+});
