@@ -115,10 +115,10 @@ Harness：`scripts/unified-build-harness.cjs`（生产路径：流式导入→�
 
 | 测试 | 状态（报告撰写时） | 关键指标（进行中数字） |
 |---|---|---|
-| DS-FULL | 运行中（v6 重启后修复 FK 落库缺陷；S1 进行中） | 尝试 1（131 请求）发现并修复统一导入的世界侧章节镜像缺失（FOREIGN KEY 约束失败 → 事实无法落库），证据存 `.tmp/unified/attempt1-fk-bug/`。修复后实测：单元正常完成、201 事实/63 实体落库、**真实模型输出引文逐字审计 201/201 = 100%、0 错配**；前缀缓存生效（cached ~9.7-12.8k/请求）；思考政策下 DS 高频 reasoning_only 由 ×1.5 阶梯恢复 |
-| DS-PROG | 排队（驱动顺序执行） | — |
-| GLM-FULL | 排队 | — |
-| GLM-PROG | 排队 | — |
+| DS-FULL | **受阻（外部）**：DeepSeek 测试账户余额耗尽 | 多轮真实推进后 HTTP 402：v6 修复 FK 后完整抽取 S1 的 18/18 单元（1928 事实）但在时间线前向引用 FK 上受阻（已修复并提交）；v10 干净重跑至 10/22 单元后 402。**已验证的真实证据**：单元正常提交、201 事实/63 实体、引文逐字审计 **201/201=100%**、前缀缓存生效、校准重规划真实触发（estOutputPerChunk 800→580、批 22→18）、截断阶梯与 reasoning_only 重试在真实数据工作。**未达成**：全书三书发布与开局操作 |
+| DS-PROG | **受阻（外部）**：同上（402，2 分钟内全单元失败退出） | — |
+| GLM-FULL | **运行中**（专用驱动 `.tmp/unified/run-glm-tests.sh`，请求干净：completed、思考 7 token、前缀缓存命中 ~10k） | 见 `.tmp/unified/glm-full/metrics.jsonl` |
+| GLM-PROG | 排队（GLM-FULL 后顺序执行） | — |
 
 驱动脚本 nohup 分离运行（`.tmp/unified/run-main-tests.sh`），跨会话继续；每 run 落 summary.json 后本表将回填最终指标。**按当前实测速率（DS 单请求 80-120s、高频思考重试），四 run 全部完成预计需 8 小时以上；若达预算上限将如实中止并记录。**
 
@@ -127,7 +127,8 @@ Harness：`scripts/unified-build-harness.cjs`（生产路径：流式导入→�
 - GLM low 档：同章 → 16-21 实体、10-14 事实、输出 1754-2240 token（思考 8-10 token）、26.5-34.8s。
 - DeepSeek 实测不执行 `budget_tokens`（思考可烧 16-30k），由 provider reasoning_only 重试（×1.5）与内容/思考分离计量兜底；已按用户政策保留思考开启。
 
-**完成后此处将更新为：每 run 导入耗时、TTFP、各阶段耗时、物理请求/重试数、完整 usage（缺失标 unavailable）、缓存命中率（含分母）、覆盖 100% 验证、证据逐字审计（verified/mismatched）、阶段包 revisions、触发/激活日志、回合统计、budgetExceeded 标志。** 若任一 run 因预算上限中止，将如实标注未完成原因，不以降质冒充。
+DS 余额阻碍按合同处理：不重试刷 402、不改用另一模型冒充通过（GLM 结果只记 GLM 名下）；DS 两条在账户补充后可用同 harness 复跑（命令见 §8）。
+完成后此处将更新为：每 run 导入耗时、TTFP、各阶段耗时、物理请求/重试数、完整 usage（缺失标 unavailable）、缓存命中率（含分母）、覆盖 100% 验证、证据逐字审计（verified/mismatched）、阶段包 revisions、触发/激活日志、回合统计、budgetExceeded 标志。若任一 run 因预算上限中止，将如实标注未完成原因，不以降质冒充。
 
 ## 6. 未验项与阻碍（如实）
 
