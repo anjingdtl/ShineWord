@@ -115,7 +115,7 @@ Harness：`scripts/unified-build-harness.cjs`（生产路径：流式导入→�
 
 | 测试 | 状态（报告撰写时） | 关键指标（进行中数字） |
 |---|---|---|
-| DS-FULL | 运行中（131+ 物理请求，~110 分钟，S1/S2 抽取中，尚未到首个阶段完成里程碑） | `.tmp/unified/ds-full/metrics.jsonl`；已观测：前缀缓存生效（cached ~9.7-12.8k/请求）；思考政策下 DeepSeek 高频 reasoning_only（单次思考可烧 20480 token）由 provider ×1.5 阶梯恢复，代价是每批 2-3 次物理请求 |
+| DS-FULL | 运行中（v6 重启后修复 FK 落库缺陷；S1 进行中） | 尝试 1（131 请求）发现并修复统一导入的世界侧章节镜像缺失（FOREIGN KEY 约束失败 → 事实无法落库），证据存 `.tmp/unified/attempt1-fk-bug/`。修复后实测：单元正常完成、201 事实/63 实体落库、**真实模型输出引文逐字审计 201/201 = 100%、0 错配**；前缀缓存生效（cached ~9.7-12.8k/请求）；思考政策下 DS 高频 reasoning_only 由 ×1.5 阶梯恢复 |
 | DS-PROG | 排队（驱动顺序执行） | — |
 | GLM-FULL | 排队 | — |
 | GLM-PROG | 排队 | — |
