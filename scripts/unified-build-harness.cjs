@@ -586,6 +586,23 @@ async function buildMode(mode, configFile, workdir, novelPath, label) {
     normalizeVersion: sourceManifest.normalizeVersion, chapterSplitVersion: sourceManifest.chapterSplitVersion,
     buildStatus: 'extracting', createdAt: now, updatedAt: now,
   });
+  // The world-side chapter/chunk mirror is authoritative for fact evidence
+  // FKs; createExtractionRun only mirrors when the world is NEW, so mirror
+  // explicitly here (re-imports with an existing world skip it otherwise).
+  const chaptersForMirror = await sourceStore.getChapters(`src-${label ?? mode}`);
+  const chunksForMirror = await sourceStore.getChunks(`src-${label ?? mode}`);
+  await worldStore.saveImportedSource(worldId, {
+    encoding: sourceManifest.encoding,
+    sourceSha256Hex: sourceManifest.rawSha256Hex,
+    sourceByteLength: sourceManifest.byteLength,
+    normalizeVersion: sourceManifest.normalizeVersion,
+    chapterSplitVersion: sourceManifest.chapterSplitVersion,
+    splitStrategy: sourceManifest.splitStrategy,
+    text: '',
+    codePointCount: sourceManifest.codePointCount,
+    chapters: chaptersForMirror,
+    chunks: chunksForMirror,
+  }, new Date().toISOString());
   const deps = { db, adapter, stageStore, runStore: new SqliteBuildRunStore(adapter), sourceStore, worldStore, sha256Hex: sha.sha256Hex };
   const { plan } = await ensureStagePlan(deps, {
     worldId, sourceId: `src-${label ?? mode}`, strategy: mode === 'full' ? 'full' : 'progressive',

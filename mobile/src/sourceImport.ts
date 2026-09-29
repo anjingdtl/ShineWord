@@ -221,6 +221,39 @@ async function importNovelInternal(
       worldStore: runtime.worldStore,
       sha256Hex: async (input: string) => nativeSha256.sha256Hex(input),
     };
+    // Mirror chapters/chunks world-side up front: evidence FKs (fact_sources
+    // chapters) point at the world tables, and createExtractionRun only
+    // mirrors when the world row is new (a re-import would otherwise skip it).
+    {
+      const worldStore = runtime.worldStore;
+      let world = await worldStore.getWorld(worldId);
+      if (!world) {
+        world = {
+          worldId,
+          title: manifest.title ?? fileName,
+          sourceSha256: manifest.rawSha256Hex,
+          sourceBytes: manifest.byteLength,
+          normalizeVersion: manifest.normalizeVersion,
+          chapterSplitVersion: manifest.chapterSplitVersion,
+          buildStatus: 'extracting',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } satisfies WorldRecord;
+        await worldStore.createWorld(world);
+      }
+      await worldStore.saveImportedSource(worldId, {
+        encoding: manifest.encoding,
+        sourceSha256Hex: manifest.rawSha256Hex,
+        sourceByteLength: manifest.byteLength,
+        normalizeVersion: manifest.normalizeVersion,
+        chapterSplitVersion: manifest.chapterSplitVersion,
+        splitStrategy: manifest.splitStrategy,
+        text: '',
+        codePointCount: manifest.codePointCount,
+        chapters: await sourceStore.getChapters(sourceId),
+        chunks: await sourceStore.getChunks(sourceId),
+      }, new Date().toISOString());
+    }
     const { plan } = await ensureStagePlan(deps, {
       worldId, sourceId, strategy: unifiedStrategy,
       configFingerprint: `${config.model}#${config.reasoningEffort}#${config.contentOutputTokens}`,
