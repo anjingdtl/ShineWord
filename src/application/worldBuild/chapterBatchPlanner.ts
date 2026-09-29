@@ -38,6 +38,22 @@ export function nextBodyTargetRatio(current: number): number {
   return halved >= BODY_TARGET_FLOOR ? halved : Math.min(current, BODY_TARGET_FLOOR);
 }
 
+
+/** Canonical chunk order: chapter order first, per-chapter chunk order
+ * second. The streaming importer numbers chunkIndex PER CHAPTER (each chapter
+ * restarts at 0), so chunkIndex alone is NOT a global order. */
+export function orderChunksByChapter(
+  chapters: readonly SourceChapter[],
+  chunks: readonly SourceChunk[],
+): SourceChunk[] {
+  const indexByChapter = new Map(chapters.map(chapter => [chapter.chapterId, chapter.index]));
+  return [...chunks].sort((a, b) => {
+    const chapterA = indexByChapter.get(a.chapterId) ?? 0;
+    const chapterB = indexByChapter.get(b.chapterId) ?? 0;
+    return chapterA !== chapterB ? chapterA - chapterB : a.chunkIndex - b.chunkIndex;
+  });
+}
+
 export type ExtractionRoute = 'characters' | 'world';
 
 export interface PlannedBatch {
@@ -203,7 +219,7 @@ export function planChapterBatches(
 
   // Coverage invariant: exact, ordered, no holes, no duplicates.
   const planned = runs.flatMap(run => run.segments);
-  const orderedChunks = [...chunks].sort((a, b) => a.chunkIndex - b.chunkIndex);
+  const orderedChunks = orderChunksByChapter(chapters, chunks);
   if (planned.length !== orderedChunks.length) {
     throw new Error(`Chapter batch plan lost chunks: ${planned.length}/${orderedChunks.length}.`);
   }

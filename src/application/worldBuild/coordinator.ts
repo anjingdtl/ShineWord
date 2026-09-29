@@ -31,6 +31,7 @@ import {
 } from './groupPlanner';
 import {
   nextBodyTargetRatio,
+  orderChunksByChapter,
   planChapterBatches,
   type ExtractionRoute,
 } from './chapterBatchPlanner';
@@ -530,7 +531,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     chunksByRange.set(chunk.chunkId, chunk);
     allChunks.push(chunk);
   }
-  allChunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  // Canonical order is chapter order then per-chunk order: the streaming
+  // importer resets chunkIndex per chapter, so chunkIndex alone is not global.
+  const orderedAllChunks = orderChunksByChapter(chapters, allChunks);
+  allChunks.length = 0;
+  allChunks.push(...orderedAllChunks);
   // Stage scope (unified P3): the resident prefix and segment numbering only
   // ever contain the run's authorized range - un-triggered stages never ride
   // along, not even as "context".

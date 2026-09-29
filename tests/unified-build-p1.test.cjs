@@ -332,6 +332,39 @@ test('U02 chapter planner: 1M-codepoint synthetic book packs chapter-aligned wit
   }
 });
 
+test('U02 chapter planner: per-chapter (resetting) chunkIndex stays canonically ordered', () => {
+  // The STREAMING importer numbers chunkIndex per chapter (each restarts at
+  // 0); global chunkIndex-sort would scramble the book. Coverage must hold.
+  const chapters = [];
+  const chunks = [];
+  let cp = 0;
+  for (let c = 1; c <= 12; c += 1) {
+    const chapterId = `ch-${String(c).padStart(4, '0')}`;
+    const start = cp;
+    const perChapter = (c % 3) + 1; // 1..3 chunks, ragged
+    for (let k = 0; k < perChapter; k += 1) {
+      chunks.push({
+        chunkId: `${chapterId}-c${String(k + 1).padStart(3, '0')}`, chapterId,
+        chunkIndex: k, // RESETS per chapter (streaming importer semantics)
+        startOffset: cp, endOffset: cp + 1_000, charCount: 1_000, contentHash: 'x',
+      });
+      cp += 1_000;
+    }
+    chapters.push({ chapterId, index: c, title: `第${c}章`, startOffset: start, endOffset: cp, charCount: cp - start, contentHash: 'x' });
+  }
+  const batches = planChapterBatches(chapters, chunks, BUDGET_1M, {});
+  const planned = batches.flatMap(batch => batch.segments);
+  assert.equal(planned.length, chunks.length);
+  const expected = [...chunks].sort((a, b) => {
+    const ca = Number(a.chapterId.slice(3));
+    const cb = Number(b.chapterId.slice(3));
+    return ca !== cb ? ca - cb : a.chunkIndex - b.chunkIndex;
+  });
+  for (let i = 0; i < planned.length; i += 1) {
+    assert.equal(planned[i].chunkId, expected[i].chunkId);
+  }
+});
+
 test('U02 chapter planner: 30MB-equivalent synthetic input, no storage-block cap', () => {
   // 30MB UTF-8 CJK ~= 10M code points. Planner is metadata-only; large counts
   // must still pack deterministically and the 32-chunk storage cap is gone.
