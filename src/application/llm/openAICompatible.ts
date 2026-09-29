@@ -114,24 +114,30 @@ export function reasoningDialect(model: string): ReasoningDialect {
  *   be disabled, so 'off' sends nothing.
  * - generic: low/high pass through as reasoning_effort.
  */
+/**
+ * Vendor thinking-TIER parameters (policy 2026-09-30: thinking is never
+ * disabled; 'off' degrades to the vendor's lowest tier, it never turns
+ * thinking off). The two dialects differ, verified live 2026-09-30:
+ *  - DeepSeek: native switch `thinking` stays ENABLED with a bounded
+ *    `budget_tokens` per tier (reasoning_effort alone was not honored).
+ *  - GLM: native tier parameter `reasoning_effort` + clear_thinking:false.
+ */
 function applyReasoningParams(
   body: Record<string, unknown>,
   dialect: ReasoningDialect,
   effort: 'off' | 'low' | 'high' | undefined,
 ): void {
-  if (!effort) return;
-  if (effort === 'off') {
-    if (dialect === 'deepseek') body.thinking = { type: 'disabled' };
+  const tier = effort === 'high' ? 'high' : 'low'; // 'off'/undefined -> lowest tier
+  if (dialect === 'deepseek') {
+    body.thinking = { type: 'enabled', budget_tokens: tier === 'high' ? 16_384 : 4_096 };
     return;
   }
   if (dialect === 'glm') {
-    body.reasoning_effort = effort;
+    body.reasoning_effort = tier;
     body.thinking = { clear_thinking: false };
     return;
   }
-  if (dialect === 'generic') {
-    body.reasoning_effort = effort;
-  }
+  body.reasoning_effort = tier;
 }
 
 function messageText(
@@ -223,13 +229,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
       if (request.jsonMode && this.profile.capabilities.supportsJson) {
         body.response_format = { type: 'json_object' };
       }
-      if (request.vendorOptions?.thinkingDisabled ?? this.profile.thinkingDisabled) {
-        // ONLY an explicit opt-out may disable thinking; reasoning models run
-        // with reasoning ON by default (policy 2026-09-27).
-        body.thinking = { type: 'disabled' };
-      } else {
-        applyReasoningParams(body, dialect, request.reasoningEffort);
-      }
+      // Policy 2026-09-30: model thinking is NEVER disabled - neither by
+      // request nor by profile. The effort only selects the vendor's THINKING
+      // TIER (DeepSeek and GLM parameters differ; see applyReasoningParams).
+      applyReasoningParams(body, dialect, request.reasoningEffort);
 
       let response: HttpResponse;
       const physicalStartedAt = Date.now();

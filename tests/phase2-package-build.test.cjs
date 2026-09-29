@@ -224,7 +224,7 @@ test('P2-4: LLM proposal with an invalid attribute is rejected as a major review
   const provider = fakeProvider({
     skills: [
       { id: 'flying', name: '飞行', attribute: 'magic', allowUntrained: true, powerTier: 'supernatural', provenanceKind: 'explicit', evidenceFactIds: [], rationale: '越界提案。' },
-      { id: 'swim', name: '凫水', attribute: 'agility', allowUntrained: true, powerTier: 'ordinary', provenanceKind: 'explicit', evidenceFactIds: [], rationale: '合法提案。' },
+      { id: 'swim', name: '凫水', attribute: 'agility', allowUntrained: true, powerTier: 'ordinary', provenanceKind: 'explicit', evidenceFactIds: ['fact-0'], rationale: '合法提案。' },
     ],
   });
   const { result } = await build(worldStore, provider);
@@ -360,6 +360,7 @@ test('P2-4: conflict facts produce a blocking canon_conflict issue that stops pu
     firstSeenChapterId: null, aliases: [],
   }, 't');
 
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
   const first = makeFact('w-build', 'fact-home-1', 'chen', 'home_location', { location: '青云院' });
   const second = makeFact('w-build', 'fact-home-2', 'chen', 'home_location', { location: '凌云阁' });
   await worldStore.saveFact(first, 't');

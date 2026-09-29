@@ -19,6 +19,7 @@ export function BuildTaskCard(props: {
   task: BuildTaskView;
   onResume: (runId: string) => void;
   onPause: (runId: string) => void;
+  onCancel: (runId: string) => void;
   busy: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
@@ -58,6 +59,15 @@ export function BuildTaskCard(props: {
       <View style={[styles.actions, { gap: theme.space.sm, marginTop: theme.space.sm }]}>
         {isRunning ? (
           <Button label="暂停" onPress={() => props.onPause(task.runId)} disabled={props.busy} />
+        ) : null}
+        {task.status !== 'canceled' && task.status !== 'completed' && task.status !== 'failed_terminal' ? (
+          <Button
+            label="取消"
+            variant="secondary"
+            onPress={() => props.onCancel(task.runId)}
+            disabled={props.busy}
+            testID={`task-cancel-${task.runId}`}
+          />
         ) : null}
         {canResume ? (
           <Button label={task.unitsDone > 0 ? '继续构建' : '开始构建'} onPress={() => props.onResume(task.runId)} disabled={props.busy} />

@@ -29,12 +29,21 @@ import {
   splitPartCount,
   type ModelBudget,
 } from './groupPlanner';
+import {
+  nextBodyTargetRatio,
+  orderChunksByChapter,
+  planChapterBatches,
+  type ExtractionRoute,
+} from './chapterBatchPlanner';
+import { revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 
-export const PIPELINE_VERSION = 'pipeline-closeout-c3';
+export const PIPELINE_VERSION = 'pipeline-unified-1';
 export const PLAN_VERSION_CHUNK = 'plan-chunk-1';
 export const PLAN_VERSION_GROUP = 'plan-group-1';
 export const PLAN_VERSION_RESIDENT = 'plan-resident-1';
+/** Chapter-aligned windowed planning (unified build P1 §2). */
+export const PLAN_VERSION_CHAPTER = 'plan-chapter-1';
 
 /** Resident viability (1M plan §4.1): book + overhead <= 85% of the window. */
 export const RESIDENT_WINDOW_RATIO = 0.85;
@@ -129,6 +138,25 @@ export interface CreateRunInput {
   /** C3 group mode: pack chunks into budget-bounded multi-chunk requests. */
   mode?: 'chunk' | 'group' | 'resident';
   budget?: ModelBudget;
+  /**
+   * Frozen run configuration (unified build P1 §1): endpoint/model/keyRef and
+   * non-secret execution parameters. Persisted on the run; later profile
+   * edits must not change this run.
+   */
+  config?: FrozenRunConfig;
+  /**
+   * Stage scope restriction (unified build P3): only chunks overlapping this
+   * codepoint range are planned. Null/undefined = whole source.
+   */
+  scope?: { startCp: number; endCp: number } | null;
+  /**
+   * Dual-route extraction (unified build P1 §4): the same batch body is
+   * extracted twice with route-focused prompts (characters/relations/states
+   * vs world rules/events/timeline). Default 'single'.
+   */
+  routes?: 'single' | 'dual';
+  /** Initial body target ratio override (default from frozen config / 0.30). */
+  bodyTargetRatio?: number;
 }
 
 export interface ResidentViability {
@@ -210,6 +238,33 @@ function chunkJobId(chunkId: string): string {
   return `job-extract-${chunkId}`;
 }
 
+export interface UnitRangeEntry {
+  chunkId: string;
+  chapterId: string;
+  startCp: number;
+  endCp: number;
+}
+
+/**
+ * Parses a unit's source ranges. New units use the v2 envelope
+ * {version, route, ranges}; legacy units are bare arrays. Route travels with
+ * the unit so dual-route runs resume correctly after process death.
+ */
+export function parseUnitRanges(sourceRangesJson: string): { route: ExtractionRoute | null; ranges: UnitRangeEntry[] } {
+  const parsed: unknown = JSON.parse(sourceRangesJson);
+  if (Array.isArray(parsed)) {
+    return { route: null, ranges: parsed as UnitRangeEntry[] };
+  }
+  if (parsed && typeof parsed === 'object') {
+    const envelope = parsed as { version?: unknown; route?: unknown; ranges?: unknown };
+    if (Array.isArray(envelope.ranges)) {
+      const route = envelope.route === 'characters' || envelope.route === 'world' ? envelope.route : null;
+      return { route, ranges: envelope.ranges as UnitRangeEntry[] };
+    }
+  }
+  throw new Error('Unrecognized unit sourceRangesJson shape.');
+}
+
 /**
  * Plans extraction units. 'chunk' keeps one unit per chunk (C2 baseline);
  * 'group' packs consecutive chunks into output-budget-bounded groups whose
@@ -233,10 +288,21 @@ export async function createExtractionRun(
     throw new Error(`Source ${input.sourceId} has no chunks.`);
   }
   const requestedMode = input.mode ?? 'chunk';
+  // Stage scope (unified P3): plan only chunks overlapping [startCp, endCp).
+  let plannedChunks = chunks;
+  if (input.scope) {
+    plannedChunks = chunks.filter(chunk =>
+      chunk.endOffset > input.scope!.startCp && chunk.startOffset < input.scope!.endCp);
+    if (plannedChunks.length === 0) {
+      throw new Error(`Scope [${input.scope.startCp}, ${input.scope.endCp}) covers no chunks.`);
+    }
+  }
   let mode: 'chunk' | 'group' | 'resident' = requestedMode;
   let residentDegraded: ResidentViability | null = null;
   if (mode === 'resident') {
-    const viability = assessResidentViability(chunks, input.budget);
+    // Scoped (stage) runs only ever see the authorized range in the resident
+    // prefix (plan §3: never send un-triggered stages through "optimizations").
+    const viability = assessResidentViability(plannedChunks, input.budget);
     if (!viability.viable) {
       mode = 'group';
       residentDegraded = viability;
@@ -245,40 +311,89 @@ export async function createExtractionRun(
   const configFingerprint = `${PIPELINE_VERSION}#${input.extractorVersion}#${input.modelFingerprint}`;
   const createdAt = now();
 
+  const routes = input.routes ?? 'single';
+  const planState: RunPlanState = {
+    bodyTargetRatio: input.bodyTargetRatio ?? input.config?.bodyTargetRatio ?? 0.30,
+    replanCount: 0,
+  };
+
   const units: BuildUnitRecord[] = [];
   if (mode === 'group' || mode === 'resident') {
-    const groups = planExtractGroups(chunks, input.budget);
-    for (const group of groups) {
-      const inputHash = await deps.sha256Hex(
-        group.segments.map(segment => `${segment.chunkId}:${segment.startCp}-${segment.endCp}`).join('|'),
-      );
-      units.push({
-        unitId: `${input.runId}-g${String(group.ord + 1).padStart(4, '0')}`,
-        runId: input.runId,
-        kind: 'extract_group' as const,
-        sourceRangesJson: JSON.stringify(group.segments.map(segment => ({
-          chunkId: segment.chunkId,
-          chapterId: segment.chapterId,
-          startCp: segment.startCp,
-          endCp: segment.endCp,
-        }))),
-        inputHash,
-        configFingerprint,
-        parentUnitId: null,
-        ord: group.ord,
-        status: 'queued' as const,
-        attempt: 0,
-        retryAt: null,
-        resultRef: null,
-        usageJson: null,
-        errorCode: null,
-        errorMessage: null,
-        createdAt,
-        updatedAt: createdAt,
+    if (mode === 'group') {
+      // Unified P1 §2: chapter-aligned batches driven by the full request
+      // budget (initial body target = 30% of the window, output-bounded).
+      // Storage chunk counts no longer cap the batch.
+      const chapters = await deps.sourceStore.getChapters(input.sourceId);
+      const batches = planChapterBatches(chapters, plannedChunks, input.budget ?? DEFAULT_MODEL_BUDGET, {
+        bodyTargetRatio: planState.bodyTargetRatio,
+        routes,
       });
+      for (const batch of batches) {
+        const seed = `${batch.inputHashSeed}|${batch.route ?? 'all'}`;
+        const inputHash = await deps.sha256Hex(seed);
+        units.push({
+          unitId: `${input.runId}-g${String(batch.ord + 1).padStart(4, '0')}${batch.route === 'characters' ? 'c' : batch.route === 'world' ? 'w' : ''}`,
+          runId: input.runId,
+          kind: 'extract_group' as const,
+          sourceRangesJson: JSON.stringify({
+            version: 2 as const,
+            route: batch.route ?? null,
+            ranges: batch.segments.map(segment => ({
+              chunkId: segment.chunkId,
+              chapterId: segment.chapterId,
+              startCp: segment.startCp,
+              endCp: segment.endCp,
+            })),
+          }),
+          inputHash,
+          configFingerprint,
+          parentUnitId: null,
+          ord: batch.ord,
+          status: 'queued' as const,
+          attempt: 0,
+          retryAt: null,
+          resultRef: null,
+          usageJson: null,
+          errorCode: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt: createdAt,
+        });
+      }
+    } else {
+      const groups = planExtractGroups(plannedChunks, input.budget);
+      for (const group of groups) {
+        const inputHash = await deps.sha256Hex(
+          group.segments.map(segment => `${segment.chunkId}:${segment.startCp}-${segment.endCp}`).join('|'),
+        );
+        units.push({
+          unitId: `${input.runId}-g${String(group.ord + 1).padStart(4, '0')}`,
+          runId: input.runId,
+          kind: 'extract_group' as const,
+          sourceRangesJson: JSON.stringify(group.segments.map(segment => ({
+            chunkId: segment.chunkId,
+            chapterId: segment.chapterId,
+            startCp: segment.startCp,
+            endCp: segment.endCp,
+          }))),
+          inputHash,
+          configFingerprint,
+          parentUnitId: null,
+          ord: group.ord,
+          status: 'queued' as const,
+          attempt: 0,
+          retryAt: null,
+          resultRef: null,
+          usageJson: null,
+          errorCode: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt: createdAt,
+        });
+      }
     }
   } else {
-    chunks.forEach((chunk, ord) => {
+    plannedChunks.forEach((chunk, ord) => {
       units.push({
         unitId: `${input.runId}-u${String(ord + 1).padStart(4, '0')}`,
         runId: input.runId,
@@ -314,7 +429,7 @@ export async function createExtractionRun(
     pipelineVersion: PIPELINE_VERSION,
     planVersion: mode === 'resident'
       ? PLAN_VERSION_RESIDENT
-      : mode === 'group' ? PLAN_VERSION_GROUP : PLAN_VERSION_CHUNK,
+      : mode === 'group' ? PLAN_VERSION_CHAPTER : PLAN_VERSION_CHUNK,
     modelFingerprint: input.modelFingerprint,
     phase: 'extracting',
     status: 'queued',
@@ -329,6 +444,11 @@ export async function createExtractionRun(
     lastErrorMessage: residentDegraded?.reason ?? null,
     createdAt,
     updatedAt: createdAt,
+    configJson: input.config ? JSON.stringify(input.config) : null,
+    planStateJson: JSON.stringify(planState),
+    scopeJson: input.scope ? JSON.stringify(input.scope) : null,
+    pauseRequested: false,
+    cancelRequested: false,
   };
   await deps.runStore.createRun(run, units);
 
@@ -411,10 +531,25 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     chunksByRange.set(chunk.chunkId, chunk);
     allChunks.push(chunk);
   }
-  allChunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
-  const globalSegmentIndexOf = new Map(allChunks.map((chunk, index) => [chunk.chunkId, index + 1]));
+  // Canonical order is chapter order then per-chunk order: the streaming
+  // importer resets chunkIndex per chapter, so chunkIndex alone is not global.
+  const orderedAllChunks = orderChunksByChapter(chapters, allChunks);
+  allChunks.length = 0;
+  allChunks.push(...orderedAllChunks);
+  // Stage scope (unified P3): the resident prefix and segment numbering only
+  // ever contain the run's authorized range - un-triggered stages never ride
+  // along, not even as "context".
+  const runScope = run.scopeJson ? JSON.parse(run.scopeJson) as { startCp: number; endCp: number } : null;
+  const bookChunks = runScope
+    ? allChunks.filter(chunk => chunk.endOffset > runScope.startCp && chunk.startOffset < runScope.endCp)
+    : allChunks;
+  const globalSegmentIndexOf = new Map(bookChunks.map((chunk, index) => [chunk.chunkId, index + 1]));
 
   const resident = run.planVersion === PLAN_VERSION_RESIDENT;
+  const chapterPlanned = run.planVersion === PLAN_VERSION_CHAPTER;
+  const planState = revivePlanState(run.planStateJson, {
+    bodyTargetRatio: deps.budget ? 0.30 : 0.30,
+  });
 
   // Resident context is built ONCE per execution: the whole-book prefix is
   // byte-stable for every unit (same reads, same assembly - 1M plan §4.2).
@@ -427,7 +562,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     }
     const titleByChapter = new Map(chapters.map(chapter => [chapter.chapterId, chapter.title]));
     const segments: GroupSegmentInput[] = [];
-    for (const chunk of allChunks) {
+    for (const chunk of bookChunks) {
       const text = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
       segments.push({
         chunkId: chunk.chunkId,
@@ -438,7 +573,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       });
     }
     bookSegments = segments;
-    bookPromptTokens = allChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0)
+    bookPromptTokens = bookChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0)
       + DEFAULT_PROMPT_OVERHEAD_TOKENS;
 
     // Pass 0 (plan §4.3): one registry request over the same byte-stable
@@ -469,7 +604,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   if (!resident) {
     const planned = await deps.runStore.listUnits(runId);
     for (const unit of planned) {
-      const ranges = JSON.parse(unit.sourceRangesJson) as Array<{ chunkId: string }>;
+      const ranges = parseUnitRanges(unit.sourceRangesJson).ranges;
       let body = 0;
       for (const range of ranges) {
         const chunk = chunksByRange.get(range.chunkId);
@@ -598,10 +733,92 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     }
   };
 
+  /**
+   * Calibrated replanning (unified P1 §8): re-plan every still-QUEUED unit of
+   * a chapter-planned run under a new body-target ratio and/or calibrated
+   * per-chunk output estimate. Completed/running/retrying/blocked units keep
+   * their identity; the replacement is a single fenced transaction and the
+   * coverage ledger of the queued range is preserved exactly.
+   */
+  const replanQueuedUnits = async (next: {
+    bodyTargetRatio?: number;
+    estOutputPerChunk?: number;
+  }): Promise<boolean> => {
+    if (!chapterPlanned || !deps.budget) return false;
+    const unitsAll = await deps.runStore.listUnits(runId);
+    const queued = unitsAll.filter(u => u.status === 'queued');
+    if (queued.length === 0) return false;
+    const queuedChunkIds: string[] = [];
+    for (const unit of queued) {
+      for (const range of parseUnitRanges(unit.sourceRangesJson).ranges) {
+        queuedChunkIds.push(range.chunkId);
+      }
+    }
+    const idSet = new Set(queuedChunkIds);
+    const chunksToPlan = bookChunks.filter(chunk => idSet.has(chunk.chunkId));
+    if (chunksToPlan.length === 0) return false;
+    const nextRatio = next.bodyTargetRatio ?? planState.bodyTargetRatio;
+    const generation = planState.replanCount + 1;
+    const routes: 'single' | 'dual' = queued.some(u => parseUnitRanges(u.sourceRangesJson).route !== null)
+      ? 'dual'
+      : 'single';
+    const batches = planChapterBatches(chapters, chunksToPlan, deps.budget, {
+      bodyTargetRatio: nextRatio,
+      estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
+      routes,
+    });
+    const minOrd = Math.min(...queued.map(u => u.ord));
+    const createdAtReplan = now();
+    const replacementUnits = [];
+    for (const batch of batches) {
+      const inputHash = await deps.sha256Hex(`re${generation}|${batch.inputHashSeed}|${batch.route ?? 'all'}`);
+      replacementUnits.push({
+        unitId: `${runId}-r${generation}b${String(batch.ord + 1).padStart(4, '0')}${batch.route === 'characters' ? 'c' : batch.route === 'world' ? 'w' : ''}`,
+        kind: 'extract_group' as const,
+        sourceRangesJson: JSON.stringify({
+          version: 2 as const,
+          route: batch.route ?? null,
+          ranges: batch.segments.map(segment => ({
+            chunkId: segment.chunkId,
+            chapterId: segment.chapterId,
+            startCp: segment.startCp,
+            endCp: segment.endCp,
+          })),
+        }),
+        inputHash,
+        configFingerprint: queued[0]!.configFingerprint,
+        parentUnitId: null,
+        ord: minOrd + batch.ord,
+        status: 'queued' as const,
+        attempt: 0,
+        retryAt: null,
+        resultRef: null,
+        usageJson: null,
+        errorCode: null,
+        errorMessage: null,
+        createdAt: createdAtReplan,
+        updatedAt: createdAtReplan,
+      });
+    }
+    const nextState: RunPlanState = {
+      bodyTargetRatio: nextRatio,
+      estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
+      replanCount: generation,
+    };
+    const replaced = await deps.runStore.replaceUnclaimedUnits({
+      runId, fencingToken, units: replacementUnits,
+      planStateJson: JSON.stringify(nextState), now: createdAtReplan,
+    });
+    if (replaced) {
+      planState.bodyTargetRatio = nextState.bodyTargetRatio;
+      planState.estOutputPerChunk = nextState.estOutputPerChunk;
+      planState.replanCount = nextState.replanCount;
+    }
+    return replaced;
+  };
+
   const processUnit = async (unit: BuildUnitRecord): Promise<UnitOutcome> => {
-    const ranges = JSON.parse(unit.sourceRangesJson) as Array<
-      { chunkId: string; chapterId: string; startCp: number; endCp: number }
-    >;
+    const { route, ranges } = parseUnitRanges(unit.sourceRangesJson);
     if (ranges.length === 0) {
       await deps.runStore.completeUnit({
         unitId: unit.unitId, fencingToken, status: 'failed_terminal',
@@ -683,6 +900,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               worldId: run.worldId,
               registrySummary,
               maxOutputTokens,
+              route: route ?? undefined,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
         } else {
@@ -701,6 +919,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const makeRequest = async (maxOutputTokens?: number): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extract({
               unitId: unit.unitId, segments, worldId: run.worldId, maxOutputTokens,
+              route: route ?? undefined,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
         }
@@ -709,7 +928,17 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
         recordCalibrationSample(group, pendingChunks.length);
         completedGroups += 1;
-        if (calibrator.due(completedGroups)) calibrator.recalibrate();
+        if (calibrator.due(completedGroups)) {
+          const before = calibrator.currentEstimate;
+          const after = calibrator.recalibrate();
+          // Material change (unified P1 §8): replan the unclaimed tail with the
+          // calibrated density so later batches pack to reality, not the guess.
+          if (Math.abs(after - before) / Math.max(1, before) > 0.25) {
+            try {
+              await replanQueuedUnits({ estOutputPerChunk: after });
+            } catch { /* replanning is an optimization - never fatal */ }
+          }
+        }
         const ok = await deps.runStore.completeUnit({
           unitId: unit.unitId,
           fencingToken,
@@ -748,7 +977,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           children.push({
             unitId: `${unit.unitId}-s${index + 1}`,
             kind: 'extract_group' as const,
-            sourceRangesJson: JSON.stringify(part),
+            sourceRangesJson: JSON.stringify(route
+              ? { version: 2 as const, route, ranges: part }
+              : part),
             inputHash: await deps.sha256Hex(part.map(range => `${range.chunkId}:${range.startCp}-${range.endCp}`).join('|')),
             configFingerprint: unit.configFingerprint,
             parentUnitId: unit.unitId,
@@ -768,6 +999,19 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           unitId: unit.unitId, fencingToken, children, now: now(),
         });
         if (!replaced) { lostLease = true; return 'lost_lease'; }
+        // Ladder shrink (unified P1 §7): a truncation proves the initial body
+        // target was too ambitious for this content - shrink 30%->20%->12% for
+        // every unit nobody has claimed yet. The split children above already
+        // cover this unit; the replan covers the TAIL (completion, not just
+        // the first half at the old size).
+        if (chapterPlanned) {
+          const shrunk = nextBodyTargetRatio(planState.bodyTargetRatio);
+          if (shrunk < planState.bodyTargetRatio) {
+            try {
+              await replanQueuedUnits({ bodyTargetRatio: shrunk });
+            } catch { /* replanning is an optimization - never fatal */ }
+          }
+        }
         return 'continue';
       }
       // claimUnit increments the persisted attempt after `unit` was read;
@@ -794,11 +1038,39 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
 
   const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
+  /**
+   * Cross-process control (unified P4): the UI / notification action sets
+   * pause/cancel flags directly on the run row, so they reach a coordinator
+   * in another process (headless service). Checked between units; an
+   * in-flight request still finishes (its result is fenced on commit).
+   */
+  const checkControlFlags = async (): Promise<'none' | 'paused' | 'canceled'> => {
+    const fresh = await deps.runStore.getRun(runId);
+    if (!fresh) return 'none';
+    if (fresh.cancelRequested) {
+      await deps.runStore.requestRunControl(runId, 'cancel', now()); // clear flag
+      await deps.runStore.requestRunControl(runId, 'resume', now()); // best-effort clear of pause too
+      await deps.runStore.setRunStatus(runId, 'canceled', now());
+      return 'canceled';
+    }
+    if (fresh.pauseRequested) {
+      await deps.runStore.requestRunControl(runId, 'resume', now()); // clear flag
+      await deps.runStore.setRunStatus(runId, 'paused_user', now());
+      return 'paused';
+    }
+    return 'none';
+  };
+
   const worker = async (): Promise<'done' | 'lost_lease' | 'paused' | 'stopped'> => {
     for (;;) {
       if (lostLease) return 'lost_lease';
       if (stopRequested) return 'stopped';
       if (deps.signal?.aborted) return 'paused';
+      const control = await checkControlFlags();
+      if (control === 'paused' || control === 'canceled') {
+        stopRequested = true;
+        return 'stopped';
+      }
       const executable = await deps.runStore.listExecutableUnits(runId, now());
       if (executable.length === 0) return 'done';
       const candidates = executable.filter(unit => !claimedByWorkers.has(unit.unitId));
@@ -847,7 +1119,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         try {
           const eventHash = await deps.sha256Hex(
             allUnits.filter(u => u.status === 'completed')
-              .map(u => JSON.parse(u.sourceRangesJson).map((r: { chunkId: string }) => r.chunkId).join('+'))
+              .map(u => parseUnitRanges(u.sourceRangesJson).ranges.map(r => r.chunkId).join('+'))
               .join('|'),
           );
           await deps.onTimeline({ worldId: run.worldId, contentHash: eventHash });

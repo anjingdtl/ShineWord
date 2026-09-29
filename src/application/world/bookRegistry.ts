@@ -99,7 +99,7 @@ export interface BuildBookRegistryInput {
 function registryResultJson(entities: readonly RegistryEntity[]): string {
   return JSON.stringify({
     entities: entities.map(entity => ({
-      key: entity.entityKey, type: entity.type, name: entity.name, aliases: entity.aliases,
+      entityKey: entity.entityKey, type: entity.type, name: entity.name, aliases: entity.aliases,
     })),
   });
 }
@@ -109,8 +109,29 @@ export async function buildBookRegistry(input: BuildBookRegistryInput): Promise<
   const existing = await input.worldStore.getJob(input.worldId, jobId);
   if (existing?.status === 'done' && existing.contentHash === input.contentHash
     && existing.extractorVersion === BOOK_REGISTRY_VERSION && existing.resultJson) {
-    const stored = JSON.parse(existing.resultJson) as { entities?: RegistryEntity[] };
-    return { entities: stored.entities ?? [], reused: true };
+    const stored = JSON.parse(existing.resultJson) as {
+      entities?: Array<{ entityKey?: unknown; key?: unknown; type?: unknown; name?: unknown; aliases?: unknown }>;
+    };
+    // Legacy checkpoints serialized the field as `key` (registry-1 bug): map
+    // both spellings so reuse never yields entities with undefined keys.
+    const entities: RegistryEntity[] = [];
+    for (const candidate of stored.entities ?? []) {
+      const key = typeof candidate.entityKey === 'string' && candidate.entityKey.trim().length > 0
+        ? candidate.entityKey.trim()
+        : typeof candidate.key === 'string' && candidate.key.trim().length > 0 ? candidate.key.trim() : null;
+      const type = typeof candidate.type === 'string' ? candidate.type : null;
+      const name = typeof candidate.name === 'string' ? candidate.name : null;
+      if (!key || !type || !name) continue;
+      entities.push({
+        entityKey: key,
+        type: type as RegistryEntity['type'],
+        name,
+        aliases: Array.isArray(candidate.aliases)
+          ? candidate.aliases.filter((alias): alias is string => typeof alias === 'string')
+          : [],
+      });
+    }
+    return { entities, reused: true };
   }
 
   const response = await input.complete({

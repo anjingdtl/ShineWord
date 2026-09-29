@@ -12,9 +12,10 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { buildProvider, createSession } from '../../runtime';
 import { getWorldEntry, getWorldPreparationStatus, type WorldLibraryEntry, type WorldPreparationView } from '../../worldImport';
-import { getBuildRunProgress, runExtraction, startFullWorldRefinement } from '../../sourceImport';
+import { getBuildRunProgress, runExtraction, startFullWorldRefinement, getStagePlanView, switchToFullBuild, type UnifiedImportSummary } from '../../sourceImport';
 import { startBuildService } from '../../buildServiceBridge';
 import { Header } from '../components/Header';
+import { Button } from '../components/Button';
 import { ScreenShell } from '../components/ScreenShell';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { StatusBanner } from '../components/StatusBanner';
@@ -25,6 +26,13 @@ import { WorldOverviewPanel, type WorldSetupSummary } from '../features/world-de
 import { WorldPackagePanel } from '../features/world-detail/WorldPackagePanel';
 import { useAppSession } from '../state/AppSessionContext';
 import { WORLD_TABS, type RootStackParamList, type WorldTab } from '../navigation/types';
+
+const STAGE_STATUS_LABEL: Record<string, string> = {
+  untriggered: '未触发', queued: '已排队', building: '构建中', validating: '校验中',
+  built: '已构建', pending_activation: '待激活', activated: '已激活',
+  waiting_network: '等网络', waiting_unlock: '等解锁', waiting_system: '等系统',
+  paused: '已暂停', failed: '失败',
+};
 
 const TAB_OPTIONS: ReadonlyArray<{ value: WorldTab; label: string }> = WORLD_TABS.map(entry => ({
   value: entry.key,
@@ -129,6 +137,41 @@ function WorldDetailContent(): React.JSX.Element {
     };
   }, [refinementRunId, refreshWorld]);
 
+  const [stageView, setStageView] = useState<Awaited<ReturnType<typeof getStagePlanView>>>(null);
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const [switchMessage, setSwitchMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const view = await getStagePlanView(worldId);
+        if (!cancelled) setStageView(view);
+      } catch {
+        // worlds without a stage plan simply show nothing
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [worldId, entry]);
+
+  const switchToFull = useCallback(async () => {
+    if (switchBusy) return;
+    setSwitchBusy(true);
+    setSwitchMessage(null);
+    try {
+      const runIds = await switchToFullBuild(worldId);
+      setSwitchMessage(runIds.length > 0
+        ? `已排队 ${runIds.length} 个剩余阶段任务，后台构建中。`
+        : '没有待构建的阶段任务。');
+      const view = await getStagePlanView(worldId);
+      setStageView(view);
+    } catch (e) {
+      setSwitchMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSwitchBusy(false);
+    }
+  }, [switchBusy, worldId]);
+
   const startFullRefinement = useCallback(async () => {
     if (!profile || refinementBusy) return;
     setRefinementBusy(true);
@@ -182,6 +225,28 @@ function WorldDetailContent(): React.JSX.Element {
 
         {tab === 'overview' ? (
           <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl }}>
+            {stageView ? (
+              <View style={{ marginBottom: theme.space.md }}>
+                <StatusBanner
+                  tone="info"
+                  title={`阶段计划（${stageView.strategy === 'progressive' ? '循序构建' : '完整构建'}）`}
+                  message={`${stageView.stages.map(stage => `S${stage.index + 1}≈${Math.round(stage.ratio * 100)}%:${STAGE_STATUS_LABEL[stage.status] ?? stage.status}`).join('  ·  ')}${switchMessage ? `
+${switchMessage}` : ''}`}
+                />
+                {stageView.strategy === 'progressive' ? (
+                  <View style={{ marginTop: theme.space.sm }}>
+                    <Button
+                      label={switchBusy ? '排队中…' : '转完整构建（补齐剩余阶段）'}
+                      variant="secondary"
+                      onPress={switchToFull}
+                      disabled={switchBusy}
+                      block
+                      testID="world-switch-full"
+                    />
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             <WorldOverviewPanel
               worldId={worldId}
               title={title}

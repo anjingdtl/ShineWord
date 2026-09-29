@@ -409,6 +409,10 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
       if (!['ordinary', 'enhanced', 'supernatural'].includes(String(def.powerTier))) {
         errors.push(`skill: unknown powerTier ${String(def.powerTier)}.`);
       }
+      if (def.usage !== undefined
+        && !['attack', 'utility', 'social', 'knowledge'].includes(String(def.usage))) {
+        errors.push(`skill: unknown usage ${String(def.usage)}.`);
+      }
       break;
     }
     case 'ability': {

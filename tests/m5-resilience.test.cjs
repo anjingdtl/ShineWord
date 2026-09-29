@@ -271,7 +271,7 @@ test('relationship deltas are clamped per turn and persist', async () => {
   }
 });
 
-test('profile-level thinkingDisabled is applied to request bodies for GLM', async () => {
+test('profile-level thinkingDisabled is IGNORED: thinking is never disabled (policy 2026-09-30)', async () => {
   const { OpenAICompatibleProvider } = require('../dist/application/llm/openAICompatible');
   const { MemorySecretStore } = require('../dist/application/llm/memorySecretStore');
   const secrets = new MemorySecretStore();
@@ -290,14 +290,9 @@ test('profile-level thinkingDisabled is applied to request bodies for GLM', asyn
   };
   const provider = new OpenAICompatibleProvider(profile, secrets, capturingTransport, 1000);
   await provider.complete({ system: 's', user: 'u', maxOutputTokens: 100, jsonMode: false });
-  assert.equal(bodies[0].thinking?.type, 'disabled');
-
-  // Non-GLM profile: no thinking field.
-  const plainProfile = { ...profile, thinkingDisabled: undefined };
-  bodies.length = 0;
-  const plainProvider = new OpenAICompatibleProvider(plainProfile, secrets, capturingTransport, 1000);
-  await plainProvider.complete({ system: 's', user: 'u', maxOutputTokens: 100, jsonMode: false });
-  assert.equal('thinking' in bodies[0], false);
+  // GLM tier params apply; the obsolete opt-out flag changes nothing.
+  assert.deepEqual(bodies[0].thinking, { clear_thinking: false });
+  assert.equal(bodies[0].reasoning_effort, 'low');
 });
 
 test('malformed planner contracts are rejected cleanly, not with TypeErrors', async () => {
