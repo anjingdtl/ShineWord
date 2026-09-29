@@ -115,10 +115,12 @@ Harness：`scripts/unified-build-harness.cjs`（生产路径：流式导入→�
 
 | 测试 | 状态（报告撰写时） | 关键指标（进行中数字） |
 |---|---|---|
-| DS-FULL | 运行中（>74 物理请求，S1/S2 抽取中） | 见 `.tmp/unified/ds-full/metrics.jsonl`；已观测：cached tokens ~9.7k/请求（前缀缓存生效）、reasoning_only 重试由阶梯恢复 |
-| DS-PROG | 排队 | — |
+| DS-FULL | 运行中（131+ 物理请求，~110 分钟，S1/S2 抽取中，尚未到首个阶段完成里程碑） | `.tmp/unified/ds-full/metrics.jsonl`；已观测：前缀缓存生效（cached ~9.7-12.8k/请求）；思考政策下 DeepSeek 高频 reasoning_only（单次思考可烧 20480 token）由 provider ×1.5 阶梯恢复，代价是每批 2-3 次物理请求 |
+| DS-PROG | 排队（驱动顺序执行） | — |
 | GLM-FULL | 排队 | — |
 | GLM-PROG | 排队 | — |
+
+驱动脚本 nohup 分离运行（`.tmp/unified/run-main-tests.sh`），跨会话继续；每 run 落 summary.json 后本表将回填最终指标。**按当前实测速率（DS 单请求 80-120s、高频思考重试），四 run 全部完成预计需 8 小时以上；若达预算上限将如实中止并记录。**
 
 校准基线（每模型 2 代表章节）：
 - DeepSeek low 档（思考开启）：2418/3920 码点章 → 19-21 实体、11-12 事实、输出 1594-1720 token、5.8-6.2s。
@@ -131,7 +133,11 @@ Harness：`scripts/unified-build-harness.cjs`（生产路径：流式导入→�
 
 1. **四主测试未完成**（运行中）：DS/GLM × FULL/PROG 的最终指标、覆盖/召回/激活链证据待 run 结束后回填。质量门（引文 100%、悬空 0、召回 ≥90%、两模式差 ≤5pp、秘密泄露/晚回包/重掷 0）需以四 run 结果判定。
 2. **私有标注集（≥60 关键事实）未建立**：需要对前/中/后+边界的独立人工标注（不得取自被测模型输出）。当前只有 harness 的证据逐字审计（verified/mismatched 计数）作为引文 100% 的程序性验证。列为未验。
-3. **设备端单条 LLM 请求成功往返未达成**：first10 真实阶段 run 在设备上多次进入 needs_review（疑似 401；adb 代录密钥完整性无法在 release 构建下核验——无 root/run-as，密钥字段仅掩码显示）。桌面 harness 用同一配置文件直连成功，证明端点/密钥/管线本身有效。已实测的设备机制项见 U10。缓解建议：后续用 release-log 开关或 debug 签名专测构建复测。
+3. **设备端单条 LLM 请求成功往返未达成**（诊断过程与发现）：
+   - first10 真实阶段 run 在设备上多次快速进入 needs_review（config 类：401/api key 语义），DS 与 GLM 配置均复现；桌面 harness 用同一配置直连成功。
+   - 已定位一个明确机制：adb `input text` 代录的 DEL 清除序列有丢帧率，端点/模型/密钥字段均出现"残留+追加"式拼接损坏（端点字段实证：`…v4api/coding/paas/v4`、模型字段实证：`deepseek-v4-flashaceholder`——密钥字段为掩码显示，同类损坏不可见但高度可能）。这使设备侧 401 最可能是**自动化录入损坏**而非应用缺陷；真实用户手输空字段不受影响。
+   - 另有未解观察：本地回显端点实验中设备 run 0 命中（未发任何 HTTP 即失败），与"密钥损坏仍应到达端点"矛盾；结合无 root/run-as 的 release 可观测性限制，根因未确证。候选：headless 上下文 Keychain 读取异常（runExtraction 有 waiting_unlock 前置检查，但失败路径与观测到的 needs_review 不完全吻合）。
+   - 后续复测建议：release 加日志开关或用 debug 签名专测构建 + run-as 读 DB；密钥录入改用剪贴板或逐段校验长度。
 4. **Android 15/16 双版本矩阵**：仅 API 37 模拟器（Medium_Phone）实测；Android 15/16 专属路径（dataSync 6h 超时实测、Android 16 job 配额）未验。断网重连、进程回收冷启动、通知拒绝、加速 timeout、用户暂停取消的完整时序未全部执行（取消流已实测并促成修复）。
 5. **20 分钟对照目标**：未测完不宣称；瓶颈如实记录：DS/GLM 思考开启后单请求 90-120s（DS）/30-60s（GLM），68 批 × 3 阶段为主要时长构成。
 6. **WorkManager 恢复未引入**（决策而非遗漏）：不加依赖、不做后台 FGS 拉起循环；恢复入口=应用打开自动续跑 + 任务卡手动恢复，符合"用户强停后等用户重新打开"与不承诺无限保活。Android 12+ 后台 FGS 启动限制下的 waiting_system 语义依赖系统下次合法窗口。
