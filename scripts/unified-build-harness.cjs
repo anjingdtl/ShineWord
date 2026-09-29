@@ -382,10 +382,26 @@ async function runStage(deps, input) {
   const openConflicts = await worldStore.listReviewIssues(worldId, 'open');
   const canonConflicts = openConflicts.filter(issue => issue.kind === 'canon_conflict');
   if (canonConflicts.length > 0) {
-    log({ msg: 'canon-conflict-waived-by-operator', count: canonConflicts.length, issueIds: canonConflicts.map(issue => issue.issueId) });
+    // Adjudication must land on the FACT rows: the build re-detects stored
+    // conflict facts and re-opens the notice, so waiving alone cannot clear
+    // it. Keep each pair's first fact, archive the twin(s) with status
+    // operator_resolved (kept in storage, excluded from mapping AND from
+    // conflict detection), then resolve the notice.
+    const resolved = [];
     for (const issue of canonConflicts) {
-      await worldStore.resolveReviewIssue(worldId, issue.issueId, 'waived');
+      const detail = JSON.parse(issue.detailJson);
+      const factIds = detail.factIds ?? [];
+      for (let i = 1; i < factIds.length; i += 1) {
+        // status CHECK allows explicit/inference/speculation/conflict/
+        // user_supplement; 'speculation' archives the variant (excluded from
+        // mapping, no longer conflict) without inventing a new state.
+        await db.prepare("UPDATE canon_facts SET status = 'speculation' WHERE fact_id = ?")
+          .run(factIds[i]);
+        resolved.push(factIds[i]);
+      }
+      await worldStore.resolveReviewIssue(worldId, issue.issueId, 'operator_adjudicated');
     }
+    log({ msg: 'canon-conflict-adjudicated', issues: canonConflicts.length, archivedFacts: resolved.length });
   }
   const mappingStarted = Date.now();
   const buildResult = await buildPackageFromCanon({
