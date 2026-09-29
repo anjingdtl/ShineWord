@@ -15,7 +15,7 @@ import { useTheme } from '../../theme/ThemeContext';
 import { THEMES, THEME_ORDER, type ThemeId } from '../../theme/tokens';
 
 export function WorldThemeOverrideCard(props: { worldId: string }): React.JSX.Element {
-  const { theme, themeId, worldThemeMap, setWorldThemeId, themeIdForWorld } = useTheme();
+  const { theme, globalThemeId, worldThemeMap, setWorldThemeId, themeIdForWorld } = useTheme();
   const override = worldThemeMap[props.worldId] ?? null;
   const effective = themeIdForWorld(props.worldId);
 
@@ -48,7 +48,7 @@ export function WorldThemeOverrideCard(props: { worldId: string }): React.JSX.El
           { color: theme.onRaised.secondary, marginTop: theme.space.md },
         ]}>
         世界主题只影响这个世界的页面（资料 / 三宝书 / 审查 / 世界包，游玩页随 P4 接入）；
-        全局皮肤仍是「{THEMES[themeId].label}」，其他页面不受影响。
+        全局皮肤仍是「{THEMES[globalThemeId].label}」，其他页面不受影响。
       </Text>
     </Card>
   );

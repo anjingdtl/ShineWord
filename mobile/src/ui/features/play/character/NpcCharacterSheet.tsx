@@ -53,7 +53,11 @@ export function NpcCharacterSheet(props: {
 
   useEffect(() => {
     let cancelled = false;
+    // A different actor means the previous card — including a failed read — is
+    // stale: reset both, or an old error keeps masking the new actor's card.
     setLoading(true);
+    setError(null);
+    setNpc(null);
     (async () => {
       try {
         const view = await getNpcPublicProjection(props.campaignId, props.branchId, props.actorId);

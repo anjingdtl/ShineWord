@@ -38,8 +38,10 @@ export type WorldThemeMap = Record<string, ThemeId>;
 export interface ThemeContextValue {
   /** Resolved tokens for the active skin. Never null. */
   theme: ThemeTokens;
-  /** Active app-level skin id. */
+  /** Active skin id — inside a world ThemeScope this is the world override. */
   themeId: ThemeId;
+  /** App-level skin id, unaffected by world ThemeScopes (e.g. hint labels). */
+  globalThemeId: ThemeId;
   /** True once AsyncStorage has been read (the first paint may use the default). */
   hydrated: boolean;
   /** Switch the app-level skin. Persistence is fire-and-forget. */
@@ -57,6 +59,7 @@ export interface ThemeContextValue {
 const FALLBACK_VALUE: ThemeContextValue = {
   theme: THEMES[DEFAULT_THEME_ID],
   themeId: DEFAULT_THEME_ID,
+  globalThemeId: DEFAULT_THEME_ID,
   hydrated: false,
   setThemeId: () => undefined,
   worldThemeMap: {},
@@ -151,6 +154,7 @@ export function ThemeProvider(props: {
     return {
       theme: getTheme(themeId),
       themeId,
+      globalThemeId: themeId,
       hydrated,
       setThemeId,
       worldThemeMap,

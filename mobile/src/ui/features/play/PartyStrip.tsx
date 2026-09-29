@@ -26,6 +26,11 @@ function ratio(current: number | undefined, max: number | undefined): number {
   return Math.max(0, Math.min(1, current / max));
 }
 
+/** Visible `current/max` value next to a resource bar (§30: bars carry numbers). */
+function resourceValue(current: number | undefined, max: number | undefined): string {
+  return `${current ?? '?'}/${max ?? '?'}`;
+}
+
 export function PartyStrip(props: {
   /** Player first, then companions (order comes from the projection). */
   members: ActorUiProjection[];
@@ -105,26 +110,17 @@ export function PartyStrip(props: {
                 </View>
               ) : null}
             </View>
-            <View style={{ width: theme.space.xxl }}>
-              <View
-                style={{
-                  height: 3,
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  backgroundColor: theme.bar.track,
-                  marginBottom: 2,
-                }}>
-                <View style={{ width: `${hp * 100}%`, height: '100%', backgroundColor: theme.semantic.good }} />
-              </View>
-              <View
-                style={{
-                  height: 3,
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  backgroundColor: theme.bar.track,
-                }}>
-                <View style={{ width: `${stamina * 100}%`, height: '100%', backgroundColor: theme.bar.fillAlt }} />
-              </View>
+            <View style={{ minWidth: theme.space.xxl, gap: 2 }}>
+              <ResourceRow
+                fill={theme.semantic.good}
+                fillRatio={hp}
+                value={resourceValue(member.resources.hp, member.resourceMax.hp)}
+              />
+              <ResourceRow
+                fill={theme.bar.fillAlt}
+                fillRatio={stamina}
+                value={resourceValue(member.resources.stamina, member.resourceMax.stamina)}
+              />
             </View>
             <Text
               numberOfLines={1}
@@ -142,4 +138,21 @@ export function PartyStrip(props: {
 const styles = StyleSheet.create({
   tile: { alignItems: 'center' },
   avatar: { borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  resourceRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  resourceBar: { height: 3, borderRadius: 2, overflow: 'hidden', flex: 1 },
 });
+
+/** One resource line: colour ratio bar plus the visible numeric value (§30). */
+function ResourceRow(props: { fill: string; fillRatio: number; value: string }): React.JSX.Element {
+  const { theme } = useTheme();
+  return (
+    <View style={styles.resourceRow}>
+      <View style={[styles.resourceBar, { backgroundColor: theme.bar.track }]}>
+        <View style={{ width: `${props.fillRatio * 100}%`, height: '100%', backgroundColor: props.fill }} />
+      </View>
+      <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.secondary }]}>
+        {props.value}
+      </Text>
+    </View>
+  );
+}

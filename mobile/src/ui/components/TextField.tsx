@@ -77,10 +77,12 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
   const minHeight = multiline
     ? theme.type.body.lineHeight * lines + theme.space.md * 2
     : theme.touch.min;
-  // The field box itself is `bg.overlay`, so everything inside it uses the
-  // on-raised ramp; only the label/hint depend on the host surface.
+  // The field box itself is `bg.overlay`, so everything inside it — typed text,
+  // placeholder and the reveal glyph — uses the on-raised ramp regardless of the
+  // host surface; only the label/hint depend on the host surface (tone).
   const hostSecondary = props.tone === 'base' ? theme.text.secondary : theme.onRaised.secondary;
   const hostMuted = props.tone === 'base' ? theme.text.muted : theme.onRaised.secondary;
+  const fieldMuted = theme.onRaised.secondary;
   // Comic (light) skins cannot carry a red error line at 4.5:1, so the error
   // uses the readable ink plus a glyph instead of relying on hue (§30).
   const errorColor = theme.scheme === 'light' ? theme.onRaised.primary : theme.semanticText.bad;
@@ -110,7 +112,7 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
           value={props.value}
           onChangeText={props.onChangeText}
           placeholder={props.placeholder}
-          placeholderTextColor={hostMuted}
+          placeholderTextColor={fieldMuted}
           multiline={multiline}
           secureTextEntry={props.secureTextEntry === true && !revealed}
           editable={!disabled}
@@ -144,11 +146,20 @@ export function TextField(props: TextFieldProps): React.JSX.Element {
             onPress={() => setRevealed(value => !value)}
             accessibilityRole="button"
             accessibilityLabel={revealed ? '隐藏输入内容' : '显示输入内容'}
-            hitSlop={{ top: theme.space.sm, bottom: theme.space.sm, left: theme.space.sm, right: theme.space.sm }}
+            // The glyph is ~18dp tall inside the field row; space.sm(8) left an
+            // effective ~34dp target (r7 D1 device audit), so the slop is sized
+            // from the touch floor instead. 13dp still fits inside the row's
+            // horizontal padding and does not reach the neighbouring input text.
+            hitSlop={{
+              top: Math.ceil((theme.touch.min - 18) / 2),
+              bottom: Math.ceil((theme.touch.min - 18) / 2),
+              left: Math.ceil((theme.touch.min - 18) / 2),
+              right: Math.ceil((theme.touch.min - 18) / 2),
+            }}
             style={styles.toggle}>
             {revealed
-              ? <EyeOff size={18} color={hostMuted} />
-              : <Eye size={18} color={hostMuted} />}
+              ? <EyeOff size={18} color={fieldMuted} />
+              : <Eye size={18} color={fieldMuted} />}
           </Pressable>
         ) : null}
       </View>
