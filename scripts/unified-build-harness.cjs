@@ -316,7 +316,7 @@ async function runStage(deps, input) {
     budget.reasoningEffort,
   );
   const chunkExtractor = new LlmChunkExtractor(request => provider.complete(request), budget.reasoningEffort);
-  const result = await executeRun({
+  const makeDeps = () => ({
     sourceStore, runStore, worldStore,
     extractor: chunkExtractor, groupExtractor,
     sha256Hex: sha.sha256Hex,
@@ -333,7 +333,25 @@ async function runStage(deps, input) {
         contentHash, createdAt: new Date().toISOString(),
       });
     },
-  }, runId);
+  });
+  // A worker exits when every remaining unit has a FUTURE retry_at; resume
+  // the run until it truly settles (bounded, same as a headless re-wake).
+  let result = await executeRun(makeDeps(), runId);
+  for (let resume = 0; resume < 6 && !result.completed && !result.lostLease; resume += 1) {
+    const units = await runStore.listUnits(runId);
+    const blocked = units.some(unit => unit.status === 'needs_review' || unit.status === 'failed_terminal');
+    if (blocked) break;
+    const pending = units.filter(unit => ['queued', 'running', 'failed_retryable', 'waiting_network'].includes(unit.status));
+    if (pending.length === 0) break;
+    const nextRetry = pending
+      .map(unit => unit.retryAt ? Date.parse(unit.retryAt) : Date.now())
+      .reduce((min, at) => Math.min(min, at), Number.POSITIVE_INFINITY);
+    const waitMs = Math.max(0, nextRetry - Date.now()) + 2_000;
+    log({ msg: 'stage-resume-wait', stageIndex, resume, waitMs, pending: pending.length });
+    await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 120_000)));
+    if (signal.aborted) break;
+    result = await executeRun(makeDeps(), runId);
+  }
   const extractionMs = Date.now() - startedAt;
   log({
     msg: 'stage-extraction-done', stageIndex, runId, completed: result.completed,
