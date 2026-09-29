@@ -118,10 +118,19 @@ export class SqliteStagePlanStore {
     dedupeKey: string;
     now: string;
   }): Promise<boolean> {
+    // Claims an untriggered (or previously failed) stage exactly once. A
+    // stage whose run reached a TERMINAL state (canceled / failed_terminal)
+    // can be re-claimed - a canceled build must not wedge the stage forever;
+    // a live or queued run keeps the claim (dedupe).
     const changed = await this.db.execute(
       `UPDATE world_stage_states SET
          status = 'queued', trigger_reason = ?, trigger_dedupe_key = ?, triggered_at = ?, updated_at = ?
-       WHERE plan_id = ? AND stage_index = ? AND status IN ('untriggered', 'failed')`,
+       WHERE plan_id = ? AND stage_index = ? AND (
+         status IN ('untriggered', 'failed')
+         OR (run_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM world_build_runs r
+            WHERE r.run_id = world_stage_states.run_id
+              AND r.status IN ('canceled', 'failed_terminal'))))`,
       [input.reason, input.dedupeKey, input.now, input.now, input.planId, input.stageIndex],
     );
     return changed > 0;

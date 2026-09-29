@@ -308,6 +308,34 @@ test('U08 progressive initial queue builds ONLY S1; un-triggered stages never re
   }
 });
 
+test('U08 a canceled stage run can be re-queued; a live run keeps the claim', async () => {
+  const db = setupDb();
+  try {
+    const { adapter, sourceStore, worldStore } = await prepareWorld(db, 'novel-medium.txt', 'w-p3c', 'src-p3c');
+    const deps = orchestratorDeps(db, adapter, sourceStore, worldStore);
+    await ensureStagePlan(deps, { worldId: 'w-p3c', sourceId: 'src-p3c', strategy: 'progressive', configFingerprint: 'cf' });
+    const queued = await queueInitialStages(deps, { worldId: 'w-p3c', title: 't', template: TEMPLATE });
+    assert.equal(queued.length, 1);
+    const planId = (await deps.stageStore.getStagePlanByWorld('w-p3c')).planId;
+
+    // While the run is live (queued), a new claim is deduped away.
+    assert.equal(await deps.stageStore.claimStageTrigger({
+      planId, stageIndex: 0, reason: 'demand:0', dedupeKey: 'demand:0', now: 't',
+    }), false, 'live run keeps the claim');
+
+    // Cancel the run -> the stage re-claims and produces a fresh run slot.
+    await deps.runStore.setRunStatus(queued[0].runId, 'canceled', 't');
+    assert.equal(await deps.stageStore.claimStageTrigger({
+      planId, stageIndex: 0, reason: 'requeue', dedupeKey: 'requeue:0', now: 't',
+    }), true, 'canceled run releases the stage for requeue');
+    const reQueued = await queueInitialStages(deps, { worldId: 'w-p3c', title: 't', template: TEMPLATE });
+    assert.equal(reQueued.length, 1, 'S1 re-queues after cancel');
+    assert.notEqual(reQueued[0].runId, queued[0].runId);
+  } finally {
+    db.close();
+  }
+});
+
 test('U08 repeated triggers dedupe to one task; full strategy queues every stage; switch builds the remainder', async () => {
   const db = setupDb();
   try {

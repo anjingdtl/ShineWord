@@ -128,7 +128,7 @@ async function createStageRun(
   const stage = existing.stages.find(slice => slice.index === input.stageIndex);
   if (!stage) throw new Error(`Stage ${input.stageIndex} missing from plan.`);
   const now = (deps.now ?? (() => new Date().toISOString()))();
-  const runId = `run-${input.worldId}-s${input.stageIndex + 1}-${now.replace(/[^0-9]/g, '').slice(0, 14)}`;
+  const runId = `run-${input.worldId}-s${input.stageIndex + 1}-${now.replace(/[^0-9]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`;
   const run: BuildRunRecord = await createExtractionRun(
     {
       sourceStore: deps.sourceStore, runStore: deps.runStore, worldStore: deps.worldStore,
