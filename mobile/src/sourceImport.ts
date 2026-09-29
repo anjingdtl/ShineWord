@@ -13,6 +13,7 @@ import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore'
 import { createExtractionRun, executeRun, type UnitExtractor } from '../../src/application/worldBuild/coordinator';
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
+import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
 import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import type { ApiProfile } from '../../src/application/llm/types';
@@ -646,6 +647,24 @@ export async function runExtraction(
       concurrency: profile.concurrency ?? 3,
       tpmTokensPerMinute: profile.tpm,
       budget: runBudget,
+      buildRegistry: async ({ segmentBody, worldId, contentHash, modelFingerprint }) => {
+        const provider = new OpenAICompatibleProvider(
+          profile,
+          new KeychainSecretStore(),
+          new FetchHttpTransport(),
+          300_000,
+        );
+        const registry = await buildBookRegistry({
+          worldStore: runtime.worldStore,
+          complete: request => provider.complete(request),
+          segmentBody,
+          worldId,
+          modelFingerprint,
+          contentHash,
+          createdAt: new Date().toISOString(),
+        });
+        return registrySummaryFor(registry.entities);
+      },
       onUnitDone: info => {
         onProgress({
           phase: 'extracting',

@@ -91,6 +91,18 @@ export interface CoordinatorDeps {
    * they planned the run with.
    */
   budget?: ModelBudget;
+  /**
+   * Pass 0 (plan §4.3): builds the whole-book entity registry before the
+   * first resident unit; the returned compact summary is injected into every
+   * scope instruction ("prefer these entity keys"). Failures degrade to a
+   * registry-free run - the registry is an enhancement, never a gate.
+   */
+  buildRegistry?: (input: {
+    segmentBody: string;
+    worldId: string;
+    contentHash: string;
+    modelFingerprint: string;
+  }) => Promise<string | undefined>;
   onUnitDone?: (info: { unitsDone: number; unitsTotal: number }) => void;
   /** Optional final publication runs under the same renewable build lease. */
   onFinalize?: (input: {
@@ -402,6 +414,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   // byte-stable for every unit (same reads, same assembly - 1M plan §4.2).
   let bookSegments: readonly GroupSegmentInput[] | null = null;
   let bookPromptTokens = 0;
+  let registrySummary: string | undefined;
   if (resident) {
     if (!deps.groupExtractor) {
       throw new Error('Resident run planned but no group extractor was provided.');
@@ -421,6 +434,28 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     bookSegments = segments;
     bookPromptTokens = allChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0)
       + DEFAULT_PROMPT_OVERHEAD_TOKENS;
+
+    // Pass 0 (plan §4.3): one registry request over the same byte-stable
+    // prefix; failure degrades to a registry-free run, never blocks it.
+    if (deps.buildRegistry) {
+      try {
+        const segmentBody = segments.map((segment, index) => {
+          const header = `[S${index + 1} ${segment.chapterTitle}]`;
+          return `${header}\n${segment.text}`;
+        }).join('\n\n');
+        const contentHash = await deps.sha256Hex(
+          segments.map(segment => segment.chunkId).join('|'),
+        );
+        registrySummary = await deps.buildRegistry({
+          segmentBody,
+          worldId: run.worldId,
+          contentHash,
+          modelFingerprint: run.modelFingerprint,
+        }) ?? undefined;
+      } catch {
+        registrySummary = undefined;
+      }
+    }
   }
 
   // Worker count: profile-configured 1-4 (default 3), TPM-capped (§6).
@@ -640,6 +675,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               segments: bookSegments,
               scope: { firstSegment, lastSegment },
               worldId: run.worldId,
+              registrySummary,
               maxOutputTokens,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
