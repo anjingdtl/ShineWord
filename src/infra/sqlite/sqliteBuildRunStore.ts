@@ -29,6 +29,11 @@ interface RunRow extends SqliteRow {
   last_error_message: string | null;
   created_at: string;
   updated_at: string;
+  config_json: string | null;
+  plan_state_json: string | null;
+  scope_json: string | null;
+  pause_requested: number | null;
+  cancel_requested: number | null;
 }
 
 interface UnitRow extends SqliteRow {
@@ -115,6 +120,11 @@ function runFromRow(row: RunRow): BuildRunRecord {
     lastErrorMessage: optionalString(row, 'last_error_message'),
     createdAt: requireString(row, 'created_at'),
     updatedAt: requireString(row, 'updated_at'),
+    configJson: optionalString(row, 'config_json'),
+    planStateJson: optionalString(row, 'plan_state_json'),
+    scopeJson: optionalString(row, 'scope_json'),
+    pauseRequested: (row['pause_requested'] ?? 0) !== 0,
+    cancelRequested: (row['cancel_requested'] ?? 0) !== 0,
   };
 }
 
@@ -180,12 +190,14 @@ export class SqliteBuildRunStore implements BuildRunStore {
           (run_id, world_id, source_id, source_snapshot_hash, pipeline_version, plan_version,
            model_fingerprint, phase, status, units_total, units_done, units_failed,
            lease_owner, lease_expires_at, fencing_token, heartbeat_at,
-           last_error_code, last_error_message, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, 0, NULL, NULL, NULL, ?, ?)`,
+           last_error_code, last_error_message, created_at, updated_at,
+           config_json, plan_state_json, scope_json, pause_requested, cancel_requested)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, 0, NULL, NULL, NULL, ?, ?, ?, ?, ?, 0, 0)`,
         [
           run.runId, run.worldId, run.sourceId, run.sourceSnapshotHash,
           run.pipelineVersion, run.planVersion, run.modelFingerprint,
           run.phase, run.status, units.length, run.createdAt, run.updatedAt,
+          run.configJson ?? null, run.planStateJson ?? null, run.scopeJson ?? null,
         ],
       );
       for (const unit of units) {
@@ -424,5 +436,65 @@ export class SqliteBuildRunStore implements BuildRunStore {
       );
       return true;
     });
+  }
+
+  async replaceUnclaimedUnits(input: {
+    runId: string;
+    fencingToken: number;
+    units: readonly Omit<BuildUnitRecord, 'runId'>[];
+    planStateJson?: string | null;
+    now: string;
+  }): Promise<boolean> {
+    return this.db.transaction(async tx => {
+      const run = await tx.queryOne<{ fencing_token: number }>(
+        'SELECT fencing_token FROM world_build_runs WHERE run_id = ?',
+        [input.runId],
+      );
+      if (!run || run.fencing_token !== input.fencingToken) return false;
+      // Only untouched queued units are replaceable: completed/running/
+      // retrying/blocked work keeps its identity and ordering (plan P1 §8).
+      const rows = await tx.queryAll<{ unit_id: string }>(
+        `SELECT unit_id FROM world_build_units
+           WHERE run_id = ? AND status = 'queued'`,
+        [input.runId],
+      );
+      for (const row of rows) {
+        await tx.execute(
+          `UPDATE world_build_units SET status = 'canceled', updated_at = ? WHERE unit_id = ?`,
+          [input.now, row.unit_id],
+        );
+      }
+      for (const unit of input.units) {
+        await tx.execute(insertUnitSql(), unitParams({ ...unit, runId: input.runId }));
+      }
+      const delta = input.units.length - rows.length;
+      await tx.execute(
+        `UPDATE world_build_runs SET units_total = units_total + ?, updated_at = ? WHERE run_id = ?`,
+        [delta, input.now, input.runId],
+      );
+      if (input.planStateJson !== undefined) {
+        await tx.execute(
+          'UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?',
+          [input.planStateJson, input.now, input.runId],
+        );
+      }
+      return true;
+    });
+  }
+
+  async setRunPlanState(runId: string, planStateJson: string, now: string): Promise<void> {
+    await this.db.execute(
+      'UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?',
+      [planStateJson, now, runId],
+    );
+  }
+
+  async requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume', now: string): Promise<void> {
+    const column = kind === 'pause' ? 'pause_requested' : kind === 'cancel' ? 'cancel_requested' : 'pause_requested';
+    const value = kind === 'resume' ? 0 : 1;
+    await this.db.execute(
+      `UPDATE world_build_runs SET ${column} = ?, updated_at = ? WHERE run_id = ?`,
+      [value, now, runId],
+    );
   }
 }

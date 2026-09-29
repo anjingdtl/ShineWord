@@ -46,6 +46,24 @@ export interface BuildRunRecord {
   lastErrorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Frozen non-secret run configuration (unified build P1): endpoint (no
+   * credentials), model, keyRef, budgets, concurrency/limits. Null on runs
+   * created before the unified-build pipeline; those keep the legacy
+   * live-profile behavior.
+   */
+  configJson: string | null;
+  /**
+   * Mutable planning state (body-target ladder ratio, replan counters).
+   * Changing it never touches the frozen model config above.
+   */
+  planStateJson: string | null;
+  /** Codepoint scope for stage-restricted runs ({startCp,endCp}); null = whole source. */
+  scopeJson: string | null;
+  /** Cross-process pause request; coordinator clears it when honored. */
+  pauseRequested: boolean;
+  /** Cross-process cancel request; coordinator clears it when honored. */
+  cancelRequested: boolean;
 }
 
 export interface BuildUnitRecord {
@@ -112,4 +130,25 @@ export interface BuildRunStore {
     children: readonly Omit<BuildUnitRecord, 'runId'>[];
     now: string;
   }): Promise<boolean>;
+  /**
+   * Calibrated replanning (unified build P1 §8): atomically cancel every
+   * still-queued unit and insert replacement units covering the same source
+   * ranges. Completed, running, retrying and blocked units are never
+   * touched; fenced by token so a stale owner cannot reorder work.
+   */
+  replaceUnclaimedUnits(input: {
+    runId: string;
+    fencingToken: number;
+    units: readonly Omit<BuildUnitRecord, 'runId'>[];
+    planStateJson?: string | null;
+    now: string;
+  }): Promise<boolean>;
+  /** Persist mutable planning state (body-target ladder, replan counters). */
+  setRunPlanState(runId: string, planStateJson: string, now: string): Promise<void>;
+  /**
+   * Cross-process control flags (unified build P4): the UI (or a
+   * notification action) sets pause/cancel; the owning coordinator reads and
+   * clears them. 'resume' clears the pause flag.
+   */
+  requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume', now: string): Promise<void>;
 }

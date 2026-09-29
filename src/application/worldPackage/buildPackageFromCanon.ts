@@ -36,7 +36,12 @@ export interface MappingCompleteRequest {
 }
 
 export interface MappingProvider {
-  complete(request: MappingCompleteRequest): Promise<{ text: string; usage?: unknown }>;
+  complete(request: MappingCompleteRequest): Promise<{
+    text: string;
+    usage?: unknown;
+    /** Sanitized per-attempt physical metrics (unified P1: every billed attempt). */
+    requestMetrics?: unknown;
+  }>;
 }
 
 export interface BuildPackageInput {
@@ -909,7 +914,10 @@ async function requestMappingProposals(
       contentHash: batchHash,
       extractorVersion: `mapper-${input.mappingVersion}`,
       modelFingerprint: null,
-      usageJson: response.usage ? JSON.stringify(response.usage) : null,
+      usageJson: JSON.stringify({
+        usage: response.usage ?? null,
+        requestMetrics: response.requestMetrics ?? [],
+      }),
       resultJson: JSON.stringify({ facts: batch.length }),
       error: null,
       createdAt: doneJob?.createdAt ?? input.createdAt,

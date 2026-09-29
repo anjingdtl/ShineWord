@@ -109,6 +109,8 @@ export interface ApiProfile {
   concurrency?: number;
   /** Provider tokens-per-minute limit for conservative scheduling (§6). */
   tpm?: number;
+  /** Provider requests-per-minute limit for global scheduling (unified P1 §5). */
+  rpm?: number;
   inputPricePerMillion?: number;
   outputPricePerMillion?: number;
 }

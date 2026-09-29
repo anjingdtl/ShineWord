@@ -69,6 +69,26 @@ export interface GroupSegmentInput {
   text: string;
 }
 
+/**
+ * Route focus (unified P1 §4): 'characters' emphasizes people, factions,
+ * relationships, states and skill clues; 'world' emphasizes places, items,
+ * rules, events and the timeline. Routes are PROMPT emphasis only - both
+ * routes share the exact schema, evidence validation and commit path, and a
+ * single-route run extracts everything in one pass.
+ */
+export type ExtractRoute = 'characters' | 'world';
+
+const ROUTE_FOCUS: Record<ExtractRoute, string> = {
+  characters: [
+    'Route focus: PEOPLE. Prioritize characters and factions as entities; relationship, state, identity, ability/skill-clue and circumstance facts about them.',
+    'Locations/items/rules are only worth a fact when a person\'s situation depends on them; skip standalone worldbuilding.',
+  ].join('\n'),
+  world: [
+    'Route focus: WORLD. Prioritize locations, items, rules/constraints and events; setting, geography, factions-as-institutions, resources and the timeline of what happens.',
+    'Personal relationship minutiae between characters is the other route\'s job; only keep person facts that change the world state.',
+  ].join('\n'),
+};
+
 export interface GroupExtractInput {
   unitId: string;
   segments: readonly GroupSegmentInput[];
@@ -77,6 +97,8 @@ export interface GroupExtractInput {
   maxOutputTokens?: number;
   /** Per-call reasoning effort override. */
   reasoningEffort?: ReasoningEffort;
+  /** Route focus (dual-route runs); omit for full-scope extraction. */
+  route?: ExtractRoute;
 }
 
 export interface ResidentExtractInput {
@@ -96,6 +118,8 @@ export interface ResidentExtractInput {
   maxOutputTokens?: number;
   /** Per-call reasoning effort override. */
   reasoningEffort?: ReasoningEffort;
+  /** Route focus (dual-route runs); omit for full-scope extraction. */
+  route?: ExtractRoute;
 }
 
 interface RawGroupFact {
@@ -149,9 +173,10 @@ export class LlmGroupExtractor {
 
   async extract(input: GroupExtractInput): Promise<GroupExtractionResult> {
     const body = this.buildSegmentBody(input.segments);
+    const system = input.route ? `${GROUP_SYSTEM}\n${ROUTE_FOCUS[input.route]}` : GROUP_SYSTEM;
     const request: LlmRequest = {
       role: 'Extractor',
-      system: GROUP_SYSTEM,
+      system,
       user: body,
       maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
       reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,
@@ -173,6 +198,7 @@ export class LlmGroupExtractor {
       throw new Error('Resident extract scope is outside the book segment range.');
     }
     const body = this.buildSegmentBody(input.segments);
+    const system = input.route ? `${RESIDENT_SYSTEM}\n${ROUTE_FOCUS[input.route]}` : RESIDENT_SYSTEM;
     const instruction = [
       `仅抽取第 ${input.scope.firstSegment}..${input.scope.lastSegment} 段（全书共 ${input.segments.length} 段）范围内的事实、实体与事件。`,
       `segment 字段必须取 ${input.scope.firstSegment} 到 ${input.scope.lastSegment} 之间的值。`,
@@ -183,7 +209,7 @@ export class LlmGroupExtractor {
     }
     const request: LlmRequest = {
       role: 'Extractor',
-      system: RESIDENT_SYSTEM,
+      system,
       user: body,
       maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
       reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,

@@ -863,6 +863,14 @@ CREATE TABLE IF NOT EXISTS interaction_operation_steps (
 );
 `;
 
+export const UNIFIED_BUILD_P1_SCHEMA_SQL = `
+ALTER TABLE world_build_runs ADD COLUMN config_json TEXT;
+ALTER TABLE world_build_runs ADD COLUMN plan_state_json TEXT;
+ALTER TABLE world_build_runs ADD COLUMN scope_json TEXT;
+ALTER TABLE world_build_runs ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE world_build_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -880,4 +888,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 14, name: 'progressive_package_scope', sql: PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL },
   { version: 15, name: 'progressive_branch_content', sql: PROGRESSIVE_CONTENT_SCHEMA_SQL },
   { version: 16, name: 'interaction_orchestration', sql: INTERACTION_ORCHESTRATION_SCHEMA_SQL },
+  { version: 17, name: 'unified_build_p1', sql: UNIFIED_BUILD_P1_SCHEMA_SQL },
 ];

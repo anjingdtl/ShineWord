@@ -269,7 +269,10 @@ test('C3 coordinator group mode completes with per-chunk commits', async () => {
     );
     // Multiple chunks per group must actually happen on this fixture.
     const units = await runStore.listUnits('run-g1');
-    const sizes = units.map(unit => JSON.parse(unit.sourceRangesJson).length);
+    const sizes = units.map(unit => {
+      const parsed = JSON.parse(unit.sourceRangesJson);
+      return Array.isArray(parsed) ? parsed.length : parsed.ranges.length;
+    });
     assert.ok(sizes.some(size => size > 1), `expected multi-chunk groups, got ${sizes.join(',')}`);
     assert.equal(run.unitsTotal, units.length);
 

@@ -347,7 +347,7 @@ test('T7 resident degrades to windowed without prompt-cache support and records 
         budget: { ...RESIDENT_BUDGET, supportsPromptCache: false },
       },
     );
-    assert.equal(run.planVersion, 'plan-group-1', 'degraded to the windowed plan');
+    assert.equal(run.planVersion, 'plan-chapter-1', 'degraded to the windowed chapter plan');
     assert.equal(run.lastErrorCode, RESIDENT_DEGRADED_NO_CACHE);
     assert.match(run.lastErrorMessage ?? '', /前缀缓存/);
 
