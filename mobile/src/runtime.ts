@@ -13,6 +13,8 @@ import { getDatabaseRuntime } from './database';
 import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
 import { KeychainSecretStore } from './secureKeyStore';
 import { publishUserRequestedSourceLookupDelta } from '../../src/application/worldPackage/progressiveDelta';
+import { SqliteInteractionOperationJournal } from '../../src/application/campaign/interactionOrchestrator';
+import { projectStoryEntry } from '../../src/application/campaign/storyEntry';
 
 export type { PlayTurnResult };
 
@@ -51,6 +53,11 @@ export async function createSession(
     provider,
     profile,
   );
+}
+
+export async function getInteractionOperationJournal(): Promise<SqliteInteractionOperationJournal> {
+  const runtime = await getDatabaseRuntime();
+  return new SqliteInteractionOperationJournal(runtime.db);
 }
 
 export async function buildProvider(profile: ApiProfile): Promise<OpenAICompatibleProvider> {
@@ -177,6 +184,7 @@ export interface TurnView {
   /** Branch state version this turn committed as. */
   stateVersion: number;
   resumed: boolean;
+  mechanicalOnly: boolean;
   /** Absent for turns that needed no roll (deterministic auto-success). */
   roll?: TurnRollView;
 }
@@ -184,12 +192,18 @@ export interface TurnView {
 export async function loadHistory(branchId: string): Promise<TurnView[]> {
   const runtime = await getDatabaseRuntime();
   const rows = await runtime.turns.listCommittedTurns(branchId);
-  return rows
-    .filter(row => row.narrativeText !== null)
-    .map(row => ({
+  return rows.map(row => {
+    const story = projectStoryEntry({
       turnId: row.turnId,
-      text: row.narrativeText ?? row.publicSummary,
-      grade: row.rollRecord?.grade ?? row.outcomeGrade,
+      narrativeText: row.narrativeText,
+      narrativeStatus: row.narrativeStatus,
+      outcomeGrade: row.rollRecord?.grade ?? row.outcomeGrade,
+    });
+    return {
+      turnId: story.turnId,
+      text: story.text,
+      grade: story.grade,
+      mechanicalOnly: story.mechanicalOnly,
       stateVersion: row.stateVersion,
       resumed: false,
       ...(row.rollRecord
@@ -205,7 +219,8 @@ export async function loadHistory(branchId: string): Promise<TurnView[]> {
             },
           }
         : {}),
-    }));
+    };
+  });
 }
 
 export { saveApiProfile } from './profileStore';

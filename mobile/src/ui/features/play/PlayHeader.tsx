@@ -41,10 +41,7 @@ export function formatWorldClock(themeId: ThemeId, clockSeconds: number): string
 
 export function PlayHeader(props: {
   title: string;
-  branchLabel: string;
-  locationLabel: string;
   clockSeconds: number | null;
-  stateVersion: number | null;
   onBack: () => void;
   onMenu?: () => void;
   busy?: boolean;
@@ -58,18 +55,13 @@ export function PlayHeader(props: {
       backLabel="‹ 战役"
       actions={
         <View style={[styles.actions, { gap: theme.space.sm }]}>
-          <View style={styles.meta}>
-            <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.secondary }]}>
-              {props.branchLabel}
-              {props.locationLabel ? ` · ${props.locationLabel}` : ''}
-            </Text>
+          <View style={styles.meta} accessibilityLiveRegion="polite">
             <Text
               style={[
-                typeStyle(theme, theme.type.micro),
-                { color: theme.text.muted, fontFamily: theme.font.numeric },
+                typeStyle(theme, theme.type.caption),
+                { color: theme.text.secondary, fontFamily: theme.font.numeric },
               ]}>
-              {clock ? `${clock} · ` : ''}v{props.stateVersion ?? '–'}
-              {props.busy ? ' · 结算中…' : ''}
+              {props.busy ? '正在结算…' : clock ?? ''}
             </Text>
           </View>
           {props.onMenu ? (
@@ -85,7 +77,8 @@ export function PlayHeader(props: {
                   borderColor: theme.border.colorStrong,
                   borderRadius: theme.radius.md,
                   paddingHorizontal: theme.space.sm,
-                  paddingVertical: theme.space.xs,
+                  minHeight: theme.touch.min,
+                  minWidth: theme.touch.min,
                   opacity: pressed ? 0.8 : 1,
                 },
               ]}>
@@ -100,6 +93,6 @@ export function PlayHeader(props: {
 
 const styles = StyleSheet.create({
   meta: { alignItems: 'flex-end' },
-  actions: { flexDirection: 'row', alignItems: 'center' },
+  actions: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
   menu: { borderWidth: 1 },
 });

@@ -15,6 +15,7 @@ import { ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
+import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
@@ -27,6 +28,8 @@ import { StepCharacter } from '../features/opening/StepCharacter';
 import { StepCompanions } from '../features/opening/StepCompanions';
 import { StepConfirm } from '../features/opening/StepConfirm';
 import { StepWorldStart } from '../features/opening/StepWorldStart';
+import { QuickOpeningConfirm } from '../features/opening/QuickOpeningConfirm';
+import { QuickOpeningIdentity } from '../features/opening/QuickOpeningIdentity';
 import { WIZARD_STEPS, type OpeningWorldSetup } from '../features/opening/openingModel';
 import { useTheme } from '../theme/ThemeContext';
 import { THEMES } from '../theme/tokens';
@@ -40,9 +43,14 @@ export function OpeningScreen(): React.JSX.Element {
   const route = useRoute<RouteProp<RootStackParamList, 'Opening'>>();
   const { worldId, title } = route.params;
 
+  const [advancedWizard, setAdvancedWizard] = useState(false);
   const [step, setStep] = useState(0);
+  const [quickStep, setQuickStep] = useState(0);
+  const [quickAdvancedOpen, setQuickAdvancedOpen] = useState(false);
+  const [quickRecommendationsInitialized, setQuickRecommendationsInitialized] = useState(false);
   const [setup, setSetup] = useState<OpeningWorldSetup | null>(null);
   const [name, setName] = useState('');
+  const [characterDescription, setCharacterDescription] = useState('');
   const [kind, setKind] = useState<'original' | 'canon'>('original');
   const [canonEntityId, setCanonEntityId] = useState<string>('');
   const [points, setPoints] = useState<Record<string, number>>({
@@ -138,15 +146,25 @@ export function OpeningScreen(): React.JSX.Element {
   }
 
   const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
-  const characterReady = kind === 'canon' ? canonEntityId !== '' : chosenSkills.length > 0;
-  const startReady = characterReady && setup?.packageRevision != null;
+  const recommendation = recommendOpeningLoadout(setup?.skills ?? []);
+  const quickIdentityReady = kind === 'canon' ? canonEntityId !== '' : name.trim().length > 0;
+  const advancedCharacterReady = kind === 'canon' ? canonEntityId !== '' : chosenSkills.length > 0;
+  const quickStartReady = quickIdentityReady && setup?.packageRevision != null && (setup?.locations.length ?? 0) > 0;
+  const advancedStartReady = advancedCharacterReady && setup?.packageRevision != null && (setup?.locations.length ?? 0) > 0;
   const stepReady = [
     setup !== null && (setup.anchorEvents.length === 0 || anchorEventId !== '') && locationId !== '',
-    characterReady,
+    advancedCharacterReady,
     true,
-    startReady,
+    advancedStartReady,
   ];
   const canAdvance = stepReady[step] ?? false;
+
+  function initializeQuickRecommendations() {
+    if (quickRecommendationsInitialized) return;
+    setPoints(recommendation.attributes);
+    setChosenSkills(recommendation.initialSkills);
+    setQuickRecommendationsInitialized(true);
+  }
 
   async function create() {
     if (!profile) return;
@@ -164,6 +182,10 @@ export function OpeningScreen(): React.JSX.Element {
       const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
       if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
       const actorName = name.trim() || '无名旅人';
+      const quickLoadout = !advancedWizard;
+      const recommended = recommendOpeningLoadout(worldSetup.skills);
+      const characterAttributes = quickLoadout && !quickAdvancedOpen ? recommended.attributes : points;
+      const characterSkills = quickLoadout && !quickAdvancedOpen ? recommended.initialSkills : chosenSkills;
       const campaignId = `camp-${Date.now().toString(36)}`;
       const runtime = await getDatabaseRuntime();
       await createCampaign({
@@ -185,17 +207,18 @@ export function OpeningScreen(): React.JSX.Element {
           name: kind === 'canon'
             ? (worldSetup.canonCharacters.find(c => c.entityId === canonEntityId)?.name ?? actorName)
             : actorName,
+          description: characterDescription.trim() || undefined,
           ...(kind === 'original'
             ? {
                 attributes: {
-                  physique: points.physique,
-                  agility: points.agility,
-                  insight: points.insight,
-                  knowledge: points.knowledge,
-                  willpower: points.willpower,
-                  social: points.social,
+                  physique: characterAttributes.physique,
+                  agility: characterAttributes.agility,
+                  insight: characterAttributes.insight,
+                  knowledge: characterAttributes.knowledge,
+                  willpower: characterAttributes.willpower,
+                  social: characterAttributes.social,
                 },
-                initialSkills: chosenSkills,
+                initialSkills: characterSkills,
               }
             : { canonEntityId }),
         },
@@ -237,20 +260,49 @@ export function OpeningScreen(): React.JSX.Element {
   const actorName = kind === 'canon'
     ? (setup?.canonCharacters.find(c => c.entityId === canonEntityId)?.name ?? (name.trim() || '无名旅人'))
     : name.trim() || '无名旅人';
+  const locationLabel = setup?.locationOptions.find(option => option.locationId === locationId)?.name
+    ?? (locationId ? '已选开局地点' : '');
+  const quickSteps = ['身份与姓名', '确认开局'];
+  const quickAnchorLabel = anchorEvent ? `序${anchorEvent.worldTimeOrder} · ${anchorEvent.title}` : '时间原点';
+
+  function switchToAdvancedWizard() {
+    setAdvancedWizard(true);
+    setStep(0);
+  }
+
+  function toggleQuickAdvanced() {
+    initializeQuickRecommendations();
+    setQuickAdvancedOpen(value => !value);
+  }
+
+  function advanceQuickStep() {
+    if (quickStep === 0) {
+      initializeQuickRecommendations();
+      setQuickStep(1);
+    }
+  }
 
   return (
     <ScreenShell bottom>
       <Header
         title={`开局 · ${title}`}
-        subtitle={`${step + 1} / ${WIZARD_STEPS.length} ${WIZARD_STEPS[step]}`}
-        onBack={() => (step > 0 ? setStep(step - 1) : navigation.goBack())}
+        subtitle={advancedWizard
+          ? `${step + 1} / ${WIZARD_STEPS.length} 自定义 · ${WIZARD_STEPS[step]}`
+          : `${quickStep + 1} / 2 ${quickSteps[quickStep]}`}
+        onBack={() => {
+          if (advancedWizard) {
+            if (step > 0) setStep(step - 1);
+            else setAdvancedWizard(false);
+          } else if (quickStep > 0) setQuickStep(0);
+          else navigation.goBack();
+        }}
       />
 
       <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
         <ProgressSteps
-          steps={WIZARD_STEPS}
-          current={step}
-          onStepPress={index => setStep(index)}
+          steps={advancedWizard ? WIZARD_STEPS : quickSteps}
+          current={advancedWizard ? step : quickStep}
+          onStepPress={index => advancedWizard ? setStep(index) : setQuickStep(index)}
         />
       </View>
 
@@ -258,68 +310,139 @@ export function OpeningScreen(): React.JSX.Element {
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
 
-        {step === 0 ? (
-          <StepWorldStart
-            setup={setup}
-            anchorEventId={anchorEventId}
-            locationId={locationId}
-            onSelectAnchor={setAnchorEventId}
-            onSelectLocation={setLocationId}
-          />
-        ) : null}
+        {advancedWizard ? (
+          <>
+            {step === 0 ? (
+              <StepWorldStart
+                setup={setup}
+                anchorEventId={anchorEventId}
+                locationId={locationId}
+                onSelectAnchor={setAnchorEventId}
+                onSelectLocation={setLocationId}
+              />
+            ) : null}
 
-        {step === 1 ? (
-          <StepCharacter
+            {step === 1 ? (
+              <StepCharacter
+                setup={setup}
+                kind={kind}
+                onKindChange={setKind}
+                name={name}
+                onNameChange={setName}
+                points={points}
+                onBump={bump}
+                spentTotal={spentTotal}
+                chosenSkills={chosenSkills}
+                onToggleSkill={toggleSkill}
+                canonEntityId={canonEntityId}
+                onSelectCanon={setCanonEntityId}
+              />
+            ) : null}
+
+            {step === 2 ? (
+              <StepCompanions
+                setup={setup}
+                companions={companions}
+                directives={companionDirectives}
+                onToggle={toggleCompanion}
+                onDirective={(entryId, directive) =>
+                  setCompanionDirectives(previous => ({ ...previous, [entryId]: directive }))
+                }
+              />
+            ) : null}
+
+            {step === 3 ? (
+              <StepConfirm
+                worldTitle={title}
+                setup={setup}
+                anchorLabel={quickAnchorLabel}
+                location={locationId}
+                locationLabel={locationLabel}
+                kind={kind}
+                actorName={actorName}
+                points={points}
+                chosenSkills={chosenSkills}
+                companions={companions}
+                directives={companionDirectives}
+                goal={goal}
+                onGoalChange={setGoal}
+                themeLabel={THEMES[themeId].label}
+                busy={busy}
+                canStart={advancedStartReady}
+                onStart={create}
+              />
+            ) : null}
+          </>
+        ) : quickStep === 0 ? (
+          <QuickOpeningIdentity
             setup={setup}
             kind={kind}
-            onKindChange={setKind}
+            onKindChange={nextKind => {
+              setKind(nextKind);
+              if (nextKind === 'canon' && setup?.canonCharacters[0]) {
+                setCanonEntityId(setup.canonCharacters[0].entityId);
+              }
+            }}
             name={name}
             onNameChange={setName}
-            points={points}
-            onBump={bump}
-            spentTotal={spentTotal}
-            chosenSkills={chosenSkills}
-            onToggleSkill={toggleSkill}
             canonEntityId={canonEntityId}
             onSelectCanon={setCanonEntityId}
+            onAdvanced={switchToAdvancedWizard}
           />
-        ) : null}
-
-        {step === 2 ? (
-          <StepCompanions
+        ) : (
+          <QuickOpeningConfirm
+            worldTitle={title}
             setup={setup}
+            anchorLabel={quickAnchorLabel}
+            locationLabel={locationLabel}
+            kind={kind}
+            actorName={actorName}
+            characterDescription={characterDescription}
+            onCharacterDescriptionChange={setCharacterDescription}
+            goal={goal}
+            onGoalChange={setGoal}
+            loadout={quickAdvancedOpen ? { attributes: points as typeof recommendation.attributes, initialSkills: chosenSkills } : recommendation}
             companions={companions}
             directives={companionDirectives}
-            onToggle={toggleCompanion}
+            onToggleCompanion={toggleCompanion}
             onDirective={(entryId, directive) =>
               setCompanionDirectives(previous => ({ ...previous, [entryId]: directive }))
             }
+            advancedOpen={quickAdvancedOpen}
+            onToggleAdvanced={toggleQuickAdvanced}
+            advancedChildren={(
+              <View style={{ gap: theme.space.md }}>
+                <StepWorldStart
+                  setup={setup}
+                  anchorEventId={anchorEventId}
+                  locationId={locationId}
+                  onSelectAnchor={setAnchorEventId}
+                  onSelectLocation={setLocationId}
+                />
+                {kind === 'original' ? (
+                  <StepCharacter
+                    setup={setup}
+                    kind={kind}
+                    onKindChange={setKind}
+                    name={name}
+                    onNameChange={setName}
+                    points={points}
+                    onBump={bump}
+                    spentTotal={spentTotal}
+                    chosenSkills={chosenSkills}
+                    onToggleSkill={toggleSkill}
+                    canonEntityId={canonEntityId}
+                    onSelectCanon={setCanonEntityId}
+                    showIdentityFields={false}
+                  />
+                ) : null}
+              </View>
+            )}
           />
-        ) : null}
-
-        {step === 3 ? (
-          <StepConfirm
-            worldTitle={title}
-            setup={setup}
-            anchorLabel={anchorEvent ? `序${anchorEvent.worldTimeOrder} · ${anchorEvent.title}` : '时间原点'}
-            location={locationId}
-            kind={kind}
-            actorName={actorName}
-            points={points}
-            chosenSkills={chosenSkills}
-            companions={companions}
-            directives={companionDirectives}
-            goal={goal}
-            onGoalChange={setGoal}
-            themeLabel={THEMES[themeId].label}
-            busy={busy}
-            canStart={startReady}
-            onStart={create}
-          />
-        ) : null}
+        )}
       </ScrollView>
 
-      {step < WIZARD_STEPS.length - 1 ? (
+      {advancedWizard && step < WIZARD_STEPS.length - 1 ? (
         <View
           style={{
             flexDirection: 'row',
@@ -344,6 +467,36 @@ export function OpeningScreen(): React.JSX.Element {
             disabled={!canAdvance}
             style={{ flex: 1 }}
             testID="opening-next"
+          />
+        </View>
+      ) : null}
+
+      {!advancedWizard ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            gap: theme.space.sm,
+            paddingHorizontal: theme.space.lg,
+            paddingBottom: theme.space.md,
+            paddingTop: theme.space.sm,
+            borderTopWidth: theme.border.hairline,
+            borderTopColor: theme.border.color,
+            backgroundColor: theme.bg.base,
+          }}>
+          {quickStep === 1 ? (
+            <Button
+              label="上一步"
+              variant="secondary"
+              onPress={() => setQuickStep(0)}
+              style={{ flex: 1 }}
+            />
+          ) : null}
+          <Button
+            label={quickStep === 0 ? '下一步' : busy ? '正在开始…' : '开始故事'}
+            onPress={quickStep === 0 ? advanceQuickStep : create}
+            disabled={quickStep === 0 ? !quickIdentityReady : busy || !quickStartReady}
+            style={{ flex: 1 }}
+            testID={quickStep === 0 ? 'opening-next' : 'quick-opening-start'}
           />
         </View>
       ) : null}

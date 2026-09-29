@@ -9,7 +9,7 @@
  * `PlayPanel`. This implementation keeps `PlayPanel` as the carrier (§20.2) and
  * names the tabbed host `GameInfoPanel`, so the two never collide.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button } from '../../../components/Button';
 import { Card } from '../../../components/Card';
@@ -39,6 +39,7 @@ type PanelTab = (typeof TABS)[number]['value'];
 export function GameInfoPanel(props: {
   controller: PlayController;
   visible: boolean;
+  initialTab?: PanelTab;
   onClose: () => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
@@ -53,6 +54,9 @@ export function GameInfoPanel(props: {
   const encounterActors = (encounter?.actors ?? []).filter(
     actor => !roster.some(member => member.actorId === actor.actorId),
   );
+  useEffect(() => {
+    if (props.visible) setTab(props.initialTab ?? 'character');
+  }, [props.visible, props.initialTab]);
   const selectedActor =
     roster.find(member => member.actorId === actorId) ??
     null;

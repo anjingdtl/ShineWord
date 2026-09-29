@@ -12,17 +12,22 @@
  * Combat affordances (`combat.*`) are local derivations of the encounter view,
  * so the UI never asks an LLM for something the client can compute (plan §31).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import type { PlayUiProjection } from '../../../../../../src/application/campaign/playProjection';
+import { proposeEncounterIntent } from '../../../../../../src/application/campaign/encounterIntent';
 import {
   buildProvider,
   createSession,
   exportCampaignSave,
   loadHistory,
+  getInteractionOperationJournal,
+  createReadOnlySession,
   type EncounterView,
   type TurnView,
 } from '../../../../runtime';
+import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
 import { useAppSession } from '../../../state/AppSessionContext';
@@ -60,14 +65,12 @@ export interface PlayController {
   setError: (value: string | null) => void;
   setNotice: (value: string | null) => void;
   encounter: EncounterView | null;
-  encounterTemplates: Array<{ entryId: string; name: string }>;
-  encounterTemplateId: string;
-  setEncounterTemplateId: (entryId: string) => void;
+  sceneEncounterOptions: SceneEncounterOption[];
   recruitmentOptions: Array<{ actorId: string; name: string; eligible: boolean; reason: string | null }>;
   rejoinOptions: Array<{ actorId: string; name: string; eligible: boolean; reason: string | null }>;
   combat: PlayCombatView;
   refresh: () => Promise<void>;
-  submit: () => Promise<void>;
+  submit: (intentOverride?: string) => Promise<void>;
   rest: (kind: 'short' | 'long') => Promise<void>;
   rewind: () => Promise<void>;
   exportSave: () => Promise<void>;
@@ -76,6 +79,8 @@ export interface PlayController {
   partyCall: (action: (session: Awaited<ReturnType<typeof createSession>>) => Promise<void>) => Promise<void>;
   /** Encounter actions that return the updated encounter view. */
   encounterCall: (work: (session: Awaited<ReturnType<typeof createSession>>) => Promise<EncounterView>) => Promise<void>;
+  beginSceneEncounter: (sceneEntryId: string) => Promise<void>;
+  checkAttackTarget: (encounterId: string, targetActorId: string) => Promise<{ allowed: boolean; explanation: string | null }>;
 }
 
 export function usePlayController(): PlayController {
@@ -90,19 +95,32 @@ export function usePlayController(): PlayController {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [encounter, setEncounter] = useState<EncounterView | null>(null);
-  const [encounterTemplates, setEncounterTemplates] = useState<Array<{ entryId: string; name: string }>>([]);
-  const [encounterTemplateId, setEncounterTemplateId] = useState<string>('');
+  const [sceneEncounterOptions, setSceneEncounterOptions] = useState<SceneEncounterOption[]>([]);
   const [recruitmentOptions, setRecruitmentOptions] = useState<PlayController['recruitmentOptions']>([]);
   const [rejoinOptions, setRejoinOptions] = useState<PlayController['rejoinOptions']>([]);
+  const actionInFlight = useRef(false);
+  const autoNpcRunning = useRef(false);
+  const foreground = useRef(AppState.currentState === 'active');
+  const [foregroundEpoch, setForegroundEpoch] = useState(0);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      foreground.current = state === 'active';
+      if (state === 'active') setForegroundEpoch(value => value + 1);
+    });
+    return () => subscription.remove();
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextProjection, history] = await Promise.all([
+      const [nextProjection, history, nextSceneEncounters] = await Promise.all([
         getPlayUiProjection(campaignId, branchId),
         loadHistory(branchId),
+        createReadOnlySession().then(session => session.getCurrentSceneEncounterOptions(campaignId, branchId)),
       ]);
       setProjection(nextProjection);
       setTurns(history);
+      setSceneEncounterOptions(nextSceneEncounters);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -136,31 +154,62 @@ export function usePlayController(): PlayController {
     return () => { cancelled = true; };
   }, [campaignId, branchId, projection?.stateVersion, profile]);
 
-  // Encounter templates come from the locked world package; failures are not
-  // fatal (the template picker is an optional affordance).
-  useEffect(() => {
-    if (!profile || !projection) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const session = await createSession(profile, await buildProvider(profile));
-        const setup = await session.getWorldSetup(
-          projection.worldId,
-          projection.anchorWorldTimeOrder ?? undefined,
-          projection.packageRevision,
-        );
-        if (!cancelled && setup.encounterTemplates.length > 0) {
-          setEncounterTemplates(setup.encounterTemplates);
-          setEncounterTemplateId(previous => previous || setup.encounterTemplates[0]!.entryId);
-        }
-      } catch {
-        // Optional data: ignore load failures.
+  const progressAutomaticActors = useCallback(async (
+    session: Awaited<ReturnType<typeof createSession>>,
+    initial: EncounterView,
+  ): Promise<EncounterView> => {
+    if (autoNpcRunning.current || initial.status !== 'active') return initial;
+    autoNpcRunning.current = true;
+    let latest = initial;
+    try {
+      const journal = await getInteractionOperationJournal();
+      const resumable = await journal.getResumableOperation(campaignId, branchId);
+      if (latest.currentActorIsPlayer && !resumable) return latest;
+      const operationId = resumable?.operationId ?? `auto:${initial.encounterId}:${initial.stateVersion}`;
+      const result = await journal.run({
+        operationId,
+        campaignId,
+        branchId,
+        kind: 'encounter_auto',
+        expectedStateVersion: initial.stateVersion,
+        nextAction: async (_stepIndex, _stateVersion, replayPreparedStep) => {
+          const current = await session.getActiveEncounter(campaignId, branchId);
+          if (!current || current.encounterId !== initial.encounterId || current.status !== 'active') {
+            latest = current ?? latest;
+            return null;
+          }
+          latest = current;
+          if (!replayPreparedStep && current.currentActorIsPlayer) return null;
+          return { encounterId: initial.encounterId };
+        },
+        actionKind: () => 'npc_turn',
+        executeAction: async (action, requestId, fenceToken) => {
+          latest = await session.encounterNpcTurn({
+            campaignId,
+            branchId,
+            encounterId: action.encounterId,
+            requestId,
+            fenceToken,
+          });
+          setEncounter(latest);
+          return {
+            stateVersion: latest.stateVersion,
+            continue: latest.status === 'active' && !latest.currentActorIsPlayer,
+          };
+        },
+        pauseRequested: () => !foreground.current,
+      });
+      if (result.pauseReason === 'step_limit' || result.pauseReason === 'wall_clock') {
+        setNotice('自动行动已暂停，可继续写下自己的行动。');
       }
-    })();
-    return () => { cancelled = true; };
-  }, [projection, profile]);
+      return latest;
+    } finally {
+      autoNpcRunning.current = false;
+    }
+  }, [campaignId, branchId]);
 
-  // Kill-process recovery: an ACTIVE encounter restores its panel on mount.
+  // Kill-process recovery: an ACTIVE encounter restores and completes any
+  // pending NPC decisions from its durable child request ids.
   useEffect(() => {
     if (!profile) return;
     let cancelled = false;
@@ -168,39 +217,127 @@ export function usePlayController(): PlayController {
       try {
         const session = await createSession(profile, await buildProvider(profile));
         const active = await session.getActiveEncounter(campaignId, branchId);
-        if (!cancelled && active) setEncounter(active);
+        if (!cancelled && active) {
+          setEncounter(active);
+          if (active.status === 'active' && !active.currentActorIsPlayer) {
+            setBusy(true);
+            const latest = await progressAutomaticActors(session, active);
+            if (!cancelled) {
+              setEncounter(latest);
+              await refresh();
+            }
+          }
+        }
       } catch {
         // No encounter or a transient read error: the panel simply stays closed.
+        if (!cancelled) setError('无法恢复当前遭遇；战役存档保持不变。');
+      } finally {
+        if (!cancelled) setBusy(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [campaignId, branchId, profile]);
+  }, [campaignId, branchId, profile, progressAutomaticActors, refresh]);
 
-  async function submit() {
-    if (!intent.trim() || busy || !profile) return;
-    const value = intent.trim();
-    setIntent('');
+  // AppState only requests a resume after a system pause. It never selects or
+  // executes a player action.
+  useEffect(() => {
+    if (foregroundEpoch === 0 || !foreground.current || !profile || !encounter
+      || encounter.status !== 'active' || encounter.currentActorIsPlayer || autoNpcRunning.current) return;
+    let cancelled = false;
+    setBusy(true);
+    (async () => {
+      try {
+        const session = await createSession(profile, await buildProvider(profile));
+        const latest = await progressAutomaticActors(session, encounter);
+        if (!cancelled) {
+          setEncounter(latest);
+          await refresh();
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [foregroundEpoch, profile, encounter?.encounterId, encounter?.status, encounter?.currentActorIsPlayer,
+    progressAutomaticActors, refresh]);
+
+  async function submit(intentOverride?: string) {
+    if (actionInFlight.current || busy || !profile) return;
+    const fromComposer = intentOverride === undefined;
+    const value = (intentOverride ?? intent).trim();
+    if (!value) return;
+    actionInFlight.current = true;
+    if (fromComposer) setIntent('');
     setBusy(true);
     setError(null);
-    setNotice('拟定检定…');
+    const activeEncounter = encounter?.status === 'active' ? encounter : null;
+    setNotice(activeEncounter ? '识别战斗行动…' : '拟定检定…');
     try {
       const session = await createSession(profile, await buildProvider(profile));
+      if (activeEncounter) {
+        const proposal = proposeEncounterIntent(value, activeEncounter);
+        if (proposal.kind === 'clarify') {
+          if (fromComposer) setIntent(value);
+          setError(proposal.explanation);
+          setNotice(null);
+          return;
+        }
+        const requestId = combatRequestId(`text-${proposal.kind}`,
+          proposal.kind === 'attack' || proposal.kind === 'rescue' ? proposal.targetActorId : '');
+        let view: EncounterView;
+        if (proposal.kind === 'attack') {
+          const availability = await session.getPlayerAttackAvailability({
+            campaignId, branchId, encounterId: activeEncounter.encounterId, targetId: proposal.targetActorId,
+          });
+          if (!availability.allowed) throw new Error(availability.explanation ?? '当前规则条件不允许攻击。');
+          view = await session.encounterAttack({
+            campaignId, branchId, encounterId: activeEncounter.encounterId,
+            targetId: proposal.targetActorId, requestId,
+          });
+        } else if (proposal.kind === 'rescue') {
+          view = await session.encounterRescue({
+            campaignId, branchId, encounterId: activeEncounter.encounterId,
+            targetId: proposal.targetActorId, requestId,
+          });
+        } else if (proposal.kind === 'retreat') {
+          view = await session.encounterRetreat({
+            campaignId, branchId, encounterId: activeEncounter.encounterId, requestId,
+          });
+        } else {
+          view = await session.encounterPassTurn({
+            campaignId, branchId, encounterId: activeEncounter.encounterId, requestId,
+          });
+        }
+        setEncounter(view);
+        if (view.status === 'active' && !view.currentActorIsPlayer) {
+          setNotice('同伴与对手正在按规则行动…');
+          const latest = await progressAutomaticActors(session, view);
+          setEncounter(latest);
+          if (latest.currentActorIsPlayer || latest.status !== 'active') setNotice(null);
+        }
+        await refresh();
+        return;
+      }
       const result = await session.playTurn({ campaignId, branchId, intent: value });
+      const turnView: TurnView = { ...result, mechanicalOnly: false };
       // The turn is already committed; merge it into the feed by id so a
       // resumed turn never duplicates (plan §18.3).
       setTurns(previous =>
-        previous.some(item => item.turnId === result.turnId)
-          ? previous.map(item => (item.turnId === result.turnId ? { ...item } : item))
-          : [...previous, result],
+        previous.some(item => item.turnId === turnView.turnId)
+          ? previous.map(item => (item.turnId === turnView.turnId ? { ...item } : item))
+          : [...previous, turnView],
       );
       setNotice(null);
       await refresh();
     } catch (e) {
       // A failed submit restores the intent so nothing the player typed is lost.
-      setIntent(value);
+      if (fromComposer) setIntent(value);
       setError(e instanceof Error ? e.message : String(e));
       setNotice(null);
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -221,19 +358,38 @@ export function usePlayController(): PlayController {
   }
 
   async function encounterCall(work: (session: Awaited<ReturnType<typeof createSession>>) => Promise<EncounterView>) {
-    if (!profile) return;
+    if (!profile || actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
       const session = await createSession(profile, await buildProvider(profile));
       const view = await work(session);
       setEncounter(view);
+      if (view.status === 'active' && !view.currentActorIsPlayer) {
+        setNotice('同伴与对手正在按规则行动…');
+        const latest = await progressAutomaticActors(session, view);
+        setEncounter(latest);
+        if (latest.currentActorIsPlayer || latest.status !== 'active') setNotice(null);
+      }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
+  }
+
+  async function beginSceneEncounter(sceneEntryId: string) {
+    if (!profile) return;
+    const requestId = `${branchId.slice(-18)}:${projection?.stateVersion ?? 0}:begin:${sceneEntryId.slice(-24)}`;
+    await encounterCall(session => session.beginSceneEncounter({ campaignId, branchId, sceneEntryId, requestId }));
+  }
+
+  async function checkAttackTarget(encounterId: string, targetActorId: string) {
+    const session = await createReadOnlySession();
+    return session.getPlayerAttackAvailability({ campaignId, branchId, encounterId, targetId: targetActorId });
   }
 
   async function rest(kind: 'short' | 'long') {
@@ -371,9 +527,7 @@ export function usePlayController(): PlayController {
     setError,
     setNotice,
     encounter,
-    encounterTemplates,
-    encounterTemplateId,
-    setEncounterTemplateId,
+    sceneEncounterOptions,
     recruitmentOptions,
     rejoinOptions,
     combat: {
@@ -393,5 +547,7 @@ export function usePlayController(): PlayController {
     trainSkill,
     partyCall,
     encounterCall,
+    beginSceneEncounter,
+    checkAttackTarget,
   };
 }

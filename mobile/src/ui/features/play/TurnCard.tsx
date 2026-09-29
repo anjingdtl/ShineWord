@@ -14,7 +14,7 @@ import { useTheme } from '../../theme/ThemeContext';
 import { RollStrip } from './RollStrip';
 import type { TurnView } from '../../../runtime';
 
-export function TurnCard(props: { turn: TurnView; index: number }): React.JSX.Element {
+export function TurnCard(props: { turn: TurnView }): React.JSX.Element {
   const { theme } = useTheme();
   const { turn } = props;
   return (
@@ -26,7 +26,7 @@ export function TurnCard(props: { turn: TurnView; index: number }): React.JSX.El
               typeStyle(theme, theme.type.micro),
               { color: theme.onRaised.secondary, fontFamily: theme.font.numeric },
             ]}>
-            第 {props.index + 1} 回合 · v{turn.stateVersion}
+              {turn.mechanicalOnly ? '规则结果' : '故事'}
           </Text>
           {turn.roll ? <RollStrip roll={turn.roll} /> : null}
           <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.primary }]}>

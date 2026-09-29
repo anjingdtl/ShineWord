@@ -30,6 +30,16 @@ export function CombatActions(props: { controller: PlayController }): React.JSX.
   const attack = combat.target;
   const rescue = combat.disabledAlly;
 
+  if (!encounter.currentActorIsPlayer) {
+    return (
+      <View accessibilityLiveRegion="polite">
+        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
+          同伴与对手按规则自动行动。
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ gap: theme.space.md }}>
       <View style={{ gap: theme.space.xs }}>
@@ -96,21 +106,9 @@ export function CombatActions(props: { controller: PlayController }): React.JSX.
                 />
               ))}
             </>
-          ) : (
-            <Button
-              label="推进自动角色行动"
-              onPress={() => encounterCall(s => s.encounterNpcTurn({
-                campaignId,
-                branchId,
-                encounterId: encounter.encounterId,
-                requestId: combat.requestId('npc'),
-              }))}
-              disabled={busy}
-              testID="combat-npc-turn"
-            />
-          )}
+          ) : null}
           <Button
-            label="撤退"
+            label="撤离这场冲突"
             variant="secondary"
             onPress={() => encounterCall(s => s.encounterRetreat({
               campaignId,

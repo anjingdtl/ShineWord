@@ -347,6 +347,11 @@ export interface SceneDefinition {
     exits: string[];
   }>;
   actors: string[];
+  /** Explicit, reviewed qualification for entering combat from this scene. */
+  encounterParticipants?: {
+    hostiles: Array<{ templateId: string; count: number }>;
+    neutrals?: Array<{ templateId: string; count: number }>;
+  };
   visibleItems: string[];
   hazards: string[];
   clues: string[];
@@ -519,6 +524,40 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
       requireString('locationId');
       if (!Array.isArray(def.zones) || (def.zones as unknown[]).length < 1) {
         errors.push('scene: zones must be a non-empty array.');
+      }
+      if (def.encounterParticipants !== undefined) {
+        const participants = def.encounterParticipants as Record<string, unknown> | null;
+        if (!participants || typeof participants !== 'object' || Array.isArray(participants)
+          || !Array.isArray(participants.hostiles) || participants.hostiles.length === 0) {
+          errors.push('scene: encounterParticipants requires at least one explicit hostile template mapping.');
+        } else {
+          const seen = new Set<string>();
+          for (const side of ['hostiles', 'neutrals'] as const) {
+            const rows = participants[side];
+            if (rows === undefined && side === 'neutrals') continue;
+            if (!Array.isArray(rows)) {
+              errors.push(`scene: encounterParticipants.${side} must be an array.`);
+              continue;
+            }
+            for (const row of rows) {
+              if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+                errors.push(`scene: encounterParticipants.${side} rows require templateId and count.`);
+                continue;
+              }
+              const item = row as Record<string, unknown>;
+              if (typeof item.templateId !== 'string' || !item.templateId.trim()) {
+                errors.push(`scene: encounterParticipants.${side} templateId must be a published actor template id.`);
+              } else if (seen.has(item.templateId)) {
+                errors.push(`scene: encounterParticipants contains duplicate template ${item.templateId}.`);
+              } else {
+                seen.add(item.templateId);
+              }
+              if (!Number.isInteger(item.count) || Number(item.count) < 1 || Number(item.count) > 6) {
+                errors.push(`scene: encounterParticipants.${side} count must be an integer from 1 to 6.`);
+              }
+            }
+          }
+        }
       }
       break;
     }

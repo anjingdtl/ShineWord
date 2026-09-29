@@ -65,7 +65,7 @@ export function NarrativeFeed(props: {
             }
           />
         }
-        renderItem={({ item, index }) => <TurnCard turn={item} index={index} />}
+        renderItem={({ item }) => <TurnCard turn={item} />}
         ListFooterComponent={
           props.busy ? (
             <View style={{ paddingVertical: theme.space.sm }}>

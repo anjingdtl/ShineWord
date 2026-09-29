@@ -17,7 +17,6 @@ import { Button } from '../../components/Button';
 import { TextField } from '../../components/TextField';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
-import { QuickActions } from './QuickActions';
 
 const MAX_LENGTH = 500;
 
@@ -26,7 +25,7 @@ export function ActionComposer(props: {
   onChangeText: (value: string) => void;
   onSubmit: () => void;
   busy: boolean;
-  quickActions: string[];
+  encounterActive?: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const canSend = props.value.trim().length > 0 && !props.busy;
@@ -39,25 +38,20 @@ export function ActionComposer(props: {
           paddingHorizontal: theme.space.lg,
           paddingTop: theme.space.sm,
           paddingBottom: theme.space.sm,
-          gap: theme.space.sm,
+          gap: theme.space.xs,
           backgroundColor: theme.bg.base,
           borderTopWidth: theme.border.hairline,
           borderTopColor: theme.border.color,
         },
       ]}>
-      <QuickActions
-        actions={props.quickActions}
-        disabled={props.busy}
-        onPick={text => props.onChangeText(text)}
-      />
       <TextField
         value={props.value}
         onChangeText={props.onChangeText}
         multiline
-        minLines={2}
+        minLines={1}
         maxLength={MAX_LENGTH}
         disabled={props.busy}
-        placeholder="你打算怎么做？"
+        placeholder={props.encounterActive ? '描述你的战斗行动' : '你打算怎么做？'}
         tone="base"
         hint={
           props.value.length > MAX_LENGTH - 80
@@ -68,7 +62,11 @@ export function ActionComposer(props: {
       />
       <View style={[styles.actions, { gap: theme.space.md }]}>
         <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted, flex: 1 }]}>
-          {props.busy ? '正在结算这一回合…' : '行动会先经本地规则检定，再交给叙事模型。'}
+          {props.busy
+            ? '正在结算这一回合…'
+            : props.encounterActive
+              ? '战斗文字只识别明确目标、戒备或撤退；未选目标时会先请你澄清。'
+              : '行动由本地规则检定，再交给叙事模型。'}
         </Text>
         <Button
           label={props.busy ? '结算中…' : '行动'}

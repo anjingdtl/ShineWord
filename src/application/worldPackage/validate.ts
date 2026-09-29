@@ -79,6 +79,36 @@ export function validatePackage(
         );
       }
     }
+
+    if (entry.kind === 'scene') {
+      const scene = entry.definition as { actors?: unknown; encounterParticipants?: {
+        hostiles?: unknown; neutrals?: unknown;
+      } };
+      if (scene.encounterParticipants !== undefined) {
+        if (entry.visibility !== 'public') {
+          errors.push(`${entry.entryId}: scene combat entry must be public to be entered from the story screen.`);
+        }
+        const actors = new Set(Array.isArray(scene.actors)
+          ? scene.actors.filter((id): id is string => typeof id === 'string')
+          : []);
+        for (const side of ['hostiles', 'neutrals'] as const) {
+          const rows = scene.encounterParticipants[side];
+          if (!Array.isArray(rows)) continue;
+          for (const row of rows) {
+            if (typeof row !== 'object' || row === null || Array.isArray(row)) continue;
+            const templateId = (row as { templateId?: unknown }).templateId;
+            if (typeof templateId !== 'string') continue;
+            const template = byId.get(templateId);
+            if (!actors.has(templateId)) {
+              errors.push(`${entry.entryId}: encounter template ${templateId} must also appear in the scene actor list.`);
+            }
+            if (!template || template.kind !== 'actor_template' || template.visibility !== 'public') {
+              errors.push(`${entry.entryId}: encounter ${side.slice(0, -1)} ${templateId} must be a public actor template.`);
+            }
+          }
+        }
+      }
+    }
   }
 
   // Acyclic dependency graph (iterative DFS with colors).

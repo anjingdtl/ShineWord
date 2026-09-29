@@ -15,6 +15,7 @@ export interface OpeningWorldSetup {
   lore: Array<{ name: string; text: string }>;
   anchorEvents: Array<{ eventId: string; title: string; summary: string; worldTimeOrder: number }>;
   locations: string[];
+  locationOptions: Array<{ locationId: string; name: string }>;
   canonCharacters: Array<{ entityId: string; name: string }>;
   companionTemplates: Array<{ entryId: string; name: string; description: string }>;
   encounterTemplates: Array<{ entryId: string; name: string }>;

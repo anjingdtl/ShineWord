@@ -47,7 +47,7 @@ export function WorldThemeOverrideCard(props: { worldId: string }): React.JSX.El
           typeStyle(theme, theme.type.caption),
           { color: theme.onRaised.secondary, marginTop: theme.space.md },
         ]}>
-        世界主题只影响这个世界的页面（资料 / 三宝书 / 审查 / 世界包，游玩页随 P4 接入）；
+        世界主题只影响这个世界的页面（资料 / 三宝书 / 审查 / 世界包 / 游玩页）；
         全局皮肤仍是「{THEMES[globalThemeId].label}」，其他页面不受影响。
       </Text>
     </Card>

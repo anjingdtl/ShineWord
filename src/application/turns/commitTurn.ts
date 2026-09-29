@@ -27,6 +27,7 @@ export interface CommitResolvedTurnInput {
   events?: Array<{ eventType: string; payload: unknown }>;
   /** 'engine' contracts are local-built (rest/training) and may carry caps. */
   contractOrigin?: 'planner' | 'engine';
+  coordinationFence?: { campaignId: string; fenceToken: number };
   committedAt?: string;
 }
 
@@ -47,6 +48,7 @@ export async function commitResolvedTurn({
   applyAuthoritativeState,
   events,
   contractOrigin = 'planner',
+  coordinationFence,
   committedAt = new Date().toISOString(),
 }: CommitResolvedTurnInput): Promise<CommitResolvedTurnResult> {
   assertValidActionContract(contract, contractOrigin);
@@ -126,6 +128,7 @@ export async function commitResolvedTurn({
     actionContractJson: serializeActionContract(contract),
     actionContractHash: contractHash,
     committedTurn,
+    coordinationFence,
     settlement,
     events: [...(events ?? []), ...domainEvents, ...lifeEvents],
   });

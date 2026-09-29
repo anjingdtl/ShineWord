@@ -40,6 +40,7 @@ export function StepConfirm(props: {
   setup: OpeningWorldSetup | null;
   anchorLabel: string;
   location: string;
+  locationLabel: string;
   kind: 'original' | 'canon';
   actorName: string;
   points: Record<string, number>;
@@ -77,7 +78,7 @@ export function StepConfirm(props: {
         <SectionHeader title="确认开局" subtitle="以下内容将写入新战役" />
         <Row label="世界" value={props.worldTitle} />
         <Row label="起点" value={props.anchorLabel} />
-        <Row label="地点" value={props.location || '（未选择）'} />
+        <Row label="地点" value={props.locationLabel || (props.location ? '已选开局地点' : '（未选择）')} />
         <Row
           label="角色"
           value={`${props.actorName} · ${props.kind === 'original' ? '原创角色' : '原著角色'}`}

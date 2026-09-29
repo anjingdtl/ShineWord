@@ -79,7 +79,7 @@ export function StepWorldStart(props: {
             {setup.locations.slice(0, 12).map(location => (
               <ChoiceCard
                 key={location}
-                title={location}
+                title={setup.locationOptions.find(option => option.locationId === location)?.name ?? location}
                 selected={props.locationId === location}
                 onPress={() => props.onSelectLocation(location)}
                 testID={`location-${location}`}

@@ -58,6 +58,8 @@ export interface AtomicCommitInput {
   actionContractJson: string;
   actionContractHash: string;
   committedTurn: CommittedTurn;
+  /** Optional cross-branch operation fence checked inside the same SQLite transaction. */
+  coordinationFence?: { campaignId: string; fenceToken: number };
   settlement?: TurnSettlementPlan;
   /** Additional engine events produced by authoritative projections in this transaction. */
   events?: Array<{ eventType: string; payload: unknown }>;

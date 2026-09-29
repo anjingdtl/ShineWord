@@ -822,6 +822,47 @@ CREATE INDEX IF NOT EXISTS idx_progressive_delta_origin
 
 `;
 
+const INTERACTION_ORCHESTRATION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS interaction_campaign_fences (
+  campaign_id TEXT PRIMARY KEY,
+  fence_token INTEGER NOT NULL CHECK(fence_token > 0),
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS interaction_operations (
+  operation_id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  operation_kind TEXT NOT NULL CHECK(operation_kind IN ('encounter_auto')),
+  status TEXT NOT NULL CHECK(status IN ('running', 'paused_system', 'completed', 'failed')),
+  expected_state_version INTEGER NOT NULL CHECK(expected_state_version >= 0),
+  fence_token INTEGER NOT NULL CHECK(fence_token > 0),
+  next_step INTEGER NOT NULL DEFAULT 0 CHECK(next_step >= 0),
+  max_steps INTEGER NOT NULL CHECK(max_steps > 0 AND max_steps <= 32),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+  FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interaction_one_running_per_branch
+  ON interaction_operations(branch_id) WHERE status = 'running';
+
+CREATE TABLE IF NOT EXISTS interaction_operation_steps (
+  operation_id TEXT NOT NULL,
+  step_index INTEGER NOT NULL CHECK(step_index >= 0),
+  action_kind TEXT NOT NULL CHECK(action_kind IN ('npc_turn')),
+  request_id TEXT NOT NULL UNIQUE,
+  expected_state_version INTEGER NOT NULL CHECK(expected_state_version >= 0),
+  committed_state_version INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('prepared', 'committed')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(operation_id, step_index),
+  FOREIGN KEY(operation_id) REFERENCES interaction_operations(operation_id) ON DELETE CASCADE
+);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -838,4 +879,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 13, name: 'world_build_runs', sql: WORLD_BUILD_RUNS_SCHEMA_SQL },
   { version: 14, name: 'progressive_package_scope', sql: PROGRESSIVE_PACKAGE_SCOPE_SCHEMA_SQL },
   { version: 15, name: 'progressive_branch_content', sql: PROGRESSIVE_CONTENT_SCHEMA_SQL },
+  { version: 16, name: 'interaction_orchestration', sql: INTERACTION_ORCHESTRATION_SCHEMA_SQL },
 ];

@@ -57,7 +57,8 @@ import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn } from '../turns/commitTurn';
 import { forkBranch } from '../branch/fork';
 import { hasBranchContentManifestTable, ensureBaseBranchContentManifest } from '../worldPackage/branchContentStore';
-import { contentDependencyBinding, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
+import { contentDependencyBinding, createBaseContentManifest, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
+import { projectLegacyAnchorlessOpeningFacts } from '../worldPackage/openingCompatibility';
 import { publishSourceEvidenceExcerptDelta } from '../worldPackage/progressiveDelta';
 import {
   EncounterService,
@@ -1334,15 +1335,25 @@ export class CampaignSession {
     const campaignAnchorRow = await this.deps.db.queryOne<{ anchor_json: string }>(
       'SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [options.campaignId],
     );
-    const anchor = campaignAnchorRow ? JSON.parse(campaignAnchorRow.anchor_json) as { worldTimeOrder?: number } : {};
+    const anchor = campaignAnchorRow
+      ? JSON.parse(campaignAnchorRow.anchor_json) as { worldTimeOrder?: number; anchorEventId?: string }
+      : {};
     const worldTimeOrder = Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0;
     const facts = await this.deps.worldStore.listFacts(summary.worldId);
+    const anchorEvents = (await this.deps.worldStore.listEvents(summary.worldId))
+      .filter(event => event.status === 'canon' && event.worldTimeOrder !== null);
+    const projectionFacts = projectLegacyAnchorlessOpeningFacts(
+      summary.worldId,
+      basePackage.manifest,
+      facts,
+      !anchor.anchorEventId && anchorEvents.length === 0,
+    );
     const knownEntryIds = new Set((summary.state.discoveries ?? [])
       .filter(item => item.actorId === playerCard.actorId).map(item => item.entryId));
-    const entries = projectPlayerEntriesAtAnchor(allEntries, facts, worldTimeOrder, knownEntryIds);
+    const entries = projectPlayerEntriesAtAnchor(allEntries, projectionFacts, worldTimeOrder, knownEntryIds);
     // The local authority may resolve hidden clue/quest references, but this
     // full time-valid package projection is never passed to the planner.
-    const authoritativeEntries = allEntries.filter(entry => isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+    const authoritativeEntries = allEntries.filter(entry => isEntryVisibleAtAnchor(entry, projectionFacts, worldTimeOrder)
       && (entry.kind !== 'actor_template' || isTemplateValidAtAnchor(entry, worldTimeOrder)));
     const { catalog, abilities, scenes, constraints } = packageIndexes(entries);
     const partyGroupId = (summary.state.party ?? []).find(member => member.actorId === playerCard.actorId)?.groupId ?? 'main';
@@ -1364,9 +1375,9 @@ export class CampaignSession {
     const memories = await this.deps.game.listMemories(options.branchId);
     const worldContext = this.buildWorldContext(
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
-      worldTimeOrder, facts,
+      worldTimeOrder, projectionFacts,
     );
-    const visibleSourceRanges = visibleEvidenceRanges(entries, facts, worldTimeOrder, knownEntryIds);
+    const visibleSourceRanges = visibleEvidenceRanges(entries, projectionFacts, worldTimeOrder, knownEntryIds);
     let sourceHash: string | null = null;
     let safeSourceContext = '';
     if (this.deps.progressiveTurnContext && visibleSourceRanges.length > 0) {
@@ -1409,7 +1420,7 @@ export class CampaignSession {
                 summary.state.contentManifest = excerptDelta.activeManifest;
                 allEntries.push(...excerptDelta.delta.entries);
                 entries.push(...projectPlayerEntriesAtAnchor(
-                  excerptDelta.delta.entries, facts, worldTimeOrder, knownEntryIds,
+                  excerptDelta.delta.entries, projectionFacts, worldTimeOrder, knownEntryIds,
                 ));
                 authoritativeEntries.push(...excerptDelta.delta.entries);
               }
@@ -1834,6 +1845,7 @@ export class CampaignSession {
     lore: Array<{ name: string; text: string }>;
     anchorEvents: Array<{ eventId: string; title: string; summary: string; worldTimeOrder: number }>;
     locations: string[];
+    locationOptions: Array<{ locationId: string; name: string }>;
     canonCharacters: Array<{ entityId: string; name: string }>;
     companionTemplates: Array<{ entryId: string; name: string; description: string }>;
     encounterTemplates: Array<{ entryId: string; name: string }>;
@@ -1842,11 +1854,20 @@ export class CampaignSession {
     if (revision === null) {
       return {
         packageRevision: null, rulesetVersion: '', skills: [], lore: [],
-        anchorEvents: [], locations: [], canonCharacters: [], companionTemplates: [], encounterTemplates: [],
+        anchorEvents: [], locations: [], locationOptions: [], canonCharacters: [], companionTemplates: [], encounterTemplates: [],
       };
     }
     const entries = await this.loadPackageEntries(worldId, revision);
-    const facts = await this.deps.worldStore.listFacts(worldId);
+    const pkg = await this.deps.worldStore.getWorldPackage(worldId, revision);
+    const anchorEvents = await this.deps.worldStore.listEvents(worldId);
+    const hasCanonTimeAnchor = anchorEvents.some(event => event.status === 'canon' && event.worldTimeOrder !== null);
+    const rawFacts = await this.deps.worldStore.listFacts(worldId);
+    const facts = projectLegacyAnchorlessOpeningFacts(
+      worldId,
+      pkg?.manifest ?? null,
+      rawFacts,
+      worldTimeOrder === undefined && !hasCanonTimeAnchor,
+    );
     const skills = entries
       .filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
         && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
@@ -1866,10 +1887,10 @@ export class CampaignSession {
         const def = entry.definition as { name?: string; text?: string };
         return { name: def.name ?? entry.entryId, text: def.text ?? '' };
       });
-    const scenes = entries
+    const sceneEntries = entries
       .filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
-        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
-      .map(entry => entry.definition as SceneDefinition);
+        && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder));
+    const scenes = sceneEntries.map(entry => entry.definition as SceneDefinition);
     // Locations come from package scene entries AND the novel's canon
     // location entities (the extractor always produces those) - a package
     // without scene entries still offers real novel places to start at
@@ -1881,8 +1902,23 @@ export class CampaignSession {
         && (worldTimeOrder === undefined
           ? fact.validFrom === null && fact.validTo === null && fact.revealAt === null
           : isFactVisibleAtAnchor(fact, worldTimeOrder))))
-      .map(entity => entity.name);
-    const locations = [...new Set([...scenes.map(scene => scene.locationId), ...canonLocations])];
+      .map(entity => ({ locationId: entity.name, name: entity.name }));
+    const locations = [...new Set([...scenes.map(scene => scene.locationId), ...canonLocations.map(location => location.locationId)])];
+    const locationOptionsById = new Map<string, { locationId: string; name: string }>();
+    for (const entry of sceneEntries) {
+      const definition = entry.definition as SceneDefinition;
+      if (definition.locationId && !locationOptionsById.has(definition.locationId)) {
+        locationOptionsById.set(definition.locationId, {
+          locationId: definition.locationId,
+          name: typeof definition.name === 'string' && definition.name.trim()
+            ? definition.name.trim()
+            : definition.locationId,
+        });
+      }
+    }
+    for (const location of canonLocations) {
+      if (!locationOptionsById.has(location.locationId)) locationOptionsById.set(location.locationId, location);
+    }
     const companionTemplates = entries
       .filter(entry => entry.visibility === 'public'
         && isPlayerRecruitmentCandidate(entry, facts, worldTimeOrder)
@@ -1907,8 +1943,7 @@ export class CampaignSession {
     // Anchor candidates: canon events in world-time order (the opening must
     // pick a REAL point in the story, not a fixed placeholder), plus the
     // world's person entities as canon-protagonist candidates.
-    const events = await this.deps.worldStore.listEvents(worldId);
-    const anchorEvents = [...events]
+    const anchors = [...anchorEvents]
       .filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
       .filter(event => lockedPackageRevision === undefined || event.worldTimeOrder! <= (worldTimeOrder ?? 0))
       .sort((a, b) => (a.worldTimeOrder ?? 0) - (b.worldTimeOrder ?? 0))
@@ -1930,14 +1965,14 @@ export class CampaignSession {
       .slice(0, 60)
       .map(entity => ({ entityId: entity.entityId, name: entity.name }));
 
-    const pkg = await this.deps.worldStore.getWorldPackage(worldId, revision);
     return {
       packageRevision: revision,
       rulesetVersion: pkg?.manifest.ruleset.version ?? '',
       skills,
       lore,
-      anchorEvents,
+      anchorEvents: anchors,
       locations,
+      locationOptions: [...locationOptionsById.values()],
       canonCharacters,
       companionTemplates,
       encounterTemplates,
@@ -1986,12 +2021,106 @@ export class CampaignSession {
     return this.encounters.getView(campaignId, branchId, encounterId);
   }
 
+  /** Return only explicitly authored conflict mappings for the player's current public scene. */
+  async getCurrentSceneEncounterOptions(campaignId: string, branchId: string): Promise<SceneEncounterOption[]> {
+    const summary = await this.getSummary(campaignId, branchId);
+    if (summary.packageRevision < 1 || summary.state.encounters?.some(item => item.state.status === 'active')) return [];
+    const player = summary.cards.find(card => card.controller === 'player');
+    const locationId = player ? summary.state.actors[player.actorId]?.locationId : null;
+    if (!player || !locationId) return [];
+
+    const pkg = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+    if (!pkg || pkg.manifest.status !== 'published') return [];
+    const manifest = summary.state.contentManifest ?? createBaseContentManifest({
+      worldId: summary.worldId,
+      branchId,
+      stateVersion: summary.state.stateVersion,
+      basePackage: { revision: summary.packageRevision, contentHash: pkg.manifest.contentHash },
+    });
+    const deltas = await loadBranchDeltaEntries({
+      manifest,
+      worldId: summary.worldId,
+      branchId,
+      stateVersion: summary.state.stateVersion,
+      baseRevision: summary.packageRevision,
+      baseContentHash: pkg.manifest.contentHash,
+      getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
+      sha256Hex: this.deps.hashProvider.sha256Hex,
+    });
+    const entries = [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
+    const anchorRow = await this.deps.db.queryOne<{ anchor_json: string }>(
+      'SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [campaignId],
+    );
+    let anchorEventId: string | undefined;
+    try { anchorEventId = anchorRow ? (JSON.parse(anchorRow.anchor_json) as { anchorEventId?: string }).anchorEventId : undefined; }
+    catch { return []; }
+    const events = await this.deps.worldStore.listEvents(summary.worldId);
+    const hasCanonTimeAnchor = events.some(event => event.status === 'canon' && event.worldTimeOrder !== null);
+    const facts = projectLegacyAnchorlessOpeningFacts(
+      summary.worldId,
+      pkg.manifest,
+      await this.deps.worldStore.listFacts(summary.worldId),
+      summary.anchorWorldTimeOrder === null && !anchorEventId && !hasCanonTimeAnchor,
+    );
+    const templates = new Map(entries.filter(entry => entry.kind === 'actor_template').map(entry => [entry.entryId, entry]));
+    const visibleScenes = entries.filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
+      && isEntryVisibleAtAnchor(entry, facts, summary.anchorWorldTimeOrder ?? undefined))
+      .filter(entry => (entry.definition as SceneDefinition).locationId === locationId)
+      .filter(entry => {
+        const scene = entry.definition as SceneDefinition;
+        const mapping = scene.encounterParticipants;
+        if (!mapping || mapping.hostiles.length === 0) return false;
+        return [...mapping.hostiles, ...(mapping.neutrals ?? [])].every(participant => {
+          const template = templates.get(participant.templateId);
+          return scene.actors.includes(participant.templateId) && template?.visibility === 'public'
+            && isEntryVisibleAtAnchor(template, facts, summary.anchorWorldTimeOrder ?? undefined)
+            && isTemplateValidAtAnchor(template, summary.anchorWorldTimeOrder ?? undefined);
+        });
+      });
+    return visibleScenes.map(entry => {
+      const scene = entry.definition as SceneDefinition;
+      const mapping = scene.encounterParticipants!;
+      return {
+        sceneEntryId: entry.entryId,
+        sceneName: scene.name,
+        hostiles: mapping.hostiles.map(item => ({ ...item })),
+        neutrals: (mapping.neutrals ?? []).map(item => ({ ...item })),
+      };
+    });
+  }
+
+  /** Revalidates scene and template qualification immediately before encounter creation. */
+  async beginSceneEncounter(input: {
+    campaignId: string; branchId: string; sceneEntryId: string; requestId: string;
+  }): Promise<EncounterView> {
+    if (!input.requestId || input.requestId.length > 96) throw new Error('遭遇请求编号无效。');
+    const replayEncounterId = `enc-${input.branchId}-${encodeURIComponent(input.requestId)}`;
+    if (await this.deps.game.loadEncounter(input.branchId, replayEncounterId)) {
+      return this.encounters.getView(input.campaignId, input.branchId, replayEncounterId);
+    }
+    const option = (await this.getCurrentSceneEncounterOptions(input.campaignId, input.branchId))
+      .find(item => item.sceneEntryId === input.sceneEntryId);
+    if (!option) throw new Error('当前场景没有这组明确公开的冲突资格，未开始遭遇。');
+    return this.encounters.begin({
+      campaignId: input.campaignId,
+      branchId: input.branchId,
+      hostiles: option.hostiles,
+      neutrals: option.neutrals,
+      requestId: input.requestId,
+    });
+  }
+
   getActiveEncounter(campaignId: string, branchId: string): Promise<EncounterView | null> {
     return this.encounters.getActiveEncounter(campaignId, branchId);
   }
 
   encounterAttack(input: Parameters<EncounterService['playerAttack']>[0]): Promise<EncounterView> {
     return this.encounters.playerAttack(input);
+  }
+
+  getPlayerAttackAvailability(input: Parameters<EncounterService['getPlayerAttackAvailability']>[0]):
+    Promise<{ allowed: boolean; explanation: string | null }> {
+    return this.encounters.getPlayerAttackAvailability(input);
   }
 
   encounterNpcTurn(input: Parameters<EncounterService['npcTurn']>[0]): Promise<EncounterView> {
@@ -2139,6 +2268,21 @@ export function projectPlayerEntriesAtAnchor(
   });
 }
 
+export interface SceneEncounterOption {
+  sceneEntryId: string;
+  sceneName: string;
+  hostiles: Array<{ templateId: string; count: number }>;
+  neutrals: Array<{ templateId: string; count: number }>;
+}
+
+/**
+ * Read-only compatibility for worlds published before the r7 D3 correction.
+ * Those exact partial-opening builds stored their four dossier facts with
+ * revealAt=1. On a campaign with no canon anchor, the runtime uses time 0,
+ * hiding the scene that was explicitly compiled as the opening. Re-expose
+ * only the four versioned opening facts in the matching published partial
+ * package; do not rewrite the immutable fact or package rows.
+ */
 function contractActorId(contract: ActionContract, cards: readonly ActorCard[]): string {
   // The acting card must exist; unknown ids never silently remap to the player.
   if (cards.some(card => card.actorId === contract.actorId)) return contract.actorId;

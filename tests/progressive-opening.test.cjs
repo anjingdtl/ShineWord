@@ -296,5 +296,37 @@ test('anchor-less world setup still exposes the compiled opening location and lo
   assert.ok(setup.locations.length > 0, `locations must not be empty for an anchor-less world, got ${JSON.stringify(setup.locations)}`);
   assert.ok(setup.locations.includes('opening-location'));
   assert.ok(setup.lore.some(item => item.name === '开局资料'));
+
+  // Model an already-imported package produced before the D3 fix. The opening
+  // facts remain immutable on disk; read projection and campaign creation
+  // must recover the playable opening without deleting or re-importing it.
+  db.prepare("UPDATE canon_facts SET reveal_at = '1' WHERE world_id = ? AND fact_id IN (?, ?, ?, ?)").run(
+    'w-anchorless',
+    'fact-w-anchorless-opening-location',
+    'fact-w-anchorless-opening-setting',
+    'fact-w-anchorless-opening-situation',
+    'fact-w-anchorless-opening-goal',
+  );
+  const legacySetup = await session.getWorldSetup('w-anchorless');
+  assert.ok(legacySetup.locations.includes('opening-location'));
+  assert.ok(legacySetup.lore.some(item => item.name === '开局资料'));
+  assert.equal(db.prepare("SELECT reveal_at FROM canon_facts WHERE world_id = ? AND fact_id = ?").get(
+    'w-anchorless', 'fact-w-anchorless-opening-location',
+  ).reveal_at, '1', 'compatibility must not rewrite immutable legacy facts');
+
+  const legacyCampaign = await createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-legacy-opening', title: '旧格式开局',
+    worldId: 'w-anchorless', packageRevision: published.manifest.revision,
+    anchor: { worldTimeOrder: 0, locationId: 'opening-location' },
+    protagonist: { actorId: 'actor-legacy', kind: 'original', name: '旅人',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 },
+      initialSkills: ['skill-observation'] },
+    goal: '寻找巷口脚步声的来源',
+    createdAt: 'later',
+  });
+  assert.equal(legacyCampaign.snapshot.actors['actor-legacy'].locationId, 'opening-location');
+  assert.equal(db.prepare("SELECT reveal_at FROM canon_facts WHERE world_id = ? AND fact_id = ?").get(
+    'w-anchorless', 'fact-w-anchorless-opening-location',
+  ).reveal_at, '1', 'campaign recovery must preserve the original fact row');
   db.close();
 });

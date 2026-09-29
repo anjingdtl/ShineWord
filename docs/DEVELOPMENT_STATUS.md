@@ -1,8 +1,28 @@
-# ShineWord 开发状态
+# ShineWord 项目建设进度（PROGRESS）
 
-更新日期：2026-09-29（最终收尾验收轮 F0–F6 后）。本轮逐项证据见 [final-closeout/FINAL_REPORT.md](reviews/final-closeout/FINAL_REPORT.md)；二/三期历史报告保留为快照。
+更新日期：2026-09-29（第四期本地复验）。逐项证据见 [第四期最终报告](reviews/phase4/Q4_FINAL_REPORT.md)；下方 F0–F6 与更早阶段保留为历史快照。
 
-## 当前阶段（最终收尾验收轮 F0–F6）
+## 当前阶段（第四期本地建设与复验）
+
+版本：`0.3.0-progressive.2` / versionCode `16`。第四期建设和本地复验已形成可审查交付；**整体验收未通过，不是 Alpha/Beta，不可称为可发布**。
+
+### 本轮完成
+
+- **文字优先主屏**：故事滚动区、最多三项文字行动和显式输入；默认页移除常驻战斗 HUD。四主题、1.3×/2×系统字、键盘与窄屏布局有 API37 模拟器截图。
+- **规则与恢复**：场景资格遭遇入口、隔离的遭遇意图协议、StoryEntry 安全摘要、NPC 自动推进 operation journal 与 migration 16 已实现；有旧 `revealAt='1'`、目标/协议边界、幂等、fence、上限及 commit/checkpoint 故障注入回归。
+- **工程门禁**：`npm run verify:core` 237/237；mobile typecheck exit 0；96 项文本对比度检查和组件断言 PASS；Debug 与签名 Release 本地构建成功。
+- **现有模拟器**：使用 `ShineQA` / `emulator-5554`（Android 17 API 37），候选包同签名 `install -r` 后保留两个合成 QA 世界；Release 断网强停冷启动到达书库。默认故事页在 412×915、360×800、320×640 dp 的故事滚动区分别为 66.6%、61.8%、52.3%。
+
+### 未达到的出口
+
+- 本轮没有调用真实 LLM、没有 SAF 导入《白篱梦》或《凡人修仙传》，没有 3 次独立开局、10 次玩家决定、真实 campaign 恢复或 TTFP 样本。配置文件轮换状态没有证据，未读/未用凭据。
+- 设备没有提交普通故事行动；当前 QA 包缺明确 scene/template 冲突资格，所以没有设备遭遇行动或自动 NPC 轮转。
+- 架构仍没有独立 `UnifiedActionGateway` 类。自动行动精确 Android 强停注入、TalkBack、API24、Android 15/16 真机与端上 P95 未测。
+- 仅 API37 模拟器并不关闭设备矩阵。Release 候选保留 versionCode16，未递增、未上传、未发布。
+
+完整状态、命令退出码、证据路径和限制见 [Q4_FINAL_REPORT.md](reviews/phase4/Q4_FINAL_REPORT.md)、[Q4_DEVICE_MATRIX.md](reviews/phase4/Q4_DEVICE_MATRIX.md)、[Q4_COMPATIBILITY_REPORT.md](reviews/phase4/Q4_COMPATIBILITY_REPORT.md) 与 [Q4_LLM_NOVEL_REPORT.md](reviews/phase4/Q4_LLM_NOVEL_REPORT.md)。
+
+## 历史快照（最终收尾验收轮 F0–F6，2026-09-29）
 
 版本：`0.3.0-progressive.2` / versionCode `16`（情况 B：工程绿、真实可玩外部阻断；非 Alpha）。
 

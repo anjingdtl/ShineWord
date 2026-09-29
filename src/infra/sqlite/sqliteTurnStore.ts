@@ -15,6 +15,7 @@ import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchC
 
 interface BranchRow extends SqliteRow {
   branch_id: string;
+  campaign_id: string;
   state_version: number;
 }
 
@@ -322,7 +323,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       }
 
       const branch = await tx.queryOne<BranchRow>(
-        'SELECT branch_id, state_version FROM branches WHERE branch_id = ?',
+        'SELECT branch_id, campaign_id, state_version FROM branches WHERE branch_id = ?',
         [input.branchId],
       );
       if (!branch) throw new Error(`Unknown branch: ${input.branchId}.`);
@@ -331,7 +332,6 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           `State version mismatch while staging roll: expected ${input.expectedStateVersion}, actual ${branch.state_version}.`,
         );
       }
-
       await tx.execute(
         `INSERT INTO turns
           (branch_id, turn_id, status, expected_state_version, committed_state_version,
@@ -431,7 +431,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       if (existing) return existing;
 
       const branch = await tx.queryOne<BranchRow>(
-        'SELECT branch_id, state_version FROM branches WHERE branch_id = ?',
+        'SELECT branch_id, campaign_id, state_version FROM branches WHERE branch_id = ?',
         [input.branchId],
       );
       if (!branch) throw new Error(`Unknown branch: ${input.branchId}.`);
@@ -439,6 +439,16 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         throw new Error(
           `Atomic commit conflict: expected stateVersion ${input.expectedStateVersion}, actual ${branch.state_version}.`,
         );
+      }
+      if (input.coordinationFence) {
+        const fence = await tx.queryOne<{ fence_token: number }>(
+          'SELECT fence_token FROM interaction_campaign_fences WHERE campaign_id = ?',
+          [branch.campaign_id],
+        );
+        if (branch.campaign_id !== input.coordinationFence.campaignId
+          || fence?.fence_token !== input.coordinationFence.fenceToken) {
+          throw new Error('Interaction operation fence expired before the atomic game commit.');
+        }
       }
       if (input.nextState.branchId !== input.branchId) {
         throw new Error('Atomic commit cannot move a state to another branch.');

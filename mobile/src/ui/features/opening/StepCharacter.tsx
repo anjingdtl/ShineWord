@@ -46,55 +46,66 @@ export function StepCharacter(props: {
   onToggleSkill: (entryId: string) => void;
   canonEntityId: string;
   onSelectCanon: (entityId: string) => void;
+  /** False when this card is embedded as a custom-fields expansion after quick identity is chosen. */
+  showIdentityFields?: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const remaining = FREE_POINT_BUDGET - props.spentTotal;
+  const showIdentityFields = props.showIdentityFields ?? true;
 
   return (
     <View style={{ gap: theme.space.md }}>
-      <SegmentedControl
-        options={ORIGIN_OPTIONS}
-        value={props.kind}
-        onChange={props.onKindChange}
-        testID="opening-origin"
-      />
+      {showIdentityFields ? (
+        <SegmentedControl
+          options={ORIGIN_OPTIONS}
+          value={props.kind}
+          onChange={props.onKindChange}
+          testID="opening-origin"
+        />
+      ) : null}
 
       {props.kind === 'canon' ? (
-        <View>
-          <SectionHeader title="原著角色" subtitle="从这个世界可扮演的人物中选择" />
-          {props.setup && props.setup.canonCharacters.length > 0 ? (
-            <View style={{ gap: theme.space.sm }}>
-              {props.setup.canonCharacters.slice(0, 20).map(character => (
-                <ChoiceCard
-                  key={character.entityId}
-                  title={character.name}
-                  selected={props.canonEntityId === character.entityId}
-                  onPress={() => props.onSelectCanon(character.entityId)}
-                  description="按锚点之前的原著证据推导属性与技能；不显示未来剧情与主持人资料。"
-                  testID={`canon-${character.entityId}`}
-                />
-              ))}
-            </View>
-          ) : (
-            <EmptyState
-              compact
-              title="没有可扮演的原著人物"
-              description="这个世界包未提供可扮演的原著角色记录，请改选原创角色。"
-            />
-          )}
-        </View>
+        showIdentityFields ? (
+          <View>
+            <SectionHeader title="原著角色" subtitle="从这个世界可扮演的人物中选择" />
+            {props.setup && props.setup.canonCharacters.length > 0 ? (
+              <View style={{ gap: theme.space.sm }}>
+                {props.setup.canonCharacters.slice(0, 20).map(character => (
+                  <ChoiceCard
+                    key={character.entityId}
+                    title={character.name}
+                    selected={props.canonEntityId === character.entityId}
+                    onPress={() => props.onSelectCanon(character.entityId)}
+                    description="按锚点之前的原著证据推导属性与技能；不显示未来剧情与主持人资料。"
+                    testID={`canon-${character.entityId}`}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptyState
+                compact
+                title="没有可扮演的原著人物"
+                description="这个世界包未提供可扮演的原著角色记录，请改选原创角色。"
+              />
+            )}
+          </View>
+        ) : (
+          <EmptyState compact title="原著人物属性由公开资料决定" description="此身份没有可自定义的原创属性或初始技能。" />
+        )
       ) : (
         <>
-          <Card>
-            <SectionHeader title="角色" subtitle="原创角色：属性与技能由你在开局时决定" />
-            <TextField
-              label="姓名"
-              value={props.name}
-              onChangeText={props.onNameChange}
-              placeholder="角色姓名（留空则为「无名旅人」）"
-              testID="opening-name"
-            />
-          </Card>
+          {showIdentityFields ? (
+            <Card>
+              <SectionHeader title="角色" subtitle="原创角色：属性与技能由你在开局时决定" />
+              <TextField
+                label="姓名"
+                value={props.name}
+                onChangeText={props.onNameChange}
+                placeholder="角色姓名（留空则为「无名旅人」）"
+                testID="opening-name"
+              />
+            </Card>
+          ) : null}
 
           <Card>
             <SectionHeader

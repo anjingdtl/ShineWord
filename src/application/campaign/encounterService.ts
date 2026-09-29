@@ -111,6 +111,7 @@ interface EncounterContext {
   worldId: string;
   packageRevision: number;
   state: GameStateSnapshot;
+  operationFence?: { campaignId: string; fenceToken: number };
 }
 
 interface ActionEconomy {
@@ -402,6 +403,60 @@ export class EncounterService {
 
   // ------------------------------------------------------------- player turn
 
+  /** Read-only attack preflight so an out-of-range choice is explained before any roll. */
+  async getPlayerAttackAvailability(input: {
+    campaignId: string; branchId: string; encounterId: string; targetId: string;
+  }): Promise<{ allowed: boolean; explanation: string | null }> {
+    const ctx = await this.context(input.campaignId, input.branchId, input.encounterId);
+    if (ctx.encounter.status !== 'active') return { allowed: false, explanation: '这场冲突已经结束。' };
+    const actorId = currentActor(ctx.encounter);
+    const actorCard = ctx.cards.find(card => card.actorId === actorId);
+    if (!actorCard || actorCard.controller !== 'player') {
+      return { allowed: false, explanation: '当前由同伴或对手行动，系统正在自动结算。' };
+    }
+    const attacker = combatantFor(actorId, ctx.encounter, ctx.cards, ctx.zoneMap,
+      templateMap(ctx.entries), ctx.entries);
+    const target = combatantFor(input.targetId, ctx.encounter, ctx.cards, ctx.zoneMap,
+      templateMap(ctx.entries), ctx.entries);
+    if (target.side !== 'hostile') return { allowed: false, explanation: '只能选择当前公开在场的敌对目标。' };
+    const catalog = packageIndexes(ctx.entries).catalog;
+    const skillId = bestAttackSkill(actorCard, attacker, catalog);
+    if (!skillId) return { allowed: false, explanation: `${actorCard.name} 没有可用于攻击的技能。` };
+    const attackRange = attackRangeOf(attacker, skillId, templateMap(ctx.entries));
+    try {
+      compileAttack({
+        attacker,
+        target,
+        skillId,
+        catalog,
+        difficultyBand: 'normal',
+        state: ctx.state,
+        encounter: ctx.encounter,
+        encounterId: input.encounterId,
+        actionSeq: ctx.state.stateVersion,
+        stateVersion: ctx.state.stateVersion,
+        zones: ctx.zones,
+        attackRange,
+      });
+      return { allowed: true, explanation: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const range = message.match(/at (near|mid|far) range; a (touch|near|mid|far) attack cannot reach/i);
+      if (range) {
+        const distanceLabel = ({ near: '近', mid: '中', far: '远' } as Record<string, string>)[range[1]!] ?? '未知';
+        const reachLabel = ({ touch: '接触', near: '近', mid: '中', far: '远' } as Record<string, string>)[range[2]!] ?? '未知';
+        return { allowed: false, explanation: `暂时够不到这个目标：目标距离为${distanceLabel}，当前攻击范围为${reachLabel}。` };
+      }
+      if (/already used its main action/i.test(message)) {
+        return { allowed: false, explanation: '本回合的主要行动已用尽。' };
+      }
+      if (/disabled and cannot act/i.test(message)) {
+        return { allowed: false, explanation: '当前角色失能，无法攻击。' };
+      }
+      return { allowed: false, explanation: '当前规则条件不允许攻击这个目标。' };
+    }
+  }
+
   /** Player attack with a legal attack skill against a target in range. */
   async playerAttack(input: {
     campaignId: string;
@@ -475,10 +530,15 @@ export class EncounterService {
     branchId: string;
     encounterId: string;
     requestId?: string;
+    fenceToken?: number;
   }): Promise<EncounterView> {
     const replay = await this.replayCommittedRequest(input.campaignId, input.branchId, input.encounterId, input.requestId);
     if (replay) return replay;
     const ctx = await this.context(input.campaignId, input.branchId, input.encounterId);
+    if (input.fenceToken !== undefined) {
+      if (!Number.isSafeInteger(input.fenceToken) || input.fenceToken < 1) throw new Error('自动行动栅栏编号无效。');
+      ctx.operationFence = { campaignId: input.campaignId, fenceToken: input.fenceToken };
+    }
     if (ctx.encounter.status !== 'active') throw new Error('遭遇已经结束。');
     const { encounter, cards, zoneMap } = ctx;
     const currentActorId = currentActor(encounter);
@@ -1181,6 +1241,7 @@ export class EncounterService {
       rollRecord: rollRecord ?? undefined,
       settlement: effectiveSettlement,
       contractOrigin: 'engine',
+      coordinationFence: ctx.operationFence,
       committedAt: now,
       updateNextState: nextState => {
         for (const actorId of removedActorIds) delete nextState.actors[actorId];

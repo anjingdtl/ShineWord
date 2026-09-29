@@ -17,6 +17,7 @@ const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeSt
 const { assembleBook } = require('../dist/application/worldPackage/publish');
 const { CampaignSession } = require('../dist/application/campaign/session');
 const { commitResolvedTurn } = require('../dist/application/turns/commitTurn');
+const { SqliteInteractionOperationJournal } = require('../dist/application/campaign/interactionOrchestrator');
 const {
   distanceBetweenZones, rangeCoversBand, decideNpcAction, explainNpcDecision,
 } = require('../dist/application/campaign/encounterFlow');
@@ -170,7 +171,7 @@ async function seedWorld(db, worldStore, worldId = 'w-pkg') {
   });
 }
 
-async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], entryRevision = 1, includeRecruitmentScene = false } = {}) {
+async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], entryRevision = 1, includeRecruitmentScene = false, enableQualifiedEncounter = false } = {}) {
   const { publishWorldPackage } = require('../dist/application/worldPackage/publish');
   const guardTemplate = lootItemIds.length > 0
     ? {
@@ -179,13 +180,21 @@ async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], 
         dependencyIds: [...lootItemIds],
       }
     : GUARD_TEMPLATE;
-  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN, OPENING_COURTYARD, ITEM_KIT, COMPANION_TEMPLATE, FUTURE_COMPANION_TEMPLATE,
+  const publishedGuard = enableQualifiedEncounter ? { ...guardTemplate, visibility: 'public' } : guardTemplate;
+  const openingScene = enableQualifiedEncounter ? {
+    ...OPENING_COURTYARD,
+    definition: {
+      ...OPENING_COURTYARD.definition,
+      encounterParticipants: { hostiles: [{ templateId: 'guard-template', count: 1 }] },
+    },
+  } : OPENING_COURTYARD;
+  const entries = [SKILL_STEALTH, SKILL_SWORD, LORE_RAIN, openingScene, ITEM_KIT, COMPANION_TEMPLATE, FUTURE_COMPANION_TEMPLATE,
     ...(includeRecruitmentScene ? [SOCIAL_CHARM, CLUE_NOTE, RECRUITABLE_NPC, RECRUITMENT_SCENE] : []),
-    ...(lootItemIds.length > 0 ? [ITEM_RELIC] : []), guardTemplate]
+    ...(lootItemIds.length > 0 ? [ITEM_RELIC] : []), publishedGuard]
     .map(item => ({ ...item, revision: entryRevision }));
   const sections = [
     { book: 'player_handbook', sectionKey: 'skills', title: '技能', entryIds: ['stealth', 'sword', ...(includeRecruitmentScene ? ['charm'] : [])], position: 1 },
-    { book: 'player_handbook', sectionKey: 'world', title: '世界', entryIds: ['lore-rain', ...(includeRecruitmentScene ? ['clue-note', 'scene-courtyard'] : [])], position: 0 },
+    { book: 'player_handbook', sectionKey: 'world', title: '世界', entryIds: ['lore-rain', ...(enableQualifiedEncounter ? ['scene-open-courtyard'] : []), ...(includeRecruitmentScene ? ['clue-note', 'scene-courtyard'] : [])], position: 0 },
     { book: 'player_handbook', sectionKey: 'items', title: '物品', entryIds: ['item-field-kit'], position: 3 },
     { book: 'monster_manual', sectionKey: 'humans', title: '人类对手', entryIds: ['guard-template', 'companion-template', ...(includeRecruitmentScene ? ['recruitable-npc'] : [])], position: 0 },
   ];
@@ -195,11 +204,11 @@ async function publishSample(worldStore, worldId = 'w-pkg', { lootItemIds = [], 
   });
 }
 
-async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], lootItemIds = [], companionDirective, includeRecruitmentScene = false } = {}) {
+async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], lootItemIds = [], companionDirective, includeRecruitmentScene = false, enableQualifiedEncounter = false, protagonistDescription } = {}) {
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
   await seedWorld(db, worldStore);
-  const pub = await publishSample(worldStore, 'w-pkg', { lootItemIds, includeRecruitmentScene });
+  const pub = await publishSample(worldStore, 'w-pkg', { lootItemIds, includeRecruitmentScene, enableQualifiedEncounter });
   const { createCampaign } = require('../dist/application/campaign/createCampaign');
   await createCampaign({
     db: adapter, worldStore, campaignId: 'camp-s', title: '雨夜潜入', worldId: 'w-pkg',
@@ -207,6 +216,7 @@ async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], 
     anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
     protagonist: {
       actorId: 'actor-shen', kind: 'original', name: '沈青',
+      ...(protagonistDescription ? { description: protagonistDescription } : {}),
       attributes: { physique: 1, agility: 3, insight: 2, knowledge: 1, willpower: 1, social: 1 },
       initialSkills,
     },
@@ -220,6 +230,14 @@ async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], 
   }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
   return { session, adapter, worldStore, provider };
 }
+
+test('Q4: optional quick-opening character description is stored on the protagonist card', async () => {
+  const db = setupDb();
+  await makeSession(db, { protagonistDescription: '一名披着旧蓝斗篷的旅人。' });
+  const row = db.prepare("SELECT card_json FROM actor_cards WHERE branch_id = 'camp-s-main' AND actor_id = 'actor-shen'").get();
+  assert.equal(JSON.parse(row.card_json).description, '一名披着旧蓝斗篷的旅人。');
+  db.close();
+});
 
 // ---------------------------------------------------------------------------
 // A01: local rules authority — the planner cannot inject numbers
@@ -1099,6 +1117,113 @@ test('Phase 2: support instruction commits a legal companion rescue', async () =
 // G01: encounter scheduling end-to-end (initiative, attack, NPC turns,
 // disable/rescue/retreat/end, cleanup, crash-resume via the envelope)
 // ---------------------------------------------------------------------------
+
+test('Q4: story encounter entry requires an explicit current-scene roster and replays the same request', async () => {
+  const unqualifiedDb = setupDb();
+  const unqualified = await makeSession(unqualifiedDb);
+  assert.deepEqual(await unqualified.session.getCurrentSceneEncounterOptions('camp-s', 'camp-s-main'), []);
+  await assert.rejects(() => unqualified.session.beginSceneEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', sceneEntryId: 'scene-open-courtyard', requestId: 'story-choice-1',
+  }), /没有这组明确公开的冲突资格/);
+  unqualifiedDb.close();
+
+  const db = setupDb();
+  const { session } = await makeSession(db, { initialSkills: ['stealth', 'sword'], enableQualifiedEncounter: true });
+  const options = await session.getCurrentSceneEncounterOptions('camp-s', 'camp-s-main');
+  assert.equal(options.length, 1);
+  assert.deepEqual(options[0].hostiles, [{ templateId: 'guard-template', count: 1 }]);
+  let encounter = await session.beginSceneEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', sceneEntryId: options[0].sceneEntryId, requestId: 'story-choice-1',
+  });
+  assert.equal(encounter.status, 'active');
+  assert.equal(encounter.actors.filter(actor => actor.side === 'hostile').length, 1);
+  assert.deepEqual(await session.getCurrentSceneEncounterOptions('camp-s', 'camp-s-main'), [],
+    'the current scene is not offered as a new encounter while one is active');
+  const committedVersion = encounter.stateVersion;
+  encounter = await session.beginSceneEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', sceneEntryId: options[0].sceneEntryId, requestId: 'story-choice-1',
+  });
+  assert.equal(encounter.stateVersion, committedVersion, 'a double tap replays the same begin request');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM turns WHERE branch_id = 'camp-s-main' AND status = 'Committed' AND action_contract_json LIKE '%encounter_begin%'").get().n, 1);
+  db.close();
+});
+
+test('Q4: committed NPC encounter action survives process death before checkpoint without replaying its effect', async () => {
+  const db = setupDb();
+  const { session, adapter } = await makeSession(db, {
+    initialSkills: ['stealth', 'sword'], enableQualifiedEncounter: true,
+  });
+  const [option] = await session.getCurrentSceneEncounterOptions('camp-s', 'camp-s-main');
+  let view = await session.beginSceneEncounter({
+    campaignId: 'camp-s', branchId: 'camp-s-main', sceneEntryId: option.sceneEntryId,
+    requestId: 'q4-crash-scene-entry',
+  });
+  let setupPass = 0;
+  while (view.currentActorIsPlayer && setupPass < 6) {
+    view = await session.encounterPassTurn({
+      campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: view.encounterId,
+      requestId: `q4-crash-setup-pass-${setupPass++}`,
+    });
+  }
+  assert.equal(view.status, 'active');
+  assert.equal(view.currentActorIsPlayer, false, 'fixture is positioned at a real companion or hostile NPC decision');
+  const journal = new SqliteInteractionOperationJournal(adapter);
+  const operationId = `q4-crash:${view.encounterId}:${view.stateVersion}`;
+  const committedTurnsBefore = db.prepare(
+    "SELECT COUNT(*) AS n FROM turns WHERE branch_id = 'camp-s-main' AND status = 'Committed'",
+  ).get().n;
+  let failAfterCommit = true;
+  let replayConsumed = false;
+  const runInput = expectedStateVersion => ({
+    operationId,
+    campaignId: 'camp-s',
+    branchId: 'camp-s-main',
+    kind: 'encounter_auto',
+    expectedStateVersion,
+    nextAction: async (_step, _version, replayPreparedStep) => {
+      if (replayPreparedStep) {
+        replayConsumed = true;
+        return { encounterId: view.encounterId };
+      }
+      return replayConsumed ? null : { encounterId: view.encounterId };
+    },
+    actionKind: () => 'npc_turn',
+    executeAction: async (action, requestId, fenceToken) => {
+      view = await session.encounterNpcTurn({
+        campaignId: 'camp-s', branchId: 'camp-s-main', encounterId: action.encounterId,
+        requestId, fenceToken,
+      });
+      return { stateVersion: view.stateVersion, continue: true };
+    },
+    afterActionBeforeCheckpoint: async () => {
+      if (failAfterCommit) { failAfterCommit = false; throw new Error('injected stop after real SQLite game commit'); }
+    },
+  });
+  const preCommitVersion = view.stateVersion;
+  await assert.rejects(journal.run(runInput(preCommitVersion)), /injected stop after real SQLite game commit/);
+  const committedOnce = await session.getSummary('camp-s', 'camp-s-main');
+  const turnsAfterFirstCommit = db.prepare(
+    "SELECT COUNT(*) AS n FROM turns WHERE branch_id = 'camp-s-main' AND status = 'Committed'",
+  ).get().n;
+  assert.equal(committedOnce.state.stateVersion, preCommitVersion + 1);
+  assert.equal(turnsAfterFirstCommit, committedTurnsBefore + 1);
+
+  const resumable = await journal.getResumableOperation('camp-s', 'camp-s-main');
+  assert.equal(resumable.operationId, operationId);
+  assert.equal(resumable.replayPreparedStep, true);
+  const restoredEncounter = await session.getActiveEncounter('camp-s', 'camp-s-main');
+  view = restoredEncounter;
+  await journal.run(runInput(restoredEncounter.stateVersion));
+  const afterRecovery = await session.getSummary('camp-s', 'camp-s-main');
+  const turnsAfterRecovery = db.prepare(
+    "SELECT COUNT(*) AS n FROM turns WHERE branch_id = 'camp-s-main' AND status = 'Committed'",
+  ).get().n;
+  assert.equal(replayConsumed, true);
+  assert.equal(afterRecovery.state.stateVersion, committedOnce.state.stateVersion,
+    'same NPC child request replays its result without another movement, damage, or roll commit');
+  assert.equal(turnsAfterRecovery, turnsAfterFirstCommit);
+  db.close();
+});
 
 test('G01: encounter begin/attack/npc/rescue/retreat run through atomic commits', async () => {
   const db = setupDb();

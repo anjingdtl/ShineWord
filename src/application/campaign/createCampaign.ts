@@ -9,6 +9,7 @@ import { buildOpening, isFactVisibleAtAnchor } from '../world/opening';
 import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAtAnchor, openingRelationshipFor } from './recruitment';
 import { createBaseContentManifest } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest } from '../worldPackage/branchContentStore';
+import { projectLegacyAnchorlessOpeningFacts } from '../worldPackage/openingCompatibility';
 
 export interface OpeningAnchor {
   /** World-time order the game starts at (canon events after this diverge). */
@@ -38,6 +39,7 @@ export interface CreateCampaignInput {
     actorId: string;
     kind: 'original' | 'canon';
     name: string;
+    description?: string;
     attributes?: Record<AttributeName, number>;
     initialSkills?: string[];
     preparedAbilities?: string[];
@@ -114,10 +116,16 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   if (!world) throw new Error(`Unknown world: ${input.worldId}.`);
   const entities = await input.worldStore.listEntities(input.worldId);
   const facts = await input.worldStore.listFacts(input.worldId);
+  const projectionFacts = projectLegacyAnchorlessOpeningFacts(
+    input.worldId,
+    pkg.manifest,
+    facts,
+    anchorEvents.length === 0 && !input.anchor.anchorEventId,
+  );
   const visibleSceneEntries = pkg.entries.filter(entry => entry.kind === 'scene'
-    && entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, facts, input.anchor.worldTimeOrder));
+    && entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder));
   const visibleCanonLocations = entities.filter(entity => entity.type === 'location'
-    && facts.some(fact => fact.subjectEntityId === entity.entityId && fact.status !== 'speculation'
+    && projectionFacts.some(fact => fact.subjectEntityId === entity.entityId && fact.status !== 'speculation'
       && fact.status !== 'conflict' && isFactVisibleAtAnchor(fact, input.anchor.worldTimeOrder)));
   const allowedLocations = new Set([
     ...visibleSceneEntries
@@ -134,7 +142,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   // Opening projections and server-side factories share the same player-safe
   // catalog. A client cannot name a GM-only skill directly in createCampaign.
   const skillEntries = pkg.entries.filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
-    && isEntryVisibleAtAnchor(entry, facts, input.anchor.worldTimeOrder));
+    && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder));
   const catalog: SkillCatalog = {};
   for (const entry of skillEntries) {
     catalog[entry.entryId] = entry.definition as SkillDefinition;
@@ -143,13 +151,13 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   }
   const publicAbilityIds = new Set(pkg.entries
     .filter(entry => entry.kind === 'ability' && entry.visibility === 'public'
-      && isEntryVisibleAtAnchor(entry, facts, input.anchor.worldTimeOrder))
+      && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder))
     .flatMap(entry => [entry.entryId, entry.entryId.replace(/^ability-/, '')]));
   const publicSkillIds = new Set(Object.keys(catalog));
   const publicOriginIds = new Set(pkg.entries.filter(entry => entry.kind === 'origin' && entry.visibility === 'public'
-    && isEntryVisibleAtAnchor(entry, facts, input.anchor.worldTimeOrder)).map(entry => entry.entryId));
+    && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder)).map(entry => entry.entryId));
   const publicPathIds = new Set(pkg.entries.filter(entry => entry.kind === 'path' && entry.visibility === 'public'
-    && isEntryVisibleAtAnchor(entry, facts, input.anchor.worldTimeOrder)).map(entry => entry.entryId));
+    && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder)).map(entry => entry.entryId));
 
   const templateEntries = new Map<string, ContentEntry>();
   for (const entry of pkg.entries) {
@@ -185,6 +193,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       worldPackageRevision: input.packageRevision,
       attributes: input.protagonist.attributes,
       initialSkills: input.protagonist.initialSkills,
+      description: input.protagonist.description,
       preparedAbilities: input.protagonist.preparedAbilities,
       learnedAbilities: input.protagonist.learnedAbilities,
       originId: input.protagonist.originId,
@@ -198,7 +207,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     }
     const entity = await input.worldStore.getEntity(input.worldId, input.protagonist.canonEntityId);
     if (!entity) throw new Error(`Canon entity not found: ${input.protagonist.canonEntityId}.`);
-    if (!facts.some(fact => fact.subjectEntityId === entity.entityId && fact.status !== 'speculation'
+    if (!projectionFacts.some(fact => fact.subjectEntityId === entity.entityId && fact.status !== 'speculation'
       && fact.status !== 'conflict' && isFactVisibleAtAnchor(fact, input.anchor.worldTimeOrder))) {
       throw new Error(`原著角色 ${input.protagonist.canonEntityId} 在该时间锚点没有已揭露的支持事实。`);
     }
@@ -211,7 +220,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       worldTimeOrder: input.anchor.worldTimeOrder,
       canonEntity: entity,
       fallbackLocationId: input.anchor.locationId,
-    }, { facts, mappings });
+    }, { facts: projectionFacts, mappings });
     protagonistCard = {
       actorId: input.protagonist.actorId,
       name: input.protagonist.name,
@@ -230,7 +239,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       worldId: input.worldId,
       worldPackageRevision: input.packageRevision,
       cardRevision: 1,
-      description: entity.name,
+      description: input.protagonist.description?.trim() || entity.name,
     };
     protagonistCard.skills = Object.fromEntries(Object.entries(protagonistCard.skills)
       .filter(([skillId]) => publicSkillIds.has(skillId)));
@@ -245,14 +254,14 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   if (input.protagonist.kind === 'original' && input.protagonist.originId) {
     const originEntry = entryById.get(input.protagonist.originId);
     if (!originEntry || originEntry.kind !== 'origin' || originEntry.visibility !== 'public'
-      || !isEntryVisibleAtAnchor(originEntry, facts, input.anchor.worldTimeOrder)) {
+      || !isEntryVisibleAtAnchor(originEntry, projectionFacts, input.anchor.worldTimeOrder)) {
       throw new Error(`开局出身 ${input.protagonist.originId} 在当前锚点不可用。`);
     }
     const origin = originEntry.definition as OriginDefinition;
     for (const itemId of origin.startingItems) {
       const itemEntry = entryById.get(itemId);
       if (!itemEntry || itemEntry.kind !== 'item' || itemEntry.visibility !== 'public'
-        || !isEntryVisibleAtAnchor(itemEntry, facts, input.anchor.worldTimeOrder)) {
+        || !isEntryVisibleAtAnchor(itemEntry, projectionFacts, input.anchor.worldTimeOrder)) {
         throw new Error(`出身 ${input.protagonist.originId} 的起始物品 ${itemId} 不存在、不可公开或当前不可用。`);
       }
       if (itemOwners[itemId] !== undefined) {
@@ -270,7 +279,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       throw new Error(`Unknown companion template: ${companion.templateId}.`);
     }
     if (templateEntry.visibility !== 'public'
-      || !isPlayerRecruitmentCandidate(templateEntry, facts, input.anchor.worldTimeOrder)
+      || !isPlayerRecruitmentCandidate(templateEntry, projectionFacts, input.anchor.worldTimeOrder)
       || !openingRelationshipFor(templateEntry, input.anchor.worldTimeOrder)) {
       throw new Error(`同伴模板 ${companion.templateId} 在此开局锚点不可招募，或缺少公开的资格/关系依据。`);
     }
@@ -306,7 +315,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     for (const itemId of (templateEntry.definition as ActorTemplateDefinition).startingItems ?? []) {
       const itemEntry = entryById.get(itemId);
       if (!itemEntry || itemEntry.kind !== 'item' || itemEntry.visibility !== 'public'
-        || !isEntryVisibleAtAnchor(itemEntry, facts, input.anchor.worldTimeOrder)) {
+        || !isEntryVisibleAtAnchor(itemEntry, projectionFacts, input.anchor.worldTimeOrder)) {
         throw new Error(`同伴 ${companion.templateId} 的初始物品 ${itemId} 不存在或不可公开。`);
       }
       if (itemOwners[itemId] !== undefined) {
@@ -327,7 +336,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   for (const templateId of openingActorTemplateIds) {
     const templateEntry = templateEntries.get(templateId);
     if (!templateEntry) continue; // Non-template scene actor IDs can be canon references.
-    if (!isEntryVisibleAtAnchor(templateEntry, facts, input.anchor.worldTimeOrder)
+    if (!isEntryVisibleAtAnchor(templateEntry, projectionFacts, input.anchor.worldTimeOrder)
       || !isTemplateValidAtAnchor(templateEntry, input.anchor.worldTimeOrder)) continue;
     const actorId = `npc-${templateId}`;
     if (cards.some(card => card.actorId === actorId) || actorId === input.protagonist.actorId) {
@@ -355,7 +364,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     for (const itemId of definition.startingItems ?? []) {
       const itemEntry = entryById.get(itemId);
       if (!itemEntry || itemEntry.kind !== 'item' || itemEntry.visibility !== 'public'
-        || !isEntryVisibleAtAnchor(itemEntry, facts, input.anchor.worldTimeOrder)) {
+        || !isEntryVisibleAtAnchor(itemEntry, projectionFacts, input.anchor.worldTimeOrder)) {
         throw new Error(`场景角色 ${templateId} 的初始物品 ${itemId} 不存在。`);
       }
       if (itemOwners[itemId] !== undefined) {

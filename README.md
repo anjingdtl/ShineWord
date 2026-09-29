@@ -1,17 +1,17 @@
 # Shine-TRPG
 
-面向 Android 的 AI 驱动互动小说 TRPG（**Alpha 前工程态；第三期已代码级验收，设备/视觉验收未通过**）。
+面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事（**第四期本地施工中；尚未达到 Alpha/Beta 出口**）。
 
-用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过固定选项或自由行动推进自己的故事。LLM 负责主持与叙事，本地规则引擎负责资格、骰点、成长、状态与事务结算。
+用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前状态：`0.3.0-progressive.2` / versionCode 16。工程门禁全绿（核心 226/226、两处 typecheck、debug APK）；第三期视觉/交互代码级验收（对比度 84 项达标、3 处 <44dp 触控面修复）与 NPC 公开投影安全门禁通过。**第三期设备级验收与 Progressive 首次真实可玩闭环未通过**：沙箱无 Android 设备与可用模型端点，四主题截图/完整旅程/真实 `TXT → 第一回合` 未取证，TTFP 未测。详见[最终收尾报告](docs/reviews/final-closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
+> 当前版本仍为 `0.3.0-progressive.2` / versionCode 16。本地第四期改造回归 237/237、mobile typecheck、96 项文字对比度、签名 Release 候选与 API 37 `ShineQA` 断网冷启动已通过；默认文字主屏及三个尺寸布局已在模拟器检查。**第四期整体验收未通过**：本轮没有确认密钥轮换或调用真实 LLM，没有 SAF 导入《白篱梦》《凡人修仙传》，没有从设备完成普通提交或正式遭遇；API 24、真机、端上 P95 也未测。不得据此宣称 Alpha/Beta。详见[第四期最终报告](docs/reviews/phase4/Q4_FINAL_REPORT.md)、[设备矩阵](docs/reviews/phase4/Q4_DEVICE_MATRIX.md)与[最终收尾历史报告](docs/reviews/final-closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
 ## 核心特性
 
 - **确定性骰点**：Shine-TRPG Ruleset V0.1——六属性、d4～d12 技能骰、1～4 颗骰取最高、四档结果等级。骰点由本地引擎用 Android SecureRandom 拒绝采样完成，先持久化 RollRecord 再调用叙事模型；Narrator 失败或重启后复用同一骰点，永不重掷。
 - **TXT 原著导入**：编码探测（UTF-8/GBK）、标准分章、码点偏移体系。历史桌面 Node 基准不代表 Android 端性能；二阶段的真实模型召回、独立人工标注和端上大文件性能仍待验。LLM 只产出 verbatim 引文，本地解析偏移并检查证据位置。
 - **LLM 权限边界**：Planner 只能提出行动合同（ActionContract JSON），本地校验器严格把关（禁止骰点/结果/数值等权威字段，畸形合同干净拒绝）；Narrator 不得更改冻结的结果等级。
-- **战役引擎模块**：技能成长（5/10/20/40 练习点阈值）、叙事战斗（距离带/先攻/伤害）、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；完整 Android 冒险、同伴生命周期与 Beta 验收仍有未结项。
+- **战役引擎模块**：技能成长、冲突检定、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；同伴/NPC 可依规则自动推进到玩家决策。玩家仍决定目标、撤退、关键物品支出、成长选择和谜题答案。完整 Android 冒险与真实小说验收仍有未结项。
 - **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时确定性行动仍可结算，恢复后无缝衔接。
 
 ## 安全与隐私
@@ -40,11 +40,13 @@ npm run apk:debug --prefix mobile
 pwsh -File mobile/scripts/build-release-apk.ps1
 ```
 
-APK 输出到 dist/apk/{debug|release}/，不入库。本地已构建并签名验证 p2.9；该包在 API 37.1 隔离模拟器上断网冷启动成功。此证据只覆盖 Release bundle 启动，未覆盖完整冒险或 API 24/真机矩阵。签名、哈希和源码对应信息见 R6 报告。
+APK 输出到 dist/apk/{debug|release}/，不入库。本期本地 Release 候选在现有 API 37 `ShineQA` 上通过同签名 `install -r`、数据可见性复核和断网冷启动；候选版本仍为 versionCode 16 / `0.3.0-progressive.2`、ABI 为 arm64-v8a + x86_64。此证据不覆盖真实行动提交、真实模型、API 24 或真机。签名、哈希和限制见[第四期设备矩阵](docs/reviews/phase4/Q4_DEVICE_MATRIX.md)。
 
 ## 进度与评审
 
-- 开发进度：[docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md)
+- 最新第四期验收：[docs/reviews/phase4/Q4_FINAL_REPORT.md](docs/reviews/phase4/Q4_FINAL_REPORT.md)
+- 项目建设进度（PROGRESS）：[docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md)
+- 第四期基线与架构：[Q4_BASELINE.md](docs/reviews/phase4/Q4_BASELINE.md)、[Q4_ARCHITECTURE_ADR.md](docs/reviews/phase4/Q4_ARCHITECTURE_ADR.md)
 - 最终收尾验收：[docs/reviews/final-closeout/FINAL_REPORT.md](docs/reviews/final-closeout/FINAL_REPORT.md)
 - 第三期建设基线：[docs/Shine-TRPG_PHASE3_CONSTRUCTION_PLAN.md](docs/Shine-TRPG_PHASE3_CONSTRUCTION_PLAN.md)
 - 二阶段建设基线：[docs/PHASE2_CONSTRUCTION_PLAN.md](docs/PHASE2_CONSTRUCTION_PLAN.md)
