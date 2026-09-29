@@ -2,10 +2,10 @@
 
 ## Default import and first turn
 
-1. Install `dist/apk/release/ShineWord-V0.3.0-progressive.1-release.apk` and configure the API profile through the app's normal secure profile flow. The key is stored through Android Keychain; profile metadata contains only the secure key reference.
+1. Install `dist/apk/release/ShineWord-V0.3.0-progressive.2-release.apk` and configure the API profile through the app's normal secure profile flow. The key is stored through Android Keychain; profile metadata contains only the secure key reference.
 2. In the library, import the TXT. This streams normalized source into local shards and prepares only the bounded opening dossier. It does **not** start whole-novel extraction in the background.
 3. When the dossier passes citation checks and the normal publish gate, the app routes to original-character creation. Finish character setup, create the campaign, and enter the first turn. The campaign stays bound to that published base package revision.
-4. If the endpoint returns no usable JSON or a request times out, the opening is not published. The streamed source remains available for a retry; the UI must not be treated as playable merely because a world or character screen opened.
+4. If the endpoint returns no usable JSON or a request times out, the opening is not published. The streamed source remains available for a retry; the UI must not be treated as playable merely because a world or character screen opened. A failed preparation records a safe, desensitized stage code — `invalid_dossier:json_parse` / `:schema` / `:citation` / `:reference_closure` or `package_validation:publish` — plus redacted physical-request metrics, and never the prompt, the novel text, the key, or the model response.
 
 The bounded `glm-5.3` endpoint probe returned a citation-valid dossier after two physical requests in 88.281 seconds, but this exceeded the 60-second median target before compile/publish/first turn. The final Release's real TXT opening attempt failed before package publication. TTFP has not met or been measured against the target; see [G0](reviews/progressive-opening/G0.md), [G1](reviews/progressive-opening/G1.md), and [status](reviews/progressive-opening/STATUS.md).
 
@@ -34,7 +34,7 @@ Full refinement can take many requests and substantial time. It is never started
 The signed Release APK and verified SHA-256 are listed in [progressive opening status](reviews/progressive-opening/STATUS.md). On an Android device or emulator, install without clearing app data:
 
 ```powershell
-adb install -r .\dist\apk\release\ShineWord-V0.3.0-progressive.1-release.apk
+adb install -r .\dist\apk\release\ShineWord-V0.3.0-progressive.2-release.apk
 ```
 
 Release verification covered first launch/profile setup, real TXT import through the document picker, local library launch with Wi-Fi disabled after force-stop, screen off/on resume, and an in-place v14-to-v15 update with existing AVD records preserved. The endpoint did not publish a package, so no first turn or first-ten-turn wait was measured. These checks do not replace long-range, active background-build, playable-campaign offline recovery, or on-device full-source index timing.
