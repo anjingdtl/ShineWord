@@ -54,10 +54,24 @@ export interface OpeningDossierResult {
   repairUsed: boolean;
 }
 
+/**
+ * Fine-grained, desensitized stage label for the coarse `category`. It lets a
+ * release failure be attributed to one exact stage (F3.1) without ever storing
+ * prompt text, novel text, or the model response. It carries no model output.
+ */
+export type OpeningFailureDetail =
+  | 'json_parse'
+  | 'schema'
+  | 'citation'
+  | 'reference_closure'
+  | 'compile'
+  | 'publish';
+
 export class OpeningPreparationError extends Error {
   constructor(
     readonly category: 'provider_failure' | 'profile_budget' | 'empty_completion' | 'invalid_dossier' | 'package_validation',
     readonly requestMetrics: readonly LlmPhysicalRequestMetric[] = [],
+    readonly detail?: OpeningFailureDetail,
   ) {
     super(category === 'provider_failure'
       ? '开局资料请求失败，可稍后重试。'
@@ -69,6 +83,11 @@ export class OpeningPreparationError extends Error {
           ? '开局资料未通过原文引文校验，请稍后重试。'
           : '开局范围包未通过发布校验。');
     this.name = 'OpeningPreparationError';
+  }
+
+  /** Coarse category plus the desensitized stage, e.g. `invalid_dossier:citation`. */
+  get errorCode(): string {
+    return this.detail ? `${this.category}:${this.detail}` : this.category;
   }
 }
 
@@ -112,7 +131,7 @@ function parseDossier(raw: string, sourceExcerpt: string): OpeningDossier {
   try {
     object = parseStrictJsonObject<Record<string, unknown>>(raw, 'opening dossier');
   } catch {
-    throw new OpeningPreparationError('invalid_dossier');
+    throw new OpeningPreparationError('invalid_dossier', [], 'json_parse');
   }
   const locationName = boundedText(object.locationName, 64);
   const locationQuote = boundedText(object.locationQuote, 240);
@@ -125,9 +144,12 @@ function parseDossier(raw: string, sourceExcerpt: string): OpeningDossier {
   const firstScene = Array.from(sourceExcerpt).slice(0, OPENING_EVIDENCE_BUDGET_CODE_POINTS).join('');
   const quotes = [locationQuote, settingQuote, situationQuote, goalQuote];
   if (!locationName || !locationQuote || !setting || !settingQuote || !situation || !situationQuote
-    || !initialGoal || !goalQuote || quotes.some(quote => !quote || codePointLength(quote) < 4
-      || !firstScene.includes(quote)) || !locationQuote.includes(locationName)) {
-    throw new OpeningPreparationError('invalid_dossier');
+    || !initialGoal || !goalQuote) {
+    throw new OpeningPreparationError('invalid_dossier', [], 'schema');
+  }
+  if (quotes.some(quote => !quote || codePointLength(quote) < 4 || !firstScene.includes(quote))
+    || !locationQuote.includes(locationName)) {
+    throw new OpeningPreparationError('invalid_dossier', [], 'citation');
   }
   const unknowns = Array.isArray(object.unknowns)
     ? object.unknowns.map(value => boundedText(value, 120)).filter((value): value is string => Boolean(value)).slice(0, 5)
@@ -186,7 +208,11 @@ export async function extractOpeningDossier(input: {
       };
     } catch (error) {
       if (error instanceof OpeningPreparationError) {
-        throw new OpeningPreparationError(error.category, [...metrics, ...repairMetrics, ...error.requestMetrics]);
+        throw new OpeningPreparationError(
+          error.category,
+          [...metrics, ...repairMetrics, ...error.requestMetrics],
+          error.detail,
+        );
       }
       throw new OpeningPreparationError('invalid_dossier', [...metrics, ...repairMetrics, ...sourceFailureMetrics(error)]);
     }
@@ -215,11 +241,11 @@ async function evidenceSpan(input: {
 }): Promise<FactSourceSpan> {
   const firstScene = Array.from(input.sourceExcerpt).slice(0, OPENING_EVIDENCE_BUDGET_CODE_POINTS).join('');
   const utf16Start = firstScene.indexOf(input.quote);
-  if (utf16Start < 0) throw new OpeningPreparationError('invalid_dossier');
+  if (utf16Start < 0) throw new OpeningPreparationError('invalid_dossier', [], 'reference_closure');
   const startOffset = codePointLength(firstScene.slice(0, utf16Start));
   const endOffset = startOffset + codePointLength(input.quote);
   const chapter = input.chapters.find(item => startOffset >= item.startOffset && endOffset <= item.endOffset);
-  if (!chapter) throw new OpeningPreparationError('invalid_dossier');
+  if (!chapter) throw new OpeningPreparationError('invalid_dossier', [], 'reference_closure');
   return {
     chapterId: chapter.chapterId,
     startOffset,
@@ -371,6 +397,6 @@ export async function compileProgressiveOpeningPackage(input: {
     });
     return { manifest: published.manifest, entries, sections };
   } catch {
-    throw new OpeningPreparationError('package_validation', input.requestMetrics);
+    throw new OpeningPreparationError('package_validation', input.requestMetrics, 'publish');
   }
 }

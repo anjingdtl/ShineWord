@@ -307,7 +307,7 @@ async function prepareProgressiveOpening(input: {
   try {
     requestBudget = openingSourceBudgetForProfile(input.profile, input.sourceManifest.codePointCount);
   } catch (error) {
-    const category = error instanceof OpeningPreparationError ? error.category : 'profile_budget';
+    const category = error instanceof OpeningPreparationError ? error.errorCode : 'profile_budget';
     await recordOpeningJob({
       worldStore,
       worldId,
@@ -412,7 +412,7 @@ async function prepareProgressiveOpening(input: {
     const safeMetrics = requestMetrics.length > 0
       ? requestMetrics
       : error instanceof OpeningPreparationError ? [...error.requestMetrics] : [];
-    const category = error instanceof OpeningPreparationError ? error.category : 'preparation_failed';
+    const category = error instanceof OpeningPreparationError ? error.errorCode : 'preparation_failed';
     await recordOpeningJob({
       worldStore,
       worldId,
