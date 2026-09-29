@@ -195,9 +195,11 @@ async function importNovelInternal(
       modelFingerprint: `${profile.endpoint}#${profile.model}`,
       title: manifest.title ?? fileName,
       extractorVersion: extractor.version,
-      // C3 group mode: consecutive chunks packed into budget-bounded
-      // requests with the segment protocol.
-      mode: 'group',
+      // Resident mode (1M plan §4): whole-book prefix with per-unit scope
+      // instructions when the book fits 85% of the window and the model
+      // supports prefix caching; otherwise the planner degrades to the
+      // windowed group mode and records why on the run.
+      mode: 'resident',
       budget: modelBudgetFromProfile(profile),
     },
   );
@@ -490,7 +492,8 @@ export function coordinatorExtractor(profile: ApiProfile): UnitExtractor {
   };
 }
 
-/** C3 group extractor over the same provider. */
+/** C3 group extractor over the same provider; output cap comes from the
+ *  profile-derived budget (content + reasoning reserve), never a hard 8k. */
 export function coordinatorGroupExtractor(profile: ApiProfile): LlmGroupExtractor {
   const provider = new OpenAICompatibleProvider(
     profile,
@@ -498,7 +501,12 @@ export function coordinatorGroupExtractor(profile: ApiProfile): LlmGroupExtracto
     new FetchHttpTransport(),
     300_000,
   );
-  return new LlmGroupExtractor(request => provider.complete(request));
+  const budget = modelBudgetFromProfile(profile);
+  return new LlmGroupExtractor(
+    request => provider.complete(request),
+    budget.maxContentOutputTokens + budget.reasoningReserveTokens,
+    budget.reasoningEffort,
+  );
 }
 
 /**
@@ -573,7 +581,7 @@ export async function startFullWorldRefinement(
       modelFingerprint,
       title: world.title,
       extractorVersion: extractor.version,
-      mode: 'group',
+      mode: 'resident',
       budget: modelBudgetFromProfile(profile),
     },
   );
@@ -623,6 +631,7 @@ export async function runExtraction(
   });
   const signal = { aborted: false };
   activeRuns.set(runId, signal);
+  const runBudget = modelBudgetFromProfile(profile);
   try {
   const result = await executeRun(
     {
@@ -634,6 +643,9 @@ export async function runExtraction(
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       owner: 'ui',
       signal,
+      concurrency: profile.concurrency ?? 3,
+      tpmTokensPerMinute: profile.tpm,
+      budget: runBudget,
       onUnitDone: info => {
         onProgress({
           phase: 'extracting',

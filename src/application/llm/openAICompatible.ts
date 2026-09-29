@@ -89,6 +89,51 @@ function normalizeEndpoint(endpoint: string): string {
   return `${trimmed}/chat/completions`;
 }
 
+export type ReasoningDialect = 'deepseek' | 'glm' | 'generic';
+
+/**
+ * Vendor dialect for reasoning-parameter shaping (request layer only). This
+ * routes REQUEST PARAMETERS, never capability assumptions: probing, not
+ * branding, decides what a model can do (plan §13).
+ */
+export function reasoningDialect(model: string): ReasoningDialect {
+  const lower = model.toLowerCase();
+  if (lower.includes('deepseek')) return 'deepseek';
+  if (lower.includes('glm')) return 'glm';
+  return 'generic';
+}
+
+/**
+ * Dialect-shaped reasoning passthrough (1M plan §3.2). Nothing is sent when
+ * the request declares no effort - the provider default (reasoning ON for
+ * reasoning models, policy 2026-09-27) stays untouched.
+ * - DeepSeek: 'off' flips the non-thinking switch; low/high leave the binary
+ *   thinking mode enabled.
+ * - GLM: low/high map to reasoning_effort plus thinking.clear_thinking=false
+ *   (keep turn-to-turn thinking context, official guidance); thinking cannot
+ *   be disabled, so 'off' sends nothing.
+ * - generic: low/high pass through as reasoning_effort.
+ */
+function applyReasoningParams(
+  body: Record<string, unknown>,
+  dialect: ReasoningDialect,
+  effort: 'off' | 'low' | 'high' | undefined,
+): void {
+  if (!effort) return;
+  if (effort === 'off') {
+    if (dialect === 'deepseek') body.thinking = { type: 'disabled' };
+    return;
+  }
+  if (dialect === 'glm') {
+    body.reasoning_effort = effort;
+    body.thinking = { clear_thinking: false };
+    return;
+  }
+  if (dialect === 'generic') {
+    body.reasoning_effort = effort;
+  }
+}
+
 function messageText(
   content: string | Array<{ type?: string; text?: string }> | undefined,
 ): string {
@@ -156,13 +201,22 @@ export class OpenAICompatibleProvider implements LlmProvider {
     };
     const requestUrl = normalizeEndpoint(this.profile.endpoint);
 
+    const dialect = reasoningDialect(this.profile.model);
+
     while (true) {
+      // Resident-mode request structure: [system, user, ...followUps]. The
+      // system+user prefix must stay byte-stable across units of one run so
+      // provider prefix caches hit (1M plan §4.2).
+      const messages: Array<{ role: string; content: string }> = [
+        { role: 'system', content: request.system },
+        { role: 'user', content: request.user },
+      ];
+      for (const extra of request.followUpUserMessages ?? []) {
+        messages.push({ role: 'user', content: extra });
+      }
       const body: Record<string, unknown> = {
         model: this.profile.model,
-        messages: [
-          { role: 'system', content: request.system },
-          { role: 'user', content: request.user },
-        ],
+        messages,
         max_tokens: maxTokens,
         stream: false,
       };
@@ -173,6 +227,8 @@ export class OpenAICompatibleProvider implements LlmProvider {
         // ONLY an explicit opt-out may disable thinking; reasoning models run
         // with reasoning ON by default (policy 2026-09-27).
         body.thinking = { type: 'disabled' };
+      } else {
+        applyReasoningParams(body, dialect, request.reasoningEffort);
       }
 
       let response: HttpResponse;

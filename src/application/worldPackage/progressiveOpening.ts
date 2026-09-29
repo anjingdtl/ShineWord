@@ -25,12 +25,13 @@ export function openingSourceBudgetForProfile(profile: ApiProfile, availableCode
   maxOutputTokens: number;
 } {
   const modelBudget = modelBudgetFromProfile(profile);
-  const maxOutputTokens = Math.min(DOSSIER_OUTPUT_TOKEN_LIMIT, modelBudget.maxOutputTokens);
-  const promptAllowance = modelBudget.contextWindowTokens - maxOutputTokens
+  const contentTokens = Math.min(DOSSIER_OUTPUT_TOKEN_LIMIT, modelBudget.maxContentOutputTokens);
+  const requestTokens = contentTokens + modelBudget.reasoningReserveTokens;
+  const promptAllowance = modelBudget.contextWindowTokens - requestTokens
     - modelBudget.reserveTokens - 1_500;
   const desired = Math.min(availableCodePoints, OPENING_SOURCE_BUDGET_CODE_POINTS);
   if (promptAllowance < desired * 2) throw new OpeningPreparationError('profile_budget');
-  return { sourceCodePoints: desired, maxOutputTokens };
+  return { sourceCodePoints: desired, maxOutputTokens: requestTokens };
 }
 
 /** Only facts needed to establish the first playable scene are accepted. */

@@ -34,8 +34,8 @@ class NodeSqliteAdapter {
     this.chain = Promise.resolve();
   }
   async execute(sql, params = []) {
-    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return; }
-    this.db.prepare(sql).run(...params);
+    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return 0; }
+    return this.db.prepare(sql).run(...params).changes;
   }
   async queryOne(sql, params = []) { return this.db.prepare(sql).get(...params) ?? null; }
   async queryAll(sql, params = []) { return this.db.prepare(sql).all(...params); }
@@ -153,11 +153,14 @@ test('C3 planner covers every chunk exactly once and respects budgets', () => {
     const sum = group.segments.reduce((acc, segment) => acc + segment.charCount, 0);
     assert.ok(group.estInputTokens >= sum * 0.99, 'estimate is conservative');
   }
-  // A tight budget forces smaller groups (more of them than the uncapped
-  // default, which fits all 50 chunks into one group).
+  // Since the 1M redesign packing is OUTPUT-budget driven: the default 16k
+  // content budget with est 800/chunk gives 14 chunks per group; a tight
+  // INPUT budget yields MORE groups.
   const uncapped = planExtractGroups(chunks, DEFAULT_MODEL_BUDGET);
+  assert.ok(uncapped.every(group => group.segments.length <= 14));
   const tight = planExtractGroups(chunks, {
-    contextWindowTokens: 30_000, maxOutputTokens: 8_000, reserveTokens: 2_000,
+    contextWindowTokens: 30_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0,
+    reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000,
   });
   assert.ok(tight.length > uncapped.length, 'tighter budget yields more groups');
   const bodyBudget = 30_000 - 8_000 - 2_000 - 1_500;
@@ -252,15 +255,16 @@ test('C3 coordinator group mode completes with per-chunk commits', async () => {
   const db = setupDb();
   try {
     const { store: sourceStore, result } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g1');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
     const run = await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
         runId: 'run-g1', worldId: 'w-g1', sourceId: 'src-g1', modelFingerprint: 'ep#m',
         title: 't', extractorVersion: fixture.version, mode: 'group',
-        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+        budget: { contextWindowTokens: 60_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0, reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000 },
       },
     );
     // Multiple chunks per group must actually happen on this fixture.
@@ -296,15 +300,16 @@ test('G0 lease heartbeat keeps ownership during a slow provider call', async () 
   const db = setupDb();
   try {
     const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-heartbeat');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
         runId: 'run-g0-heartbeat', worldId: 'w-g0-heartbeat', sourceId: 'src-g0-heartbeat',
         modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
-        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+        budget: { contextWindowTokens: 60_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0, reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000 },
       },
     );
     const base = fakeGroupExtractorFromFixture();
@@ -334,15 +339,16 @@ test('G0 canceled late extraction is discarded and its unit can be resumed', asy
   const db = setupDb();
   try {
     const { store: sourceStore, result: imported } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-cancel');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
         runId: 'run-g0-cancel', worldId: 'w-g0-cancel', sourceId: 'src-g0-cancel',
         modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
-        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+        budget: { contextWindowTokens: 60_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0, reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000 },
       },
     );
     const base = fakeGroupExtractorFromFixture();
@@ -388,15 +394,16 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
   const db = setupDb();
   try {
     const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-metrics');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
         runId: 'run-g0-metrics', worldId: 'w-g0-metrics', sourceId: 'src-g0-metrics',
         modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
-        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+        budget: { contextWindowTokens: 60_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0, reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000 },
       },
     );
     const failed = {
@@ -418,8 +425,13 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
     assert.doesNotMatch(pending.errorMessage, /PRIVATE_RAW_RESPONSE/);
     assert.doesNotMatch((await runStore.getRun('run-g0-metrics')).lastErrorMessage ?? '', /PRIVATE_RAW_RESPONSE/);
 
+    // Output-budget packing (1M plan §5) splits this fixture into several
+    // groups; requeue EVERY backoff-waiting unit so the retry run can finish
+    // within the test clock. The guarded semantics stay: metrics survive the
+    // retry and no private response text leaks.
     await new NodeSqliteAdapter(db).execute(
-      "UPDATE world_build_units SET status = 'queued', retry_at = NULL WHERE unit_id = ?", [pending.unitId],
+      "UPDATE world_build_units SET status = 'queued', retry_at = NULL WHERE run_id = ? AND status IN ('failed_retryable', 'running')",
+      ['run-g0-metrics'],
     );
     const retried = await executeRun({
       sourceStore, runStore, worldStore, extractor: fixture,
@@ -441,15 +453,16 @@ test('C3 truncation splits a group transactionally; children finish the work', a
   const db = setupDb();
   try {
     const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g2');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
         runId: 'run-g2', worldId: 'w-g2', sourceId: 'src-g2', modelFingerprint: 'ep#m',
         title: 't', extractorVersion: fixture.version, mode: 'group',
-        budget: { contextWindowTokens: 60_000, maxOutputTokens: 8_000, reserveTokens: 2_000 },
+        budget: { contextWindowTokens: 60_000, maxContentOutputTokens: 8_000, reasoningReserveTokens: 0, reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2_000 },
       },
     );
     const base = fakeGroupExtractorFromFixture();

@@ -11,14 +11,23 @@ function profile(contextWindow, maxOutputTokens) {
 test('opening/full-build planner budget follows profile capabilities and extractor output cap', () => {
   assert.deepEqual(modelBudgetFromProfile(profile(32_000, 4_096)), {
     contextWindowTokens: 32_000,
-    maxOutputTokens: 4_096,
+    maxContentOutputTokens: 4_096,
+    reasoningReserveTokens: 0,
+    reasoningEffort: 'off',
+    supportsPromptCache: false,
     reserveTokens: 2_000,
   });
+  // The legacy 8k hard clamp is removed (1M plan §5): a profile that
+  // declares a 16k output ceiling now keeps its full content budget.
   assert.deepEqual(modelBudgetFromProfile(profile(128_000, 16_000)), {
     contextWindowTokens: 128_000,
-    maxOutputTokens: 8_000,
+    maxContentOutputTokens: 16_000,
+    reasoningReserveTokens: 0,
+    reasoningEffort: 'off',
+    supportsPromptCache: false,
     reserveTokens: 2_000,
   });
+  assert.equal(modelBudgetFromProfile(profile(128_000, 131_072)).maxContentOutputTokens, 16_384);
 });
 
 test('profile budget rejects invalid limits before planning or making requests', () => {

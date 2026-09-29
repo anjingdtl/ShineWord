@@ -62,6 +62,14 @@ export interface LlmRequest {
   vendorOptions?: {
     thinkingDisabled?: boolean;
   };
+  /** Reasoning effort passthrough ('off' = non-thinking; 1M plan §3.2). */
+  reasoningEffort?: 'off' | 'low' | 'high';
+  /**
+   * Extra user messages appended AFTER `user` (resident mode: [0]=system,
+   * [1]=whole-book user, [2]=per-unit scope instruction). The prefix formed
+   * by system+user must stay byte-stable for prefix-cache hits.
+   */
+  followUpUserMessages?: readonly string[];
 }
 
 export interface LlmProvider {
@@ -74,6 +82,8 @@ export interface LlmProviderCapabilities {
   reportsUsage: boolean;
   contextWindow: number;
   maxOutputTokens: number;
+  /** Probe-determined prefix-cache support (resident-mode gate, probe v2). */
+  supportsPromptCache?: boolean;
 }
 
 export interface ApiProfile {
@@ -89,6 +99,16 @@ export interface ApiProfile {
    * grown budget instead of disabling thinking. Never auto-set.
    */
   thinkingDisabled?: boolean;
+  /** Content output budget per request (1M plan §3.1); default 16,384. */
+  contentOutputTokens?: number;
+  /** Chain-of-thought reserve on top of the content budget (GLM low = 2,048). */
+  reasoningReserveTokens?: number;
+  /** Reasoning effort passthrough; 'off' = non-thinking extraction. */
+  reasoningEffort?: 'off' | 'low' | 'high';
+  /** Resident-build worker concurrency (1-4; default 3). */
+  concurrency?: number;
+  /** Provider tokens-per-minute limit for conservative scheduling (§6). */
+  tpm?: number;
   inputPricePerMillion?: number;
   outputPricePerMillion?: number;
 }

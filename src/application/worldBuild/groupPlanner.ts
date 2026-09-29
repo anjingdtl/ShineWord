@@ -1,28 +1,52 @@
 /**
- * Model-budget-driven extract group planner (closeout C3, plan §7.1/§7.2).
+ * Model-budget-driven extract group planner (closeout C3, 1M resident plan §5).
  *
  * Physical chunks (bounded I/O, ~1200 cp) are packed into LLM groups so one
- * request amortizes the prompt while staying inside a VERIFIED model budget:
- * system + group body + output reserve + safety margin <= context window.
- * Chapters, storage chunks and model groups stay decoupled: a group is a
- * list of consecutive chunk ranges plus a coverage ledger.
+ * request amortizes the prompt while staying inside a VERIFIED model budget.
+ * Since the 1M redesign, packing is OUTPUT-budget driven: the group size is
+ * what the model can ANSWER for, not merely what fits in the input window -
+ * chunksPerGroup = clamp(maxContentOutputTokens * 0.7 / estOutputPerChunk,
+ * 4, maxGroupSegments). maxGroupSegments is the evidence-attribution
+ * reliability cap; the input window still bounds the group body as a hard
+ * ceiling. Chapters, storage chunks and model groups stay decoupled: a group
+ * is a list of consecutive chunk ranges plus a coverage ledger.
  */
 import type { SourceChapter, SourceChunk } from '../../domain/world/types';
+
+export type ReasoningEffort = 'off' | 'low' | 'high';
 
 export interface ModelBudget {
   /** Verified context window of the model, in tokens. */
   contextWindowTokens: number;
-  /** Output the model may produce for one request. */
-  maxOutputTokens: number;
-  /** Safety margin for reasoning tokens, schema, formatting drift. */
+  /** Content (JSON body) output budget per request, EXCLUDING reasoning. */
+  maxContentOutputTokens: number;
+  /** Chain-of-thought reserve on top of the content budget (GLM low = 2,048). */
+  reasoningReserveTokens: number;
+  /** Requested reasoning effort; 'off' means non-thinking extraction. */
+  reasoningEffort: ReasoningEffort;
+  /** Probe-determined prefix-cache support (resident-mode gate). */
+  supportsPromptCache: boolean;
+  /** Safety margin for schema, formatting drift. */
   reserveTokens: number;
 }
 
 export const DEFAULT_MODEL_BUDGET: ModelBudget = {
   contextWindowTokens: 128_000,
-  maxOutputTokens: 8_000,
+  maxContentOutputTokens: 16_384,
+  reasoningReserveTokens: 0,
+  reasoningEffort: 'off',
+  supportsPromptCache: false,
   reserveTokens: 2_000,
 };
+
+export const DEFAULT_PROMPT_OVERHEAD_TOKENS = 1_500;
+/** Evidence-attribution reliability cap (1M plan §5). */
+export const DEFAULT_MAX_GROUP_SEGMENTS = 32;
+/** Amortization floor: an output-budget group never packs fewer chunks. */
+export const MIN_OUTPUT_DRIVEN_SEGMENTS = 4;
+export const DEFAULT_EST_OUTPUT_PER_CHUNK = 800;
+/** Fraction of the content output budget usable for estimated chunk output. */
+export const OUTPUT_BUDGET_RATIO = 0.7;
 
 /**
  * Conservative token estimate: CJK code points cost ~1 token each, other
@@ -64,8 +88,10 @@ export interface ExtractGroup {
 export interface GroupPlanOptions {
   /** Fixed per-request overhead estimate (system prompt, schema, headers). */
   promptOverheadTokens?: number;
-  /** Hard cap on one group's body even when the budget would allow more. */
+  /** Evidence-attribution reliability cap for one group (default 32). */
   maxGroupSegments?: number;
+  /** Estimated content output tokens per chunk (default 800; §5 calibration). */
+  estOutputPerChunk?: number;
 }
 
 export function planExtractGroups(
@@ -73,13 +99,19 @@ export function planExtractGroups(
   budget: ModelBudget = DEFAULT_MODEL_BUDGET,
   options: GroupPlanOptions = {},
 ): ExtractGroup[] {
-  const overhead = options.promptOverheadTokens ?? 1_500;
-  const maxSegments = options.maxGroupSegments ?? 64;
-  const bodyBudget = budget.contextWindowTokens - budget.maxOutputTokens
-    - budget.reserveTokens - overhead;
+  const overhead = options.promptOverheadTokens ?? DEFAULT_PROMPT_OVERHEAD_TOKENS;
+  const maxSegments = options.maxGroupSegments ?? DEFAULT_MAX_GROUP_SEGMENTS;
+  const estOutputPerChunk = Math.max(1, options.estOutputPerChunk ?? DEFAULT_EST_OUTPUT_PER_CHUNK);
+  const bodyBudget = budget.contextWindowTokens - budget.maxContentOutputTokens
+    - budget.reasoningReserveTokens - budget.reserveTokens - overhead;
   if (bodyBudget <= 0) {
     throw new Error('Model budget leaves no room for any group body.');
   }
+  const outputBudget = Math.floor(budget.maxContentOutputTokens * OUTPUT_BUDGET_RATIO);
+  const chunksPerGroup = Math.min(
+    maxSegments,
+    Math.max(MIN_OUTPUT_DRIVEN_SEGMENTS, Math.floor(outputBudget / estOutputPerChunk)),
+  );
 
   const groups: ExtractGroup[] = [];
   let current: ExtractSegment[] = [];
@@ -98,7 +130,7 @@ export function planExtractGroups(
   for (const chunk of chunks) {
     // Conservative upper bound: worst case one token per code point.
     const chunkTokens = Math.ceil(chunk.charCount);
-    if (current.length > 0 && (currentTokens + chunkTokens > bodyBudget || current.length >= maxSegments)) {
+    if (current.length > 0 && (currentTokens + chunkTokens > bodyBudget || current.length >= chunksPerGroup)) {
       flush();
     }
     current.push({
@@ -123,6 +155,67 @@ export function planExtractGroups(
     }
   }
   return groups;
+}
+
+export const CALIBRATION_FIRST_CHECKPOINT_GROUPS = 3;
+export const CALIBRATION_INTERVAL_GROUPS = 10;
+export const CALIBRATION_WINDOW_GROUPS = 10;
+
+/**
+ * Online calibration of estOutputPerChunk from measured unit usage (§3.3/§5):
+ * one recalibration after the first 3 completed group units, then one every
+ * 10 groups; the estimate is the sliding per-chunk mean of measured content
+ * output tokens over the last 10 groups.
+ */
+export class OutputPerChunkCalibrator {
+  private samples: Array<{ outputTokens: number; chunkCount: number }> = [];
+  private estimate = DEFAULT_EST_OUTPUT_PER_CHUNK;
+
+  record(outputTokens: number, chunkCount: number): void {
+    if (!Number.isFinite(outputTokens) || outputTokens < 0 || chunkCount < 1) return;
+    this.samples.push({ outputTokens: Math.ceil(outputTokens), chunkCount });
+    if (this.samples.length > CALIBRATION_WINDOW_GROUPS * 2) {
+      this.samples = this.samples.slice(-CALIBRATION_WINDOW_GROUPS);
+    }
+  }
+
+  /** Whether a recalibration checkpoint fires after `completedGroups` groups. */
+  due(completedGroups: number): boolean {
+    if (completedGroups === CALIBRATION_FIRST_CHECKPOINT_GROUPS) return true;
+    return completedGroups > CALIBRATION_FIRST_CHECKPOINT_GROUPS
+      && (completedGroups - CALIBRATION_FIRST_CHECKPOINT_GROUPS) % CALIBRATION_INTERVAL_GROUPS === 0;
+  }
+
+  recalibrate(): number {
+    const window = this.samples.slice(-CALIBRATION_WINDOW_GROUPS);
+    if (window.length === 0) return this.estimate;
+    const chunkTotal = window.reduce((sum, sample) => sum + sample.chunkCount, 0);
+    if (chunkTotal === 0) return this.estimate;
+    const outputTotal = window.reduce((sum, sample) => sum + sample.outputTokens, 0);
+    this.estimate = Math.max(1, Math.ceil(outputTotal / chunkTotal));
+    return this.estimate;
+  }
+
+  get currentEstimate(): number {
+    return this.estimate;
+  }
+}
+
+/**
+ * How many contiguous parts an over-output group splits into: at least two
+ * (the transactional halving), more only when the calibrated per-chunk
+ * estimate says even a half would exceed the output budget. Pure function so
+ * the split stays deterministic and testable.
+ */
+export function splitPartCount(
+  totalChunks: number,
+  estOutputPerChunk: number,
+  maxContentOutputTokens: number,
+): number {
+  if (totalChunks <= 1) return 1;
+  const outputBudget = Math.max(1, Math.floor(maxContentOutputTokens * OUTPUT_BUDGET_RATIO));
+  const maxPerPart = Math.max(1, Math.floor(outputBudget / Math.max(1, estOutputPerChunk)));
+  return Math.max(2, Math.ceil(totalChunks / Math.min(totalChunks, maxPerPart)));
 }
 
 /** Chapter titles for the group prompt headers, by chapterId. */

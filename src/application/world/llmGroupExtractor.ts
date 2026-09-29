@@ -1,10 +1,10 @@
 /**
  * Segment-protocol LLM extractor for multi-chunk groups (closeout C3,
- * plan §7.1). One request carries numbered segments (one per chunk, with its
- * chapter title); the model returns facts tagged with the segment and a
- * verbatim quote. Local code resolves quote -> segment-relative offset ->
- * absolute code point span, so evidence validation still holds without the
- * model ever seeing or emitting offsets.
+ * plan §7.1; resident variant per 1M plan §4.2). One request carries numbered
+ * segments (one per chunk, with its chapter title); the model returns facts
+ * tagged with the segment and a verbatim quote. Local code resolves quote ->
+ * segment-relative offset -> absolute code point span, so evidence
+ * validation still holds without the model ever seeing or emitting offsets.
  */
 import type {
   EntityProposal,
@@ -15,11 +15,17 @@ import type {
 } from '../../domain/world/types';
 import { codePointLength } from '../../domain/world/textOffsets';
 import { LlmRequestFailure, type LlmPhysicalRequestMetric, type LlmRequest } from '../../application/llm/types';
+import type { ReasoningEffort } from '../worldBuild/groupPlanner';
 import type { LlmCompleteFn } from './llmExtractor';
 import { parseExtractorJson } from './llmExtractor';
 
 export const LLM_GROUP_EXTRACTOR_VERSION = 'llm-group-extractor-1';
-export const DEFAULT_GROUP_MAX_OUTPUT_TOKENS = 8_000;
+/**
+ * Fallback content output cap when no budget is injected. The legacy 8k hard
+ * clamp is gone (1M plan §5): production always injects the profile-derived
+ * budget (maxContentOutputTokens + reasoningReserveTokens).
+ */
+export const DEFAULT_GROUP_CONTENT_OUTPUT_TOKENS = 16_384;
 
 const GROUP_SYSTEM = [
   'You are ShineWord Extractor. You read several numbered segments of a Chinese novel and output exactly one JSON object, no prose.',
@@ -35,6 +41,26 @@ const GROUP_SYSTEM = [
   '- Never invent facts, never mix segments, never output offsets.',
 ].join('\n');
 
+/**
+ * Resident mode (1M plan §4.2): message 1 is this static system prompt,
+ * message 2 is the WHOLE book as numbered segments - byte-stable across all
+ * units of a run so provider prefix caches hit - and message 3 is the per-unit
+ * scope instruction.
+ */
+const RESIDENT_SYSTEM = [
+  'You are ShineWord Resident Extractor. You read the WHOLE Chinese novel provided as numbered segments (each header looks like [S<segmentNumber> <chapterTitle>]) and output exactly one JSON object, no prose.',
+  'The FINAL user message restricts WHICH segment range this request covers; extract ONLY inside that range.',
+  'Schema: {"entities":[{"key":string,"type":"character|faction|location|item|ability|rule|event","name":string,"aliases":string[]}],',
+  '"facts":[{"subject":string,"predicate":string,"value":object,"status":"explicit|inference|speculation","confidence":number,"segment":number,"quote":string}],',
+  '"events":[{"key":string,"title":string,"summary":string,"order":number|null,"segment":number,"dependsOn":string[]}],',
+  '"ruleMappings":[{"target":string,"kind":"attribute|skill|power_tier|resource","mapping":object,"evidenceQuotes":string[]}]}',
+  'Rules:',
+  '- subject/predicate targets must be entity keys you listed; when the final message provides an entity registry, prefer its keys.',
+  '- segment is the GLOBAL 1-based segment number the fact was found in and MUST be inside the requested range; quote MUST be a verbatim contiguous substring of THAT segment.',
+  '- status "explicit" only for directly stated facts; "inference" for safe conclusions; "speculation" for guesses.',
+  '- Never invent facts, never mix segments, never output offsets, never extract outside the requested range.',
+].join('\n');
+
 export interface GroupSegmentInput {
   chunkId: string;
   chapterId: string;
@@ -47,6 +73,29 @@ export interface GroupExtractInput {
   unitId: string;
   segments: readonly GroupSegmentInput[];
   worldId: string;
+  /** Per-call output cap override (e.g. a reasoning-reserve bump retry). */
+  maxOutputTokens?: number;
+  /** Per-call reasoning effort override. */
+  reasoningEffort?: ReasoningEffort;
+}
+
+export interface ResidentExtractInput {
+  unitId: string;
+  /**
+   * ALL book segments with GLOBAL numbering - the coordinator passes the SAME
+   * array for every unit of a run so the message-2 prefix stays byte-stable
+   * (1M plan §4.2, no per-unit assembly drift allowed).
+   */
+  segments: readonly GroupSegmentInput[];
+  /** Inclusive 1-based GLOBAL segment range this unit extracts. */
+  scope: { firstSegment: number; lastSegment: number };
+  worldId: string;
+  /** Compact Pass-0 registry summary: entity keys to prefer (plan §4.3). */
+  registrySummary?: string;
+  /** Per-call output cap override (e.g. a reasoning-reserve bump retry). */
+  maxOutputTokens?: number;
+  /** Per-call reasoning effort override. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 interface RawGroupFact {
@@ -94,22 +143,69 @@ export class LlmGroupExtractor {
 
   constructor(
     private readonly complete: LlmCompleteFn,
-    private readonly maxOutputTokens = DEFAULT_GROUP_MAX_OUTPUT_TOKENS,
+    private readonly maxOutputTokens = DEFAULT_GROUP_CONTENT_OUTPUT_TOKENS,
+    private readonly reasoningEffort: ReasoningEffort = 'off',
   ) {}
 
   async extract(input: GroupExtractInput): Promise<GroupExtractionResult> {
-    const body = input.segments.map((segment, index) => {
-      const header = `[S${index + 1} ${segment.chapterTitle}]`;
-      return `${header}\n${segment.text}`;
-    }).join('\n\n');
+    const body = this.buildSegmentBody(input.segments);
     const request: LlmRequest = {
       role: 'Extractor',
       system: GROUP_SYSTEM,
       user: body,
-      maxOutputTokens: this.maxOutputTokens,
+      maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
+      reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,
       jsonMode: true,
     };
     const response = await this.complete(request);
+    return this.parseResponse(response, input.segments);
+  }
+
+  /**
+   * Resident extraction (1M plan §4.2): the whole book rides as a byte-stable
+   * user message; only the final scope instruction varies per unit. Local
+   * resolution still validates every quote against the claimed segment and
+   * drops anything outside the requested scope (defense in depth).
+   */
+  async extractResident(input: ResidentExtractInput): Promise<GroupExtractionResult> {
+    if (input.scope.firstSegment < 1 || input.scope.lastSegment > input.segments.length
+      || input.scope.firstSegment > input.scope.lastSegment) {
+      throw new Error('Resident extract scope is outside the book segment range.');
+    }
+    const body = this.buildSegmentBody(input.segments);
+    const instruction = [
+      `仅抽取第 ${input.scope.firstSegment}..${input.scope.lastSegment} 段（全书共 ${input.segments.length} 段）范围内的事实、实体与事件。`,
+      `segment 字段必须取 ${input.scope.firstSegment} 到 ${input.scope.lastSegment} 之间的值。`,
+      '其余段落仅用于消歧参考，不得输出其中的内容。',
+    ];
+    if (input.registrySummary) {
+      instruction.push(`实体 key 优先使用注册表中已有的 key：${input.registrySummary}`);
+    }
+    const request: LlmRequest = {
+      role: 'Extractor',
+      system: RESIDENT_SYSTEM,
+      user: body,
+      maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
+      reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,
+      jsonMode: true,
+      followUpUserMessages: [instruction.join('\n')],
+    };
+    const response = await this.complete(request);
+    return this.parseResponse(response, input.segments, input.scope);
+  }
+
+  private buildSegmentBody(segments: readonly GroupSegmentInput[]): string {
+    return segments.map((segment, index) => {
+      const header = `[S${index + 1} ${segment.chapterTitle}]`;
+      return `${header}\n${segment.text}`;
+    }).join('\n\n');
+  }
+
+  private async parseResponse(
+    response: { text: string; requestMetrics?: readonly LlmPhysicalRequestMetric[] },
+    segments: readonly GroupSegmentInput[],
+    scope?: { firstSegment: number; lastSegment: number },
+  ): Promise<GroupExtractionResult> {
     let raw: RawGroupExtraction;
     try {
       raw = parseExtractorJson(response.text) as RawGroupExtraction;
@@ -119,6 +215,8 @@ export class LlmGroupExtractor {
       }
       throw error;
     }
+    const inScope = (segmentNumber: number): boolean =>
+      scope ? segmentNumber >= scope.firstSegment && segmentNumber <= scope.lastSegment : true;
 
     const entities: EntityProposal[] = [];
     for (const candidate of raw.entities ?? []) {
@@ -145,9 +243,15 @@ export class LlmGroupExtractor {
       const quote = asString(candidate.quote);
       const status = asString(candidate.status);
       const segmentNumber = typeof candidate.segment === 'number' ? candidate.segment : 0;
-      const segment = input.segments[segmentNumber - 1];
+      const segment = segments[segmentNumber - 1];
       if (!subject || !predicate || !quote || !status || !segment) continue;
       if (!['explicit', 'inference', 'speculation', 'conflict', 'user_supplement'].includes(status)) continue;
+      if (!inScope(segmentNumber)) {
+        // Resident defense in depth: the model answered outside the requested
+        // range - drop it, another unit owns that range.
+        rejectedQuotes += 1;
+        continue;
+      }
       // Local resolution inside the claimed segment only - a quote that
       // exists elsewhere but not in this segment is rejected, not relocated.
       const rel = segment.text.indexOf(quote);
@@ -182,8 +286,9 @@ export class LlmGroupExtractor {
       const title = asString(candidate.title);
       const summary = asString(candidate.summary);
       const segmentNumber = typeof candidate.segment === 'number' ? candidate.segment : 0;
-      const segment = input.segments[segmentNumber - 1];
+      const segment = segments[segmentNumber - 1];
       if (!key || !title || !summary || !segment) continue;
+      if (!inScope(segmentNumber)) continue;
       events.push({
         eventKey: key,
         title,
