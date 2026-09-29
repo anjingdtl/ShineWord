@@ -9,6 +9,7 @@ import type {
   EntryKind,
   EntryVisibility,
   Provenance,
+  SkillDefinition,
   WorldPackageBuildScope,
   WorldPackageManifest,
 } from '../../domain/content/types';
@@ -143,6 +144,8 @@ const EFFECT_OPS = [
 ];
 const ATTACK_RANGES = ['touch', 'near', 'mid', 'far'];
 const MORALE = ['low', 'steady', 'fierce'];
+/** Skill usage enum (A07): attack skills compile into attack actions. */
+const SKILL_USAGES = ['attack', 'utility', 'social', 'knowledge'];
 
 /** Facts per mapping call; truncation keeps the prompt bounded and evidence ids valid. */
 const MAX_PROMPT_FACTS = 800;
@@ -153,7 +156,7 @@ export const CANON_MAPPER_ROLE = 'WorldMapper';
 
 const MAPPER_SYSTEM = [
   'You are ShineWord WorldMapper. You map novel canon facts into a tabletop RPG world package and output exactly one JSON object, no prose.',
-  'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"allowUntrained":boolean,"requirements":string[],"powerTier":"ordinary|enhanced|supernatural","provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  'Schema: {"skills":[{"id":string,"name":string,"description":string,"attribute":string,"usage":"attack|utility|social|knowledge","allowUntrained":boolean,"requirements":string[],"powerTier":"ordinary|enhanced|supernatural","provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"constraints":[{"id":string,"name":string,"description":string,"enforcement":"block_action|block_effect|audit","pattern":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"lootItemIds":string[],"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
@@ -162,11 +165,14 @@ const MAPPER_SYSTEM = [
   'Rules:',
   '- attribute MUST be exactly one of: physique, agility, insight, knowledge, willpower, social.',
   '- powerTier MUST be exactly one of: ordinary, enhanced, supernatural. Use ordinary for anything a normal person can learn.',
+  '- usage MUST be exactly one of attack, utility, social, knowledge - attack is for skills that can serve as a weapon technique in combat; a skill with no combat technique evidence is never attack.',
   '- effect op MUST be exactly one of: damage, heal, apply_condition, remove_condition, move_self, move_target, consume_resource, restore_resource, reveal_information, grant_bonus_dice, change_distance.',
   '- provenanceKind MUST be one of: explicit, inferred, rule_mapping, design_fill. Numeric hp/stamina/defense/threat values are rule_mapping (game rule values), never canon facts from the novel.',
+  '- explicit or inferred provenance REQUIRES at least one evidenceFactId from the provided fact list; without novel evidence you must use rule_mapping or design_fill instead.',
   '- Every entry MUST cite evidenceFactIds using only fact ids from the provided fact list, plus a one-sentence rationale.',
   '- Every id must be a short stable english token (letters, digits, dash). attack skillId and weaponSkillId must reference a proposed skill id.',
   '- lootItemIds may list only ids of items proposed in this same package; leave it empty when the evidence does not define loot.',
+  '- Skill names come from the novel\'s own vocabulary (what the text calls the practice), never from a generic genre dictionary.',
   '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
   '- ruleMappings target MUST be the name of an entity from the provided entities list; kind MUST be one of attribute, skill, power_tier, resource; evidenceFactIds must reference provided fact ids. Mappings without verified evidence are dropped.',
 ].join('\n');
@@ -296,13 +302,22 @@ function cleanProvenance(
   raw: Record<string, unknown>,
   fallbackKind: Provenance['kind'],
   fallbackRationale: string,
+  reasons?: string[],
 ): Provenance | null {
   const kind = (asString(raw.provenanceKind) ?? fallbackKind) as Provenance['kind'];
   if (!PROVENANCE_KINDS.includes(kind)) {
-    // The caller records the rejection with its own entry kind.
+    reasons?.push(`unknown provenanceKind ${String(raw.provenanceKind)}.`);
     return null;
   }
   const evidenceFactIds = asStringArray(raw.evidenceFactIds).filter(id => ctx.knownFactIds.has(id));
+  // Evidence honesty gate (unified P2/U07): explicit/inferred claims assert
+  // the novel says so - without a surviving evidence fact that is exactly the
+  // "no evidence masquerading as explicit" failure. rule_mapping/design_fill
+  // stay allowed with empty evidence (honest labels for local values).
+  if ((kind === 'explicit' || kind === 'inferred') && evidenceFactIds.length === 0) {
+    reasons?.push('explicit/inferred provenance requires evidence fact ids (U07).');
+    return null;
+  }
   return {
     kind,
     sourceFactIds: evidenceFactIds,
@@ -379,8 +394,7 @@ function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
   const rawAttribute = asString(record.attribute);
   const attribute = rawAttribute ? normalizeEnum(rawAttribute, ATTRIBUTE_SYNONYMS) : null;
   if (!attribute || !ATTRIBUTES.includes(attribute)) reasons.push(`unknown attribute ${String(record.attribute)}.`);
-  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。');
-  if (!provenance) reasons.push('invalid provenance.');
+  const provenance = cleanProvenance(ctx, record, 'inferred', '映射自小说事实的模型提案。', reasons);
   if (reasons.length > 0 || !id || !name || !attribute || !provenance) {
     rejectEntry(ctx, 'skill', id ?? String(record.id ?? '?'), reasons);
     return null;
@@ -395,6 +409,10 @@ function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
     rejectEntry(ctx, 'skill', id, [`unknown powerTier ${String(record.powerTier)}.`]);
     return null;
   }
+  // Usage (unified P2/A07): only attack-usage skills compile into attack
+  // actions; the default is utility and an unknown value degrades to it.
+  const rawUsage = asString(record.usage);
+  const usage = SKILL_USAGES.includes(rawUsage ?? '') ? rawUsage as SkillDefinition['usage'] : 'utility';
   return makeEntry({
     entryId: skillEntryId(id),
     kind: 'skill',
@@ -403,6 +421,7 @@ function cleanSkill(raw: unknown, ctx: CleanContext): ContentEntry | null {
       name,
       description: asString(record.description) ?? name,
       attribute,
+      usage,
       allowUntrained,
       requirements,
       powerTier,
@@ -617,6 +636,15 @@ function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate |
     sourceFactIds: provenance.sourceFactIds,
     rationale: '数值化为游戏规则值，非原著事实。',
   };
+  // Skill RANKS on a template are game-rule translations (unified P2): the
+  // template's possession of the skill is evidence-backed, the trained/master
+  // ladder value is a local rule mapping unless a skill ruleMapping says
+  // otherwise - so ranks stay traceable, never silently "explicit".
+  const skillRankField: Provenance = {
+    kind: 'rule_mapping',
+    sourceFactIds: provenance.sourceFactIds,
+    rationale: '技能等级为规则映射值；技能归属本身来自证据事实。',
+  };
   const definition: Record<string, unknown> = {
     name,
     category,
@@ -661,6 +689,8 @@ function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate |
         stamina: ruleMappingField,
         defense: ruleMappingField,
         threat: ruleMappingField,
+        ...(Object.keys(definition.skills as Record<string, unknown>).length > 0 ? { skills: skillRankField } : {}),
+        ...(attacks.length > 0 ? { attacks: skillRankField } : {}),
         ...(lootItemIds.length > 0 ? { lootItemIds: ruleMappingField } : {}),
       },
     }),
