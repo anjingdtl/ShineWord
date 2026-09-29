@@ -89,7 +89,7 @@ export function PlayHeader(props: {
                   opacity: pressed ? 0.8 : 1,
                 },
               ]}>
-              <Text style={[typeStyle(theme, theme.type.small), { color: theme.accentText }]}>☰ 信息</Text>
+              <Text style={[typeStyle(theme, theme.type.small), { color: theme.accentOnBase }]}>☰ 信息</Text>
             </Pressable>
           ) : null}
         </View>

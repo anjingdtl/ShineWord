@@ -5,7 +5,7 @@
  * Selection is shown by the accent fill *and* an underline bar, so the state
  * survives greyscale screenshots and colour-blind readers (plan §30).
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { typeStyle } from './typography';
@@ -30,6 +30,20 @@ export function SegmentedControl<T extends string>(props: {
 }): React.JSX.Element {
   const { theme } = useTheme();
   const block = props.block ?? true;
+  // Segments are visually compact (a `compact` row is ~23dp tall, the default
+  // row's press surface is 36dp), so the shortfall up to the 44dp floor is
+  // added as vertical-only hitSlop. Horizontal slop is deliberately zero: the
+  // segments sit shoulder-to-shoulder and an overlapping left/right slop would
+  // make taps on the gap ambiguous (plan §4).
+  const hitSlop = useMemo(() => {
+    const type = props.compact ? theme.type.label : theme.type.small;
+    const paddingVertical = props.compact ? theme.space.xs : theme.space.sm;
+    const visualHeight = props.compact
+      ? paddingVertical * 2 + type.lineHeight
+      : Math.max(theme.touch.min - theme.space.sm, paddingVertical * 2 + type.lineHeight);
+    const pad = Math.max(0, Math.ceil((theme.touch.min - visualHeight) / 2));
+    return { top: pad, bottom: pad, left: 0, right: 0 };
+  }, [props.compact, theme]);
   return (
     <View
       style={[
@@ -52,6 +66,7 @@ export function SegmentedControl<T extends string>(props: {
             key={option.value}
             onPress={() => props.onChange(option.value)}
             disabled={disabled}
+            hitSlop={hitSlop}
             accessibilityRole="tab"
             accessibilityState={{ selected, disabled }}
             accessibilityLabel={option.label}

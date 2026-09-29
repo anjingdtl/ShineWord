@@ -60,7 +60,25 @@ export interface ThemeTokens {
    * 漫画红 on its white panels is 3.3:1, so labels use this instead.
    */
   accentText: string;
+  /**
+   * Accent colour that is safe as *text on the page* (`bg.base`). For the three
+   * dark skins this equals `accentText`, whose accent is mid-bright and clears
+   * 4.5:1 on both the page and the raised card. The `manga` skin paints a dark
+   * page (`bg.base`) with white panels (`bg.raised`), so its `accentText` is the
+   * black panel ink and is unreadable on the page; its page-chrome accent text
+   * uses this token instead (red on near-black = 5.4:1).
+   */
+  accentOnBase: string;
   semantic: { good: string; bad: string; warn: string; info: string };
+  /**
+   * Semantic colours that are safe as *text* (>= 4.5:1) on the skin's light
+   * card surfaces (`bg.raised` / `bg.overlay`). The fill ramp above is tuned for
+   * bars, dice and banners, where the colour is a large block; some of those
+   * hues fall below the text floor when they carry a small label (朱砂 on the
+   * ink card is 3.6:1, and every bright manga hue is below 3.7:1 on its white
+   * panels). Labels read this ramp instead of `semantic`.
+   */
+  semanticText: { good: string; bad: string; warn: string; info: string };
   border: { color: string; colorStrong: string; width: number; hairline: number };
   /** Highlight chip variant (`chip.hot` in the prototype). */
   chip: { hotBackground: string | null; hotText: string; hotBorder: string };
@@ -147,7 +165,9 @@ const INK: ThemeTokens = {
   onAccent: '#FFFDF5',
   accent: { primary: '#C8442F', secondary: '#C9A063', tertiary: '#7FA05A' },
   accentText: '#C9A063',
+  accentOnBase: '#C9A063',
   semantic: { good: '#7FA05A', bad: '#C8442F', warn: '#C9A063', info: '#A99E86' },
+  semanticText: { good: '#7FA05A', bad: '#D96D5C', warn: '#C9A063', info: '#A99E86' },
   border: { color: '#3A3226', colorStrong: '#5A4C36', width: 1, hairline: 1 },
   chip: { hotBackground: null, hotText: '#C9A063', hotBorder: '#C8442F' },
   pip: { on: '#C9A063', off: '#2A241B', half: '#C9A063', border: '#3A3226', width: 16, height: 6, radius: 2 },
@@ -193,7 +213,9 @@ const FANTASY: ThemeTokens = {
   onAccent: '#0A0E1A',
   accent: { primary: '#D9A441', secondary: '#91B6D7', tertiary: '#79C99E' },
   accentText: '#D9A441',
+  accentOnBase: '#D9A441',
   semantic: { good: '#79C99E', bad: '#FF9B9B', warn: '#D9A441', info: '#91B6D7' },
+  semanticText: { good: '#79C99E', bad: '#FF9B9B', warn: '#D9A441', info: '#91B6D7' },
   border: { color: '#263A4D', colorStrong: '#3B5568', width: 1, hairline: 1 },
   chip: { hotBackground: null, hotText: '#D9A441', hotBorder: '#D9A441' },
   pip: { on: '#91B6D7', off: '#1A2438', half: '#91B6D7', border: '#263A4D', width: 16, height: 6, radius: 3 },
@@ -242,7 +264,12 @@ const MANGA: ThemeTokens = {
   // On the white manga panels black is the readable "ink"; colour carries the
   // accent through borders and fills instead of through label text.
   accentText: '#111111',
+  // The manga page is dark (`bg.base`) even though its panels are white, so the
+  // accent used as page-chrome text is the red, not the black panel ink.
+  accentOnBase: '#FF4757',
   semantic: { good: '#2ED573', bad: '#FF4757', warn: '#FACC15', info: '#3B82F6' },
+  // White panels need dark inks for the same hues; the bright fills stay on bars.
+  semanticText: { good: '#1A8345', bad: '#EA0014', warn: '#8C7103', info: '#196CF4' },
   border: { color: '#000000', colorStrong: '#000000', width: 3, hairline: 2 },
   chip: { hotBackground: '#FACC15', hotText: '#111111', hotBorder: '#000000' },
   pip: { on: '#111111', off: '#EEEEEE', half: '#111111', border: '#000000', width: 16, height: 6, radius: 2 },
@@ -288,7 +315,9 @@ const SCIFI: ThemeTokens = {
   onAccent: '#05070D',
   accent: { primary: '#35E0FF', secondary: '#FF3DF0', tertiary: '#7D93AC' },
   accentText: '#35E0FF',
+  accentOnBase: '#35E0FF',
   semantic: { good: '#35E0FF', bad: '#FF3DF0', warn: '#FF3DF0', info: '#7D93AC' },
+  semanticText: { good: '#35E0FF', bad: '#FF3DF0', warn: '#FF3DF0', info: '#7D93AC' },
   border: { color: 'rgba(53,224,255,0.22)', colorStrong: 'rgba(53,224,255,0.45)', width: 1, hairline: 1 },
   chip: { hotBackground: null, hotText: '#35E0FF', hotBorder: '#35E0FF' },
   pip: {

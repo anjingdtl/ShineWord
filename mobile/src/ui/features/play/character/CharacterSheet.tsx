@@ -180,7 +180,7 @@ export function CharacterSheet(props: {
 
 function Badge(props: { text: string; tone?: 'normal' | 'warn' }): React.JSX.Element {
   const { theme } = useTheme();
-  const color = props.tone === 'warn' ? theme.semantic.warn : theme.accentText;
+  const color = props.tone === 'warn' ? theme.semanticText.warn : theme.accentText;
   return (
     <View
       style={{

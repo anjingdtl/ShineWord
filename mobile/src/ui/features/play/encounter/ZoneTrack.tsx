@@ -63,9 +63,9 @@ export function ZoneTrack(props: { encounter: EncounterView }): React.JSX.Elemen
                         {
                           color:
                             actor.side === 'hostile'
-                              ? theme.semantic.bad
+                              ? theme.semanticText.bad
                               : actor.side === 'party'
-                                ? theme.semantic.good
+                                ? theme.semanticText.good
                                 : theme.onRaised.secondary,
                         },
                       ]}>

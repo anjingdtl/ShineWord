@@ -56,6 +56,15 @@ export function PartyStrip(props: {
             key={member.actorId}
             onPress={() => props.onSelect(member.actorId)}
             disabled={props.busy}
+            // The tile is as wide as its 32dp avatar; the strip's 12dp gap is
+            // left intact so the horizontal slop reaches the 44dp floor without
+            // overlapping the next tile (plan §4).
+            hitSlop={{
+              top: 0,
+              bottom: 0,
+              left: Math.ceil((theme.touch.min - theme.space.xxl) / 2),
+              right: Math.ceil((theme.touch.min - theme.space.xxl) / 2),
+            }}
             accessibilityRole="button"
             accessibilityLabel={`${member.name}${isPlayer ? '（你）' : ''}，气血 ${member.resources.hp ?? '?'}/${member.resourceMax.hp ?? '?'}，体力 ${member.resources.stamina ?? '?'}/${member.resourceMax.stamina ?? '?'}${critical ? '，濒危' : ''}${disabled ? '，失能' : ''}`}
             testID={`party-member-${member.actorId}`}

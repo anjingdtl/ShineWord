@@ -103,7 +103,7 @@ export function BuildStatusCard(props: {
         <Text
           style={[
             typeStyle(theme, theme.type.caption),
-            { color: theme.semantic.good, marginTop: theme.space.sm },
+            { color: theme.semanticText.good, marginTop: theme.space.sm },
           ]}>
           ✓ 本次为续建（复用已完成的文本块）
         </Text>

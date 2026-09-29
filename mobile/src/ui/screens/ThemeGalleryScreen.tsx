@@ -64,7 +64,7 @@ export function ThemeGalleryScreen(props: { onClose: () => void }): React.JSX.El
         <ChapterDivider label="BUTTON" />
 
         <View style={[styles.section, { padding: theme.space.lg, gap: theme.space.md }]}>
-          <Text style={[typeStyle(theme, theme.type.heading), { color: theme.accentText }]}>
+          <Text style={[typeStyle(theme, theme.type.heading), { color: theme.accentOnBase }]}>
             按钮 · 三态 + 按压反馈
           </Text>
           <Button label="主要行动" variant="primary" onPress={() => undefined} block />

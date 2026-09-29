@@ -28,7 +28,10 @@ export function StatusBanner(props: {
 }): React.JSX.Element {
   const { theme } = useTheme();
   const tone = props.tone ?? 'info';
-  const color =
+  // The leading rule is a 3dp fill, so it uses the bright `semantic` ramp; the
+  // tone glyph is rendered as text, so it uses the contrast-safe `semanticText`
+  // ramp instead (plan §30).
+  const ruleColor =
     tone === 'success'
       ? theme.semantic.good
       : tone === 'warning'
@@ -36,6 +39,14 @@ export function StatusBanner(props: {
         : tone === 'error'
           ? theme.semantic.bad
           : theme.semantic.info;
+  const glyphColor =
+    tone === 'success'
+      ? theme.semanticText.good
+      : tone === 'warning'
+        ? theme.semanticText.warn
+        : tone === 'error'
+          ? theme.semanticText.bad
+          : theme.semanticText.info;
 
   return (
     <View
@@ -53,11 +64,11 @@ export function StatusBanner(props: {
         },
         props.style,
       ]}>
-      <View style={[styles.rule, { backgroundColor: color, borderRadius: theme.radius.sm }]} />
+      <View style={[styles.rule, { backgroundColor: ruleColor, borderRadius: theme.radius.sm }]} />
       <View style={{ flex: 1, gap: theme.space.xs }}>
         {props.title ? (
           <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.primary, fontWeight: '700' }]}>
-            <Text style={{ color }}>{GLYPH[tone]} </Text>
+            <Text style={{ color: glyphColor }}>{GLYPH[tone]} </Text>
             {props.title}
           </Text>
         ) : null}
