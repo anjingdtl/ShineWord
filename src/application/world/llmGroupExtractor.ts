@@ -287,9 +287,15 @@ export class LlmGroupExtractor {
       }
       const absStart = segment.startCp + codePointLength(segment.text.slice(0, rel));
       const absEnd = absStart + codePointLength(quote);
-      const value = candidate.value && typeof candidate.value === 'object' && !Array.isArray(candidate.value)
+      const rawValue = candidate.value && typeof candidate.value === 'object' && !Array.isArray(candidate.value)
         ? candidate.value as Record<string, unknown>
         : {};
+      // Real models (GLM run 2026-09-30) sometimes emit schema facts with an
+      // EMPTY value object; empty values all share the '' value key, so two
+      // same-predicate facts on one subject would falsely register as canon
+      // conflicts. The verbatim quote is real extracted content - carrying it
+      // as value.text keeps the fact distinct and honest (no invention).
+      const value = Object.keys(rawValue).length > 0 ? rawValue : { text: quote };
       facts.push({
         subjectKey: subject,
         predicate,
