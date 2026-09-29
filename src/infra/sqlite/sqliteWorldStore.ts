@@ -658,11 +658,22 @@ export class SqliteWorldStore implements WorldStore {
         );
       }
       for (const dependency of event.dependsOnEventIds) {
-        await tx.execute(
-          `INSERT OR IGNORE INTO event_dependencies (world_id, event_id, depends_on_event_id, created_at)
-           VALUES (?, ?, ?, ?)`,
-          [event.worldId, event.eventId, dependency, createdAt],
+        // Forward references are legal in proposal order (a real novel's
+        // timeline cites later events); the FK requires the dependency row
+        // to exist first. Guard the insert instead of failing the whole
+        // event commit - a missing dependency is simply not recorded yet
+        // and the resolver's floor semantics (drop unknown deps) apply.
+        const exists = await tx.queryOne<{ n: number }>(
+          'SELECT COUNT(*) AS n FROM canon_events WHERE world_id = ? AND event_id = ?',
+          [event.worldId, dependency],
         );
+        if (exists && Number(exists.n) > 0) {
+          await tx.execute(
+            `INSERT OR IGNORE INTO event_dependencies (world_id, event_id, depends_on_event_id, created_at)
+             VALUES (?, ?, ?, ?)`,
+            [event.worldId, event.eventId, dependency, createdAt],
+          );
+        }
       }
     });
   }
