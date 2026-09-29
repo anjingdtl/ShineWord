@@ -31,8 +31,8 @@ class NodeSqliteAdapter {
     this.chain = Promise.resolve();
   }
   async execute(sql, params = []) {
-    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return; }
-    this.db.prepare(sql).run(...params);
+    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return 0; }
+    return this.db.prepare(sql).run(...params).changes;
   }
   async queryOne(sql, params = []) { return this.db.prepare(sql).get(...params) ?? null; }
   async queryAll(sql, params = []) { return this.db.prepare(sql).all(...params); }
@@ -324,8 +324,9 @@ test('C2 coordinator executes a run to completion over persisted shards', async 
     const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
     const { store: sourceStore } = await prepareActiveSqliteSource(db, bytes, 'src-1');
 
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const extractor = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore },
@@ -432,8 +433,9 @@ test('C2 crash mid-run recovers without re-paying finished units', async () => {
   try {
     const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
     const { store: sourceStore } = await prepareActiveSqliteSource(db, bytes, 'src-2');
-    const runStore = new SqliteBuildRunStore(new NodeSqliteAdapter(db));
-    const worldStore = new SqliteWorldStore(new NodeSqliteAdapter(db));
+    const sharedAdapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(sharedAdapter);
+    const worldStore = new SqliteWorldStore(sharedAdapter);
     const extractor = new FixtureExtractor({ knownNames: fixtureNames() });
     await createExtractionRun(
       { sourceStore, runStore, worldStore },

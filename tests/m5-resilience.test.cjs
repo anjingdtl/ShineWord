@@ -18,8 +18,8 @@ class NodeSqliteAdapter {
     this.chain = Promise.resolve();
   }
   async execute(sql, params = []) {
-    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return; }
-    this.db.prepare(sql).run(...params);
+    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return 0; }
+    return this.db.prepare(sql).run(...params).changes;
   }
   async queryOne(sql, params = []) { return this.db.prepare(sql).get(...params) ?? null; }
   async queryAll(sql, params = []) { return this.db.prepare(sql).all(...params) ?? []; }

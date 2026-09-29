@@ -15,7 +15,7 @@ const sha = { sha256Hex: value => createHash('sha256').update(value, 'utf8').dig
 
 class NodeSqliteAdapter {
   constructor(db) { this.db = db; this.chain = Promise.resolve(); }
-  async execute(sql, params = []) { this.db.prepare(sql).run(...params); }
+  async execute(sql, params = []) { return this.db.prepare(sql).run(...params).changes; }
   async queryOne(sql, params = []) { return this.db.prepare(sql).get(...params) ?? null; }
   async queryAll(sql, params = []) { return this.db.prepare(sql).all(...params); }
   transaction(work) {

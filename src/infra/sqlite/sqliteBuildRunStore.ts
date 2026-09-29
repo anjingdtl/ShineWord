@@ -307,21 +307,19 @@ export class SqliteBuildRunStore implements BuildRunStore {
   }
 
   async claimUnit(unitId: string, now: string): Promise<boolean> {
-    const row = await this.db.queryOne<{ status: string }>(
-      'SELECT status FROM world_build_units WHERE unit_id = ?',
-      [unitId],
-    );
-    if (!row) return false;
-    if (row.status !== 'queued' && row.status !== 'failed_retryable'
-      && row.status !== 'running' && row.status !== 'waiting_network') {
-      return false;
-    }
-    await this.db.execute(
-      `UPDATE world_build_units SET status = 'running', attempt = attempt + 1, updated_at = ?
-         WHERE unit_id = ?`,
+    // Atomic compare-and-set claim (resident plan §6): one conditional
+    // UPDATE either matches or not, so concurrent workers can never both
+    // win - no read/write race window, no explicit transaction needed.
+    // 'running' stays claimable on purpose: a unit stuck 'running' after a
+    // crashed coordinator is recovered by the next lease holder.
+    const changed = await this.db.execute(
+      `UPDATE world_build_units
+         SET status = 'running', attempt = attempt + 1, updated_at = ?
+       WHERE unit_id = ?
+         AND status IN ('queued', 'failed_retryable', 'running', 'waiting_network')`,
       [now, unitId],
     );
-    return true;
+    return changed > 0;
   }
 
   async completeUnit(input: {

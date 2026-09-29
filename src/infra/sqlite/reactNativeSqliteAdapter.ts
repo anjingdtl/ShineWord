@@ -9,6 +9,8 @@ export interface ReactNativeSqlResultSet {
     length: number;
     item(index: number): SqliteRow;
   };
+  /** Web SQL standard field; the affected-row count for UPDATE/DELETE. */
+  rowsAffected?: number;
 }
 
 export interface ReactNativeSqliteDatabase {
@@ -53,8 +55,9 @@ export class ReactNativeSqliteAdapter implements SqliteDatabase {
 
   constructor(private readonly db: ReactNativeSqliteDatabase) {}
 
-  async execute(sql: string, params: readonly unknown[] = []): Promise<void> {
-    await this.db.executeSql(sql, params);
+  async execute(sql: string, params: readonly unknown[] = []): Promise<number> {
+    const result = unwrapResult(await this.db.executeSql(sql, params));
+    return typeof result.rowsAffected === 'number' ? result.rowsAffected : 0;
   }
 
   async queryOne<T extends SqliteRow>(
@@ -87,7 +90,8 @@ export class ReactNativeSqliteAdapter implements SqliteDatabase {
       await this.db.executeSql('BEGIN IMMEDIATE');
       const tx: SqliteTransaction = {
         execute: async (sql, params = []) => {
-          await this.db.executeSql(sql, params);
+          const result = unwrapResult(await this.db.executeSql(sql, params));
+          return typeof result.rowsAffected === 'number' ? result.rowsAffected : 0;
         },
         queryOne: async <R extends SqliteRow>(
           sql: string,

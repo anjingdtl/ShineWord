@@ -13,9 +13,9 @@ class NodeSqliteAdapter {
   async execute(sql, params = []) {
     if (params.length === 0 && sql.includes(';')) {
       this.db.exec(sql);
-      return;
+      return 0;
     }
-    this.db.prepare(sql).run(...params);
+    return this.db.prepare(sql).run(...params).changes;
   }
   async queryOne(sql, params = []) {
     return this.db.prepare(sql).get(...params) ?? null;
