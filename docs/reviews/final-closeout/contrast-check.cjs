@@ -2,84 +2,121 @@
 /*
  * Token-level WCAG 2.1 contrast audit for the four Shine-TRPG skins.
  *
- * This is a STATIC verification: it reads the same literal colour values the
- * components read (the single source of truth is
- * `mobile/src/ui/theme/tokens.ts`, mirrored below) and computes contrast
- * ratios. It does NOT render anything on a device and cannot prove the pixel
- * result of alpha compositing, fonts, or shadows — see F1_VISUAL.md.
+ * Source of truth: the audit PARSES `mobile/src/ui/theme/tokens.ts` at run
+ * time — there is no hand-copied colour mirror in this file, so a token change
+ * that breaks a pairing fails here even if the script itself is not updated
+ * (that mirror gap is exactly how the 2026-09-29 A1 placeholder defect slipped
+ * through the previous 84-pair audit).
  *
- * Each pair carries a role:
- *   text   — the value is rendered as a small text label; must clear 4.5:1.
- *   large  — text rendered at >= 18.66px bold; must clear 3:1.
- *   fill   — a block/bar/border fill; contrast is not a text requirement, kept
- *            for reference only and never counted as a failure.
- *   guard  — a pairing the components must NOT use for text (documented
- *            regression guard); never counted as a failure.
+ * Two layers:
  *
- * Exit code is non-zero only if a `text`/`large` pair falls below its floor.
+ *  1. Colour maths over the parsed tokens. Each pair carries a role:
+ *       text   — small text label; must clear 4.5:1.
+ *       large  — text at >= 18.66px bold; must clear 3:1.
+ *       fill   — block/bar/border fill; reference only, never a failure.
+ *       guard  — a pairing components must NOT use for text; documented
+ *                regression guard, never a failure.
+ *
+ *  2. Component pairing assertions: the real widget sources must bind the
+ *     audited slots (e.g. TextField's placeholder colour). Colour maths alone
+ *     cannot catch a component reading the *wrong* slot while every pair in
+ *     isolation still passes.
+ *
+ * This remains a STATIC verification: no device pixels, fonts or alpha
+ * compositing are involved — see F1_VISUAL.md.
+ *
+ * Exit code is non-zero if a `text`/`large` pair falls below its floor, if a
+ * token the audit expects cannot be parsed, or if a component assertion fails.
  *
  * Usage: node docs/reviews/final-closeout/contrast-check.cjs [--json]
  */
 'use strict';
 
-const THEMES = {
-  ink: {
-    scheme: 'dark',
-    bg: { base: '#12100C', raised: '#1D1913', overlay: '#2A241B' },
-    text: { primary: '#EFE6D0', secondary: '#A99E86', muted: '#8A8A8A' },
-    onRaised: { primary: '#EFE6D0', secondary: '#A99E86' },
-    onAccent: '#FFFDF5',
-    accent: { primary: '#C8442F', secondary: '#C9A063' },
-    accentText: '#C9A063',
-    accentOnBase: '#C9A063',
-    semantic: { good: '#7FA05A', bad: '#C8442F', warn: '#C9A063', info: '#A99E86' },
-    semanticText: { good: '#7FA05A', bad: '#D96D5C', warn: '#C9A063', info: '#A99E86' },
-    chip: { hotBackground: null, hotText: '#C9A063' },
-    die: { fill: '#C9A063', text: '#12100C' },
-  },
-  fantasy: {
-    scheme: 'dark',
-    bg: { base: '#0A0E1A', raised: '#101828', overlay: '#1A2438' },
-    text: { primary: '#F1F5F9', secondary: '#A8B8C6', muted: '#8EA1B2' },
-    onRaised: { primary: '#F1F5F9', secondary: '#A8B8C6' },
-    onAccent: '#0A0E1A',
-    accent: { primary: '#D9A441', secondary: '#91B6D7' },
-    accentText: '#D9A441',
-    accentOnBase: '#D9A441',
-    semantic: { good: '#79C99E', bad: '#FF9B9B', warn: '#D9A441', info: '#91B6D7' },
-    semanticText: { good: '#79C99E', bad: '#FF9B9B', warn: '#D9A441', info: '#91B6D7' },
-    chip: { hotBackground: null, hotText: '#D9A441' },
-    die: { fill: '#91B6D7', text: '#0A0E1A' },
-  },
-  manga: {
-    scheme: 'light',
-    bg: { base: '#16161E', raised: '#FFFFFF', overlay: '#FFFDF5' },
-    text: { primary: '#F5F5F5', secondary: '#9A9AA5', muted: '#8A8A93' },
-    onRaised: { primary: '#111111', secondary: '#555555' },
-    onAccent: '#111111',
-    accent: { primary: '#FF4757', secondary: '#3B82F6' },
-    accentText: '#111111',
-    accentOnBase: '#FF4757',
-    semantic: { good: '#2ED573', bad: '#FF4757', warn: '#FACC15', info: '#3B82F6' },
-    semanticText: { good: '#1A8345', bad: '#EA0014', warn: '#8C7103', info: '#196CF4' },
-    chip: { hotBackground: '#FACC15', hotText: '#111111' },
-    die: { fill: '#111111', text: '#FFFFFF' },
-  },
-  scifi: {
-    scheme: 'dark',
-    bg: { base: '#05070D', raised: '#0B101B', overlay: '#111A2B' },
-    text: { primary: '#D7E6F5', secondary: '#7D93AC', muted: '#6C8098' },
-    onRaised: { primary: '#D7E6F5', secondary: '#7D93AC' },
-    onAccent: '#05070D',
-    accent: { primary: '#35E0FF', secondary: '#FF3DF0' },
-    accentText: '#35E0FF',
-    accentOnBase: '#35E0FF',
-    semantic: { good: '#35E0FF', bad: '#FF3DF0', warn: '#FF3DF0', info: '#7D93AC' },
-    semanticText: { good: '#35E0FF', bad: '#FF3DF0', warn: '#FF3DF0', info: '#7D93AC' },
-    chip: { hotBackground: null, hotText: '#35E0FF' },
-    die: { fill: '#35E0FF', text: '#05070D' },
-  },
-};
+const fs = require('node:fs');
+const path = require('node:path');
+
+const REPO = path.resolve(__dirname, '..', '..', '..');
+const TOKENS_PATH = path.join(REPO, 'mobile', 'src', 'ui', 'theme', 'tokens.ts');
+
+/* ------------------------------------------------------------------ */
+/* 1. Parse the real token literals out of tokens.ts.                  */
+/* ------------------------------------------------------------------ */
+
+function parseThemeBlock(source, constName) {
+  const start = source.indexOf(`const ${constName}: ThemeTokens = {`);
+  if (start < 0) throw new Error(`tokens.ts: theme block ${constName} not found`);
+  const end = source.indexOf('\n};', start);
+  const block = source.slice(start, end);
+
+  const id = /id:\s*'([^']+)'/.exec(block)?.[1];
+  const scheme = /scheme:\s*'(dark|light)'/.exec(block)?.[1];
+  if (!id || !scheme) throw new Error(`tokens.ts: ${constName} missing id/scheme`);
+
+  const group = (name) => {
+    const inner = new RegExp(`${name}:\\s*\\{([^}]+)\\}`).exec(block)?.[1];
+    if (inner === undefined) throw new Error(`tokens.ts: ${constName} missing group ${name}`);
+    return inner;
+  };
+  const hex = (inner, key) => {
+    const m = new RegExp(`\\b${key}:\\s*'(#[0-9A-Fa-f]{3,8})'`).exec(inner);
+    if (!m) throw new Error(`tokens.ts: ${constName} missing hex for ${key}`);
+    return m[1];
+  };
+  const maybeNull = (inner, key) =>
+    new RegExp(`\\b${key}:\\s*null`).test(inner) ? null : hex(inner, key);
+
+  const bg = group('bg');
+  const text = group('text');
+  const onRaised = group('onRaised');
+  const accent = group('accent');
+  const semantic = group('semantic');
+  const semanticText = group('semanticText');
+  const chip = group('chip');
+  const die = group('die');
+
+  return {
+    constName,
+    scheme,
+    bg: { base: hex(bg, 'base'), raised: hex(bg, 'raised'), overlay: hex(bg, 'overlay') },
+    text: { primary: hex(text, 'primary'), secondary: hex(text, 'secondary'), muted: hex(text, 'muted') },
+    onRaised: { primary: hex(onRaised, 'primary'), secondary: hex(onRaised, 'secondary') },
+    onAccent: /onAccent:\s*'([^']+)'/.exec(block)?.[1],
+    accent: { primary: hex(accent, 'primary'), secondary: hex(accent, 'secondary') },
+    accentText: /accentText:\s*'([^']+)'/.exec(block)?.[1],
+    accentOnBase: /accentOnBase:\s*'([^']+)'/.exec(block)?.[1],
+    semantic: {
+      good: hex(semantic, 'good'), bad: hex(semantic, 'bad'),
+      warn: hex(semantic, 'warn'), info: hex(semantic, 'info'),
+    },
+    semanticText: {
+      good: hex(semanticText, 'good'), bad: hex(semanticText, 'bad'),
+      warn: hex(semanticText, 'warn'), info: hex(semanticText, 'info'),
+    },
+    chip: { hotText: hex(chip, 'hotText'), hotBackground: maybeNull(chip, 'hotBackground') },
+    die: { fill: hex(die, 'fill'), text: hex(die, 'text') },
+  };
+}
+
+function parseTokens() {
+  const source = fs.readFileSync(TOKENS_PATH, 'utf8');
+  const themes = {};
+  const blockRe = /const\s+([A-Z][A-Za-z0-9_]*):\s*ThemeTokens\s*=\s*\{/g;
+  let m;
+  while ((m = blockRe.exec(source)) !== null) {
+    const theme = parseThemeBlock(source, m[1]);
+    themes[theme.constName] = theme;
+  }
+  // Key by the skin's own `id` so display order follows tokens.ts semantics.
+  const byId = {};
+  for (const theme of Object.values(themes)) byId[theme.constName] = theme;
+  return byId;
+}
+
+const THEMES = parseTokens();
+
+/* ------------------------------------------------------------------ */
+/* 2. Colour maths (WCAG 2.1 relative luminance / contrast).           */
+/* ------------------------------------------------------------------ */
 
 const NORMAL_MIN = 4.5;
 const LARGE_MIN = 3.0;
@@ -116,15 +153,22 @@ function pairsFor(t) {
     ['onRaised.secondary / bg.raised', t.onRaised.secondary, t.bg.raised, NORMAL_MIN, 'text'],
     ['onRaised.primary / bg.overlay', t.onRaised.primary, t.bg.overlay, NORMAL_MIN, 'text'],
     ['onRaised.secondary / bg.overlay', t.onRaised.secondary, t.bg.overlay, NORMAL_MIN, 'text'],
+    ['TextField placeholder: onRaised.secondary / bg.overlay', t.onRaised.secondary, t.bg.overlay, NORMAL_MIN, 'text'],
+    ['TextField typed text: onRaised.primary / bg.overlay', t.onRaised.primary, t.bg.overlay, NORMAL_MIN, 'text'],
     ['accentText / bg.raised (panel label)', t.accentText, t.bg.raised, NORMAL_MIN, 'text'],
     ['accentText / bg.overlay (panel label)', t.accentText, t.bg.overlay, NORMAL_MIN, 'text'],
     ['accentOnBase / bg.base (page chrome)', t.accentOnBase, t.bg.base, NORMAL_MIN, 'text'],
     ['onAccent / accent.primary (label on fill)', t.onAccent, t.accent.primary, NORMAL_MIN, 'text'],
+    ['PartyStrip tile text: text.secondary / bg.base', t.text.secondary, t.bg.base, NORMAL_MIN, 'text'],
     ['chip.hotText / chip background', t.chip.hotText, t.chip.hotBackground || t.bg.base, NORMAL_MIN, 'text'],
     ['die.text / die.fill (large glyph)', t.die.text, t.die.fill, LARGE_MIN, 'large'],
     ['accent.primary / bg.base (fill/border only)', t.accent.primary, t.bg.base, NORMAL_MIN, 'fill'],
     ['text.muted / bg.raised (WRONG surface guard)', t.text.muted, t.bg.raised, NORMAL_MIN, 'guard'],
     ['accentText / bg.base (WRONG surface guard)', t.accentText, t.bg.base, NORMAL_MIN, 'guard'],
+    // A1 (2026-09-29): TextField's placeholder used the host-surface muted
+    // token while sitting on the overlay field box — 4.45/3.36/4.29:1 on
+    // ink/manga/scifi. Components must keep text.muted off bg.overlay.
+    ['text.muted / bg.overlay (TextField placeholder WRONG pairing guard)', t.text.muted, t.bg.overlay, NORMAL_MIN, 'guard'],
   ];
   for (const slot of ['good', 'bad', 'warn', 'info']) {
     pairs.push([
@@ -159,6 +203,62 @@ function pairsFor(t) {
   return pairs;
 }
 
+/* ------------------------------------------------------------------ */
+/* 3. Component pairing assertions — the widget must bind the slot.    */
+/* ------------------------------------------------------------------ */
+
+function readComponent(rel) {
+  return fs.readFileSync(path.join(REPO, 'mobile', 'src', 'ui', rel), 'utf8');
+}
+
+/** [assertion label, component rel path, RegExp the source must match] */
+const COMPONENT_ASSERTIONS = [
+  [
+    'TextField placeholder binds onRaised.secondary (A1)',
+    'components/TextField.tsx',
+    (src) =>
+      (/const fieldMuted = theme\.onRaised\.secondary;/.test(src) &&
+        /placeholderTextColor=\{fieldMuted\}/.test(src)) ||
+      /placeholderTextColor=\{theme\.onRaised\.secondary\}/.test(src),
+  ],
+  [
+    'TextField must not bind placeholder to the host-surface muted token (A1)',
+    'components/TextField.tsx',
+    (src) => !/placeholderTextColor=\{hostMuted\}/.test(src) && !/placeholderTextColor=\{props\./.test(src),
+  ],
+  [
+    'PartyStrip renders visible numeric resource values (A2, §30)',
+    'features/play/PartyStrip.tsx',
+    (src) =>
+      /<Text[^>]*>\s*\{props\.value\}/.test(src) &&
+      /resourceValue\(member\.resources\.hp,\s*member\.resourceMax\.hp\)/.test(src) &&
+      /resourceValue\(member\.resources\.stamina,\s*member\.resourceMax\.stamina\)/.test(src),
+  ],
+  [
+    'NpcCharacterSheet resets stale error/npc when the actor changes (A3)',
+    'features/play/character/NpcCharacterSheet.tsx',
+    (src) => /setError\(null\);/.test(src) && /setNpc\(null\);/.test(src) && /let cancelled = false;/.test(src),
+  ],
+];
+
+const componentFailures = [];
+for (const [label, rel, matcher] of COMPONENT_ASSERTIONS) {
+  let ok = false;
+  let err = null;
+  try {
+    const src = readComponent(rel);
+    ok = typeof matcher === 'function' ? matcher(src) : matcher.test(src);
+  } catch (e) {
+    err = e;
+  }
+  if (err) componentFailures.push(`${label}: cannot read ${rel} (${err.message})`);
+  else if (!ok) componentFailures.push(`${label}: source does not match the required pairing`);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. Run.                                                             */
+/* ------------------------------------------------------------------ */
+
 const results = {};
 let textFailures = 0;
 let textChecks = 0;
@@ -175,8 +275,10 @@ for (const [id, t] of Object.entries(THEMES)) {
 }
 
 if (process.argv.includes('--json')) {
-  process.stdout.write(JSON.stringify({ results, textChecks, textFailures }, null, 2) + '\n');
-  process.exit(textFailures === 0 ? 0 : 1);
+  process.stdout.write(
+    JSON.stringify({ tokensSource: TOKENS_PATH, results, textChecks, textFailures, componentFailures }, null, 2) + '\n',
+  );
+  process.exit(textFailures === 0 && componentFailures.length === 0 ? 0 : 1);
 }
 
 for (const [id, rows] of Object.entries(results)) {
@@ -188,8 +290,15 @@ for (const [id, rows] of Object.entries(results)) {
     );
   }
 }
+if (componentFailures.length > 0) {
+  process.stdout.write('\nComponent pairing assertions:\n');
+  for (const f of componentFailures) process.stdout.write(`FAIL  ${f}\n`);
+} else {
+  process.stdout.write('\nComponent pairing assertions: ALL PASS\n');
+}
 process.stdout.write(
-  `\nText/large checks: ${textChecks}; below floor: ${textFailures}\n` +
-    `${textFailures === 0 ? 'ALL TEXT PAIRS PASS' : 'TEXT PAIRS BELOW FLOOR'}\n`,
+  `\nText/large checks: ${textChecks}; below floor: ${textFailures}; component failures: ${componentFailures.length}\n` +
+    `tokens parsed live from: ${path.relative(REPO, TOKENS_PATH)}\n` +
+    `${textFailures === 0 && componentFailures.length === 0 ? 'ALL TEXT PAIRS PASS' : 'TEXT PAIRS BELOW FLOOR'}\n`,
 );
-process.exit(textFailures === 0 ? 0 : 1);
+process.exit(textFailures === 0 && componentFailures.length === 0 ? 0 : 1);
