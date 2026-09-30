@@ -41,6 +41,19 @@ export interface ContextDemand {
   clipMode: ContextClipMode;
 }
 
+/** A materialized context item with its rendered text (plan §15). */
+export interface ContextCandidate extends ContextDemand {
+  /** Renderer heading inside the board section. */
+  heading?: string;
+  /** The already-permission-filtered rendered text. */
+  text: string;
+  provenance: {
+    sourceType: string;
+    sourceId: string;
+    stateVersion?: number;
+  };
+}
+
 export interface ContextAllocationEntry {
   id: string;
   demanded: number;

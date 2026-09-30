@@ -602,3 +602,96 @@ test('rest and training follow V0.2 policy: threshold only enables training', as
     'the raw persisted snapshot stores a minute projection matching its authoritative seconds');
   assert.equal(after.state.actors['actor-shen'].resources.stamina, 3, 'short rest restores 2 stamina from 1');
 });
+
+// ---------------------------------------------------------------------------
+// M5: elastic turn-context integration (infrastructure plan §57-§60)
+// ---------------------------------------------------------------------------
+
+class CapturingProvider extends ScriptedPlannerProvider {
+  constructor() {
+    super();
+    this.requests = [];
+  }
+  async complete(request) {
+    this.requests.push(request);
+    return super.complete(request);
+  }
+}
+
+test('M5: playTurn routes planner/narrator through kernel budgets and separate contexts', async () => {
+  const db = setupDb();
+  const adapter = new NodeSqliteAdapter(db);
+  const worldStore = new SqliteWorldStore(adapter);
+  await seedWorld(db, worldStore);
+  await createSampleCampaign(db, adapter, worldStore, 'camp-ctx');
+  const provider = new CapturingProvider();
+  const session = new CampaignSession({
+    db: adapter,
+    turns: new SqliteTurnStore(adapter),
+    game: new SqliteGameStore(adapter),
+    worldStore,
+    narratives: new SqliteNarrativeStore(adapter),
+    hashProvider: sha,
+    random: RNG,
+  }, provider, {
+    endpoint: 'https://x', model: 'glm-test', keyRef: 'kr',
+    capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 32_000, maxOutputTokens: 8_192 },
+    reasoningEffort: 'low',
+    reasoningReserveTokens: 2_048,
+  });
+
+  await session.playTurn({ campaignId: 'camp-ctx', branchId: 'camp-ctx-main', intent: '雨夜潜行接近书阁' });
+
+  const plannerRequest = provider.requests.find(request => request.role === 'Planner');
+  const narratorRequest = provider.requests.find(request => request.role === 'Narrator');
+  assert.ok(plannerRequest && narratorRequest);
+
+  // Kernel budgets, not the legacy fixed 1200/1500 (planner demand maximum
+  // 4000 fits the declared 8192 ceiling with the GLM reserve inside).
+  assert.equal(plannerRequest.maxOutputTokens, 4_000);
+  assert.notEqual(narratorRequest.maxOutputTokens, 1_500);
+
+  // Separate frozen contexts: the narrator payload carries its own
+  // worldContext, never the full planner context.
+  const narratorPayload = JSON.parse(narratorRequest.user);
+  assert.ok(typeof narratorPayload.worldContext === 'string');
+  const plannerPayload = JSON.parse(plannerRequest.user);
+  assert.ok(plannerPayload.worldContext.length > 0);
+  assert.ok(narratorPayload.worldContext.length < plannerPayload.worldContext.length,
+    'narrator context is deliberately smaller');
+
+  const contexts = session.lastTurnContexts;
+  assert.ok(contexts.planner && contexts.narrator);
+  assert.equal(contexts.planner.legacyFallback, false);
+  assert.equal(contexts.narrator.legacyFallback, false);
+  assert.notEqual(contexts.planner.contextId, contexts.narrator.contextId);
+  assert.equal(contexts.narrator.included.some(item => item.board === 'worldKnowledge'), false);
+  assert.equal(contexts.narrator.included.some(item => item.board === 'sourceEvidence'), false);
+});
+
+test('M5: unknown capabilities degrade to the legacy path without breaking play', async () => {
+  const db = setupDb();
+  const adapter = new NodeSqliteAdapter(db);
+  const worldStore = new SqliteWorldStore(adapter);
+  await seedWorld(db, worldStore);
+  await createSampleCampaign(db, adapter, worldStore, 'camp-legacy');
+  const provider = new CapturingProvider();
+  const session = new CampaignSession({
+    db: adapter,
+    turns: new SqliteTurnStore(adapter),
+    game: new SqliteGameStore(adapter),
+    worldStore,
+    narratives: new SqliteNarrativeStore(adapter),
+    hashProvider: sha,
+    random: RNG,
+  }, provider, { endpoint: 'https://x', model: 'stub', keyRef: 'kr' });
+
+  const result = await session.playTurn({ campaignId: 'camp-legacy', branchId: 'camp-legacy-main', intent: '潜行' });
+  assert.ok(result.stateVersion >= 1, 'the turn still plays');
+  assert.equal(session.lastTurnContexts.planner.legacyFallback, true);
+  assert.equal(
+    provider.requests.find(request => request.role === 'Planner').maxOutputTokens,
+    1_200,
+    'legacy fixed planner budget',
+  );
+});

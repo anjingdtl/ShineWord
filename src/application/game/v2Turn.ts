@@ -60,6 +60,12 @@ export interface RunV2TurnInput {
   settlementFor?(grade: RollGrade, contract: ActionContract): Promise<TurnSettlementPlan>;
   now?: () => string;
   budget?: TurnRequestBudget;
+  /** Kernel-resolved planner output budget (infrastructure plan M5). */
+  plannerOutputTokens?: number;
+  /** Independent narrator context (never the full planner context, §59). */
+  narratorWorldContext?: string;
+  /** Kernel-resolved narrator output budget. */
+  narratorOutputTokens?: number;
   usageRecorder?: (record: {
     role: 'Planner' | 'Narrator';
     inputTokens: number | null;
@@ -214,7 +220,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
           worldContext: input.worldContext ?? '',
           ...(repairErrors ? { repairInstructions: `Your previous proposal was rejected: ${repairErrors.join('; ')}. Output the corrected complete JSON proposal only.` } : {}),
         }),
-        maxOutputTokens: 1200,
+        maxOutputTokens: input.plannerOutputTokens ?? 1200,
         jsonMode: true,
         ledger: {
           logicalRequestId: `planner:${input.branchId}:${input.turnId}`,
@@ -303,6 +309,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         playerIntent: input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
+        worldContext: input.narratorWorldContext ?? '',
         roll: rollRecord
           ? {
               diceCount: rollRecord.diceCount,
@@ -313,7 +320,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
             }
           : null,
       }),
-      maxOutputTokens: 1500,
+      maxOutputTokens: input.narratorOutputTokens ?? 1500,
       jsonMode: true,
       ledger: {
         logicalRequestId: `narrator:${input.branchId}:${input.turnId}`,
