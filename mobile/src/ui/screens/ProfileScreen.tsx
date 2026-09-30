@@ -17,9 +17,11 @@ import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
 import { typeStyle } from '../components/typography';
 import { BrandLockup } from '../brand';
+import { PRODUCT_AUTHOR } from '../brand';
 import { AboutCard } from '../features/profile/AboutCard';
 import { ProfileFormCard } from '../features/profile/ProfileFormCard';
 import { ThemeSkinCard } from '../features/profile/ThemeSkinCard';
+import versionJson from '../../version.json';
 import { useProfileForm } from '../features/profile/useProfileForm';
 import { useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -67,6 +69,14 @@ export function FirstRunScreen(): React.JSX.Element {
           </Text>
         </View>
         <ProfileFormCard form={form} submitLabel="保存并进入书架" onSaved={() => undefined} />
+        <View style={styles.credit}>
+          <Text style={[typeStyle(theme, theme.type.small), { color: theme.text.muted, textAlign: 'center' }]}>
+            作者：{PRODUCT_AUTHOR}
+          </Text>
+          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted, textAlign: 'center' }]}>
+            Shine-TRPG {versionJson.versionName}（versionCode {versionJson.versionCode}）
+          </Text>
+        </View>
       </ScrollView>
     </ScreenShell>
   );
@@ -74,4 +84,5 @@ export function FirstRunScreen(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   hero: { alignItems: 'center' },
+  credit: { alignItems: 'center', gap: 2, paddingBottom: 24 },
 });

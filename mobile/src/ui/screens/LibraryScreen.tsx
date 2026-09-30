@@ -19,6 +19,7 @@ import {
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
 import { importNovelUnified, runExtraction, pauseRun, cancelRun } from '../../sourceImport';
+import versionJson from '../../version.json';
 import type { BuildMode } from '../features/library/ImportNovelCard';
 import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import { startBuildService } from '../../buildServiceBridge';
@@ -305,6 +306,15 @@ export function LibraryScreen(): React.JSX.Element {
         <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
           三宝书与审核队列在世界详情内；战役、分支与存档在「战役」页。
         </Text>
+
+        <View style={styles.credit}>
+          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted, textAlign: 'center' }]}>
+            作者：ShineHe
+          </Text>
+          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted, textAlign: 'center' }]}>
+            Shine-TRPG {versionJson.versionName}
+          </Text>
+        </View>
       </ScrollView>
     </ScreenShell>
   );
@@ -312,4 +322,5 @@ export function LibraryScreen(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
+  credit: { alignItems: 'center', gap: 2, paddingTop: 12 },
 });

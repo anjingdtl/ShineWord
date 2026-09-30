@@ -1,6 +1,6 @@
 {
   "name": "shineword",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "description": "ShineWord deterministic interactive-novel RPG core",
   "scripts": {
@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:core && node --test tests/*.test.cjs",
     "verify:core": "npm run typecheck && npm test",
+    "verify:version": "node scripts/check-version-consistency.cjs",
     "apk:debug": "npm --prefix mobile run apk:debug",
     "apk:release": "npm --prefix mobile run apk:release"
   },

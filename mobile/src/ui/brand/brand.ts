@@ -11,6 +11,8 @@ import { useTheme } from '../theme/ThemeContext';
 
 /** The single user-visible product name. Never hard-code it in a screen. */
 export const PRODUCT_NAME = 'Shine-TRPG';
+/** Author credit shown in About/brand surfaces (VERSIONING.md owner). */
+export const PRODUCT_AUTHOR = 'ShineHe';
 /** Default product description (plan §3.1). */
 export const PRODUCT_TAGLINE = 'AI 驱动的互动小说 TRPG';
 /** Short description for tight lockups. */

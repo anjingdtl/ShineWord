@@ -1,13 +1,14 @@
 {
   "name": "shineword-mobile",
-  "version": "0.3.0-progressive.2",
+  "version": "0.4.0",
   "private": true,
   "scripts": {
     "start": "react-native start",
     "android": "react-native run-android",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "apk:debug": "node scripts/build-apk.js debug",
-    "apk:release": "node scripts/build-apk.js release",
+    "prebuild": "node scripts/generate-version-json.js",
+    "apk:debug": "npm run prebuild && node scripts/build-apk.js debug",
+    "apk:release": "npm run prebuild && node scripts/build-apk.js release",
     "postinstall": "node scripts/patch-sqlite-storage-gradle.js && node scripts/patch-deps.js"
   },
   "dependencies": {
