@@ -4,6 +4,8 @@
 
 保持 V0.4.1 / versionCode 40100。本轮是该版本的源码修正，不创建 tag 或 GitHub Release；现有版本规范没有要求每个源码 commit 自动升版本。已有用户改动与未跟踪资料保留，未纳入提交。
 
+[PR #8](https://github.com/anjingdtl/ShineWord/pull/8) 经两项 CI 通过后合并 main，合并 commit 为 `72e6fd1726d2cf23a1b751a80e2002fea5369e49`。通过 PR CI 的 HEAD 为 `2f0581e7741bdfb55284e2185008c808e1c0e0e8`，与合并 commit 文件树一致；后续验收记录提交只修改本文。
+
 ## 三项修正
 
 1. **DeepSeek 预设：UNIT VERIFIED / LIVE NOT TESTED。** 展示名保持 `DeepSeek V4.1 Flash（1M）`，wire model 改为 `deepseek-flash`，contextWindow 为 1,048,576，maxOutputTokens 为 393,216，reasoningDialect 显式为 `deepseek`，默认产品 tier 为 `low`。2026-09-30 核对的依据：[官方模型列表](https://api-docs.deepseek.com/api/list-models/)、[官方模型规格](https://api-docs.deepseek.com/quick_start/pricing/)、[官方 Chat Completions 协议](https://api-docs.deepseek.com/api/create-chat-completion/)。Low / High / Max 继续发送 `thinking.type=enabled` 与相同 `reasoning_effort`；`max_tokens` 直接使用 Kernel wire budget。
@@ -26,8 +28,8 @@
 | `npm run verify:version` | PASS：0.4.1 / 40100 |
 | `git diff --check` | PASS |
 | `npm run apk:debug --prefix mobile` | PASS：`dist/apk/debug/ShineWord-V0.4.1-debug.apk`；只构建，未安装 |
-| CI Core Verify | PENDING：创建 PR 后核验 |
-| CI Android Verify | PENDING：创建 PR 后核验 |
+| CI Core Verify | PASS：[PR run 36694170632](https://github.com/anjingdtl/ShineWord/actions/runs/36694170632) |
+| CI Android Verify | PASS：[PR run 36694170733](https://github.com/anjingdtl/ShineWord/actions/runs/36694170733)，含 mobile typecheck 与 Debug APK |
 | Self Review | PASS：无 P0/P1 |
 
 只读复查 `reasoningPolicy.ts`、`requestBudgetKernel.ts`、`openAICompatible.ts`、`worldBuild/llmRequest.ts`：本轮未修改这些生产决策入口；没有新增 off、档位降级、thinking disable、重复计算 reasoning 或虚构能力默认值。Planner 与预览使用相同 output demand，实际回合仍由 Kernel 纳入自己的 mandatory input。
