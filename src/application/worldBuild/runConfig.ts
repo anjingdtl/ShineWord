@@ -238,9 +238,14 @@ export function providerProfileFromFrozen(config: FrozenRunConfig): ApiProfile {
 
 /** Mutable planning state persisted separately from the frozen config. */
 export interface RunPlanState {
+  /** Legacy chapter planner (plan-chapter-1): body share of the window. */
   bodyTargetRatio: number;
   estOutputPerChunk?: number;
   replanCount: number;
+  /** Planner-v2 (plan-analysis-1): the active policy fields. */
+  plannerVersion?: 'plan-analysis-1';
+  sourceRatio?: number;
+  density?: number;
 }
 
 export function revivePlanState(json: string | null, defaults: { bodyTargetRatio: number }): RunPlanState {
@@ -253,6 +258,11 @@ export function revivePlanState(json: string | null, defaults: { bodyTargetRatio
       bodyTargetRatio: typeof raw.bodyTargetRatio === 'number' ? raw.bodyTargetRatio : defaults.bodyTargetRatio,
       estOutputPerChunk: typeof raw.estOutputPerChunk === 'number' ? raw.estOutputPerChunk : undefined,
       replanCount: typeof raw.replanCount === 'number' ? raw.replanCount : 0,
+      plannerVersion: raw.plannerVersion === 'plan-analysis-1' ? 'plan-analysis-1' : undefined,
+      sourceRatio: typeof raw.sourceRatio === 'number' && raw.sourceRatio > 0 && raw.sourceRatio <= 1
+        ? raw.sourceRatio
+        : undefined,
+      density: typeof raw.density === 'number' && raw.density > 0 ? raw.density : undefined,
     };
   } catch {
     return { bodyTargetRatio: defaults.bodyTargetRatio, replanCount: 0 };

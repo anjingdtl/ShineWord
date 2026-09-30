@@ -258,16 +258,19 @@ test('U01 createExtractionRun persists the frozen config and scope; executeRun r
         extractorVersion: fixture.version, mode: 'group', budget: BUDGET_1M, config: frozen,
       },
     );
-    assert.equal(run.planVersion, 'plan-chapter-1');
+    assert.equal(run.planVersion, 'plan-analysis-1');
     assert.equal(run.configJson ? JSON.parse(run.configJson).model : null, 'glm-5.3-flash');
-    assert.equal(JSON.parse(run.planStateJson).bodyTargetRatio, 0.30);
+    assert.equal(JSON.parse(run.planStateJson).sourceRatio, 0.12);
+    assert.equal(JSON.parse(run.planStateJson).density, 0.06);
 
     // A later profile switch cannot alter the persisted run identity.
     const stored = await runStore.getRun('run-frozen');
     assert.equal(reviveRunConfig(stored.configJson).model, 'glm-5.3-flash');
-    assert.deepEqual(revivePlanState(stored.planStateJson, { bodyTargetRatio: 0.3 }), {
-      bodyTargetRatio: 0.3, estOutputPerChunk: undefined, replanCount: 0,
-    });
+    const revivedPlan = revivePlanState(stored.planStateJson, { bodyTargetRatio: 0.3 });
+    assert.equal(revivedPlan.plannerVersion, 'plan-analysis-1');
+    assert.equal(revivedPlan.sourceRatio, 0.12);
+    assert.equal(revivedPlan.density, 0.06);
+    assert.equal(revivedPlan.replanCount, 0);
 
     // Scoped run plans only the overlapping chunks (stage semantics, P3 base).
     const total = result.chunks.length;
@@ -477,10 +480,11 @@ test('U03 truncation splits the unit, shrinks the ladder for queued tail, and co
     assert.ok(canceledParents.length >= 1, 'the truncated unit was replaced');
     assert.ok(units.some(u => u.parentUnitId !== null), 'split children exist');
 
-    // The ladder replan happened and persisted on the run row.
+    // The ladder replan happened and persisted on the run row (planner-v2
+    // shrinks the source ratio 0.12 -> 0.06 via the halving rule).
     const run = await runStore.getRun('run-ladder');
     const planState = JSON.parse(run.planStateJson);
-    assert.equal(planState.bodyTargetRatio, 0.20, 'body target ladder stepped down for the tail');
+    assert.equal(planState.sourceRatio, 0.06, 'source ratio ladder stepped down for the tail');
     assert.ok(planState.replanCount >= 1, 'replan recorded');
 
     // Full coverage world-side: every chunk done exactly once.
