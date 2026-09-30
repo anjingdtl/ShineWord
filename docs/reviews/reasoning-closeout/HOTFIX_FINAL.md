@@ -38,4 +38,17 @@
 
 ## 边界
 
-DeepSeek live API、Android 设备 UI / 实际回合均为 **NOT TESTED**。本轮启动模拟器 / 使用 ADB：**NO**。未安装 APK、未做 force-stop、Release signing 或真实小说游戏。设备端由用户后续验证；P95 runtime feedback、玩法、Memory 和 Context 算法未扩展。
+DeepSeek live API、Android 设备 UI / 实际回合均为 **NOT TESTED**。本轮启动模拟器 / 使用 ADB：**NO**。未安装 APK、未做 force-stop 或真实小说游戏。设备端由用户后续验证；P95 runtime feedback、玩法、Memory 和 Context 算法未扩展。补充的 Release 打包结果见下节。
+
+## Release APK 补充验收（2026-09-30）
+
+生产代码基线：`eff6a84f9b50ec31f8cabc0f15880b29b68b9a67`，已与最新 `origin/main` 同步。按用户补充要求运行 `pwsh -NoProfile -File mobile/scripts/build-release-apk.ps1`，构建 **PASS**（54s）。版本保持 V0.4.1 / 40100。
+
+- APK：`dist/apk/release/ShineWord-V0.4.1-release.apk`，47332946 bytes（45.14 MiB）。
+- APK SHA256：`1af48b374060f97b9496665abc44639880366433be06bc3dc3a2a5d06fa6dfa0`。
+- 包名/版本检查 **PASS**：`com.shineword.app` / `0.4.1` / `40100`。
+- 签名检查 **PASS**：与仓库预期证书一致、单一签名者、V2 签名；4 字节 zip alignment **PASS**。签名材料继续使用仓库既有外部配置。
+- 内嵌 `assets/index.android.bundle` 为 4620520 bytes；包含 `deepseek-flash`、共享预算预览的 `max_output_unknown` 及本次构建时间 `2026-09-30T09:27:20.023Z`。
+- Mobile typecheck、版本一致性、`git diff --check` **PASS**；本轮仅提交自动生成的 `mobile/src/version.json` 构建时间与本验收记录，APK 为本地构建产物。
+
+只完成签名包构建与静态检查；设备安装/运行、真实 API 仍为 **NOT TESTED**，模拟器 / ADB 使用为 **NO**。未创建 tag 或 GitHub Release。
