@@ -18,6 +18,8 @@ export interface ProbeOutcome {
     reasoningTokens: boolean;
     /** Output-ceiling behaviour: the declared cap was accepted by the API. */
     outputCeiling: { requested: number; accepted: boolean; message?: string };
+    /** Context window is not probeable - explicitly reported unknown. */
+    contextWindow: { tokens: null; source: 'unknown' };
     errorMessages: string[];
   };
 }
@@ -175,13 +177,24 @@ export async function probeCapabilities(input: {
     supportsJson: jsonMode,
     supportsStreaming: false,
     reportsUsage: usage,
-    contextWindow: 128_000,
+    // Context window is NOT probeable via chat/completions: the probe
+    // reports unknown instead of fabricating 128K (infrastructure plan §7;
+    // callers resolve it from user_declared / provider_documented and fail
+    // closed otherwise).
     maxOutputTokens: requestedCeiling,
     supportsPromptCache: promptCache,
   };
 
   return {
     capabilities,
-    probes: { jsonMode, usage, promptCache, reasoningTokens, outputCeiling, errorMessages },
+    probes: {
+      jsonMode,
+      usage,
+      promptCache,
+      reasoningTokens,
+      outputCeiling,
+      contextWindow: { tokens: null, source: 'unknown' },
+      errorMessages,
+    },
   };
 }

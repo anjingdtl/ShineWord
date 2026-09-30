@@ -81,7 +81,13 @@ export interface LlmProviderCapabilities {
   supportsJson: boolean;
   supportsStreaming: boolean;
   reportsUsage: boolean;
-  contextWindow: number;
+  /**
+   * Context window in tokens. Optional since the capability-source
+   * governance (infrastructure plan §7): an unprobed, undeclared window is
+   * UNKNOWN and must stay absent - never fabricated as 128K. Consumers
+   * (budget kernel, profileModelBudget) fail closed when it is missing.
+   */
+  contextWindow?: number;
   maxOutputTokens: number;
   /** Probe-determined prefix-cache support (resident-mode gate, probe v2). */
   supportsPromptCache?: boolean;

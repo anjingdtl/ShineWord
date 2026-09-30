@@ -25,6 +25,11 @@ export const UNCONTROLLABLE_REASONING_HEADROOM_TOKENS = 8_192;
 export function modelBudgetFromProfile(profile: ApiProfile): ModelBudget {
   const contextWindowTokens = profile.capabilities.contextWindow;
   const capabilityMax = profile.capabilities.maxOutputTokens;
+  if (contextWindowTokens === undefined) {
+    throw new Error(
+      'Profile contextWindow is unknown (capability-source governance): declare it in the provider profile.',
+    );
+  }
   if (!Number.isInteger(contextWindowTokens) || contextWindowTokens < 1) {
     throw new Error('Profile contextWindow must be a positive integer.');
   }
