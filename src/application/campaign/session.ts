@@ -1,7 +1,28 @@
 import { RejectionSamplingRandomSource } from '../../domain/rules/random';
 import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
-import type { OpenAICompatibleProvider } from '../llm/openAICompatible';
+import type { LlmProvider } from '../llm/types';
+import { stableFingerprint } from '../llm/requestPlan';
+import { LedgeredProvider } from '../llm/requestLedger';
+import type { LlmRequestLedgerStore } from '../ports/llmLedger';
+import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
+import type { SqliteEpisodicStore } from '../memory/episodicStore';
+import { episodicRecordFromTurn } from '../memory/episodicStore';
+import { runStoryMemoryMaintenance, shouldRunMaintenance } from '../memory/storyMemoryMaintenance';
+import { recallEpisodes, renderEpisodicRecall } from '../memory/episodicRetriever';
+import { compilePreviousMemoryView } from '../memory/storyMemoryCompiler';
+import { resolveModelCapabilities } from '../llm/capabilityResolver';
+import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestBudgetKernel';
+import type { FrozenModelCapabilities } from '../llm/requestPlan';
+import {
+  buildCandidate,
+  candidatesFromParts,
+} from '../context/candidateCollector';
+import type { ContextCandidate } from '../context/contextTypes';
+import { planTurnContext } from '../context/contextPlanner';
+import { renderFrozenContext } from '../context/contextRenderer';
+import type { FrozenTurnContext } from '../context/contextSnapshot';
+import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
@@ -74,6 +95,13 @@ export interface SessionDeps {
   narratives: SqliteNarrativeStore;
   progressiveTurnContext?: ProgressiveTurnContextService;
   sourceStore?: SourceStore;
+  /** Durable physical-request ledger (infrastructure plan M2); optional so
+   * pure-domain tests can omit it, but production always provides it. */
+  llmLedger?: LlmRequestLedgerStore;
+  /** Story Memory V2 dual-track maintenance (infrastructure plan M3). */
+  storyMemory?: { store: SqliteStoryMemoryStore };
+  /** Episodic recall index (infrastructure plan M4). */
+  episodic?: { store: SqliteEpisodicStore };
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -124,13 +152,31 @@ export interface PlayTurnOptions {
 export class CampaignSession {
   /** Encounter scheduling (G01) shares the session's stores and provider. */
   readonly encounters: EncounterService;
+  /**
+   * Provider as used by every internal LLM call: wrapped with the durable
+   * ledger when deps supply a store, the raw provider otherwise.
+   */
+  private readonly provider: LlmProvider;
+  /** Kernel-ready capabilities from the saved profile (built lazily). */
+  private cachedTurnCapabilities: FrozenModelCapabilities | null = null;
+  /** Last frozen contexts for debugging (plan §71); never persisted raw. */
+  lastTurnContexts: { planner?: FrozenTurnContext; narrator?: FrozenTurnContext } = {};
 
   constructor(
     private readonly deps: SessionDeps,
-    private readonly provider: OpenAICompatibleProvider,
+    provider: LlmProvider,
     private readonly profile: ApiProfile,
   ) {
     this.encounters = new EncounterService(deps);
+    this.provider = deps.llmLedger
+      ? new LedgeredProvider(provider, deps.llmLedger, {
+        modelProfileFingerprint: stableFingerprint({
+          model: profile.model,
+          contextWindow: profile.capabilities.contextWindow ?? null,
+          maxOutputTokens: profile.capabilities.maxOutputTokens,
+        }),
+      })
+      : provider;
   }
 
   async listCampaigns(): Promise<Array<{ campaignId: string; title: string; worldId: string; status: string; createdAt: string }>> {
@@ -960,6 +1006,200 @@ export class CampaignSession {
     worldTimeOrder = 0,
     facts: Awaited<ReturnType<SqliteWorldStore['listFacts']>> = [],
   ): string {
+    return this.collectWorldContextParts(
+      entries, cards, state, goal, recentHistory, memories, queryText, viewerActorId, worldTimeOrder, facts,
+    ).join('\n');
+  }
+
+  /** Kernel-ready capabilities resolved once from the saved profile. */
+  private turnCapabilities(): FrozenModelCapabilities {
+    if (!this.cachedTurnCapabilities) {
+      const caps = this.profile.capabilities as Partial<ApiProfile['capabilities']> | undefined;
+      this.cachedTurnCapabilities = resolveModelCapabilities({
+        declared: {
+          contextWindowTokens: caps?.contextWindow,
+          maxOutputTokens: caps?.maxOutputTokens,
+          supportsJsonMode: caps?.supportsJson,
+          reportsUsage: caps?.reportsUsage,
+          supportsPromptCache: caps?.supportsPromptCache,
+        },
+        // OpenAI-compatible providers bill reasoning inside completion
+        // tokens, so the kernel uses the inside_completion dialect.
+        reasoningMode: this.profile.reasoningEffort && this.profile.reasoningEffort !== 'off'
+          ? 'always_on'
+          : 'unknown',
+      });
+    }
+    return this.cachedTurnCapabilities;
+  }
+
+  /**
+   * Builds the frozen planner + narrator contexts (plan §57-§60). The
+   * planner sees the full six-board view; the narrator gets a deliberately
+   * smaller set (current scene, party, recent story, story memory) - never
+   * the whole planner context.
+   */
+  private async buildTurnContextBundle(input: {
+    branchId: string;
+    stateVersion: number;
+    parts: readonly string[];
+    sourceEvidenceText: string;
+    intent: string;
+    goal: string;
+    plannerCards: readonly ActorCard[];
+    recentHistory: ReadonlyArray<{ turnId: string; publicSummary: string; narrativeText: string | null; stateVersion?: number }>;
+  }): Promise<{
+    plannerText: string;
+    plannerOutputTokens: number;
+    narratorText: string;
+    narratorOutputTokens: number;
+    plannerContext: FrozenTurnContext;
+    narratorContext: FrozenTurnContext;
+  }> {
+    const queryText = `${input.intent} ${input.goal}`.trim();
+    const capabilities = this.turnCapabilities();
+
+    const plannerCandidates = candidatesFromParts(input.parts, queryText);
+
+    // Story Memory V2 read gate (plan §99): only a clean state with recent
+    // enough coverage replaces the legacy summary track.
+    let storyMemoryText = '';
+    if (this.deps.storyMemory) {
+      const memoryState = await this.deps.storyMemory.store.getState(input.branchId);
+      if (memoryState && memoryState.metadata.status === 'clean'
+        && memoryState.throughStateVersion >= input.stateVersion - 8) {
+        storyMemoryText = compilePreviousMemoryView(memoryState);
+      }
+    }
+    if (storyMemoryText) {
+      const candidate = buildCandidate({
+        id: 'story-memory-v2',
+        board: 'storyMemory',
+        heading: '长期故事状态',
+        text: storyMemoryText,
+        priority: 90,
+        provenance: { sourceType: 'story_memory_v2', sourceId: input.branchId, stateVersion: input.stateVersion },
+      }, queryText);
+      if (candidate) plannerCandidates.push(candidate);
+    }
+
+    // Episodic recall (M4) rides the storyMemory board as 相关往事.
+    if (this.deps.episodic) {
+      const records = await this.deps.episodic.store.listRecords(input.branchId, input.stateVersion);
+      if (records.length > 0) {
+        const selection = recallEpisodes(records, {
+          branchId: input.branchId,
+          maxStateVersion: input.stateVersion,
+          queryText,
+          actors: input.plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
+        }, { topK: 6 });
+        const recallText = renderEpisodicRecall(selection);
+        if (recallText) {
+          const candidate = buildCandidate({
+            id: 'episodic-recall',
+            board: 'storyMemory',
+            heading: '相关往事',
+            text: `【相关往事】\n${recallText}`,
+            priority: 82,
+            provenance: { sourceType: 'episodic_recall', sourceId: input.branchId, stateVersion: input.stateVersion },
+          }, queryText);
+          if (candidate) plannerCandidates.push(candidate);
+        }
+      }
+    }
+
+    if (input.sourceEvidenceText.trim()) {
+      const candidate = buildCandidate({
+        id: 'source-evidence',
+        board: 'sourceEvidence',
+        heading: '原著证据',
+        text: input.sourceEvidenceText.trim(),
+        requirement: 'optional',
+        clipMode: 'text',
+        provenance: { sourceType: 'source_evidence', sourceId: input.branchId, stateVersion: input.stateVersion },
+      }, queryText);
+      if (candidate) plannerCandidates.push(candidate);
+    }
+
+    // Turn payload (turnId/stateVersion/intent JSON wrapper) always rides
+    // along outside the boards; reserve its tokens as mandatory protocol.
+    const mandatoryProtocolTokens = estimateTokens(
+      JSON.stringify({ turnId: 'turn-0000', expectedStateVersion: 999999, playerIntent: input.intent }),
+    );
+
+    const plannerPlan = planTurnContext({
+      requestKind: 'planner',
+      branchId: input.branchId,
+      stateVersion: input.stateVersion,
+      candidates: plannerCandidates,
+      capabilities,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      reasoningBudget: 'inside_completion',
+      reasoningReserveTokens: this.profile.reasoningReserveTokens,
+    });
+
+    // Narrator context (plan §59): scene + party + recent story + memory.
+    const narratorCandidates: ContextCandidate[] = plannerCandidates
+      .filter(candidate => candidate.board === 'currentState' || candidate.board === 'storyMemory')
+      .map(candidate => ({
+        ...candidate,
+        id: `narrator-${candidate.id}`,
+        // The narrator never needs the action-protocol line; currentState
+        // stays mandatory, memory stays preferred.
+        requirement: candidate.board === 'currentState' ? 'mandatory' as const : 'preferred' as const,
+      }));
+    const recentStory = input.recentHistory.slice(-3).map(turn =>
+      `${turn.turnId}: ${(turn.narrativeText ?? turn.publicSummary ?? '').slice(0, 200)}`).join('\n');
+    if (recentStory) {
+      const candidate = buildCandidate({
+        id: 'narrator-recent-story',
+        board: 'recentHistory',
+        heading: '最近故事',
+        text: recentStory,
+        clipMode: 'text',
+        provenance: { sourceType: 'recent_history', sourceId: input.branchId },
+      }, queryText);
+      if (candidate) narratorCandidates.push(candidate);
+    }
+    const narratorPlan = planTurnContext({
+      requestKind: 'narrator',
+      branchId: input.branchId,
+      stateVersion: input.stateVersion,
+      candidates: narratorCandidates,
+      capabilities,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      reasoningBudget: 'inside_completion',
+      reasoningReserveTokens: this.profile.reasoningReserveTokens,
+    });
+
+    return {
+      plannerText: renderFrozenContext(plannerPlan.context),
+      plannerOutputTokens: plannerPlan.requestedOutputTokens,
+      narratorText: renderFrozenContext(narratorPlan.context),
+      narratorOutputTokens: narratorPlan.requestedOutputTokens,
+      plannerContext: plannerPlan.context,
+      narratorContext: narratorPlan.context,
+    };
+  }
+
+  /**
+   * Permission-filtered world context as labeled parts (M5): each 【】 part
+   * becomes an elastic-allocator candidate; labels map onto the six boards.
+   */
+  private collectWorldContextParts(
+    entries: readonly ContentEntry[],
+    cards: readonly ActorCard[],
+    state: GameStateSnapshot,
+    goal: string,
+    recentHistory?: ReadonlyArray<{ turnId: string; publicSummary: string; narrativeText: string | null }>,
+    memories: ReadonlyArray<{ memoryId: string; summary: string; fromStateVersion: number; toStateVersion: number; invalidAt: number | null }> = [],
+    queryText = '',
+    viewerActorId = '',
+    worldTimeOrder = 0,
+    facts: Awaited<ReturnType<SqliteWorldStore['listFacts']>> = [],
+  ): string[] {
     const parts: string[] = [];
     for (const entry of entries) {
       if (!isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)) continue;
@@ -1057,7 +1297,7 @@ export class CampaignSession {
       parts.push(`【最近的经历】\n${recent.join('\n')}`);
     }
     parts.push('使用队伍中存在的 actorId。只提出提案允许的动作（skill_check/ability/observe/talk/interact/move）；检定与数值由本地规则引擎编译。');
-    return parts.join('\n');
+    return parts;
   }
 
   private applyDiscoveryAndQuestProgress(
@@ -1373,10 +1613,22 @@ export class CampaignSession {
     const turnId = options.turnIdOverride ?? `turn-${String(stateVersion).padStart(4, '0')}`;
     const recentHistory = await this.deps.turns.listCommittedTurns(options.branchId);
     const memories = await this.deps.game.listMemories(options.branchId);
-    const worldContext = this.buildWorldContext(
+    const contextParts = this.collectWorldContextParts(
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, projectionFacts,
     );
+    // Legal skill ids for skill_check proposals (plan §40 mandatory): the
+    // planner may only reference skills the actor actually knows.
+    const actorSkillIds = Object.keys(playerCard.skills ?? {});
+    if (actorSkillIds.length > 0) {
+      const skillSummary = actorSkillIds
+        .map(key => {
+          const definition = catalog[key] ?? catalog[key.replace(/^skill-/, '')];
+          return definition ? `${key}(${definition.name})` : key;
+        })
+        .join('、');
+      contextParts.push(`【可用技能】${skillSummary}。skill_check 的 skillId 只能从中选择。`);
+    }
     const visibleSourceRanges = visibleEvidenceRanges(entries, projectionFacts, worldTimeOrder, knownEntryIds);
     let sourceHash: string | null = null;
     let safeSourceContext = '';
@@ -1432,7 +1684,24 @@ export class CampaignSession {
         // hostage or replace an unknown with invented canon.
       }
     }
-    const plannerWorldContext = worldContext + safeSourceContext;
+    // Turn-context pipeline (infrastructure plan M5): parts + story memory
+    // V2 + episodic recall + source evidence -> elastic allocation against
+    // the model's REAL capabilities -> frozen planner/narrator contexts.
+    const turnBundle = await this.buildTurnContextBundle({
+      branchId: options.branchId,
+      stateVersion: summary.state.stateVersion,
+      parts: contextParts,
+      sourceEvidenceText: safeSourceContext,
+      intent: options.intent,
+      goal: summary.goal,
+      plannerCards,
+      recentHistory,
+    });
+    const plannerWorldContext = turnBundle.plannerText;
+    this.lastTurnContexts = {
+      planner: turnBundle.plannerContext,
+      narrator: turnBundle.narratorContext,
+    };
 
     let usageSeq = 0;
     const gameStore = this.deps.game;
@@ -1448,6 +1717,9 @@ export class CampaignSession {
         turnId,
         playerIntent: options.intent,
         worldContext: plannerWorldContext,
+        plannerOutputTokens: turnBundle.plannerOutputTokens,
+        narratorWorldContext: turnBundle.narratorText,
+        narratorOutputTokens: turnBundle.narratorOutputTokens,
         ...(contentManifest ? { expectedContentDependency: contentDependencyBinding(contentManifest) } : {}),
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
@@ -1555,6 +1827,45 @@ export class CampaignSession {
         }).catch(() => undefined);
       }
     }
+
+    // Story Memory V2 dual-track maintenance (infrastructure plan M3) +
+    // episodic index write (M4): return-first - the cadence gate, the index
+    // row write and any checkpoint LLM run in the background and can never
+    // block or fail this committed turn.
+    void (async () => {
+      try {
+        const committed = await this.deps.turns.listCommittedTurns(options.branchId);
+        const latest = committed.find(turn => turn.stateVersion === result.stateVersion);
+        if (latest && this.deps.episodic) {
+          const record = episodicRecordFromTurn({ entry: latest });
+          const namesById = new Map(plannerCards.map(card => [card.actorId, card.name]));
+          record.keywords = record.actorIds
+            .map(actorId => namesById.get(actorId))
+            .filter((name): name is string => Boolean(name));
+          await this.deps.episodic.store.saveTurnRecord(record);
+        }
+        if (this.deps.storyMemory) {
+          const decision = await shouldRunMaintenance({
+            store: this.deps.storyMemory.store,
+            turnStore: this.deps.turns,
+            branchId: options.branchId,
+            currentStateVersion: result.stateVersion,
+          });
+          if (decision.should) {
+            await runStoryMemoryMaintenance({
+              provider: this.provider,
+              store: this.deps.storyMemory.store,
+              turnStore: this.deps.turns,
+              branchId: options.branchId,
+              currentStateVersion: result.stateVersion,
+              actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
+            });
+          }
+        }
+      } catch {
+        // Background memory/index maintenance must never fail a played turn.
+      }
+    })();
 
     return {
       turnId,

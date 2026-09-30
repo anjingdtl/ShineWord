@@ -914,6 +914,78 @@ CREATE INDEX IF NOT EXISTS idx_campaign_package_advances
   ON campaign_package_advances(campaign_id, branch_id, state_version);
 `;
 
+export const LLM_REQUEST_LEDGER_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS llm_request_attempts (
+  attempt_id TEXT PRIMARY KEY,
+  logical_request_id TEXT NOT NULL,
+  request_kind TEXT NOT NULL,
+  campaign_id TEXT,
+  branch_id TEXT,
+  world_id TEXT,
+  state_version INTEGER,
+  model_profile_fingerprint TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  failure_class TEXT,
+  error_code TEXT,
+  http_status INTEGER,
+  provider_request_id TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  reasoning_tokens INTEGER,
+  cached_input_tokens INTEGER,
+  estimated_usage INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_llm_request_attempts_logical
+  ON llm_request_attempts(logical_request_id, attempt_no);
+CREATE INDEX IF NOT EXISTS idx_llm_request_attempts_status
+  ON llm_request_attempts(status);
+`;
+
+export const STORY_MEMORY_V2_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS story_memory_states (
+  branch_id TEXT PRIMARY KEY,
+  through_state_version INTEGER NOT NULL,
+  state_json TEXT NOT NULL,
+  state_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dirty_from_state_version INTEGER,
+  last_applied_patch_id TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS story_memory_patches (
+  patch_id TEXT PRIMARY KEY,
+  branch_id TEXT NOT NULL,
+  from_state_version INTEGER NOT NULL,
+  to_state_version INTEGER NOT NULL,
+  base_fingerprint TEXT NOT NULL,
+  result_fingerprint TEXT,
+  patch_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  applied_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_story_memory_patches_branch
+  ON story_memory_patches(branch_id, to_state_version);
+`;
+
+export const EPISODIC_RECALL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS episodic_turn_index (
+  branch_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL,
+  search_text TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  invalid_at_state_version INTEGER,
+  PRIMARY KEY(branch_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_episodic_turn_index_branch
+  ON episodic_turn_index(branch_id, state_version);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -933,4 +1005,7 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 16, name: 'interaction_orchestration', sql: INTERACTION_ORCHESTRATION_SCHEMA_SQL },
   { version: 17, name: 'unified_build_p1', sql: UNIFIED_BUILD_P1_SCHEMA_SQL },
   { version: 18, name: 'unified_build_p3_stages', sql: UNIFIED_BUILD_P3_SCHEMA_SQL },
+  { version: 19, name: 'llm_request_ledger', sql: LLM_REQUEST_LEDGER_SCHEMA_SQL },
+  { version: 20, name: 'story_memory_v2', sql: STORY_MEMORY_V2_SCHEMA_SQL },
+  { version: 21, name: 'episodic_recall_v2', sql: EPISODIC_RECALL_SCHEMA_SQL },
 ];

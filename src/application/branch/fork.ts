@@ -9,6 +9,7 @@ import type { TurnStore } from '../ports/turnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
+import { forkStoryMemory } from '../memory/storyMemoryRepository';
 
 export interface ForkBranchInput {
   db: SqliteDatabase;
@@ -202,6 +203,76 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
        VALUES (?, ?, ?, NULL, ?)`,
       [input.targetBranchId, targetStateVersion, JSON.stringify(snapshot), input.createdAt],
     );
+
+    // Committed history <= fork point travels with the branch: the new
+    // branch shares the source timeline up to the fork, and story-memory /
+    // episodic recall (plan §67, §88) must be able to see those turns
+    // WITHOUT ever seeing the source branch's post-fork future.
+    await tx.execute(
+      `INSERT INTO turns (branch_id, turn_id, status, expected_state_version, committed_state_version,
+          action_contract_json, action_contract_hash, outcome_grade, public_summary, effects_json,
+          created_at, committed_at)
+       SELECT ?, turn_id, status, expected_state_version, committed_state_version,
+          action_contract_json, action_contract_hash, outcome_grade, public_summary, effects_json,
+          created_at, committed_at
+         FROM turns
+        WHERE branch_id = ? AND status = 'Committed' AND committed_state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+    await tx.execute(
+      `INSERT INTO roll_records (branch_id, turn_id, roll_index, ruleset_id, ruleset_version,
+          contract_hash, dice_count, die_sides, rolls_json, highest, difficulty, margin, grade, created_at)
+       SELECT ?, r.turn_id, r.roll_index, r.ruleset_id, r.ruleset_version,
+          r.contract_hash, r.dice_count, r.die_sides, r.rolls_json, r.highest, r.difficulty,
+          r.margin, r.grade, r.created_at
+         FROM roll_records r
+         JOIN turns t ON t.branch_id = r.branch_id AND t.turn_id = r.turn_id
+        WHERE r.branch_id = ? AND t.committed_state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+    await tx.execute(
+      `INSERT INTO turn_narratives (branch_id, turn_id, outcome_grade, text, status, created_at)
+       SELECT ?, n.turn_id, n.outcome_grade, n.text, n.status, n.created_at
+         FROM turn_narratives n
+         JOIN turns t ON t.branch_id = n.branch_id AND t.turn_id = n.turn_id
+        WHERE n.branch_id = ? AND t.committed_state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+    await tx.execute(
+      `INSERT INTO branch_events (branch_id, event_seq, turn_id, state_version, event_type, payload_json, created_at)
+       SELECT ?, event_seq, turn_id, state_version, event_type, payload_json, created_at
+         FROM branch_events
+        WHERE branch_id = ? AND state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+    // Old-track range summaries <= fork keep the dual-track Planner context
+    // continuous on the new branch (post-fork summaries never cross over).
+    await tx.execute(
+      `INSERT INTO memories (branch_id, memory_id, kind, summary, from_state_version, to_state_version, invalid_at, created_at)
+       SELECT ?, memory_id, kind, summary, from_state_version, to_state_version, invalid_at, created_at
+         FROM memories
+        WHERE branch_id = ? AND to_state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+    // Episodic index rows <= fork travel with the branch (plan §67); recall
+    // on the new branch can never surface the source branch's future.
+    await tx.execute(
+      `INSERT INTO episodic_turn_index (branch_id, turn_id, state_version, search_text, metadata_json, invalid_at_state_version)
+       SELECT ?, turn_id, state_version, search_text, metadata_json, invalid_at_state_version
+         FROM episodic_turn_index
+        WHERE branch_id = ? AND state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
+
+    // Story-memory isolation (plan §28, §67): replay the source patch chain
+    // up to the fork version onto the new branch. Post-fork memory never
+    // crosses over.
+    await forkStoryMemory(tx, {
+      sourceBranchId: input.sourceBranchId,
+      targetBranchId: input.targetBranchId,
+      forkStateVersion: targetStateVersion,
+      createdAt: input.createdAt,
+    });
   });
 
   return {

@@ -9,6 +9,7 @@ import { assertValidActionContract } from '../../domain/turns/contracts';
 import type { ActionContract } from '../../domain/turns/types';
 import type { LlmProvider } from '../llm/types';
 import { parseStrictJsonObject } from '../llm/json';
+import { parseStructuredOutput } from '../llm/structuredOutput';
 import { TurnRequestBudget } from '../llm/requestBudget';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
@@ -21,6 +22,19 @@ export interface NarrativeCandidate {
   outcomeGrade: RollGrade;
   text: string;
 }
+
+/**
+ * Transport-level field aliases observed from real provider output
+ * (infrastructure plan §46). Promoted ONLY when the canonical key is absent;
+ * the authority validators downstream stay untouched.
+ */
+export const ACTION_FIELD_ALIASES: Record<string, string> = {
+  type: 'op',
+  effectType: 'op',
+  to: 'locationId',
+  resource: 'resourceId',
+  condition: 'conditionId',
+};
 
 export interface RunLlmTurnInput {
   provider: LlmProvider;
@@ -264,9 +278,21 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
       }),
       maxOutputTokens: 2200,
       jsonMode: true,
+      ledger: {
+        logicalRequestId: `planner:${input.branchId}:${input.turnId}`,
+        requestKind: 'planner',
+        branchId: input.branchId,
+        stateVersion: state.stateVersion,
+      },
     });
     recordUsage(input, 'Planner', planned);
-    contract = parseStrictJsonObject<ActionContract>(planned.text, 'Planner ActionContract');
+    // Transport-level normalization only: the authority gate
+    // (assertValidActionContract) still runs AFTER actor reconciliation,
+    // exactly where it ran before the resilience layer.
+    contract = parseStructuredOutput<ActionContract>(planned.text, {
+      label: 'Planner ActionContract',
+      fieldAliases: ACTION_FIELD_ALIASES,
+    }).value;
     contract = normalizePlannerEffects(contract);
     if (contract.turnId !== input.turnId) throw new Error('Planner turnId mismatch.');
     if (contract.expectedStateVersion !== state.stateVersion) {
@@ -359,11 +385,16 @@ export async function runLlmTurn(input: RunLlmTurnInput): Promise<RunLlmTurnResu
       }),
       maxOutputTokens: 1500,
       jsonMode: true,
+      ledger: {
+        logicalRequestId: `narrator:${input.branchId}:${input.turnId}`,
+        requestKind: 'narrator',
+        branchId: input.branchId,
+        stateVersion: contract.expectedStateVersion,
+      },
     });
-    const candidate = parseStrictJsonObject<NarrativeCandidate>(
-      narrated.text,
-      'Narrator candidate',
-    );
+    const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
+      label: 'Narrator candidate',
+    }).value;
     recordUsage(input, 'Narrator', narrated);
     validateNarrative(candidate, input.turnId, grade);
     narrative = await input.narratives.saveCandidate({

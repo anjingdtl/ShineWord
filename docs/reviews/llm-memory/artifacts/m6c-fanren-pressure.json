@@ -1,0 +1,43 @@
+{
+  "generatedAt": "2026-09-30T02:14:14.525Z",
+  "novel": {
+    "file": "凡人修仙传.txt",
+    "sha256": "f85896898ba84636f1a3f63309f0d3b8375693e540fffadb289822934828f0cb",
+    "bytes": 22513508,
+    "codePoints": 7601316,
+    "estimatedTokens": 6865366,
+    "chapters": 2469,
+    "chunks": 7312,
+    "splitStrategy": "standard",
+    "importMs": 1476
+  },
+  "probes": [
+    {
+      "probe": "big_context_json",
+      "pass": true,
+      "ms": 3847,
+      "contextCodePoints": 60000,
+      "contextTokensEstimate": 54495,
+      "usage": {
+        "inputTokens": 39224,
+        "outputTokens": 44,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 15,
+        "estimated": false
+      }
+    },
+    {
+      "probe": "prefix_cache_repeat",
+      "pass": true,
+      "ms": 2401,
+      "usage": {
+        "inputTokens": 39229,
+        "outputTokens": 64,
+        "cachedInputTokens": 39168,
+        "reasoningTokens": 30,
+        "estimated": false
+      },
+      "cachedRatio": 0.998
+    }
+  ]
+}

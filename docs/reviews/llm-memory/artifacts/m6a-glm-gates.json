@@ -1,0 +1,113 @@
+{
+  "generatedAt": "2026-09-30T02:05:20.425Z",
+  "model": "GLM-5.3-Flash",
+  "endpointHost": "open.bigmodel.cn",
+  "physicalRequests": 4,
+  "scenarios": [
+    {
+      "scenario": "planner",
+      "pass": true,
+      "ms": 2916,
+      "actionKind": "skill_check",
+      "usage": {
+        "inputTokens": 261,
+        "outputTokens": 100,
+        "cachedInputTokens": 256,
+        "reasoningTokens": 4,
+        "estimated": false
+      }
+    },
+    {
+      "scenario": "narrator",
+      "pass": true,
+      "ms": 3026,
+      "textLength": 94,
+      "usage": {
+        "inputTokens": 198,
+        "outputTokens": 93,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0,
+        "estimated": false
+      }
+    },
+    {
+      "scenario": "memory_patch",
+      "pass": true,
+      "ms": 13102,
+      "status": "clean",
+      "characters": 2,
+      "relationships": 1,
+      "beats": 2
+    },
+    {
+      "scenario": "json_variant",
+      "pass": true,
+      "ms": 6561,
+      "usedFence": true,
+      "repairSteps": []
+    },
+    {
+      "scenario": "ledger",
+      "pass": true,
+      "attempts": 4
+    },
+    {
+      "scenario": "reasoning_observed",
+      "pass": true,
+      "observed": true,
+      "sampleUsage": {
+        "inputTokens": 261,
+        "outputTokens": 100,
+        "cachedInputTokens": 256,
+        "reasoningTokens": 4,
+        "estimated": false
+      }
+    }
+  ],
+  "ledgerAttempts": [
+    {
+      "logical_request_id": "m6a:planner:1",
+      "request_kind": "planner",
+      "status": "succeeded",
+      "attempt_no": 1,
+      "input_tokens": 261,
+      "output_tokens": 100,
+      "reasoning_tokens": 4,
+      "cached_input_tokens": 256,
+      "estimated_usage": 0
+    },
+    {
+      "logical_request_id": "m6a:narrator:1",
+      "request_kind": "narrator",
+      "status": "succeeded",
+      "attempt_no": 1,
+      "input_tokens": 198,
+      "output_tokens": 93,
+      "reasoning_tokens": 0,
+      "cached_input_tokens": 0,
+      "estimated_usage": 0
+    },
+    {
+      "logical_request_id": "memory:m6a-branch:v0-8",
+      "request_kind": "memory_checkpoint",
+      "status": "succeeded",
+      "attempt_no": 1,
+      "input_tokens": 941,
+      "output_tokens": 919,
+      "reasoning_tokens": 0,
+      "cached_input_tokens": 896,
+      "estimated_usage": 0
+    },
+    {
+      "logical_request_id": "m6a:json-variant:1",
+      "request_kind": "summarizer",
+      "status": "succeeded",
+      "attempt_no": 1,
+      "input_tokens": 66,
+      "output_tokens": 254,
+      "reasoning_tokens": 229,
+      "cached_input_tokens": 64,
+      "estimated_usage": 0
+    }
+  ]
+}
