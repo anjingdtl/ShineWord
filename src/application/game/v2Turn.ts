@@ -12,6 +12,8 @@ import type { ActionContract } from '../../domain/turns/types';
 import type { ContentDependencyBinding } from '../../domain/content/types';
 import type { LlmProvider } from '../llm/types';
 import { parseStrictJsonObject } from '../llm/json';
+import { parseStructuredOutput } from '../llm/structuredOutput';
+import { ACTION_FIELD_ALIASES } from './llmTurn';
 import { TurnRequestBudget } from '../llm/requestBudget';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
@@ -214,9 +216,18 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         }),
         maxOutputTokens: 1200,
         jsonMode: true,
+        ledger: {
+          logicalRequestId: `planner:${input.branchId}:${input.turnId}`,
+          requestKind: 'planner',
+          branchId: input.branchId,
+          stateVersion: state.stateVersion,
+        },
       });
       recordUsage(input, 'Planner', planned);
-      return parseStrictJsonObject<PlannerProposal>(planned.text, 'Planner proposal');
+      return parseStructuredOutput<PlannerProposal>(planned.text, {
+        label: 'Planner proposal',
+        fieldAliases: ACTION_FIELD_ALIASES,
+      }).value;
     };
     let proposal = await requestPlanner();
     try {
@@ -304,11 +315,16 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       }),
       maxOutputTokens: 1500,
       jsonMode: true,
+      ledger: {
+        logicalRequestId: `narrator:${input.branchId}:${input.turnId}`,
+        requestKind: 'narrator',
+        branchId: input.branchId,
+        stateVersion: contract.expectedStateVersion,
+      },
     });
-    const candidate = parseStrictJsonObject<NarrativeCandidate>(
-      narrated.text,
-      'Narrator candidate',
-    );
+    const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
+      label: 'Narrator candidate',
+    }).value;
     recordUsage(input, 'Narrator', narrated);
     validateNarrative(candidate, input.turnId, grade);
     narrative = await input.narratives.saveCandidate({

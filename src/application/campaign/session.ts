@@ -1,7 +1,10 @@
 import { RejectionSamplingRandomSource } from '../../domain/rules/random';
 import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
-import type { OpenAICompatibleProvider } from '../llm/openAICompatible';
+import type { LlmProvider } from '../llm/types';
+import { stableFingerprint } from '../llm/requestPlan';
+import { LedgeredProvider } from '../llm/requestLedger';
+import type { LlmRequestLedgerStore } from '../ports/llmLedger';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
@@ -74,6 +77,9 @@ export interface SessionDeps {
   narratives: SqliteNarrativeStore;
   progressiveTurnContext?: ProgressiveTurnContextService;
   sourceStore?: SourceStore;
+  /** Durable physical-request ledger (infrastructure plan M2); optional so
+   * pure-domain tests can omit it, but production always provides it. */
+  llmLedger?: LlmRequestLedgerStore;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -124,13 +130,27 @@ export interface PlayTurnOptions {
 export class CampaignSession {
   /** Encounter scheduling (G01) shares the session's stores and provider. */
   readonly encounters: EncounterService;
+  /**
+   * Provider as used by every internal LLM call: wrapped with the durable
+   * ledger when deps supply a store, the raw provider otherwise.
+   */
+  private readonly provider: LlmProvider;
 
   constructor(
     private readonly deps: SessionDeps,
-    private readonly provider: OpenAICompatibleProvider,
+    provider: LlmProvider,
     private readonly profile: ApiProfile,
   ) {
     this.encounters = new EncounterService(deps);
+    this.provider = deps.llmLedger
+      ? new LedgeredProvider(provider, deps.llmLedger, {
+        modelProfileFingerprint: stableFingerprint({
+          model: profile.model,
+          contextWindow: profile.capabilities.contextWindow ?? null,
+          maxOutputTokens: profile.capabilities.maxOutputTokens,
+        }),
+      })
+      : provider;
   }
 
   async listCampaigns(): Promise<Array<{ campaignId: string; title: string; worldId: string; status: string; createdAt: string }>> {

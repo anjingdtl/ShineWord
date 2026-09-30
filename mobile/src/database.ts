@@ -6,6 +6,8 @@ import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStor
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
+import { SqliteLlmLedgerStore } from '../../src/infra/sqlite/sqliteLlmLedgerStore';
+import { recoverInterruptedAttempts } from '../../src/application/llm/requestLedger';
 import { probeFts5 } from '../../src/infra/sqlite/ftsCapability';
 import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 import { LocalSourceSearchService } from '../../src/application/search/localSourceSearch';
@@ -21,6 +23,7 @@ export interface MobileDatabaseRuntime {
   game: SqliteGameStore;
   worldStore: SqliteWorldStore;
   sourceStore: SqliteSourceStore;
+  llmLedger: SqliteLlmLedgerStore;
   sqliteCapabilities: { fts5: boolean };
   progressiveTurnContext: ProgressiveTurnContextService;
 }
@@ -45,6 +48,16 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     sourceSearch,
     new ProgressiveBuildQueue(),
   );
+  const llmLedger = new SqliteLlmLedgerStore(db);
+  // Cold-start recovery (infrastructure plan §53): attempts still marked
+  // prepared/sent from a previous process become outcome_unknown; the
+  // LedgeredProvider then refuses automatic replays of those requests.
+  const recovered = await recoverInterruptedAttempts(llmLedger);
+  if (recovered.recoveredAttemptIds.length > 0) {
+    console.warn(
+      `[llm-ledger] ${recovered.recoveredAttemptIds.length} interrupted attempt(s) marked outcome_unknown on cold start.`,
+    );
+  }
 
   // Phase 2: no implicit demo campaign. Every game is an explicit campaign
   // with a locked world package; existing demo-main data stays readable
@@ -56,6 +69,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     game: new SqliteGameStore(db),
     worldStore,
     sourceStore,
+    llmLedger,
     sqliteCapabilities: { fts5 },
     progressiveTurnContext,
   };

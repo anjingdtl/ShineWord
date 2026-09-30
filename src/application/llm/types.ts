@@ -71,6 +71,19 @@ export interface LlmRequest {
    * by system+user must stay byte-stable for prefix-cache hits.
    */
   followUpUserMessages?: readonly string[];
+  /**
+   * Physical-request ledger metadata (infrastructure plan §51-§56). Present
+   * only for request kinds already migrated onto the durable ledger
+   * (planner/narrator/summarizer); absent metadata passes through unlogged.
+   */
+  ledger?: {
+    logicalRequestId: string;
+    requestKind: string;
+    campaignId?: string;
+    branchId?: string;
+    worldId?: string;
+    stateVersion?: number;
+  };
 }
 
 export interface LlmProvider {

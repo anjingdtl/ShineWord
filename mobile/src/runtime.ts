@@ -47,6 +47,7 @@ export async function createSession(
       narratives: runtime.narratives,
       progressiveTurnContext: runtime.progressiveTurnContext,
       sourceStore: runtime.sourceStore,
+      llmLedger: runtime.llmLedger,
       hashProvider: nativeSha256,
       random: new RejectionSamplingRandomSource(createNativeRandomBytes()),
     },

@@ -1,4 +1,5 @@
 import type { LlmProvider } from '../llm/types';
+import { parseStructuredOutput } from '../llm/structuredOutput';
 import { buildSummaryRequest, SUMMARY_INTERVAL_TURNS } from './retrieval';
 import type { MemoryRecord, SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import type { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
@@ -7,13 +8,6 @@ export interface SummarizerResult {
   memory: MemoryRecord;
   fromStateVersion: number;
   toStateVersion: number;
-}
-
-function extractJson(text: string): unknown {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end <= start) throw new Error('Summarizer returned no JSON object.');
-  return JSON.parse(text.slice(start, end + 1));
 }
 
 /**
@@ -56,9 +50,17 @@ export async function summarizeRange(input: {
     user: JSON.stringify(payload),
     maxOutputTokens: 800,
     jsonMode: true,
+    ledger: {
+      logicalRequestId: `summarizer:${input.branchId}:${input.fromStateVersion}-${input.toStateVersion}`,
+      requestKind: 'summarizer',
+      branchId: input.branchId,
+      stateVersion: input.toStateVersion,
+    },
   });
 
-  const parsed = extractJson(response.text) as { summary?: unknown };
+  const parsed = parseStructuredOutput<{ summary?: unknown }>(response.text, {
+    label: 'Summarizer summary',
+  }).value;
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim() ? parsed.summary.trim() : '';
   if (!summary) throw new Error('Summarizer returned an empty summary.');
 
