@@ -117,3 +117,55 @@
 
 - `scripts/perf-dryrun.cjs`：新旧 planner 对比 dry-run（无 LLM、脱敏输出）。
 - `scripts/llm-smoke.cjs`：真实 API 最小链路 smoke（`--key-file/--novel` 参数化，本地路径与密钥不进 Git；请求上限 + signal 熔断）。
+
+## 11. Closeout（2026-10-01）
+
+分支：`fix/project-library-closeout` → `main`。施工前 fetch 确认 main 为
+`42185812c6c139ff50d71685da4261c978861c8c`，功能分支为
+`e132a070e0b335b7042ffa5069047d00f31e3cdd`（ahead 3 / behind 0），无新增开放 PR。
+本节覆盖上一轮验收发现的尾项；不重做 planner，不增加产品规则或数据库迁移。
+
+### 修复与证据
+
+- **Playability conflict preflight**：Gate 接受 `conflictFactCount`，同时直接检查 facts 的 conflict 状态，避免漏传或旧计数绕过。每批后的 TTFP Hook 保留，满足条件即可 Opening。
+- **Mapping provider zero-call**：`buildPackageFromCanon` 在场景编译、付费 WorldMapper 请求前检查全世界 conflict，写入/更新 blocking `canon-conflict` 并给出固定、可恢复错误；保留 Canon，不发布 Package。确认 conflict → Provider 0 次调用 / 无发布；解决真实 conflict 后下一次 Mapping 成功，旧 issue resolve。正常 retry 的 stale issue 机制保留。
+- **Library fast poll**：完整刷新负责 Session / Campaign / Branch / World / 项目投影。每 1.5 秒快速读取仅查询动态项目的本地 runs / units 更新时间 / worlds / published revision；不构造 Provider、不创建 Session、不查 Campaign/Branch、不访问网络或 Keychain。新 Opening 发布或 Run 完成后补一次完整刷新。合并只更新构建字段，保留 campaign、branch、playable、章数、标题和 package revision，直到完整刷新更新它们。
+- **生命周期**：仅 focused 且存在 dynamic run 时启用单 timer；blur/unmount 清理 timer，忽略离焦后的异步结果；in-flight guard 串行化快速与完整刷新。首次进入、重新 focus、导入/删除完成及下拉刷新走完整刷新。
+- **Project status aggregation**：Library 与 Hub 复用 `deriveProjectStatus` / 标签；review/failed/retry > running/queued > waiting > paused > stopped > completed。按 worldId 汇总全部有效 Run，含已完成阶段；canceled/superseded 历史不重复计入。Library 展示项目总完成/总批次，Hub 继续保留每个任务卡。
+- **Project action menu**：Library / Hub 的 ⋯ 先打开项目操作菜单，选择“删除项目”才进入原有删除确认。生产组件事件测试确认三步分离。
+- **Legacy source cleanup**：事务内按 `world.source_sha256 = imported_sources.raw_sha256` 补充候选 Source，继续原有 run / plan / world 引用保护。无 run/plan 的 legacy 项目删后无残留；共享 Source 删除第一个世界后保留、最后一个世界后删除。
+
+### 自动验证
+
+| 项目 | Closeout 结果 |
+|---|---|
+| `npm run verify:core` | **577 / 577 PASS**（原有全量 + 新增回归；0 skip） |
+| Root typecheck | PASS |
+| Mobile typecheck | PASS |
+| `npm run verify:version` | PASS，0.4.1 / 40100 保持 |
+| `git diff --check` | PASS |
+| 本环境 Debug APK | NOT TESTED：未配置 Android SDK，构建命令在环境预检阶段退出 |
+| GitHub Core Verify | PENDING：创建 PR 后等待 |
+| GitHub Android Verify | PENDING：创建 PR 后等待，含 Android debug APK 编译 |
+
+测试位置：`analysis-planner-v2`（Gate conflict 输入与实际 facts）、`phase2-package-build`
+（zero-call / 无发布 / Canon 保留 / conflict 解决后恢复）、`project-projection`
+（多 Run 隔离与优先级 / 0→1 批 / running→paused / completion 单次完整刷新 /
+Opening 提前发布 / timer 与请求生命周期）、`project-library-ui`（卡片显示和三步删除）、
+`project-deletion`（legacy fallback / legacy shared source），均纳入全量 `verify:core`。
+
+### 独立 Self Review
+
+| 检查 | 结论 |
+|---|---|
+| A 已知 conflict 是否仍触发 WorldMapper | 否；Gate 与 Mapping preflight 双重拦截，zero-call 回归 PASS |
+| B fast poll 是否调用 Session / Provider / Campaign / Branch | 否；生产快速读取路径计数回归 PASS |
+| C 是否丢 campaign / branch | 否；合并保留稳定字段及 campaign 对象引用 |
+| D Library / Hub 状态是否一致 | 是；共享同一聚合和状态投影函数 |
+| E 多 Run 是否正确聚合 | 是；有效 Run 合计、worldId 隔离，旧 paused 不覆盖当前 running |
+| F Legacy Source 是否清理 | 是；无 run / plan 回归 PASS |
+| G Shared Source 是否保护 | 是；既有与 legacy 双世界回归 PASS，foreign_key_check = 0 |
+| H planner-v2 是否回退 | 否；planner / coordinator 未修改，既有 ratio / 密度 / shrink / frozen run / TTFP 回归全通过 |
+| I 密钥 / 真实小说 / 本地测试路径泄露 | 未引入；仅使用确定性测试夹具，本轮未调用真实 API |
+
+Self Review 无剩余 P0/P1。PR 保持未合并；CI 结果确认后更新本节。

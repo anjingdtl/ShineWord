@@ -18,7 +18,7 @@ export function ProjectCard(props: {
   project: ProjectStatusProjection;
   onOpenProject: () => void;
   onPrimary: () => void;
-  onDelete: () => void;
+  onMenu: () => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const { project } = props;
@@ -29,7 +29,7 @@ export function ProjectCard(props: {
     ? theme.accentText
     : project.buildStatus === 'building'
       ? theme.text.primary
-      : project.buildStatus === 'attention' || project.buildStatus === 'review'
+      : ['failed', 'retry', 'review'].includes(project.buildStatus)
         ? theme.text.primary
         : theme.onRaised.secondary;
 
@@ -44,7 +44,7 @@ export function ProjectCard(props: {
         <Button
           label="⋯"
           variant="chip"
-          onPress={props.onDelete}
+          onPress={props.onMenu}
           accessibilityLabel="项目操作"
           testID={`project-menu-${project.worldId}`}
         />
@@ -57,9 +57,9 @@ export function ProjectCard(props: {
           {`${project.chapterCount} 章 · 更新于 ${project.updatedAt.slice(0, 10)}`}
         </Text>
       </View>
-      {project.activeRun && project.activeRun.total > 0 ? (
+      {project.buildSummary.totalBatches > 0 ? (
         <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary, marginTop: theme.space.xs }]}>
-          {`LLM：${project.activeRun.done} / ${project.activeRun.total} 批 · 后台继续构建世界资料`}
+          {`LLM：${project.buildSummary.doneBatches} / ${project.buildSummary.totalBatches} 批${project.buildSummary.dynamicRuns > 0 ? ' · 后台继续构建世界资料' : ''}`}
         </Text>
       ) : null}
       <View style={[styles.actions, { marginTop: theme.space.md, gap: theme.space.sm }]}>

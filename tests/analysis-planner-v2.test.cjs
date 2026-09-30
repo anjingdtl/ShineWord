@@ -366,6 +366,14 @@ test('V2-11 playability gate: deterministic canon-based verdicts', () => {
   verdict = evaluatePlayabilityGate({ entities, facts, eventCount: 2, openBlockingReviewIssues: 0 });
   assert.equal(verdict.playable, true);
   assert.deepEqual(verdict.reasons, []);
+  // Conflicts block even before an extraction creates its review issue.
+  verdict = evaluatePlayabilityGate({ entities, facts, eventCount: 2, openBlockingReviewIssues: 0, conflictFactCount: 1 });
+  assert.equal(verdict.playable, false);
+  assert.ok(verdict.reasons.some(reason => reason.includes('冲突事实')));
+  verdict = evaluatePlayabilityGate({ entities, facts, eventCount: 2, openBlockingReviewIssues: 0, conflictFactCount: 0 });
+  assert.equal(verdict.playable, true);
+  verdict = evaluatePlayabilityGate({ entities, facts: [...facts, { status: 'conflict' }], eventCount: 2, openBlockingReviewIssues: 0, conflictFactCount: 0 });
+  assert.equal(verdict.playable, false, 'facts themselves cannot be bypassed by a stale count');
   // Blocking review issue vetoes.
   verdict = evaluatePlayabilityGate({ entities, facts, eventCount: 2, openBlockingReviewIssues: 1 });
   assert.equal(verdict.playable, false);

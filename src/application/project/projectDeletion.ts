@@ -144,6 +144,19 @@ export async function deleteProject(
     for (const row of stageSourceRows) {
       if (!candidateSourceIds.includes(row.source_id)) candidateSourceIds.push(row.source_id);
     }
+    // Legacy projects may have lost their historical runs/plans. Discover
+    // their source via the surviving world hash, inside the same transaction.
+    const sourceWorld = await tx.queryOne<{ source_sha256: string | null }>(
+      'SELECT source_sha256 FROM worlds WHERE world_id = ?', [input.worldId],
+    );
+    if (sourceWorld?.source_sha256) {
+      const legacySources = await tx.queryAll<{ source_id: string }>(
+        'SELECT source_id FROM imported_sources WHERE raw_sha256 = ?', [sourceWorld.source_sha256],
+      );
+      for (const row of legacySources) {
+        if (!candidateSourceIds.includes(row.source_id)) candidateSourceIds.push(row.source_id);
+      }
+    }
 
     // ---- 1. Branch-scoped no-FK tables, then the branches graph itself. ----
     if (branchIds.length > 0) {

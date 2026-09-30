@@ -8,7 +8,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { useIsFocused, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import {
@@ -20,6 +20,8 @@ import {
 } from '../../buildTasks';
 import { pauseRun, cancelRun } from '../../sourceImport';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
+import { deriveProjectStatus, listProjectBuildSummaries, summarizeProjectBuild, PROJECT_STATUS_LABEL, type ProjectBuildSummary } from '../../projectLibrary';
+import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
 import { getWorldEntry } from '../../worldImport';
 import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
 import { useAppSession } from '../state/AppSessionContext';
@@ -55,40 +57,44 @@ export function ProjectHubScreen(): React.JSX.Element {
   const [deletePhase, setDeletePhase] = useState<DeleteProjectPhase>('confirm');
   const [deleteBuilding, setDeleteBuilding] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const focusedRef = useRef(true);
+  const focused = useIsFocused();
+  const refreshInFlight = useRef(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [buildSummary, setBuildSummary] = useState<ProjectBuildSummary>(() => summarizeProjectBuild([]));
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     try {
-      const openTasks = await listOpenBuildTasksForWorld(worldId);
+      const [openTasks, worldEntry, summaries] = await Promise.all([
+        listOpenBuildTasksForWorld(worldId), getWorldEntry(worldId), listProjectBuildSummaries([worldId]),
+      ]);
+      setBuildSummary(summaries.get(worldId)!);
       setTasks(openTasks);
-      setEntry(await getWorldEntry(worldId));
+      setEntry(worldEntry);
       const runId = openTasks[0]?.runId ?? null;
       setPerf(runId ? await listBuildTaskPerfStats(runId) : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    }
+    } finally { refreshInFlight.current = false; }
   }, [worldId, setError]);
 
   useFocusEffect(
     useCallback(() => {
-      focusedRef.current = true;
       void refresh();
       (async () => {
         try {
           if (profile) await recoverBuildTasks(await listOpenBuildTasksForWorld(worldId), profile);
         } catch { /* best-effort */ }
       })();
-      return () => {
-        focusedRef.current = false;
-      };
     }, [refresh, profile, worldId]),
   );
 
   useEffect(() => {
-    if (!focusedRef.current || !isTaskListDynamic(tasks)) return;
+    if (!focused || !isTaskListDynamic(tasks)) return;
     const timer = setInterval(() => void refresh(), 1_500);
     return () => clearInterval(timer);
-  }, [tasks, refresh]);
+  }, [focused, tasks, refresh]);
 
   async function resumeTask(runId: string) {
     if (taskBusy || !profile) return;
@@ -104,7 +110,7 @@ export function ProjectHubScreen(): React.JSX.Element {
   }
 
   const playable = (entry?.packageRevision ?? 0) > 0 && entry?.openingReady === true;
-  const projectStatus = playable ? '可游玩' : tasks.length > 0 ? '构建中' : '构建准备中';
+  const projectStatus = PROJECT_STATUS_LABEL[deriveProjectStatus(entry ?? { packageRevision: 0 }, buildSummary)];
 
   async function requestDelete() {
     setDeleteVisible(true);
@@ -160,7 +166,7 @@ export function ProjectHubScreen(): React.JSX.Element {
           if (navigation.canGoBack()) navigation.goBack();
         }}
         actions={
-          <Button label="⋯" variant="chip" onPress={() => void requestDelete()} accessibilityLabel="项目操作" />
+          <Button label="⋯" variant="chip" onPress={() => setMenuVisible(true)} accessibilityLabel="项目操作" />
         }
       />
       <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
@@ -281,6 +287,12 @@ export function ProjectHubScreen(): React.JSX.Element {
         ) : null}
       </ScrollView>
 
+      <ProjectActionsMenu
+        visible={menuVisible}
+        title={title}
+        onCancel={() => setMenuVisible(false)}
+        onDelete={() => { setMenuVisible(false); void requestDelete(); }}
+      />
       <DeleteProjectDialog
         visible={deleteVisible}
         title={title}

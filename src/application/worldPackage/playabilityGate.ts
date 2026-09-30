@@ -24,6 +24,8 @@ export interface PlayabilityGateInput {
   eventCount: number;
   /** Open review issues with severity 'blocking'. */
   openBlockingReviewIssues: number;
+  /** Persisted conflict facts, even before a review issue has been recorded. */
+  conflictFactCount?: number;
   minimumFacts?: number;
 }
 
@@ -39,6 +41,11 @@ function isMappableFact(fact: StoredFact): boolean {
 
 export function evaluatePlayabilityGate(input: PlayabilityGateInput): PlayabilityGateResult {
   const reasons: string[] = [];
+  const conflictFactCount = Math.max(input.conflictFactCount ?? 0,
+    input.facts.filter(fact => fact.status === 'conflict').length);
+  if (conflictFactCount > 0) {
+    reasons.push(`存在 ${conflictFactCount} 条冲突事实，请先处理再构建开局`);
+  }
   const mappable = input.facts.filter(isMappableFact);
   const factsBySubject = new Map<string, number>();
   for (const fact of mappable) {
@@ -75,6 +82,7 @@ export interface PlayabilitySnapshot {
   facts: readonly StoredFact[];
   eventCount: number;
   openBlockingReviewIssues: number;
+  conflictFactCount: number;
 }
 
 /**
@@ -97,5 +105,6 @@ export async function loadPlayabilitySnapshot(input: {
     input.countOpenBlockingReviewIssues(input.worldId),
   ]);
   const eventCount = events.filter(event => event.status === 'canon').length + proposals.length;
-  return { entities, facts, eventCount, openBlockingReviewIssues: blocking };
+  return { entities, facts, eventCount, openBlockingReviewIssues: blocking,
+    conflictFactCount: facts.filter(fact => fact.status === 'conflict').length };
 }

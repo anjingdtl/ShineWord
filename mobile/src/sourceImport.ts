@@ -1009,6 +1009,7 @@ async function runExtractionInternal(
             facts,
             eventCount: events.filter(event => event.status === 'canon').length + proposals.length,
             openBlockingReviewIssues: blocking?.count ?? 0,
+            conflictFactCount: facts.filter(fact => fact.status === 'conflict').length,
           });
           if (!verdict.playable) return;
           const chunks = (await worldStore.getChunks(worldId))

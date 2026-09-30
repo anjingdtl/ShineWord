@@ -6,20 +6,19 @@
  * stats) lives inside the Project Hub; nothing global is piled onto this page
  * anymore. After an import the user lands straight in the new project's hub.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
-  buildProvider,
-  createSession,
   importPortableWorldPackageFile,
-  type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
 import { importNovelUnified } from '../../sourceImport';
 import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
-import { listProjects, filterProjects, type ProjectStatusProjection } from '../../projectLibrary';
+import { refreshProjectBuildStatusFast, filterProjects, type ProjectStatusProjection } from '../../projectLibrary';
+import { createLibraryRefreshController, refreshLibraryFull } from '../../projectLibraryRefresh';
+import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
 import { listOpenBuildTasks } from '../../buildTasks';
 import versionJson from '../../version.json';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
@@ -54,56 +53,25 @@ export function LibraryScreen(): React.JSX.Element {
   const [deletePhase, setDeletePhase] = useState<DeleteProjectPhase>('confirm');
   const [deleteBuilding, setDeleteBuilding] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const focusedRef = useRef(true);
-  const [tick, setTick] = useState(0);
+  const [menuTarget, setMenuTarget] = useState<ProjectStatusProjection | null>(null);
+  const projectsRef = useRef(projects);
+  const refreshController = useMemo(() => createLibraryRefreshController({
+    full: () => profile ? refreshLibraryFull(profile) : Promise.resolve([]),
+    fast: refreshProjectBuildStatusFast,
+    getProjects: () => projectsRef.current,
+    apply: next => { projectsRef.current = next; setProjects(next); },
+    onError: e => setError(e instanceof Error ? e.message : String(e)),
+  }), [profile, setError]);
+  const refresh = refreshController.refreshFull;
 
-  const refresh = useCallback(async () => {
-    if (!profile) return;
-    try {
-      const session = await createSession(profile, await buildProvider(profile));
-      const campaignList = await session.listCampaigns();
-      const withBranches: CampaignListItem[] = [];
-      for (const campaign of campaignList) {
-        const branches = await session.listBranches(campaign.campaignId);
-        for (const branch of branches) {
-          withBranches.push({ ...campaign, branchId: branch.branchId });
-        }
-      }
-      setProjects(await listProjects({ campaigns: withBranches }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [profile, setError]);
-
-  // Light-weight poll while any project builds, so the compact cards' batch
-  // counters move without a full session refresh.
-  useEffect(() => {
-    if (!focusedRef.current || !projects.some(project => project.activeRun?.dynamic)) return;
-    const timer = setInterval(() => setTick(value => value + 1), 1_500);
-    return () => clearInterval(timer);
-  }, [projects]);
-
-  useEffect(() => {
-    if (focusedRef.current) void refresh();
-  }, [tick, refresh]);
-
-  useFocusEffect(
-    useCallback(() => {
-      focusedRef.current = true;
-      void refresh();
-      (async () => {
-        try {
-          const open = await listOpenBuildTasks();
-          await recoverBuildTasks(open, profile);
-        } catch {
-          // recovery is best-effort; the hub's task card offers manual resume
-        }
-      })();
-      return () => {
-        focusedRef.current = false;
-      };
-    }, [refresh, profile]),
-  );
+  useFocusEffect(useCallback(() => {
+    void refreshController.focus();
+    (async () => {
+      try { await recoverBuildTasks(await listOpenBuildTasks(), profile); }
+      catch { /* the hub offers manual resume */ }
+    })();
+    return () => refreshController.blur();
+  }, [refreshController, profile]));
 
   const visible = useMemo(() => filterProjects(projects, query), [projects, query]);
 
@@ -241,7 +209,7 @@ export function LibraryScreen(): React.JSX.Element {
           </View>
         }
       />
-      <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
+      <ScrollView refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />} style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
         {projects.length > 0 ? (
           <TextField
             value={query}
@@ -269,7 +237,7 @@ export function LibraryScreen(): React.JSX.Element {
               project={project}
               onOpenProject={() => openProject(project)}
               onPrimary={() => primaryAction(project)}
-              onDelete={() => void requestDelete(project)}
+              onMenu={() => setMenuTarget(project)}
             />
           ))
         )}
@@ -289,6 +257,16 @@ export function LibraryScreen(): React.JSX.Element {
         </View>
       </ScrollView>
 
+      <ProjectActionsMenu
+        visible={menuTarget !== null}
+        title={menuTarget?.title ?? ''}
+        onCancel={() => setMenuTarget(null)}
+        onDelete={() => {
+          const target = menuTarget;
+          setMenuTarget(null);
+          if (target) void requestDelete(target);
+        }}
+      />
       <DeleteProjectDialog
         visible={deleteTarget !== null}
         title={deleteTarget?.title ?? ''}

@@ -372,6 +372,9 @@ test('P2-4: conflict facts produce a blocking canon_conflict issue that stops pu
     /blocking conflict/,
     'canon conflicts prevent publication',
   );
+  assert.equal(provider.calls.length, 0, 'known conflicts never spend a mapping request');
+  assert.equal(await worldStore.getPublishedPackageRevision('w-build'), null);
+  assert.equal((await worldStore.listFacts('w-build')).length, 3, 'extracted canon remains recoverable');
 
   const issues = await worldStore.listReviewIssues('w-build', 'open');
   const conflicts = issues.filter(issue => issue.kind === 'canon_conflict');
@@ -379,6 +382,25 @@ test('P2-4: conflict facts produce a blocking canon_conflict issue that stops pu
   assert.equal(conflicts[0].severity, 'blocking');
   const detail = JSON.parse(conflicts[0].detailJson);
   assert.ok(detail.factIds.includes('fact-home-2'), 'detail lists the conflicting fact id');
+});
+
+test('closeout: actual conflict then resolution retires the blocker and allows mapping', async () => {
+  const { db, worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '测试事实' }), 't');
+  await worldStore.saveFact(makeFact('w-build', 'home-1', 'chen', 'home_location', { location: '甲' }), 't');
+  await worldStore.saveFact(makeFact('w-build', 'home-2', 'chen', 'home_location', { location: '乙' }), 't');
+  const provider = fakeProvider(VALID_PROPOSAL);
+  await assert.rejects(() => build(worldStore, provider), /blocking conflict/);
+  assert.equal(provider.calls.length, 0);
+  db.prepare("UPDATE canon_facts SET status = 'explicit' WHERE world_id = ? AND status = 'conflict'").run('w-build');
+  const { result } = await build(worldStore, provider);
+  assert.equal(provider.calls.length, 1);
+  assert.equal(result.manifest.status, 'published');
+  const issue = (await worldStore.listReviewIssues('w-build', 'all')).find(i => i.issueId === 'canon-conflict');
+  assert.equal(issue.status, 'resolved');
+  db.close();
 });
 
 // ---------------------------------------------------------------------------

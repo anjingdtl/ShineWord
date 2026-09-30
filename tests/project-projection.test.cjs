@@ -172,3 +172,180 @@ test('PROJ-01 three worlds project into three isolated, sorted, searchable proje
     db.close();
   }
 });
+
+function projectionFixture() {
+  const db = setup();
+  const database = { getDatabaseRuntime: async () => ({ db: new Adapter(db) }) };
+  const worlds = ['a', 'b', 'c'].map(id => ({ worldId: `w-${id}`, title: `项目${id}`, sourceSha256: 'sha-1',
+    updatedAt: NOW, packageRevision: 0, openingReady: false, openReviewIssues: 0 }));
+  const library = loadMobileModule('mobile/src/projectLibrary.ts', {
+    './database': database, './worldImport': { listWorlds: async () => worlds },
+  });
+  const calls = { buildProvider: 0, createSession: 0, listCampaigns: 0, listBranches: 0 };
+  const session = {
+    async listCampaigns() { calls.listCampaigns++; return [{ campaignId: 'camp-a', worldId: 'w-a' }]; },
+    async listBranches() { calls.listBranches++; return [{ branchId: 'branch-a' }]; },
+  };
+  const refresh = loadMobileModule('mobile/src/projectLibraryRefresh.ts', {
+    './runtime': {
+      async buildProvider() { calls.buildProvider++; return {}; },
+      async createSession() { calls.createSession++; return session; },
+    },
+    './projectLibrary': library,
+  });
+  return { db, library, refresh, calls, worlds };
+}
+
+function run(status, runId = status, done = 0, total = 8) {
+  return { runId, status, phase: 'extracting', done, total, failed: 0,
+    dynamic: ['queued', 'running'].includes(status), updatedAt: NOW };
+}
+
+test('PROJ-closeout unified statuses and priority include every resumable or blocked run', () => {
+  const { db, library } = projectionFixture();
+  try {
+    for (const [status, expected] of Object.entries({ running: 'building', queued: 'building',
+      paused_user: 'paused', paused_system: 'paused', stopped_user: 'stopped', needs_review: 'review',
+      failed_retryable: 'retry', failed_terminal: 'failed', waiting_network: 'waiting_network', waiting_unlock: 'waiting_unlock' })) {
+      assert.equal(library.deriveProjectStatus({ packageRevision: 0 }, library.summarizeProjectBuild([run(status)])), expected);
+      assert.ok(library.PROJECT_STATUS_LABEL[expected]);
+    }
+    assert.equal(library.deriveProjectStatus({ packageRevision: 2, openingReady: true }, library.summarizeProjectBuild([run('completed')])), 'playable');
+    for (const [lower, higher] of [['completed', 'stopped_user'], ['stopped_user', 'paused_user'],
+      ['paused_user', 'waiting_network'], ['waiting_network', 'running'], ['running', 'needs_review'], ['running', 'failed_retryable']]) {
+      assert.equal(library.summarizeProjectBuild([run(lower), run(higher)]).status,
+        library.summarizeProjectBuild([run(higher)]).status);
+    }
+  } finally { db.close(); }
+});
+
+test('PROJ-closeout multiple runs aggregate all effective batches and remain world-scoped', async () => {
+  const { db, library } = projectionFixture();
+  try {
+    db.prepare(`INSERT INTO world_build_runs
+      (run_id, world_id, source_id, source_snapshot_hash, pipeline_version, plan_version, model_fingerprint,
+       phase, status, units_total, units_done, units_failed, created_at, updated_at)
+      SELECT 'run-a-old', world_id, source_id, source_snapshot_hash, pipeline_version, plan_version, model_fingerprint,
+       phase, 'paused_user', 4, 3, 0, created_at, updated_at FROM world_build_runs WHERE run_id = 'run-a'`).run();
+    const projects = await library.listProjects({});
+    const a = projects.find(p => p.worldId === 'w-a');
+    assert.equal(a.activeRun.runId, 'run-a', 'running run outranks old paused run');
+    assert.equal(a.buildStatus, 'building');
+    assert.equal(a.buildSummary.runsTotal, 2);
+    assert.equal(a.buildSummary.doneBatches, 5);
+    assert.equal(a.buildSummary.totalBatches, 12);
+    assert.equal(a.buildSummary.dynamicRuns, 1);
+    assert.equal(projects.find(p => p.worldId === 'w-b').buildSummary.totalBatches, 8);
+    const summary = library.summarizeProjectBuild([run('completed', 'stage-1', 8, 8), run('running', 'stage-2', 1, 6), run('canceled', 'superseded', 9, 99)]);
+    assert.equal(summary.runsTotal, 2);
+    assert.equal(summary.doneBatches, 9);
+    assert.equal(summary.totalBatches, 14);
+    assert.equal(summary.status, 'building');
+  } finally { db.close(); }
+});
+
+test('PROJ-closeout fast poll updates card progress/status with zero session/provider/campaign/branch calls', async () => {
+  const { db, library, refresh, calls } = projectionFixture();
+  try {
+    db.prepare("UPDATE world_build_runs SET units_done = 0 WHERE run_id = 'run-a'").run();
+    let projects = await refresh.refreshLibraryFull({});
+    const baseline = { ...calls };
+    const a = projects.find(p => p.worldId === 'w-a');
+    assert.equal(a.buildSummary.doneBatches, 0);
+    db.prepare("UPDATE world_build_runs SET units_done = 1, updated_at = '2026-10-01T12:00:00.000Z' WHERE run_id = 'run-a'").run();
+    db.prepare("UPDATE world_build_units SET updated_at = '2026-10-01T13:00:00.000Z' WHERE run_id = 'run-a'").run();
+    let result = await library.refreshProjectBuildStatusFast(projects);
+    assert.equal(result.needsFullRefresh, false);
+    let next = result.projects.find(p => p.worldId === 'w-a');
+    assert.equal(next.buildSummary.doneBatches, 1);
+    assert.equal(next.buildSummary.totalBatches, 8);
+    assert.equal(next.updatedAt, '2026-10-01T13:00:00.000Z');
+    for (const field of ['campaign', 'playable', 'chapterCount', 'title', 'packageRevision']) assert.deepEqual(next[field], a[field]);
+    assert.strictEqual(next.campaign, a.campaign, 'stable campaign object is retained');
+    projects = result.projects;
+    db.prepare("UPDATE world_build_runs SET status = 'paused_user' WHERE run_id = 'run-a'").run();
+    result = await library.refreshProjectBuildStatusFast(projects);
+    next = result.projects.find(p => p.worldId === 'w-a');
+    assert.equal(next.buildStatus, 'paused');
+    assert.equal(next.buildSummary.dynamicRuns, 0);
+    assert.deepEqual(calls, baseline, 'fast path performs no full-refresh operations');
+  } finally { db.close(); }
+});
+
+test('PROJ-closeout completion triggers exactly one full refresh and updates opening/campaign projection', async () => {
+  const { db, library, refresh, calls, worlds } = projectionFixture();
+  try {
+    let projects = [];
+    const timers = new Map();
+    let timerId = 0;
+    const controller = refresh.createLibraryRefreshController({
+      full: () => refresh.refreshLibraryFull({}), fast: library.refreshProjectBuildStatusFast,
+      getProjects: () => projects, apply: next => { projects = next; }, onError: e => { throw e; },
+      setTimer: cb => { timers.set(++timerId, cb); return timerId; }, clearTimer: id => timers.delete(id),
+    });
+    await controller.focus();
+    assert.equal(timers.size, 1);
+    const baseline = calls.createSession;
+    db.prepare("UPDATE world_build_runs SET status = 'completed', units_done = 8 WHERE run_id = 'run-a'").run();
+    worlds[0].packageRevision = 1;
+    worlds[0].openingReady = true;
+    await controller.pollFast();
+    assert.equal(calls.createSession, baseline + 1);
+    const a = projects.find(p => p.worldId === 'w-a');
+    assert.equal(a.playable, true);
+    assert.equal(a.packageRevision, 1);
+    assert.equal(a.buildStatus, 'playable');
+    assert.deepEqual(a.campaign, { campaignId: 'camp-a', branchId: 'branch-a' });
+    assert.equal(timers.size, 0, 'completed projects stop polling');
+    await controller.pollFast();
+    assert.equal(calls.createSession, baseline + 1, 'no repeated full refresh');
+    controller.blur();
+  } finally { db.close(); }
+});
+
+test('PROJ-closeout Opening published mid-run triggers full refresh without waiting for completion', async () => {
+  const { db, library } = projectionFixture();
+  try {
+    const projects = await library.listProjects({});
+    db.prepare(`INSERT INTO world_packages (world_id, revision, status, ruleset_id, ruleset_version, mapping_version,
+      source_sha256, content_hash, created_at)
+      VALUES ('w-a', 1, 'published', 'shineword', '1', '1', 'sha-1', 'h', ?)`).run(NOW);
+    const result = await library.refreshProjectBuildStatusFast(projects);
+    assert.equal(result.needsFullRefresh, true);
+    assert.equal(result.projects.find(p => p.worldId === 'w-a').buildSummary.dynamicRuns, 1);
+  } finally { db.close(); }
+});
+
+test('PROJ-closeout poll lifecycle serializes requests and discards responses after blur', async () => {
+  const { db, library, refresh } = projectionFixture();
+  try {
+    let projects = await library.listProjects({});
+    let fastCalls = 0, fullCalls = 0, resolveFast;
+    const timers = new Map();
+    const controller = refresh.createLibraryRefreshController({
+      full: async () => { fullCalls++; return projects; },
+      fast: async () => { fastCalls++; return new Promise(resolve => { resolveFast = resolve; }); },
+      getProjects: () => projects, apply: next => { projects = next; }, onError: e => { throw e; },
+      setTimer: cb => { timers.set(1, cb); return 1; }, clearTimer: id => timers.delete(id),
+    });
+    await controller.focus();
+    assert.equal(fullCalls, 1);
+    const before = projects;
+    const first = controller.pollFast();
+    await controller.pollFast();
+    assert.equal(fastCalls, 1, 'in-flight fast query cannot overlap');
+    const full = controller.refreshFull();
+    assert.equal(fullCalls, 1, 'full refresh waits behind fast read');
+    controller.blur();
+    assert.equal(timers.size, 0, 'blur removes timer immediately');
+    resolveFast({ projects: [], needsFullRefresh: true });
+    await first; await full;
+    assert.strictEqual(projects, before, 'late async response never overwrites projection after blur');
+    await controller.pollFast();
+    assert.equal(fastCalls, 1, 'unfocused screen cannot poll');
+    await controller.focus();
+    assert.equal(fullCalls, 2);
+    assert.equal(timers.size, 1, 'refocus starts exactly one timer');
+    controller.blur();
+  } finally { db.close(); }
+});

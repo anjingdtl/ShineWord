@@ -305,3 +305,29 @@ test('DEL-O deleting twice is a safe no-op', async () => {
     assert.equal(again.foreignKeyViolations, 0);
   } finally { db.close(); }
 });
+
+test('DEL-legacy source hash fallback cleans a world without runs or plans', async () => {
+  const db = setupDb();
+  try {
+    insertSource(db, 'legacy-src', 'legacy-sha');
+    insertWorld(db, 'legacy-world', { sourceSha: 'legacy-sha' });
+    const result = await deleteWorld(new Adapter(db), 'legacy-world');
+    assert.deepEqual(result.removedSourceIds, ['legacy-src']);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM imported_sources').get().c, 0);
+    assert.equal(result.foreignKeyViolations, 0);
+  } finally { db.close(); }
+});
+
+test('DEL-legacy shared source stays until its final world hash reference disappears', async () => {
+  const db = setupDb();
+  try {
+    insertSource(db, 'legacy-src', 'legacy-sha');
+    insertWorld(db, 'legacy-a', { sourceSha: 'legacy-sha' });
+    insertWorld(db, 'legacy-b', { sourceSha: 'legacy-sha' });
+    const adapter = new Adapter(db);
+    assert.deepEqual((await deleteWorld(adapter, 'legacy-a')).removedSourceIds, []);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM imported_sources').get().c, 1);
+    assert.deepEqual((await deleteWorld(adapter, 'legacy-b')).removedSourceIds, ['legacy-src']);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM imported_sources').get().c, 0);
+  } finally { db.close(); }
+});
