@@ -29,6 +29,7 @@ import { LedgeredProvider } from '../../src/application/llm/requestLedger';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
 import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
+import { hasPlayableOpening } from '../../src/application/worldPackage/openingRecovery';
 
 /**
  * The import pipeline's byte-hash provider (closeout C1). Every call hashes
@@ -98,6 +99,7 @@ export interface WorldLibraryEntry {
   updatedAt: string;
   /** Latest published three-book revision; 0 = nothing published yet. */
   packageRevision: number;
+  openingReady?: boolean;
   /** Review issues the mapping pass left open (real count, may be 0). */
   openReviewIssues: number;
 }
@@ -255,6 +257,7 @@ async function toLibraryEntry(
   const packages = await worldStore.listWorldPackages(world.worldId);
   const published = packages.filter(item => item.status === 'published');
   const packageRevision = published.reduce((max, item) => Math.max(max, item.revision), 0);
+  const openingReady = packageRevision > 0 && await hasPlayableOpening(worldStore, world.worldId, packageRevision);
   const issues = await worldStore.listReviewIssues(world.worldId, 'open');
   return {
     worldId: world.worldId,
@@ -264,6 +267,7 @@ async function toLibraryEntry(
     buildStatus: world.buildStatus,
     updatedAt: world.updatedAt,
     packageRevision,
+    openingReady,
     openReviewIssues: issues.length,
   };
 }
@@ -383,6 +387,7 @@ export async function buildWorldOnDevice(
     sha256Hex: nativeSha256.sha256Hex,
   });
   const pkg = await buildPackageFromCanon({
+    requirePlayableOpening: true,
     worldStore,
     provider: {
       // The mapper always speaks as WorldMapper; adapter aligns the role type.

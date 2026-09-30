@@ -1007,6 +1007,25 @@ ALTER TABLE llm_request_attempts ADD COLUMN wire_output_tokens INTEGER;
  * runs rebuild). Runs with FK off per the documented rebuild procedure - the
  * migration runner flips PRAGMA foreign_keys around this transaction.
  */
+/** Old cancellation left completed work intact. Unknown attempted canceled units
+ * require review; a never-attempted unit has no submitted work to duplicate. */
+export const LEGACY_CANCELED_RECOVERY_SQL = `
+UPDATE world_build_units
+SET status = CASE
+  WHEN attempt = 0 AND result_ref IS NULL AND usage_json IS NULL THEN 'queued'
+  ELSE 'needs_review'
+END
+WHERE status = 'canceled' AND run_id IN (
+  SELECT run_id FROM world_build_runs WHERE status = 'canceled' AND units_done < units_total
+)
+AND NOT EXISTS (
+  SELECT 1 FROM world_build_units child WHERE child.parent_unit_id = world_build_units.unit_id
+);
+UPDATE world_build_runs
+SET status = 'stopped_user', pause_requested = 0, cancel_requested = 0
+WHERE status = 'canceled' AND units_done < units_total;
+`;
+
 export const STOPPED_USER_STATUS_SCHEMA_SQL = `
 CREATE TABLE world_build_runs_v24 (
   run_id TEXT PRIMARY KEY,
@@ -1091,6 +1110,7 @@ CREATE INDEX IF NOT EXISTS idx_world_build_runs_status ON world_build_runs(statu
 CREATE INDEX IF NOT EXISTS idx_world_build_units_run ON world_build_units(run_id, ord);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_world_build_units_unique_input
   ON world_build_units(run_id, kind, input_hash, config_fingerprint);
+${LEGACY_CANCELED_RECOVERY_SQL}
 `;
 
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
@@ -1118,4 +1138,6 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 22, name: 'reasoning_usage_tier', sql: REASONING_USAGE_LEDGER_SCHEMA_SQL },
   { version: 23, name: 'frozen_reasoning_ledger', sql: FROZEN_REASONING_LEDGER_SCHEMA_SQL },
   { version: 24, name: 'stopped_user_status', sql: STOPPED_USER_STATUS_SCHEMA_SQL, foreignKeys: 'off' },
+  // Clients which already applied the original v24 still need data recovery.
+  { version: 25, name: 'legacy_canceled_recovery', sql: LEGACY_CANCELED_RECOVERY_SQL },
 ];

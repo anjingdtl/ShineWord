@@ -19,6 +19,7 @@ import type {
   WorldJobRecord,
   WorldRecord,
   WorldStore,
+  WorldCanonSnapshot,
 } from '../../application/ports/worldStore';
 
 interface WorldRow extends SqliteRow {
@@ -1108,6 +1109,7 @@ export class SqliteWorldStore implements WorldStore {
     sections: readonly BookSection[];
     validationJson: string;
     createdAt: string;
+    canon?: WorldCanonSnapshot;
   }): Promise<void> {
     await this.db.transaction(async tx => {
       const existing = await tx.queryOne<SqliteRow>('SELECT world_id FROM worlds WHERE world_id = ?', [input.world.worldId]);
@@ -1121,6 +1123,7 @@ export class SqliteWorldStore implements WorldStore {
           input.world.normalizeVersion, input.world.chapterSplitVersion, input.world.buildStatus,
           input.world.createdAt, input.world.updatedAt],
       );
+      if (input.canon) await this.saveImportedCanonTx(tx, input.world.worldId, input.canon, input.createdAt);
       await tx.execute(
         `INSERT INTO world_packages
           (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
@@ -1152,6 +1155,41 @@ export class SqliteWorldStore implements WorldStore {
         );
       }
     });
+  }
+
+  private async saveImportedCanonTx(
+    tx: SqliteTransaction, worldId: string, canon: WorldCanonSnapshot, createdAt: string,
+  ): Promise<void> {
+    for (const chapter of canon.chapters) {
+      await tx.execute(
+        `INSERT INTO source_chapters
+          (world_id, chapter_id, chapter_index, title, start_offset, end_offset, char_count, content_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [worldId, chapter.chapterId, chapter.index, chapter.title, chapter.startOffset, chapter.endOffset,
+          chapter.charCount, chapter.contentHash, createdAt],
+      );
+    }
+    for (const entity of canon.entities) await this.upsertEntityTx(tx, { ...entity, worldId }, createdAt);
+    for (const fact of canon.facts) await this.saveFactTx(tx, { ...fact, worldId }, createdAt);
+    // Insert every event before its edges, including forward dependencies.
+    for (const event of canon.events) {
+      await tx.execute(
+        `INSERT INTO canon_events
+          (world_id, event_id, title, summary, world_time_order, narrative_chapter_id, valid_from, valid_to, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [worldId, event.eventId, event.title, event.summary, event.worldTimeOrder, event.narrativeChapterId,
+          event.validFrom, event.validTo, event.status, createdAt],
+      );
+    }
+    for (const event of canon.events) {
+      for (const dependency of event.dependsOnEventIds) {
+        await tx.execute(
+          'INSERT INTO event_dependencies (world_id, event_id, depends_on_event_id, created_at) VALUES (?, ?, ?, ?)',
+          [worldId, event.eventId, dependency, createdAt],
+        );
+      }
+    }
+    for (const mapping of canon.ruleMappings) await this.saveRuleMappingTx(tx, { ...mapping, worldId }, createdAt);
   }
 
   async getWorldPackage(

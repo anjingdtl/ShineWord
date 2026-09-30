@@ -15,6 +15,7 @@ import type {
 } from '../../domain/content/types';
 import { publishWorldPackage } from './publish';
 import { sourceRangesCoverWholeText } from './preparationStatus';
+import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -57,6 +58,8 @@ export interface BuildPackageInput {
   sourceSha256: string;
   mappingVersion: string;
   createdAt: string;
+  /** Mobile builds must publish a world that can actually create a campaign. */
+  requirePlayableOpening?: boolean;
   /** Exact normalized source chunks, supplied only after every chunk extracted. */
   sourceRanges?: WorldPackageBuildScope['sourceRanges'];
   sourceCodePointCount?: number;
@@ -1017,12 +1020,44 @@ export function buildSections(entries: readonly ContentEntry[]): BookSection[] {
   push({ book: 'player_handbook', sectionKey: 'world', title: '世界设定', entryIds: worldLore });
   push({ book: 'player_handbook', sectionKey: 'skills', title: '技能', entryIds: skills });
   push({ book: 'player_handbook', sectionKey: 'constraints', title: '世界约束', entryIds: constraints });
+  push({ book: 'player_handbook', sectionKey: 'locations', title: '地点与场景', entryIds: byKind('scene', 'public') });
   push({ book: 'gm_guide', sectionKey: 'constraints', title: '世界约束', entryIds: constraints });
   push({ book: 'gm_guide', sectionKey: 'review', title: '冲突与审核摘要', entryIds: reviewLore });
   push({ book: 'gm_guide', sectionKey: 'npcs', title: '人物模板', entryIds: templates });
   push({ book: 'gm_guide', sectionKey: 'items', title: '物品', entryIds: items });
   push({ book: 'monster_manual', sectionKey: 'creatures', title: '对手图鉴', entryIds: templates });
   return sections;
+}
+
+/** Preserve evidenced novel places even when the mapper proposes no scenes. */
+async function compileCanonScenes(
+  store: SqliteWorldStore, entities: readonly StoredEntity[], facts: StoredFact[], createdAt: string,
+): Promise<ContentEntry[]> {
+  const entries: ContentEntry[] = [];
+  for (const entity of entities.filter(candidate => candidate.type === 'location')) {
+    let evidence = facts.find(fact => fact.subjectEntityId === entity.entityId
+      && fact.status !== 'speculation' && fact.status !== 'conflict' && fact.sources.length > 0);
+    if (!evidence) {
+      const mention = facts.find(fact => fact.status !== 'speculation' && fact.status !== 'conflict'
+        && fact.sources.some(span => span.quote.includes(entity.name)));
+      if (!mention) continue;
+      evidence = { ...mention, factId: `fact-${entity.entityId}-location-mention`, subjectEntityId: entity.entityId,
+        predicate: 'named_location', value: { name: entity.name }, status: 'explicit', confidence: 1,
+        sources: mention.sources.filter(span => span.quote.includes(entity.name)) };
+      await store.saveFact(evidence, createdAt);
+      facts.push(evidence);
+    }
+    entries.push({
+      entryId: `scene-${entity.entityId}`, kind: 'scene', revision: 0,
+      provenance: { kind: 'explicit', sourceFactIds: [evidence.factId], rationale: '由原著已核验的地点证据保留可选择场景。' },
+      fieldProvenance: { zones: { kind: 'design_fill', sourceFactIds: [], rationale: '规则集提供可操作区域，不补造原著情节。' } },
+      visibility: 'public', dependencyIds: [],
+      definition: { name: entity.name, description: `原著资料中已出现的地点：${entity.name}。`, locationId: entity.name,
+        zones: [{ zoneId: `zone-${entity.entityId}`, name: entity.name, cover: false, exits: [] }],
+        actors: [], visibleItems: [], hazards: [], clues: [] },
+    });
+  }
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,9 +1107,15 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       stageRanges.some(range => span.endOffset > range.startCodePoint && span.startOffset < range.endCodePoint));
   };
   const scopedFacts = allFacts.filter(factInRange);
+  const canonScenes = await compileCanonScenes(worldStore, entities, scopedFacts, input.createdAt);
+  const firstAnchor = events.filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
+    .sort((a, b) => a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
+  if (input.requirePlayableOpening && !canonScenes.some(scene => isEntryVisibleAtAnchor(scene, scopedFacts, firstAnchor))) {
+    throw new Error('原著抽取缺少当前开局可用的地点证据，未发布世界包。请补齐地点分析后继续构建。');
+  }
   const mappableFacts = scopedFacts.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
   const conflictFacts = scopedFacts.filter(fact => fact.status === 'conflict');
-  const knownFactIds = new Set(allFacts.map(fact => fact.factId));
+  const knownFactIds = new Set([...allFacts, ...scopedFacts].map(fact => fact.factId));
 
   let reviewIssueCount = 0;
 
@@ -1199,6 +1240,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
 
   // c. Local deterministic cleaning results + design_fill baseline.
   const entries: ContentEntry[] = [];
+  entries.push(...canonScenes);
 
   const acceptedSkillIds = new Set(proposals.skills.map(entry => entry.entryId));
   for (const skill of proposals.skills) entries.push(skill);

@@ -27,6 +27,7 @@ export function WorldCard(props: {
   const { theme } = useTheme();
   const { world, campaign } = props;
   const published = world.packageRevision >= 1;
+  const openingMissing = published && world.openingReady === false;
 
   return (
     <Card>
@@ -46,12 +47,12 @@ export function WorldCard(props: {
           typeStyle(theme, theme.type.small),
           { color: theme.onRaised.secondary, marginTop: theme.space.xs },
         ]}>
-        {published ? '世界已经可以开始冒险' : '再次导入同一文件可继续构建三宝书'}
+        {openingMissing ? '世界包缺少可用开局资料，请先补齐原著地点与证据' : published ? '世界已经可以开始冒险' : '再次导入同一文件可继续构建三宝书'}
       </Text>
 
       <View style={[styles.actions, { gap: theme.space.sm, marginTop: theme.space.md }]}>
         <Button
-          label={campaign ? '继续冒险' : '开始冒险'}
+          label={campaign ? '继续冒险' : openingMissing ? '补齐开局资料' : '开始冒险'}
           variant="primary"
           onPress={props.onPrimary}
           disabled={props.busy === true || !published}

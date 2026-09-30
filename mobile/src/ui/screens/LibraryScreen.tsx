@@ -22,12 +22,9 @@ import { importNovelUnified, pauseRun, cancelRun } from '../../sourceImport';
 import versionJson from '../../version.json';
 import type { BuildMode } from '../features/library/ImportNovelCard';
 import { isTaskListDynamic, listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
-import { startBuildService, requestRunControl } from '../../buildServiceBridge';
-import { startBuildWithWatchdog } from '../../buildWatchdog';
+import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
 import {
-  buildWorldOnDevice,
   listWorlds,
-  type BuiltWorldSummary,
   type WorldBuildProgress,
   type WorldLibraryEntry,
 } from '../../worldImport';
@@ -53,13 +50,13 @@ export function LibraryScreen(): React.JSX.Element {
   const [campaigns, setCampaigns] = useState<CampaignListItem[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState<WorldBuildProgress | null>(null);
-  const [summary, setSummary] = useState<BuiltWorldSummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [buildMode, setBuildMode] = useState<BuildMode>('progressive');
   const [tasks, setTasks] = useState<BuildTaskView[]>([]);
   const [taskBusy, setTaskBusy] = useState(false);
   const focusedRef = useRef(true);
+  const previousTasksRef = useRef<BuildTaskView[]>([]);
 
   const refresh = useCallback(async () => {
     if (!profile) return;
@@ -92,6 +89,16 @@ export function LibraryScreen(): React.JSX.Element {
     }
   }, []);
 
+  // Finished runs disappear from the open-task query. Refresh the published
+  // world at that boundary so its opening button works without leaving the
+  // library, including when the headless service finishes after startup.
+  useEffect(() => {
+    const currentIds = new Set(tasks.map(task => task.runId));
+    const finished = previousTasksRef.current.some(task => !currentIds.has(task.runId));
+    previousTasksRef.current = tasks;
+    if (finished) void refresh();
+  }, [tasks, refresh]);
+
   // Task-list auto refresh (real-device P0-2/§4): while any task is dynamic
   // (running / control requested / waiting / retryable) the open tasks are
   // re-queried every ~1.5s so pause/stop/progress surface without a manual
@@ -119,13 +126,7 @@ export function LibraryScreen(): React.JSX.Element {
       (async () => {
         try {
           const open = await listOpenBuildTasks();
-          const recoverable = open.filter(task =>
-            task.status === 'queued' || task.status === 'running'
-            || task.status === 'waiting_network' || task.status === 'failed_retryable');
-          for (const task of recoverable) {
-            if (task.status === 'running' && task.leaseHeld) continue; // live executor
-            await startBuildService(task.runId);
-          }
+          await recoverBuildTasks(open, profile);
         } catch {
           // recovery is best-effort; the task card still offers manual resume
         }
@@ -133,7 +134,7 @@ export function LibraryScreen(): React.JSX.Element {
       return () => {
         focusedRef.current = false;
       };
-    }, [refresh]),
+    }, [refresh, profile]),
   );
 
   /** Existing campaign for a world; a branch is always playable. */
@@ -152,13 +153,16 @@ export function LibraryScreen(): React.JSX.Element {
     try {
       // An explicit resume clears any stale pause/stop request BEFORE waking
       // an executor, so the coordinator never re-interrupts immediately.
-      await requestRunControl(runId, 'resume').catch(() => undefined);
       // C5 + real-device P0-2: prefer the dataSync foreground service, then
       // VERIFY it actually started (execution evidence in SQLite). Fall back
       // to inline execution when it did not; the run lease guarantees a
       // single executor either way.
-      await startBuildWithWatchdog(runId, profile);
-      await refresh();
+      // Inline fallback can outlive this tap by minutes. Keep task controls
+      // available while its persisted progress is polled by the card list.
+      void startOrResumeBuild(runId, profile, { resume: true })
+        .then(refresh)
+        .catch(e => setError(e instanceof Error ? e.message : String(e)));
+      await refreshTasks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -171,7 +175,6 @@ export function LibraryScreen(): React.JSX.Element {
     setBusy(true);
     setError(null);
     setNotice(null);
-    setSummary(null);
     setPreview(null);
     try {
       // Unified build (P3): staged streaming import + persistent 30/30/40
@@ -193,30 +196,22 @@ export function LibraryScreen(): React.JSX.Element {
       // Real-device P0-2: a successful startForegroundService call proves
       // nothing - verify execution evidence and fall back inline if the
       // headless runner never wakes up.
-      for (const runId of imported.runIds) {
-        await startBuildWithWatchdog(runId, profile);
-      }
+      void (async () => {
+        for (const runId of imported.runIds) {
+          await startOrResumeBuild(runId, profile);
+        }
+        await refresh();
+      })().catch(e => setError(e instanceof Error ? e.message : String(e)));
       const stageText = imported.stages.map(stage => `S${stage.index + 1}≈${Math.round(stage.ratio * 100)}%`).join(' / ');
-      setPreview(`已导入 ${imported.chapterCount} 章、${imported.chunkCount} 块；阶段计划 ${stageText}。${
+      setNotice(`已导入 ${imported.chapterCount} 章、${imported.chunkCount} 块；阶段计划 ${stageText}。${
         imported.strategy === 'progressive'
           ? '循序构建：首个阶段（约前 30%）构建发布后即可开局；后续阶段由剧情推进触发。'
           : '完整构建：全书构建完成并发布后开局。'
-      }任务已在后台排队，可在下方任务卡查看进度。`);
-      setSummary({
-        worldId: imported.worldId,
-        title: picked.name.replace(/\.txt$/i, ''),
-        chapterCount: imported.chapterCount,
-        chunkCount: imported.chunkCount,
-        entityCount: 0,
-        factCount: 0,
-        eventCount: 0,
-        failedChunks: 0,
-        rejected: 0,
-        resumed: imported.reusedSource,
-        packageRevision: 0,
-        reviewIssues: 0,
-        needsRetry: false,
-      });
+      }构建进度以任务卡和世界状态为准。`);
+      // From here the DB-backed task card owns live build progress. The
+      // parser's last 0/N callback is not a snapshot of the running service.
+      setProgress(null);
+      setPreview(null);
       await refresh();
     } catch (e) {
       const detail = e instanceof Error
@@ -295,7 +290,7 @@ export function LibraryScreen(): React.JSX.Element {
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
 
         {progress ? (
-          <BuildStatusCard progress={progress} summary={summary} preview={preview} />
+          <BuildStatusCard progress={progress} summary={null} preview={preview} />
         ) : null}
 
         <View>

@@ -19,6 +19,10 @@ import { recommendOpeningLoadout } from '../../../../src/application/campaign/op
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
+import { findLocalOpeningSource } from '../../../../src/application/worldPackage/openingRecovery';
+import { importNovelForOpeningStreaming } from '../../sourceImport';
+import { startOrResumeBuild } from '../../buildWatchdog';
+import { pickTextRef } from '../../fileBridge';
 import { Button } from '../components/Button';
 import { Header } from '../components/Header';
 import { ProgressSteps } from '../components/ProgressSteps';
@@ -65,9 +69,15 @@ export function OpeningScreen(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [noPackage, setNoPackage] = useState(false);
+  const [repairMessage, setRepairMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) return;
+    setNoPackage(false);
+    setSetup(null);
+    setAnchorEventId('');
+    setLocationId('');
+    setCanonEntityId('');
     let cancelled = false;
     (async () => {
       try {
@@ -159,6 +169,36 @@ export function OpeningScreen(): React.JSX.Element {
   ];
   const canAdvance = stepReady[step] ?? false;
 
+  async function repairOpening() {
+    if (!profile || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const runtime = await getDatabaseRuntime();
+      const session = await createSession(profile, await buildProvider(profile));
+      const local = await findLocalOpeningSource({ worldStore: runtime.worldStore, worldId,
+        getSetup: id => session.getWorldSetup(id) });
+      if (local) {
+        navigation.replace('Opening', { worldId: local.worldId, title: local.title });
+        return;
+      }
+      const picked = await pickTextRef();
+      if (!picked) return;
+      const imported = await importNovelForOpeningStreaming(picked.uri, picked.name, profile,
+        progress => setRepairMessage(progress.message ?? '正在补齐世界资料…'));
+      for (const runId of imported.runIds) {
+        void startOrResumeBuild(runId, profile, { resume: true })
+          .catch(e => setError(e instanceof Error ? e.message : String(e)));
+      }
+      // The library owns controls/progress until complete analysis publishes.
+      navigation.navigate('Tabs', { screen: 'Library' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function initializeQuickRecommendations() {
     if (quickRecommendationsInitialized) return;
     setPoints(recommendation.attributes);
@@ -181,7 +221,9 @@ export function OpeningScreen(): React.JSX.Element {
       if (setup?.anchorEvents.length && !anchor) throw new Error('开局锚点不在已发布原著事件中。');
       const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
       if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
-      const actorName = name.trim() || '无名旅人';
+      const actorName = kind === 'canon'
+        ? worldSetup.canonCharacters.find(character => character.entityId === canonEntityId)?.name ?? '无名旅人'
+        : name.trim() || '无名旅人';
       const quickLoadout = !advancedWizard;
       const recommended = recommendOpeningLoadout(worldSetup.skills);
       const characterAttributes = quickLoadout && !quickAdvancedOpen ? recommended.attributes : points;
@@ -309,6 +351,14 @@ export function OpeningScreen(): React.JSX.Element {
       <ScrollView
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
+        {setup && setup.locations.length === 0 ? (
+          <View style={{ gap: theme.space.sm }}>
+            <StatusBanner tone="warning" title="需要补齐原著开局资料"
+              message={repairMessage ?? '旧世界包缺少可用地点或原著证据。可使用本地同一原著的完整资料；若没有，请选择原 TXT 重新构建。已有世界和存档会保留。'} />
+            <Button label={busy ? '正在检查资料…' : '补齐开局资料'} onPress={repairOpening}
+              disabled={busy} block testID="opening-repair" />
+          </View>
+        ) : null}
 
         {advancedWizard ? (
           <>

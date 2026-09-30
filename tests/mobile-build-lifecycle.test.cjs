@@ -204,14 +204,22 @@ test('worldBuildRunner leaves a legacy no-credential run as waiting_unlock (visi
 // P0-2.2 foreground-service startup watchdog
 // ---------------------------------------------------------------------------
 
-function loadWatchdog({ serviceResult, runtime }) {
+function loadWatchdog({ serviceResult, runtime, onService = () => undefined, active = false }) {
   const extractionCalls = [];
+  const serviceCalls = [];
   return {
     extractionCalls,
+    serviceCalls,
     api: loadMobileModule('mobile/src/buildWatchdog.ts', {
       './database': { getDatabaseRuntime: async () => runtime },
-      './buildServiceBridge': { startBuildService: async () => serviceResult },
+      './buildServiceBridge': { startBuildService: async runId => {
+        serviceCalls.push(runId);
+        await onService(runId);
+        return serviceResult;
+      } },
       './sourceImport': {
+        isRunActive: () => active,
+        resumeRun: async () => ({ activeInProcess: active }),
         runExtraction: async (runId, profile, onProgress) => {
           extractionCalls.push(runId);
           return { completed: true, unitsDone: 1, unitsTotal: 1, unitsFailed: 0 };
@@ -229,6 +237,9 @@ test('watchdog: service started and execution evidence appears -> no inline fall
     const { api, extractionCalls } = loadWatchdog({
       serviceResult: true,
       runtime: makeRuntime(new NodeSqliteAdapter(db)),
+      onService: () => db.prepare(`UPDATE world_build_runs SET lease_owner = 'new-headless',
+        lease_expires_at = ?, heartbeat_at = ? WHERE run_id = 'run-w1'`)
+        .run(new Date(Date.now() + 60_000).toISOString(), new Date().toISOString()),
     });
     const outcome = await api.startBuildWithWatchdog('run-w1', null, { evidencePollMs: 10, evidenceTimeoutMs: 500 });
     assert.equal(outcome, 'service');
@@ -295,7 +306,7 @@ test('watchdog: slow background start (evidence within the window) is NOT duplic
   }
 });
 
-test('watchdog: unit activity alone counts as execution evidence', async () => {
+test('watchdog: historical unit activity MUST NOT count as fresh execution evidence', async () => {
   const db = setupDb();
   try {
     insertSource(db, 'src-w5', 'w5.txt');
@@ -306,12 +317,107 @@ test('watchdog: unit activity alone counts as execution evidence', async () => {
       serviceResult: true,
       runtime: makeRuntime(new NodeSqliteAdapter(db)),
     });
-    const outcome = await api.startBuildWithWatchdog('run-w5', null, { evidencePollMs: 10, evidenceTimeoutMs: 300 });
-    assert.equal(outcome, 'service');
-    assert.equal(extractionCalls.length, 0);
+    const outcome = await api.startBuildWithWatchdog('run-w5', null, { evidencePollMs: 5, evidenceTimeoutMs: 25 });
+    assert.equal(outcome, 'inline');
+    assert.deepEqual(extractionCalls, ['run-w5']);
   } finally {
     db.close();
   }
+});
+
+for (const stale of ['expired lease and running status', 'stale running unit', 'unchanged live lease', 'control-only update']) {
+  test(`watchdog: ${stale} does not prove this startup`, async () => {
+    const db = setupDb();
+    try {
+      insertSource(db, 's', 'test.txt');
+      insertRun(db, 'r', 's', { status: 'running' });
+      insertUnit(db, 'u', 'r', { status: 'running', attempt: 3 });
+      const expiry = new Date(Date.now() + (stale === 'unchanged live lease' ? 60_000 : -60_000)).toISOString();
+      db.prepare(`UPDATE world_build_runs SET lease_owner = 'old', lease_expires_at = ?,
+        heartbeat_at = '2020-01-01T00:00:00.000Z' WHERE run_id = 'r'`).run(expiry);
+      const { api, extractionCalls } = loadWatchdog({ serviceResult: true,
+        runtime: makeRuntime(new NodeSqliteAdapter(db)),
+        onService: () => {
+          if (stale === 'control-only update') db.prepare(`UPDATE world_build_runs
+            SET updated_at = ?, pause_requested = 0 WHERE run_id = 'r'`).run(new Date().toISOString());
+        },
+      });
+      assert.equal(await api.startBuildWithWatchdog('r', null, { evidencePollMs: 5, evidenceTimeoutMs: 20 }), 'inline');
+      assert.deepEqual(extractionCalls, ['r']);
+    } finally { db.close(); }
+  });
+}
+
+for (const fresh of ['lease owner', 'lease renewal', 'heartbeat', 'attempt total', 'unit timestamp']) {
+  test(`watchdog: fresh ${fresh} confirms the service`, async () => {
+    const db = setupDb();
+    try {
+      insertSource(db, 's', 'test.txt');
+      insertRun(db, 'r', 's', { status: 'running' });
+      insertUnit(db, 'u', 'r', { status: 'failed_retryable', attempt: 2 });
+      db.prepare(`UPDATE world_build_runs SET lease_owner = 'old', lease_expires_at = ?,
+        heartbeat_at = '2020-01-01T00:00:00.000Z' WHERE run_id = 'r'`)
+        .run(new Date(Date.now() + 30_000).toISOString());
+      const { api, extractionCalls } = loadWatchdog({ serviceResult: true,
+        runtime: makeRuntime(new NodeSqliteAdapter(db)), onService: () => {
+          const now = new Date().toISOString();
+          if (fresh === 'lease owner') db.exec(`UPDATE world_build_runs SET lease_owner = 'new' WHERE run_id = 'r'`);
+          if (fresh === 'lease renewal') db.prepare(`UPDATE world_build_runs SET lease_expires_at = ? WHERE run_id = 'r'`)
+            .run(new Date(Date.now() + 60_000).toISOString());
+          if (fresh === 'heartbeat') db.prepare(`UPDATE world_build_runs SET heartbeat_at = ? WHERE run_id = 'r'`).run(now);
+          // Same attempted-unit count, but a new physical attempt: SUM(attempt), not COUNT(attempt > 0).
+          if (fresh === 'attempt total') db.exec(`UPDATE world_build_units SET attempt = 3 WHERE unit_id = 'u'`);
+          if (fresh === 'unit timestamp') db.prepare(`UPDATE world_build_units SET updated_at = ? WHERE unit_id = 'u'`).run(now);
+        },
+      });
+      assert.equal(await api.startBuildWithWatchdog('r', null, { evidencePollMs: 5, evidenceTimeoutMs: 50 }), 'service');
+      assert.equal(extractionCalls.length, 0);
+    } finally { db.close(); }
+  });
+}
+
+for (const fresh of [false, true]) {
+  test(`app recovery: historical attempts and ${fresh ? 'fresh heartbeat confirm Headless' : 'no new evidence fall back inline'}`, async () => {
+    const db = setupDb();
+    try {
+      insertSource(db, 's', 'test.txt');
+      insertRun(db, 'r', 's', { status: 'running', unitsDone: 2, unitsTotal: 69 });
+      insertUnit(db, 'u', 'r', { status: 'completed', attempt: 2 });
+      const { api, extractionCalls } = loadWatchdog({ serviceResult: true,
+        runtime: makeRuntime(new NodeSqliteAdapter(db)), onService: () => {
+          if (fresh) db.prepare(`UPDATE world_build_runs SET heartbeat_at = ? WHERE run_id = 'r'`).run(new Date().toISOString());
+        },
+      });
+      await api.recoverBuildTasks([{ runId: 'r', status: 'running', leaseHeld: false,
+        pauseRequested: false, cancelRequested: false }], null, { evidencePollMs: 5, evidenceTimeoutMs: 25 });
+      assert.deepEqual(extractionCalls, fresh ? [] : ['r']);
+    } finally { db.close(); }
+  });
+}
+
+test('recovery respects user intent; pause revocation with an active executor never starts another', async () => {
+  const { api, serviceCalls, extractionCalls } = loadWatchdog({ serviceResult: true, runtime: null, active: true });
+  assert.equal(await api.startOrResumeBuild('r', null, { resume: true }), 'active');
+  await api.recoverBuildTasks(['paused_user', 'stopped_user', 'needs_review', 'running'].map(status => ({
+    runId: status, status, leaseHeld: false, pauseRequested: status === 'running', cancelRequested: false,
+  })), null);
+  assert.deepEqual(serviceCalls, []);
+  assert.deepEqual(extractionCalls, []);
+});
+
+test('watchdog: a user stop during the startup window cancels the pending fallback', async () => {
+  const db = setupDb();
+  try {
+    insertSource(db, 's', 'test.txt');
+    insertRun(db, 'r', 's', { status: 'queued' });
+    const { api, extractionCalls } = loadWatchdog({ serviceResult: true,
+      runtime: makeRuntime(new NodeSqliteAdapter(db)), onService: () => {
+        db.exec("UPDATE world_build_runs SET status = 'stopped_user', cancel_requested = 0 WHERE run_id = 'r'");
+      },
+    });
+    assert.equal(await api.startBuildWithWatchdog('r', null, { evidencePollMs: 5, evidenceTimeoutMs: 25 }), 'inactive');
+    assert.deepEqual(extractionCalls, []);
+  } finally { db.close(); }
 });
 
 // ---------------------------------------------------------------------------
