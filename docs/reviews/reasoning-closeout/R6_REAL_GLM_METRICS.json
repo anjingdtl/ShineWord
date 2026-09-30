@@ -1,8 +1,6 @@
 {
-  "credentialFile": {
-    "file": "GLM-TEST-KEY.TXT",
-    "sha256": "c0c2a4aba6710a04f254972797156d550b50bd54dc1aaca2944f8628648f899a",
-    "bytes": 157
+  "credential": {
+    "loaded": true
   },
   "shortNovel": {
     "file": "《白篱梦》.TXT",
