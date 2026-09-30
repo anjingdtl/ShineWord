@@ -999,6 +999,100 @@ ALTER TABLE llm_request_attempts ADD COLUMN reasoning_policy_version TEXT;
 ALTER TABLE llm_request_attempts ADD COLUMN wire_output_tokens INTEGER;
 `;
 
+/**
+ * P0-4 stop semantics: world_build_runs.status gains the recoverable
+ * 'stopped_user' value (user-stop keeps completed units and the run itself).
+ * SQLite cannot alter a CHECK constraint, so both runs and units tables are
+ * rebuilt (units must be rebuilt too: its FK would otherwise dangle after the
+ * runs rebuild). Runs with FK off per the documented rebuild procedure - the
+ * migration runner flips PRAGMA foreign_keys around this transaction.
+ */
+export const STOPPED_USER_STATUS_SCHEMA_SQL = `
+CREATE TABLE world_build_runs_v24 (
+  run_id TEXT PRIMARY KEY,
+  world_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_snapshot_hash TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL,
+  plan_version TEXT NOT NULL,
+  model_fingerprint TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK(phase IN
+    ('reading', 'normalizing', 'indexing', 'extracting', 'merging', 'mapping', 'validating', 'publishing')),
+  status TEXT NOT NULL CHECK(status IN
+    ('queued', 'running', 'waiting_network', 'waiting_unlock', 'paused_system', 'paused_user', 'stopped_user',
+     'failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'completed')),
+  units_total INTEGER NOT NULL DEFAULT 0,
+  units_done INTEGER NOT NULL DEFAULT 0,
+  units_failed INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  fencing_token INTEGER NOT NULL DEFAULT 0,
+  heartbeat_at TEXT,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  config_json TEXT,
+  plan_state_json TEXT,
+  scope_json TEXT,
+  pause_requested INTEGER NOT NULL DEFAULT 0,
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(source_id) REFERENCES imported_sources(source_id)
+);
+INSERT INTO world_build_runs_v24
+  (run_id, world_id, source_id, source_snapshot_hash, pipeline_version, plan_version,
+   model_fingerprint, phase, status, units_total, units_done, units_failed,
+   lease_owner, lease_expires_at, fencing_token, heartbeat_at,
+   last_error_code, last_error_message, created_at, updated_at,
+   config_json, plan_state_json, scope_json, pause_requested, cancel_requested)
+SELECT
+   run_id, world_id, source_id, source_snapshot_hash, pipeline_version, plan_version,
+   model_fingerprint, phase, status, units_total, units_done, units_failed,
+   lease_owner, lease_expires_at, fencing_token, heartbeat_at,
+   last_error_code, last_error_message, created_at, updated_at,
+   config_json, plan_state_json, scope_json, pause_requested, cancel_requested
+FROM world_build_runs;
+CREATE TABLE world_build_units_v24 (
+  unit_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('extract_group', 'map_batch')),
+  source_ranges_json TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  config_fingerprint TEXT NOT NULL,
+  parent_unit_id TEXT,
+  ord INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN
+    ('queued', 'running', 'waiting_network', 'waiting_unlock',
+     'failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'completed')),
+  attempt INTEGER NOT NULL DEFAULT 0,
+  retry_at TEXT,
+  result_ref TEXT,
+  usage_json TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES world_build_runs(run_id) ON DELETE CASCADE
+);
+INSERT INTO world_build_units_v24
+  (unit_id, run_id, kind, source_ranges_json, input_hash, config_fingerprint,
+   parent_unit_id, ord, status, attempt, retry_at, result_ref, usage_json,
+   error_code, error_message, created_at, updated_at)
+SELECT
+   unit_id, run_id, kind, source_ranges_json, input_hash, config_fingerprint,
+   parent_unit_id, ord, status, attempt, retry_at, result_ref, usage_json,
+   error_code, error_message, created_at, updated_at
+FROM world_build_units;
+DROP TABLE world_build_units;
+DROP TABLE world_build_runs;
+ALTER TABLE world_build_runs_v24 RENAME TO world_build_runs;
+ALTER TABLE world_build_units_v24 RENAME TO world_build_units;
+CREATE INDEX IF NOT EXISTS idx_world_build_runs_status ON world_build_runs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_world_build_units_run ON world_build_units(run_id, ord);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_world_build_units_unique_input
+  ON world_build_units(run_id, kind, input_hash, config_fingerprint);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -1023,4 +1117,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 21, name: 'episodic_recall_v2', sql: EPISODIC_RECALL_SCHEMA_SQL },
   { version: 22, name: 'reasoning_usage_tier', sql: REASONING_USAGE_LEDGER_SCHEMA_SQL },
   { version: 23, name: 'frozen_reasoning_ledger', sql: FROZEN_REASONING_LEDGER_SCHEMA_SQL },
+  { version: 24, name: 'stopped_user_status', sql: STOPPED_USER_STATUS_SCHEMA_SQL, foreignKeys: 'off' },
 ];

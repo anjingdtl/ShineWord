@@ -215,7 +215,8 @@ export class SqliteBuildRunStore implements BuildRunStore {
     const rows = await this.db.queryAll<RunRow>(
       `SELECT * FROM world_build_runs
         WHERE status IN ('queued', 'running', 'waiting_network', 'waiting_unlock',
-                         'paused_system', 'failed_retryable', 'needs_review')
+                         'paused_system', 'paused_user', 'stopped_user',
+                         'failed_retryable', 'needs_review')
         ORDER BY created_at`,
     );
     return rows.map(runFromRow);
@@ -227,7 +228,7 @@ export class SqliteBuildRunStore implements BuildRunStore {
       `UPDATE world_build_runs SET
          lease_owner = ?, lease_expires_at = ?, fencing_token = fencing_token + 1,
          heartbeat_at = ?, updated_at = ?,
-         status = CASE WHEN status IN ('queued', 'running') THEN 'running' ELSE status END
+         status = 'running'
        WHERE run_id = ?
          AND status NOT IN ('failed_terminal', 'canceled', 'completed')
          AND (lease_owner IS NULL OR lease_owner = ? OR lease_expires_at IS NULL OR lease_expires_at < ?)`,
@@ -490,11 +491,20 @@ export class SqliteBuildRunStore implements BuildRunStore {
   }
 
   async requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume', now: string): Promise<void> {
-    const column = kind === 'pause' ? 'pause_requested' : kind === 'cancel' ? 'cancel_requested' : 'pause_requested';
-    const value = kind === 'resume' ? 0 : 1;
+    if (kind === 'resume') {
+      // Resume clears BOTH control flags: honoring a pause/stop already
+      // cleared its own flag, and a stale one must never re-interrupt the
+      // run the user just asked to continue.
+      await this.db.execute(
+        `UPDATE world_build_runs SET pause_requested = 0, cancel_requested = 0, updated_at = ? WHERE run_id = ?`,
+        [now, runId],
+      );
+      return;
+    }
+    const column = kind === 'pause' ? 'pause_requested' : 'cancel_requested';
     await this.db.execute(
-      `UPDATE world_build_runs SET ${column} = ?, updated_at = ? WHERE run_id = ?`,
-      [value, now, runId],
+      `UPDATE world_build_runs SET ${column} = 1, updated_at = ? WHERE run_id = ?`,
+      [now, runId],
     );
   }
 }

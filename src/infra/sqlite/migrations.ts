@@ -4,6 +4,14 @@ export interface SqliteMigration {
   version: number;
   name: string;
   sql: string;
+  /**
+   * Table-rebuild migrations must run with PRAGMA foreign_keys=OFF (the
+   * documented SQLite rebuild procedure): with FK enforcement on, dropping
+   * a parent table performs an implicit DELETE that would cascade-delete
+   * child rows. The runner disables FKs only for this migration's
+   * transaction and re-enables it right after.
+   */
+  foreignKeys?: 'off';
 }
 
 interface MigrationRow extends SqliteRow {
@@ -57,15 +65,26 @@ export async function applySqliteMigrations(
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
 
-    await db.transaction(async tx => {
-      for (const statement of splitSqlStatements(migration.sql)) {
-        await tx.execute(statement);
+    const disableForeignKeys = migration.foreignKeys === 'off';
+    if (disableForeignKeys) {
+      // No-op inside a transaction, so it MUST run before db.transaction.
+      await db.execute('PRAGMA foreign_keys = OFF');
+    }
+    try {
+      await db.transaction(async tx => {
+        for (const statement of splitSqlStatements(migration.sql)) {
+          await tx.execute(statement);
+        }
+        await tx.execute(
+          'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
+          [migration.version, migration.name, appliedAt()],
+        );
+      });
+    } finally {
+      if (disableForeignKeys) {
+        await db.execute('PRAGMA foreign_keys = ON');
       }
-      await tx.execute(
-        'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
-        [migration.version, migration.name, appliedAt()],
-      );
-    });
+    }
     newlyApplied.push(migration.version);
   }
 

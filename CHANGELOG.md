@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Fixed — 真机 P0 稳定性修复（fix/mobile-runtime-stability）
+
+- **导入进度闭环（99% 卡死）**：流式 TXT 导入在 `activateSource` 之后新增显式的「原文解析完成：N 章 · M 块」事件，unified/full 两条路径在创建构建任务后发出「已创建 N 个构建组，等待模型处理」（phase 进入 extracting）。UI 不再停留在最后一次 reading 的「解析中 99%」；复用已导入源（同哈希重复导入）同样完整收尾。
+- **后台 Runner 异常不再静默**：Headless `WorldBuildRunner` 外层 catch 改为分类持久化（`runner_execution_failed` / `keychain_unavailable` / `provider_config_error` / `network_error`，消息经 `sk-`/`Bearer` 脱敏）；仅当 run 仍假装 queued/running 时写入 `failed_retryable`，coordinator 已分类的状态（paused_user/needs_review/waiting_* 等）不被覆盖。旧版 run 无冻结配置且无可用凭据时落 `waiting_unlock(keychain_unavailable)`，可见、可恢复。
+- **前台服务启动看门狗（execution-start confirmation）**：`startBuildWithWatchdog` 在 `startForegroundService` 成功后轮询本地 SQLite 执行证据（run 进入 running / 活跃 lease / heartbeat / unit running / attempt>0），窗口内无证据则前台 inline fallback；lease + fencing token 保证后台与 inline 恰好一个执行者（慢启动的后台执行者在窗口内出现则不重复执行）。
+- **0/N 阶段可观察性**：任务卡派生计数实时来自 `world_build_units` 行状态——「抽取事实 2/69 组 · 正在处理 3 · 排队 61 · 待重试 3」，running 时显示「正在等待模型响应（第 N 次尝试）」与最近活动时钟；不虚构 ETA。
+- **可恢复停止（stopped_user）**：用户可见「取消」重定义为「停止构建」——停止后续 claim、保留已完成组、保留待重试组、保留 run 与 SQLite 数据，可随时「继续构建」。迁移 24 表重建 `world_build_runs` 的 status CHECK（FK 安全的双表重建过程），同步 `BuildRunStatus` / store / `listResumableRuns` / `RUN_STATUS_LABEL` / coordinator / UI / 通知按钮（「取消」→「停止」）。
+- **暂停状态机**：`pause_requested` / `cancel_requested` 进入任务卡视图，「暂停请求中 / 停止请求中」立即可见且可撤销；`requestRunControl('resume')` 现在同时清除 pause 与 cancel 标志（修复旧实现 resume 不清 cancel 导致恢复即被再次停止的缺陷）；coordinator 在所有 worker 退出后统一再清一次控制标志（并发 worker 的竞态残留）；`acquireLease` 将任意非终态 run 置回 `running`（修复 paused_user/failed_retryable 恢复执行时 UI 仍显示旧状态的僵尸执行者问题）。
+- **待重试计数口径**：`units_failed` 保持为累计失败尝试次数（现暴露为 `failureAttempts`），UI 不再把它当作待重试组数；当前待重试改为对 unit 行的实时 COUNT（failed_retryable + waiting_network），恒满足 retryable ≤ total。69 组 / 176 次历史失败不再显示「176 待重试」，累计次数移入展开明细。
+- **任务列表自动刷新**：存在动态任务（running/控制请求中/等待/可重试）时书库每 ~1.5s 轻量刷新任务视图（仅本地 SQLite，无任何 provider 请求），失焦或全部静态即停止。
+- **模型配置「测试连接」**：Profile 表单新增按钮，用生产 OpenAI 兼容管线（同一 provider、同一 reasoning 档位与方言参数塑形、`/chat/completions`）发送极小完成请求；表单中未保存的 API Key 仅存内存，Key 为空时回落 Keychain；结果区分 成功/401/403/404/400（含 reasoning 参数不兼容）/429/5xx/超时/网络/非 JSON 响应/仅思考无正文，密钥绝不进入结果、存储或日志。
+- **失败明细改进**：展开明细包含 runId、状态、完成/总组数、处理中/待重试/排队、累计失败尝试、最近错误码与消息、最近活动时间、最近 3 个失败 unit（unitId/attempt/errorCode）。
+- 新增回归测试 37 项（import 进度闭环 / 连接探测分类与密钥不泄漏 / runner 失败持久化 / watchdog 决策 / pause-resume-stop 全链路含已完成 unit 不重做与 lease 防双执行 / 计数语义 / 轮询决策），全量 506 项通过。
+
 ## [0.4.1] - 2026-09-30
 
 ### Added — Reasoning & LLM Governance Closeout

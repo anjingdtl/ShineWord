@@ -188,7 +188,6 @@ async function importNovelInternal(
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       sha256BytesHex: bytes => bytesSha.sha256BytesHex(bytes),
     });
-
     const title = fileName.replace(/\.txt$/i, '') || '未命名小说';
     await sourceStore.activateSource({
       manifest: {
@@ -216,6 +215,21 @@ async function importNovelInternal(
     // The staged raw copy is no longer needed once shards are authoritative.
     await deleteStaged(staged.path);
   }
+
+  // P0-1 import closure: the LAST reading progress can legitimately sit at
+  // 99% (final window boundary), so the parse-finished state must be an
+  // explicit event. Reused sources get the same closure - a re-import must
+  // never keep rendering the previous run's stale percentage.
+  const parsedCounts = await runtime.db.queryOne<{ chapters: number; chunks: number }>(
+    `SELECT
+       (SELECT COUNT(*) FROM imported_source_chapters WHERE source_id = ?) AS chapters,
+       (SELECT COUNT(*) FROM imported_source_chunks WHERE source_id = ?) AS chunks`,
+    [sourceId, sourceId],
+  );
+  onProgress({
+    phase: 'importing',
+    message: `原文解析完成：${parsedCounts?.chapters ?? 0} 章 · ${parsedCounts?.chunks ?? 0} 块`,
+  });
 
   if (mode === 'opening') {
     return prepareProgressiveOpening({
@@ -294,6 +308,21 @@ async function importNovelInternal(
       title: manifest.title ?? fileName,
       template,
     });
+    // P0-1 import closure: once runs exist the UI must leave the importing
+    // state - even if the LLM phase has not produced its first unit yet.
+    let queuedUnits = 0;
+    for (const entry of queued) {
+      const run = await runStore.getRun(entry.runId);
+      queuedUnits += run?.unitsTotal ?? 0;
+    }
+    onProgress({
+      phase: 'extracting',
+      chunksDone: 0,
+      chunksTotal: queuedUnits,
+      message: queuedUnits > 0
+        ? `已创建 ${queuedUnits} 个构建组，等待模型处理`
+        : '构建任务已入队，等待模型处理',
+    });
     const summary: UnifiedImportSummary = {
       sourceId,
       worldId,
@@ -317,7 +346,7 @@ async function importNovelInternal(
   const runBudget = modelBudgetFromProfile(profile);
   const frozenConfig = freezeRunConfig(profile, runBudget);
   const extractorVersion = worldBuildExtractorVersion(runBudget.reasoningTier ?? 'low');
-  await createExtractionRun(
+  const created = await createExtractionRun(
     { sourceStore, runStore, worldStore: runtime.worldStore, sha256Hex: async input => nativeSha256.sha256Hex(input) },
     {
       runId,
@@ -335,6 +364,12 @@ async function importNovelInternal(
       config: frozenConfig,
     },
   );
+  onProgress({
+    phase: 'extracting',
+    chunksDone: 0,
+    chunksTotal: created.unitsTotal,
+    message: `已创建 ${created.unitsTotal} 个构建组，等待模型处理`,
+  });
   return {
     sourceId,
     worldId,
@@ -886,8 +921,10 @@ export function coordinatorGroupExtractor(
  * Module-level abort registry: pause asks the in-flight executeRun loop to
  * stop at the next unit boundary (the lease is released and the run persists
  * as paused_user - the DB stays the single source of truth for progress).
+ * A stop marks stopRequested so the coordinator persists stopped_user
+ * (recoverable stop, never a delete of completed units).
  */
-const activeRuns = new Map<string, { aborted: boolean }>();
+const activeRuns = new Map<string, { aborted: boolean; stopRequested?: boolean }>();
 
 export function pauseRun(runId: string): boolean {
   const signal = activeRuns.get(runId);
@@ -898,10 +935,18 @@ export function pauseRun(runId: string): boolean {
   return true;
 }
 
-/** Cross-process cancel (P4): the coordinator marks the run canceled between units. */
+/**
+ * Stop semantics (P0-4): the visible "停止构建" asks the coordinator to stop
+ * claiming further units. Completed units, retryable failures and the run
+ * row itself are all preserved; the run persists as stopped_user and stays
+ * resumable.
+ */
 export async function cancelRun(runId: string): Promise<void> {
   const signal = activeRuns.get(runId);
-  if (signal) signal.aborted = true;
+  if (signal) {
+    signal.aborted = true;
+    signal.stopRequested = true;
+  }
   await requestRunControl(runId, 'cancel').catch(() => undefined);
 }
 

@@ -128,7 +128,7 @@ export interface CoordinatorDeps {
     run: BuildRunRecord;
     setPhase: (phase: BuildRunPhase) => Promise<void>;
   }) => Promise<void>;
-  signal?: { aborted: boolean };
+  signal?: { aborted: boolean; stopRequested?: boolean };
 }
 
 export interface CreateRunInput {
@@ -647,15 +647,21 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     if (!renewed) lostLease = true;
     return renewed;
   };
-  const pauseResultAfterRequest = async (): Promise<ExecuteRunResult> => {
-    await deps.runStore.setRunStatus(runId, 'paused_user', now());
-    const paused = await deps.runStore.getRun(runId);
+  /**
+   * In-process interrupt (pause or stop): the final status distinguishes the
+   * two intents - paused_user keeps the run one tap away from resuming,
+   * stopped_user records an explicit "stop building" that still never drops
+   * completed units.
+   */
+  const interruptedResultAfterRequest = async (): Promise<ExecuteRunResult> => {
+    await deps.runStore.setRunStatus(runId, deps.signal?.stopRequested ? 'stopped_user' : 'paused_user', now());
+    const fresh = await deps.runStore.getRun(runId);
     return {
       runId,
       completed: false,
-      unitsDone: paused?.unitsDone ?? run.unitsDone,
-      unitsTotal: paused?.unitsTotal ?? run.unitsTotal,
-      unitsFailed: paused?.unitsFailed ?? run.unitsFailed,
+      unitsDone: fresh?.unitsDone ?? run.unitsDone,
+      unitsTotal: fresh?.unitsTotal ?? run.unitsTotal,
+      unitsFailed: fresh?.unitsFailed ?? run.unitsFailed,
       lostLease: false,
     };
   };
@@ -1058,15 +1064,20 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
    * pause/cancel flags directly on the run row, so they reach a coordinator
    * in another process (headless service). Checked between units; an
    * in-flight request still finishes (its result is fenced on commit).
+   *
+   * 'cancel' honors as stopped_user (P0-4 stop semantics): the run keeps
+   * every completed unit, keeps queued/failed units for a later resume and
+   * stays visible in the task list - it is a RECOVERABLE stop, not a delete.
    */
-  const checkControlFlags = async (): Promise<'none' | 'paused' | 'canceled'> => {
+  const checkControlFlags = async (): Promise<'none' | 'paused' | 'stopped'> => {
     const fresh = await deps.runStore.getRun(runId);
     if (!fresh) return 'none';
     if (fresh.cancelRequested) {
-      await deps.runStore.requestRunControl(runId, 'cancel', now()); // clear flag
-      await deps.runStore.requestRunControl(runId, 'resume', now()); // best-effort clear of pause too
-      await deps.runStore.setRunStatus(runId, 'canceled', now());
-      return 'canceled';
+      // 'resume' clears BOTH control flags: a stale stop/pause request must
+      // never immediately re-stop a run the user just resumed.
+      await deps.runStore.requestRunControl(runId, 'resume', now());
+      await deps.runStore.setRunStatus(runId, 'stopped_user', now());
+      return 'stopped';
     }
     if (fresh.pauseRequested) {
       await deps.runStore.requestRunControl(runId, 'resume', now()); // clear flag
@@ -1082,7 +1093,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (stopRequested) return 'stopped';
       if (deps.signal?.aborted) return 'paused';
       const control = await checkControlFlags();
-      if (control === 'paused' || control === 'canceled') {
+      if (control === 'paused' || control === 'stopped') {
         stopRequested = true;
         return 'stopped';
       }
@@ -1117,7 +1128,22 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     const workers = Array.from({ length: workerCount }, () => worker());
     await Promise.all(workers);
 
-    if (deps.signal?.aborted) return await pauseResultAfterRequest();
+    if (deps.signal?.aborted) return await interruptedResultAfterRequest();
+
+    // An honored pause/stop/needs-review already wrote its final status via
+    // checkControlFlags or processUnit; never overwrite it with a synthetic
+    // verdict (and never keep pretending 'running').
+    if (stopRequested) {
+      // A sibling worker's in-flight extractor may have re-set a control
+      // flag AFTER the honoring worker cleared it (every worker races its
+      // own unit boundary); clear once more so a later resume is never
+      // immediately re-interrupted by a stale flag.
+      await deps.runStore.requestRunControl(runId, 'resume', now()).catch(() => undefined);
+      return {
+        runId, completed: false, unitsDone: run.unitsDone,
+        unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease,
+      };
+    }
 
     const fresh = await deps.runStore.getRun(runId);
     if (!fresh) throw new Error('Run disappeared.');
@@ -1151,7 +1177,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
             setPhase: phase => deps.runStore.setRunPhase(runId, phase, now()),
           });
         } catch (error) {
-          if (deps.signal?.aborted) return await pauseResultAfterRequest();
+          if (deps.signal?.aborted) return await interruptedResultAfterRequest();
           const reason = error instanceof Error ? error.message : String(error);
           const errorCode = reason.includes('连续覆盖全文')
             ? 'source_coverage_incomplete'

@@ -6,6 +6,12 @@
  * from these snapshots, so re-entering the page or restarting the process
  * shows the REAL persisted state - never a reset-to-zero or a synthetic
  * percentage.
+ *
+ * Real-device stability: the card's live counters (running / queued /
+ * retryable) are DERIVED from world_build_units row states on every query.
+ * run.units_failed stays what it always was - a cumulative failed-attempt
+ * counter - and is exposed as `failureAttempts`, never as "pending retries"
+ * (a 69-unit run with 176 historical failures must not render "176 待重试").
  */
 import { getDatabaseRuntime } from './database';
 import type { BuildRunRecord, BuildUnitRecord } from '../../src/application/ports/worldBuildStore';
@@ -20,12 +26,25 @@ export interface BuildTaskView {
   status: BuildRunRecord['status'];
   unitsDone: number;
   unitsTotal: number;
+  /** Cumulative failed attempts (historical counter; NOT pending retries). */
   unitsFailed: number;
+  unitsRunning: number;
+  unitsQueued: number;
+  /** Currently blocked-on-retry units, derived live from unit rows. */
+  unitsRetryable: number;
+  unitsNeedsReview: number;
+  unitsFailedTerminal: number;
+  /** Max attempt among units still being worked on. */
+  currentAttempt: number;
+  /** Newest activity across run row and unit rows. */
+  lastActivityAt: string;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
   updatedAt: string;
   /** True while another executor holds a live lease. */
   leaseHeld: boolean;
+  pauseRequested: boolean;
+  cancelRequested: boolean;
 }
 
 interface TaskRow extends SqliteRow {
@@ -43,6 +62,15 @@ interface TaskRow extends SqliteRow {
   updated_at: string;
   title: string | null;
   file_name: string | null;
+  pause_requested: number | null;
+  cancel_requested: number | null;
+  units_running: number | null;
+  units_queued: number | null;
+  units_retryable: number | null;
+  units_needs_review: number | null;
+  units_failed_terminal: number | null;
+  current_attempt: number | null;
+  last_activity_at: string | null;
 }
 
 /** Runs that are not finished - what the task card list shows. */
@@ -52,29 +80,61 @@ export async function listOpenBuildTasks(): Promise<BuildTaskView[]> {
     `SELECT r.run_id, r.world_id, r.phase, r.status, r.units_done, r.units_total,
             r.units_failed, r.lease_owner, r.lease_expires_at,
             r.last_error_code, r.last_error_message, r.updated_at,
-            s.title, s.file_name
+            r.pause_requested, r.cancel_requested,
+            s.title, s.file_name,
+            agg.units_running, agg.units_queued, agg.units_retryable,
+            agg.units_needs_review, agg.units_failed_terminal,
+            agg.current_attempt, agg.last_activity_at
        FROM world_build_runs r
        LEFT JOIN imported_sources s ON s.source_id = r.source_id
+       LEFT JOIN (
+         SELECT run_id,
+           SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS units_running,
+           SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS units_queued,
+           SUM(CASE WHEN status IN ('failed_retryable', 'waiting_network') THEN 1 ELSE 0 END) AS units_retryable,
+           SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END) AS units_needs_review,
+           SUM(CASE WHEN status = 'failed_terminal' THEN 1 ELSE 0 END) AS units_failed_terminal,
+           MAX(CASE WHEN status IN ('running', 'failed_retryable', 'needs_review') THEN attempt END) AS current_attempt,
+           MAX(updated_at) AS last_activity_at
+         FROM world_build_units GROUP BY run_id
+       ) agg ON agg.run_id = r.run_id
       WHERE r.status NOT IN ('completed', 'failed_terminal', 'canceled')
       ORDER BY r.updated_at DESC`,
   );
   const now = Date.now();
-  return rows.map(row => ({
-    runId: row.run_id,
-    worldId: row.world_id,
-    title: row.title ?? row.file_name ?? row.run_id,
-    fileName: row.file_name,
-    phase: row.phase as BuildRunRecord['phase'],
-    status: row.status as BuildRunRecord['status'],
-    unitsDone: row.units_done,
-    unitsTotal: row.units_total,
-    unitsFailed: row.units_failed,
-    lastErrorCode: row.last_error_code,
-    lastErrorMessage: row.last_error_message,
-    updatedAt: row.updated_at,
-    leaseHeld: Boolean(row.lease_owner) && Boolean(row.lease_expires_at)
-      && Date.parse(row.lease_expires_at as string) > now,
-  }));
+  return rows.map(row => {
+    const unitsTotal = row.units_total;
+    // Live counters can never exceed the effective total: they are per-unit
+    // states of exactly the units this run tracks.
+    const clamp = (value: number): number => Math.max(0, Math.min(value, unitsTotal));
+    return {
+      runId: row.run_id,
+      worldId: row.world_id,
+      title: row.title ?? row.file_name ?? row.run_id,
+      fileName: row.file_name,
+      phase: row.phase as BuildRunRecord['phase'],
+      status: row.status as BuildRunRecord['status'],
+      unitsDone: row.units_done,
+      unitsTotal,
+      unitsFailed: row.units_failed,
+      unitsRunning: clamp(row.units_running ?? 0),
+      unitsQueued: clamp(row.units_queued ?? 0),
+      unitsRetryable: clamp(row.units_retryable ?? 0),
+      unitsNeedsReview: clamp(row.units_needs_review ?? 0),
+      unitsFailedTerminal: clamp(row.units_failed_terminal ?? 0),
+      currentAttempt: row.current_attempt ?? 0,
+      lastActivityAt: row.last_activity_at && row.last_activity_at > row.updated_at
+        ? row.last_activity_at
+        : row.updated_at,
+      lastErrorCode: row.last_error_code,
+      lastErrorMessage: row.last_error_message,
+      updatedAt: row.updated_at,
+      leaseHeld: Boolean(row.lease_owner) && Boolean(row.lease_expires_at)
+        && Date.parse(row.lease_expires_at as string) > now,
+      pauseRequested: (row.pause_requested ?? 0) !== 0,
+      cancelRequested: (row.cancel_requested ?? 0) !== 0,
+    };
+  });
 }
 
 /** Failed/blocked units for one run - locating exactly what to retry. */
@@ -92,7 +152,7 @@ export async function listFailedUnits(runId: string): Promise<Array<
     `SELECT unit_id, status, error_code, error_message, attempt
        FROM world_build_units
       WHERE run_id = ? AND status IN ('failed_retryable', 'needs_review', 'failed_terminal')
-      ORDER BY ord LIMIT 10`,
+      ORDER BY updated_at DESC, ord LIMIT 3`,
     [runId],
   );
   return rows.map(row => ({
@@ -122,6 +182,7 @@ export const RUN_STATUS_LABEL: Record<BuildRunRecord['status'], string> = {
   waiting_unlock: '等待解锁',
   paused_system: '系统限制暂停',
   paused_user: '已暂停',
+  stopped_user: '已停止',
   failed_retryable: '待重试',
   needs_review: '需要处理',
   failed_terminal: '失败',
@@ -129,13 +190,60 @@ export const RUN_STATUS_LABEL: Record<BuildRunRecord['status'], string> = {
   completed: '已完成',
 };
 
+/** Task-card headline status: control flags say more than the status column. */
+export function taskStatusLabel(task: BuildTaskView): string {
+  if (task.status === 'running' && task.cancelRequested) return '停止请求中';
+  if (task.status === 'running' && task.pauseRequested) return '暂停请求中';
+  return RUN_STATUS_LABEL[task.status] ?? task.status;
+}
+
 /** Real measured progress line - counts only, no synthetic percentage. */
 export function taskProgressLine(task: BuildTaskView): string {
   if (task.status === 'completed') return '已完成';
   const label = PHASE_LABEL[task.phase] ?? task.phase;
   if (task.unitsTotal > 0) {
-    const failed = task.unitsFailed > 0 ? ` · ${task.unitsFailed} 待重试` : '';
-    return `${label} ${task.unitsDone}/${task.unitsTotal} 组${failed}`;
+    const parts: string[] = [`${label} ${task.unitsDone}/${task.unitsTotal} 组`];
+    const live: string[] = [];
+    if (task.unitsRunning > 0) live.push(`正在处理 ${task.unitsRunning}`);
+    if (task.unitsQueued > 0) live.push(`排队 ${task.unitsQueued}`);
+    if (task.unitsRetryable > 0) live.push(`待重试 ${task.unitsRetryable}`);
+    if (live.length > 0) parts.push(live.join(' · '));
+    return parts.join(' · ');
   }
   return label;
+}
+
+/** Secondary line: what the executor is doing right now (no fake ETA). */
+export function taskActivityLine(task: BuildTaskView): string | null {
+  if (task.status !== 'running' || task.pauseRequested || task.cancelRequested) return null;
+  if (task.unitsRunning > 0) {
+    const attempt = task.currentAttempt > 1 ? `（第 ${task.currentAttempt} 次尝试）` : '';
+    return `正在等待模型响应${attempt}`;
+  }
+  return null;
+}
+
+/** 最近活动时间 as HH:MM:SS (local); empty when unparsable. */
+export function formatActivityClock(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/**
+ * Poll policy (library refresh): poll ONLY while at least one task is in a
+ * dynamic state - running, requested control flag, waiting or retryable.
+ * All-static lists (paused/stopped/completed leftovers) stop the timer, and
+ * the poll itself reads local SQLite only, never the provider.
+ */
+export function isTaskListDynamic(tasks: readonly BuildTaskView[]): boolean {
+  return tasks.some(task =>
+    task.status === 'queued'
+    || task.status === 'running'
+    || task.status === 'waiting_network'
+    || task.status === 'waiting_unlock'
+    || task.status === 'failed_retryable'
+    || task.pauseRequested
+    || task.cancelRequested);
 }

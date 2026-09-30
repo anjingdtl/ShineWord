@@ -716,7 +716,8 @@ test('U04 control flags: cross-process pause and cancel stop the coordinator bet
     }, 'run-pause');
     assert.equal(resumed.completed, true, 'paused run resumes and completes');
 
-    // Cancel: a fresh run gets canceled between units.
+    // Stop: a fresh run is stopped between units (P0-4: the visible cancel
+    // is a RECOVERABLE stop - stopped_user, not the terminal 'canceled').
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
@@ -736,7 +737,10 @@ test('U04 control flags: cross-process pause and cancel stop the coordinator bet
       sha256Hex: sha.sha256Hex, owner: 'ui', budget,
     }, 'run-cancel');
     assert.equal(canceled.completed, false);
-    assert.equal((await runStore.getRun('run-cancel')).status, 'canceled');
+    assert.equal((await runStore.getRun('run-cancel')).status, 'stopped_user');
+    const stoppedRun = await runStore.getRun('run-cancel');
+    assert.equal(stoppedRun.cancelRequested, false, 'honored stop clears the flag for a later resume');
+    assert.ok(stoppedRun.unitsDone >= 1, 'completed units are preserved by the stop');
   } finally {
     db.close();
   }

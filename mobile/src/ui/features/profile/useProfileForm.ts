@@ -6,11 +6,18 @@
  * pre-fills the model name and stores its capabilities. Reasoning tier is
  * selected explicitly, while the v1 profile key and Keychain-only secret
  * handling remain stable (the key is never echoed back after saving).
+ *
+ * Real-device P0-3: adds a "测试连接" action that runs the production
+ * OpenAI-compatible pipeline with the CURRENT form values (an unsaved API
+ * key stays in memory for the probe only), so users can verify
+ * endpoint/key/model/reasoning compatibility before saving.
  */
 import { useState } from 'react';
 import { MODEL_PRESETS, saveApiProfile } from '../../../profileStore';
 import { normalizeReasoningTier, type ReasoningTier } from '../../../../../src/application/llm/types';
 import { KeychainSecretStore } from '../../../secureKeyStore';
+import { FetchHttpTransport } from '../../../fetchTransport';
+import { probeConnection, type ConnectionProbeResult } from '../../../connectionProbe';
 import { useAppSession } from '../../state/AppSessionContext';
 
 export interface ProfileFormState {
@@ -25,6 +32,8 @@ export interface ProfileFormState {
   busy: boolean;
   error: string | null;
   notice: string | null;
+  probeBusy: boolean;
+  probeResult: ConnectionProbeResult | null;
   setEndpoint: (value: string) => void;
   setModel: (value: string) => void;
   setApiKey: (value: string) => void;
@@ -35,6 +44,7 @@ export interface ProfileFormState {
   choosePreset: (presetId: string) => void;
   clearPreset: () => void;
   submit: (onSaved: () => void) => void;
+  testConnection: () => void;
 }
 
 export function useProfileForm(): ProfileFormState {
@@ -62,6 +72,8 @@ export function useProfileForm(): ProfileFormState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [probeResult, setProbeResult] = useState<ConnectionProbeResult | null>(null);
 
   function choosePreset(id: string): void {
     const preset = MODEL_PRESETS.find(item => item.id === id);
@@ -135,10 +147,53 @@ export function useProfileForm(): ProfileFormState {
     })();
   }
 
+  /**
+   * Verifies the CURRENT form values with one real chat-completions request.
+   * An unsaved API key is used from memory only; when the field is empty the
+   * already-saved Keychain key is tried. The key never reaches the result,
+   * storage or logs.
+   */
+  function testConnection() {
+    if (probeBusy) return;
+    setProbeBusy(true);
+    setProbeResult(null);
+    void (async () => {
+      try {
+        const preset = MODEL_PRESETS.find(item => item.id === presetId) ?? null;
+        const result = await probeConnection({
+          endpoint,
+          model,
+          reasoningTier,
+          reasoningDialect: reasoningParameterSupport === 'unsupported'
+            ? 'unsupported'
+            : preset?.profile.reasoningDialect,
+          apiKey: apiKey.trim() || null,
+          keyRef: 'llm.default',
+          secretStore: new KeychainSecretStore(),
+          transport: new FetchHttpTransport(),
+        });
+        setProbeResult(result);
+      } catch (e) {
+        // The probe classifies its own failures; a throw here means local
+        // wiring broke - still surfaced honestly, still secret-free.
+        setProbeResult({
+          ok: false,
+          outcome: 'network_error',
+          message: e instanceof Error ? e.message : String(e),
+          model: model.trim(),
+          reasoningTier,
+          durationMs: null,
+        });
+      } finally {
+        setProbeBusy(false);
+      }
+    })();
+  }
+
   return {
     endpoint, model, apiKey, presetId, reasoningTier, contextWindowTokens, maxOutputTokens,
-    reasoningParameterSupport, busy, error, notice,
+    reasoningParameterSupport, busy, error, notice, probeBusy, probeResult,
     setEndpoint, setModel: updateModel, setApiKey, setReasoningTier, setContextWindowTokens,
-    setMaxOutputTokens, setReasoningParameterSupport, choosePreset, clearPreset, submit,
+    setMaxOutputTokens, setReasoningParameterSupport, choosePreset, clearPreset, submit, testConnection,
   };
 }

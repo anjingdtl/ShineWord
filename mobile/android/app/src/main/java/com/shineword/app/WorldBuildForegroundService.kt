@@ -79,8 +79,10 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
               "UPDATE world_build_runs SET cancel_requested = 1, updated_at = ? WHERE run_id = ?",
               arrayOf(nowIso(), runId),
             )
+            // Resume (继续构建/撤销暂停) clears BOTH flags: a stale stop or
+            // pause request must never immediately re-interrupt the run.
             "resume" -> db.execSQL(
-              "UPDATE world_build_runs SET pause_requested = 0, updated_at = ? WHERE run_id = ?",
+              "UPDATE world_build_runs SET pause_requested = 0, cancel_requested = 0, updated_at = ? WHERE run_id = ?",
               arrayOf(nowIso(), runId),
             )
             else -> return false
@@ -128,7 +130,9 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         builder.addAction(0, "暂停", pauseIntent)
-        builder.addAction(0, "取消", cancelIntent)
+        // Stop (P0-4): recoverable stop - the JS coordinator persists
+        // stopped_user and keeps every completed unit resumable.
+        builder.addAction(0, "停止", cancelIntent)
       }
       return builder.build()
     }
@@ -316,7 +320,8 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
         if (paused) "继续" else "暂停",
         controlPendingIntent(if (paused) ACTION_RESUME else ACTION_PAUSE, 4201),
       )
-      builder.addAction(0, "取消", controlPendingIntent(ACTION_CANCEL, 4202))
+      // Stop (P0-4): recoverable stop; the run stays in the task list.
+      builder.addAction(0, "停止", controlPendingIntent(ACTION_CANCEL, 4202))
     }
     return builder.build()
   }

@@ -7,7 +7,7 @@
  * `features/library`; the screen only assembles data and routes. No
  * `legacyStyles` import remains.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -18,11 +18,12 @@ import {
   type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelUnified, runExtraction, pauseRun, cancelRun } from '../../sourceImport';
+import { importNovelUnified, pauseRun, cancelRun } from '../../sourceImport';
 import versionJson from '../../version.json';
 import type { BuildMode } from '../features/library/ImportNovelCard';
-import { listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
-import { startBuildService } from '../../buildServiceBridge';
+import { isTaskListDynamic, listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
+import { startBuildService, requestRunControl } from '../../buildServiceBridge';
+import { startBuildWithWatchdog } from '../../buildWatchdog';
 import {
   buildWorldOnDevice,
   listWorlds,
@@ -58,6 +59,7 @@ export function LibraryScreen(): React.JSX.Element {
   const [buildMode, setBuildMode] = useState<BuildMode>('progressive');
   const [tasks, setTasks] = useState<BuildTaskView[]>([]);
   const [taskBusy, setTaskBusy] = useState(false);
+  const focusedRef = useRef(true);
 
   const refresh = useCallback(async () => {
     if (!profile) return;
@@ -81,11 +83,34 @@ export function LibraryScreen(): React.JSX.Element {
     }
   }, [profile, setError]);
 
+  /** Light-weight task-only refresh; local SQLite only, no provider calls. */
+  const refreshTasks = useCallback(async () => {
+    try {
+      setTasks(await listOpenBuildTasks());
+    } catch {
+      // polling is best-effort; the next focus refresh recovers
+    }
+  }, []);
+
+  // Task-list auto refresh (real-device P0-2/§4): while any task is dynamic
+  // (running / control requested / waiting / retryable) the open tasks are
+  // re-queried every ~1.5s so pause/stop/progress surface without a manual
+  // pull. Stops on blur and when every task goes static.
+  useEffect(() => {
+    if (!focusedRef.current || !isTaskListDynamic(tasks)) return;
+    const timer = setInterval(() => {
+      if (!focusedRef.current) return;
+      void refreshTasks();
+    }, 1_500);
+    return () => clearInterval(timer);
+  }, [tasks, refreshTasks]);
+
   // Re-query whenever the tab regains focus. A build can fail after the world
   // row was already created, so the list must not depend on a full app restart
   // to show the world (and its review queue) the user was just told about.
   useFocusEffect(
     useCallback(() => {
+      focusedRef.current = true;
       refresh();
       // App-open recovery (P4): runs interrupted by system recycling (not
       // user force-stop, which cannot run code until the user reopens) resume
@@ -105,6 +130,9 @@ export function LibraryScreen(): React.JSX.Element {
           // recovery is best-effort; the task card still offers manual resume
         }
       })();
+      return () => {
+        focusedRef.current = false;
+      };
     }, [refresh]),
   );
 
@@ -122,14 +150,14 @@ export function LibraryScreen(): React.JSX.Element {
     if (taskBusy || !profile) return;
     setTaskBusy(true);
     try {
-      // C5: prefer the dataSync foreground service (headless runner); fall
-      // back to inline execution when the service cannot start (e.g. the
-      // process is background-restricted). The run lease guarantees a single
-      // executor either way.
-      const serviceStarted = await startBuildService(runId);
-      if (!serviceStarted) {
-        await runExtraction(runId, profile, () => undefined);
-      }
+      // An explicit resume clears any stale pause/stop request BEFORE waking
+      // an executor, so the coordinator never re-interrupts immediately.
+      await requestRunControl(runId, 'resume').catch(() => undefined);
+      // C5 + real-device P0-2: prefer the dataSync foreground service, then
+      // VERIFY it actually started (execution evidence in SQLite). Fall back
+      // to inline execution when it did not; the run lease guarantees a
+      // single executor either way.
+      await startBuildWithWatchdog(runId, profile);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -162,11 +190,11 @@ export function LibraryScreen(): React.JSX.Element {
           if (p.phase === 'importing') setPreview(p.message ?? null);
         },
       );
+      // Real-device P0-2: a successful startForegroundService call proves
+      // nothing - verify execution evidence and fall back inline if the
+      // headless runner never wakes up.
       for (const runId of imported.runIds) {
-        const started = await startBuildService(runId);
-        if (!started) {
-          await runExtraction(runId, profile, () => undefined);
-        }
+        await startBuildWithWatchdog(runId, profile);
       }
       const stageText = imported.stages.map(stage => `S${stage.index + 1}≈${Math.round(stage.ratio * 100)}%`).join(' / ');
       setPreview(`已导入 ${imported.chapterCount} 章、${imported.chunkCount} 块；阶段计划 ${stageText}。${
@@ -243,8 +271,15 @@ export function LibraryScreen(): React.JSX.Element {
               task={task}
               busy={taskBusy}
               onResume={runId => resumeTask(runId)}
-              onPause={runId => { pauseRun(runId); }}
-              onCancel={runId => { void cancelRun(runId).then(refresh); }}
+              onPause={runId => {
+                pauseRun(runId);
+                // Immediate feedback: the poll lands within ~1.5s, an eager
+                // task query makes "暂停请求中" appear right away.
+                void refreshTasks();
+              }}
+              onCancel={runId => {
+                void cancelRun(runId).then(refreshTasks);
+              }}
             />
           ))
         ) : null}

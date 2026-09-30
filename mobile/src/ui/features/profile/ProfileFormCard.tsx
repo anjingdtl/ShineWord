@@ -221,14 +221,35 @@ export function ProfileFormCard(props: {
           testID="profile-apikey"
         />
       </View>
-      <View style={{ marginTop: theme.space.lg }}>
+      <View style={{ marginTop: theme.space.lg, gap: theme.space.sm }}>
         <Button
           label={form.busy ? '保存中…' : props.submitLabel}
           onPress={() => form.submit(props.onSaved)}
           disabled={form.busy}
           block
         />
+        <Button
+          label={form.probeBusy ? '测试连接中…' : '测试连接'}
+          variant="secondary"
+          onPress={form.testConnection}
+          disabled={form.probeBusy}
+          block
+          testID="profile-test-connection"
+        />
       </View>
+      {form.probeResult ? (
+        <View style={{ marginTop: theme.space.md }} testID="profile-probe-result">
+          <StatusBanner
+            tone={form.probeResult.ok ? 'success' : 'error'}
+            title={form.probeResult.ok ? '连接成功' : '连接失败'}
+            message={[
+              form.probeResult.message,
+              `模型：${form.probeResult.model || '（未填写）'}`,
+              `思考参数：${form.probeResult.outcome === 'reasoning_unsupported' ? '不兼容' : '已按当前档位发送'}`,
+            ].join('\n')}
+          />
+        </View>
+      ) : null}
       {form.notice ? (
         <View style={{ marginTop: theme.space.md }}>
           <StatusBanner tone="success" message={form.notice} />

@@ -16,7 +16,7 @@ export type BuildRunPhase =
 
 export type BuildRunStatus =
   | 'queued' | 'running' | 'waiting_network' | 'waiting_unlock'
-  | 'paused_system' | 'paused_user' | 'failed_retryable' | 'needs_review'
+  | 'paused_system' | 'paused_user' | 'stopped_user' | 'failed_retryable' | 'needs_review'
   | 'failed_terminal' | 'canceled' | 'completed';
 
 export type BuildUnitKind = 'extract_group' | 'map_batch';
