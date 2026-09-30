@@ -27,6 +27,8 @@ fencing behavior remain the run coordinator's authorities.
   requests use stable run/checkpoint identities. Each provider completion is
   bounded to one physical dispatch, so application-level reserve recovery is
   auditable as the next attempt under that same ID.
+- This governance boundary strips any deprecated `reasoningEffort` compatibility
+  property before dispatch; the provider sees only the frozen `reasoningTier`.
 - Chunk/group/resident extraction, registry, timeline, and both stage/full
   world-package mapping paths run through the existing scheduler and
   `LedgeredProvider`. Mapping, registry, timeline, and extraction checkpoint

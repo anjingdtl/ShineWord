@@ -76,8 +76,12 @@ export function governWorldBuildRequest(input: GovernWorldBuildRequestInput): Ll
   });
   const policy = plan.reasoningPolicy;
   if (!policy) throw new Error('World Build reasoning policy was not frozen.');
+  const governedRequest = { ...request };
+  // Legacy callers may still construct a request with reasoningEffort. Once
+  // the request crosses this boundary, only the frozen product tier is valid.
+  delete governedRequest.reasoningEffort;
   return {
-    ...request,
+    ...governedRequest,
     maxOutputTokens: plan.wireOutputTokens,
     maxPhysicalRequests: 1,
     reasoningTier: policy.tier,
