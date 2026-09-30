@@ -5,10 +5,10 @@
  * Provider protocol parameters are kept separate from the product tier, and
  * the selected tier is never silently lowered to make a request fit.
  */
-import type { LlmRequestKind, ReasoningTier } from './types';
+import type { LlmRequestKind, ReasoningDialect, ReasoningTier } from './types';
 import { DEFAULT_OUTPUT_DEMANDS } from './requestDemands';
 
-export type ReasoningDialect = 'deepseek' | 'glm' | 'generic' | 'unsupported';
+export type { ReasoningDialect } from './types';
 
 export interface ReasoningUsageStats {
   sampleCount: number;
