@@ -64,7 +64,7 @@ export function validateStoryMemoryPatch(
   };
 
   const characterUpdates: StoryMemoryPatch['characterUpdates'] = [];
-  const rawCharacters = patch.characterUpdates;
+  const rawCharacters = patch.characterUpdates ?? [];
   if (Array.isArray(rawCharacters)) {
     rawCharacters.forEach((raw, index) => {
       const actorId = (raw as { actorId?: unknown })?.actorId;
@@ -90,7 +90,7 @@ export function validateStoryMemoryPatch(
   }
 
   const relationshipUpdates: StoryMemoryPatch['relationshipUpdates'] = [];
-  const rawRelationships = patch.relationshipUpdates;
+  const rawRelationships = patch.relationshipUpdates ?? [];
   if (Array.isArray(rawRelationships)) {
     rawRelationships.forEach((raw, index) => {
       const fromId = (raw as { fromActorId?: unknown })?.fromActorId;
@@ -137,6 +137,9 @@ export function validateStoryMemoryPatch(
     validActions: readonly string[],
   ): Array<{ title: string; action: string; evidenceTurnIds: string[]; index: number }> => {
     const out: Array<{ title: string; action: string; evidenceTurnIds: string[]; index: number }> = [];
+    // An omitted section is unambiguous ("no changes for this section",
+    // plan §25 small-patch protocol) - only wrong TYPES are errors.
+    if (raw === undefined || raw === null) return out;
     if (!Array.isArray(raw)) {
       errors.push(`${label} must be an array`);
       return out;
@@ -163,8 +166,9 @@ export function validateStoryMemoryPatch(
   const foreshadowingChanges = titleChanges(patch.foreshadowingChanges, 'foreshadowingChanges', ['plant', 'payoff', 'update']);
 
   const completedBeats: StoryMemoryPatch['completedBeats'] = [];
-  if (Array.isArray(patch.completedBeats)) {
-    (patch.completedBeats as Array<{ turnId?: unknown; summary?: unknown }>).forEach((beat, index) => {
+  const rawBeats = patch.completedBeats ?? [];
+  if (Array.isArray(rawBeats)) {
+    rawBeats.forEach((beat, index) => {
       if (typeof beat?.turnId !== 'string' || !context.batchTurnIds.has(beat.turnId)) {
         errors.push(`completedBeats[${index}] turnId ${String(beat?.turnId)} is not in the batch`);
       }

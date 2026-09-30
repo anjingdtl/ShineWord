@@ -264,6 +264,30 @@ test('validator: valid patch passes with normalized fields', () => {
   assert.deepEqual(patch.characterUpdates[0].promises, ['守口如瓶'], 'blank strings dropped');
 });
 
+test('validator: omitted sections mean no changes (real-provider tolerance)', () => {
+  const patch = validateStoryMemoryPatch({
+    schemaVersion: 2,
+    range: { fromStateVersion: 0, toStateVersion: 3 },
+    characterUpdates: [{
+      actorId: 'player', action: 'upsert', emotionalState: '平静', evidenceTurnIds: ['t-1'],
+    }],
+    // relationshipUpdates / conflictChanges / threadChanges /
+    // foreshadowingChanges / completedBeats all omitted
+  }, validationContext());
+  assert.deepEqual(patch.relationshipUpdates, []);
+  assert.deepEqual(patch.conflictChanges, []);
+  assert.deepEqual(patch.completedBeats, []);
+  // Wrong types are still errors.
+  assert.throws(
+    () => validateStoryMemoryPatch({
+      schemaVersion: 2,
+      range: { fromStateVersion: 0, toStateVersion: 3 },
+      characterUpdates: 'nope',
+    }, validationContext()),
+    /characterUpdates must be an array/,
+  );
+});
+
 // ----------------------------------------------------------------- policy
 
 test('policy: cadence fires on interval and on meaningful signals, not filler', () => {

@@ -25,8 +25,22 @@ export function openingSourceBudgetForProfile(profile: ApiProfile, availableCode
   maxOutputTokens: number;
 } {
   const modelBudget = modelBudgetFromProfile(profile);
-  const contentTokens = Math.min(DOSSIER_OUTPUT_TOKEN_LIMIT, modelBudget.maxContentOutputTokens);
+  // The dossier wire ceiling (DOSSIER_OUTPUT_TOKEN_LIMIT) must host BOTH the
+  // content and the reasoning reserve - thinking stays enabled (policy
+  // 2026-09-30), so the reserve shrinks the content slice instead of
+  // pushing requestTokens past the ceiling.
+  const contentTokens = Math.max(
+    512,
+    Math.min(
+      DOSSIER_OUTPUT_TOKEN_LIMIT - modelBudget.reasoningReserveTokens,
+      modelBudget.maxContentOutputTokens,
+      DOSSIER_OUTPUT_TOKEN_LIMIT,
+    ),
+  );
   const requestTokens = contentTokens + modelBudget.reasoningReserveTokens;
+  if (requestTokens > DOSSIER_OUTPUT_TOKEN_LIMIT) {
+    throw new OpeningPreparationError('profile_budget');
+  }
   const promptAllowance = modelBudget.contextWindowTokens - requestTokens
     - modelBudget.reserveTokens - 1_500;
   const desired = Math.min(availableCodePoints, OPENING_SOURCE_BUDGET_CODE_POINTS);

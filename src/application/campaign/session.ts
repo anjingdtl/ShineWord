@@ -1617,6 +1617,18 @@ export class CampaignSession {
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, projectionFacts,
     );
+    // Legal skill ids for skill_check proposals (plan §40 mandatory): the
+    // planner may only reference skills the actor actually knows.
+    const actorSkillIds = Object.keys(playerCard.skills ?? {});
+    if (actorSkillIds.length > 0) {
+      const skillSummary = actorSkillIds
+        .map(key => {
+          const definition = catalog[key] ?? catalog[key.replace(/^skill-/, '')];
+          return definition ? `${key}(${definition.name})` : key;
+        })
+        .join('、');
+      contextParts.push(`【可用技能】${skillSummary}。skill_check 的 skillId 只能从中选择。`);
+    }
     const visibleSourceRanges = visibleEvidenceRanges(entries, projectionFacts, worldTimeOrder, knownEntryIds);
     let sourceHash: string | null = null;
     let safeSourceContext = '';

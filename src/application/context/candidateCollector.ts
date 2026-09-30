@@ -80,6 +80,7 @@ const LABEL_BOARDS: ReadonlyArray<{ prefix: string; board: ContextBoard; heading
   { prefix: '【相关长期记忆】', board: 'storyMemory', heading: '长期故事状态' },
   { prefix: '【角色已知线索】', board: 'worldKnowledge', heading: '已知线索' },
   { prefix: '【最近的经历】', board: 'recentHistory', heading: '最近的经历' },
+  { prefix: '【可用技能】', board: 'authority', heading: '可用技能' },
 ];
 
 export function candidatesFromParts(
