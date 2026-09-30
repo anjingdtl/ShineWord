@@ -166,9 +166,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
     const apiKey = await this.secrets.get(this.profile.keyRef);
     if (!apiKey) throw new Error('LLM API key is missing from secure storage.');
 
-    const capabilityMax = this.profile.capabilities.maxOutputTokens;
-    if (!Number.isInteger(capabilityMax) || capabilityMax < 1) {
-      throw new Error('maxOutputTokens must resolve to a positive integer.');
+    const capabilityMax = this.profile.capabilities.maxOutputTokens ?? request.maxOutputTokens;
+    if (typeof capabilityMax !== 'number' || !Number.isInteger(capabilityMax) || capabilityMax < 1) {
+      throw new Error('maxOutputTokens must resolve from the profile or the explicit request.');
     }
 
     let maxTokens = Math.min(request.maxOutputTokens, capabilityMax);

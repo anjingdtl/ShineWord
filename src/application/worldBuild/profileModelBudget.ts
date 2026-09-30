@@ -33,7 +33,7 @@ export function modelBudgetFromProfile(profile: ApiProfile): ModelBudget {
   if (!Number.isInteger(contextWindowTokens) || contextWindowTokens < 1) {
     throw new Error('Profile contextWindow must be a positive integer.');
   }
-  if (!Number.isInteger(capabilityMax) || capabilityMax < 1) {
+  if (typeof capabilityMax !== 'number' || !Number.isInteger(capabilityMax) || capabilityMax < 1) {
     throw new Error('Profile maxOutputTokens must be a positive integer.');
   }
   const reasoningReserveTokens = Math.max(

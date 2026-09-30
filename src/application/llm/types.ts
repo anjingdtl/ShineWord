@@ -130,7 +130,8 @@ export interface LlmProviderCapabilities {
    * (budget kernel, profileModelBudget) fail closed when it is missing.
    */
   contextWindow?: number;
-  maxOutputTokens: number;
+  /** Unknown until user/provider evidence supplies a positive integer. */
+  maxOutputTokens?: number;
   /** Probe-determined prefix-cache support (resident-mode gate, probe v2). */
   supportsPromptCache?: boolean;
 }

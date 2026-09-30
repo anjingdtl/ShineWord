@@ -65,6 +65,10 @@ export function freezeRunConfig(
     contextWindowSource?: 'declared' | 'probed' | 'fallback';
   } = {},
 ): FrozenRunConfig {
+  const maxOutputTokens = profile.capabilities.maxOutputTokens;
+  if (typeof maxOutputTokens !== 'number' || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 1) {
+    throw new Error('World Build requires a declared positive model maxOutputTokens capability.');
+  }
   return {
     configVersion: RUN_CONFIG_VERSION,
     endpoint: sanitizeEndpoint(profile.endpoint),
@@ -74,7 +78,7 @@ export function freezeRunConfig(
     contentOutputTokens: budget.maxContentOutputTokens,
     reasoningReserveTokens: budget.reasoningReserveTokens,
     contextWindowTokens: budget.contextWindowTokens,
-    maxOutputTokens: profile.capabilities.maxOutputTokens,
+    maxOutputTokens,
     supportsPromptCache: budget.supportsPromptCache,
     supportsJson: profile.capabilities.supportsJson,
     concurrency: Math.max(1, Math.min(4, profile.concurrency ?? 3)),
