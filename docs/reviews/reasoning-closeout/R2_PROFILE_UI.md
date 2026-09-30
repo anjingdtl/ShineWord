@@ -18,14 +18,14 @@
 - `npm run typecheck --prefix mobile`: PASS.
 - `npm run apk:debug --prefix mobile`: PASS, V0.4.0 / versionCode 40000, 96,218,115 bytes, SHA256 `35A0EF17A819BD8F0D89242503D428525911E808A0459FD99AE4BED98CA5C971`.
 - Profile migration/store unit coverage: legacy off mapping and persistence, endpoint/model/keyRef preservation, preset capability preservation, custom sentinel removal, explicit custom capability retention, unknown capability preservation, required explicit tier on save, and no newly persisted `off`.
-- Android Debug UI on `Medium_Phone` (`com.shineword.app.codexqa`): PASS for Low / High / Max selection, Max reserve preview, expandable advanced settings, unknown custom capability fields, and no visible clipping in the inspected dark appearance. The segmented control and advanced-settings control were clickable through the accessibility tree.
-- Android persistence: PASS. Selected Max, force-stopped the debug app, relaunched it, and confirmed `profile-reasoning.max` remained selected in the profile UI.
+- Android Debug UI on `Medium_Phone` (`com.shineword.app.codexqa`): PASS for Low / High / Max selection and 2K / 8K / 24K Planner reserve previews. The isolated Debug QA APK used a bundled JS artifact; no additional AVD was started.
+- Touch and appearance review: default segmented controls now set `minHeight` to the 44dp theme minimum. On the 420dpi, 1080×2400 emulator, taps near both vertical edges selected Low and High successfully. Dark and white-panel Manga themes were visually reviewed. Review caught low-contrast preset labels on Manga cards; they now use `theme.onRaised.primary`, and the post-fix screenshot shows both preset labels clearly.
+- The settings screen showed the custom model’s context and output capabilities as unknown, the advanced settings disclosure, and the frozen-run notice without text overflow.
+- Android persistence: PASS. Selected Max, force-stopped the Debug QA app, cold launched it, and confirmed the 24K Max reserve preview remained.
+- Release AVD `ShineQA`: the signed V0.4.0 candidate installed over the same-signed V0.4.0 app with `adb install -r`, cold launched, and exposed the Low / High / Max settings; High and Max changed the preview to 8K and 24K. No key was entered. Final V0.4.1 release validation is recorded in R6 after version bump.
 - Android key safety: no API key was entered or read. A save attempt with blank Keychain key stopped at the expected “请输入 API Key（将只写入系统 Keychain）” validation; no provider request was made.
 - Release AVD `ShineQA` was left unchanged. The Debug QA package used a temporary local application id suffix which was removed from the tracked Gradle file after installation; no extra emulator was started.
 
-## Acceptance still pending
+## Scope and final closure
 
-- Light-appearance visual review and device-level 44dp hit-target measurement remain pending.
-- Full application behavior is not yet tier-coupled; R3–R5 integrate the selected tier with budgets and request paths.
-
-The standard React Native debug APK expects Metro to provide JavaScript. The device UI evidence above came from the isolated local Debug QA install with Metro available; it does not demonstrate a real provider request.
+The usual debuggable React Native variant can load JavaScript from Metro. For deterministic visual verification, the temporary local QA build bundled JavaScript and disabled packager access only for that build; the temporary Android host/build settings were restored immediately. This document does not claim that the Android device made a real LLM request. Real GLM API and final V0.4.1 release evidence are in `R6_REAL_REGRESSION.md` and `FINAL_REPORT.md`.

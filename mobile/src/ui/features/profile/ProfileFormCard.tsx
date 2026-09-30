@@ -79,7 +79,7 @@ export function ProfileFormCard(props: {
                   borderRadius: theme.radius.md,
                   padding: theme.space.md,
                 }}>
-                <Text style={[typeStyle(theme, theme.type.body), { color: theme.text.primary }]}>
+                <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.primary }]}>
                   {`${selected ? '✓ ' : ''}${preset.label}`}
                 </Text>
               </Pressable>

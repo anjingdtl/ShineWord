@@ -34,7 +34,7 @@ test('World Build freezes tier, per-kind reserve, exact wire output and stable l
     const request = governWorldBuildRequest({
       request: {
         role: 'Extractor', system: 'Return JSON.', user: JSON.stringify({ text: 'required source text' }),
-        maxOutputTokens: budget.maxContentOutputTokens, jsonMode: true,
+        maxOutputTokens: budget.maxContentOutputTokens, jsonMode: true, reasoningEffort: 'off',
       },
       requestKind: 'world_extract',
       logicalRequestId: 'world-extract:run-fixture:unit-0001:all',
@@ -42,6 +42,7 @@ test('World Build freezes tier, per-kind reserve, exact wire output and stable l
     });
     observed.push(request);
     assert.equal(request.reasoningTier, tier);
+    assert.equal(Object.hasOwn(request, 'reasoningEffort'), false, 'frozen requests expose only reasoningTier');
     assert.equal(request.requestKind, 'world_extract');
     assert.equal(request.maxPhysicalRequests, 1);
     assert.equal(request.ledger.logicalRequestId, 'world-extract:run-fixture:unit-0001:all');

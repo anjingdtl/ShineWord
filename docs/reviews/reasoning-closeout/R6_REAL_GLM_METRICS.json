@@ -1,0 +1,603 @@
+{
+  "credentialFile": {
+    "file": "GLM-TEST-KEY.TXT",
+    "sha256": "c0c2a4aba6710a04f254972797156d550b50bd54dc1aaca2944f8628648f899a",
+    "bytes": 157
+  },
+  "shortNovel": {
+    "file": "《白篱梦》.TXT",
+    "sha256": "6faa89e68bba97a96e1dacc0cc969de2b3217dc9c59167e9bfdb2b9e27971c81",
+    "bytes": 3065535,
+    "chapters": 300,
+    "codePoints": 965458,
+    "durationMs": 132
+  },
+  "longNovel": {
+    "file": "凡人修仙传.txt",
+    "sha256": "f85896898ba84636f1a3f63309f0d3b8375693e540fffadb289822934828f0cb",
+    "bytes": 22513508,
+    "chapters": 2469,
+    "codePoints": 7601316,
+    "durationMs": 2869
+  },
+  "directPlanner": [
+    {
+      "pass": true,
+      "tier": "low",
+      "reserveTokens": 2048,
+      "businessOutputTokens": 4000,
+      "wireOutputTokens": 6048,
+      "hardInputLimit": 1034336,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 38,
+        "reasoningTokens": 7,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "durationMs": 2380,
+      "providerParams": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 6048,
+          "httpStatus": 200
+        }
+      ]
+    },
+    {
+      "pass": true,
+      "tier": "high",
+      "reserveTokens": 8192,
+      "businessOutputTokens": 4000,
+      "wireOutputTokens": 12192,
+      "hardInputLimit": 1028192,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 74,
+        "reasoningTokens": 42,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "durationMs": 1904,
+      "providerParams": [
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12192,
+          "httpStatus": 200
+        }
+      ]
+    },
+    {
+      "pass": true,
+      "tier": "max",
+      "reserveTokens": 24576,
+      "businessOutputTokens": 4000,
+      "wireOutputTokens": 28576,
+      "hardInputLimit": 1011808,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 84,
+        "reasoningTokens": 48,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "durationMs": 2626,
+      "providerParams": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 28576,
+          "httpStatus": 200
+        }
+      ]
+    }
+  ],
+  "storyTurns": [
+    {
+      "turn": 1,
+      "tier": "low",
+      "stateVersion": 1,
+      "plannerContextId": "ctx-5ebaf026",
+      "narratorContextId": "ctx-ed1fc32a",
+      "plannerReserveTokens": 2048,
+      "narratorReserveTokens": 1024,
+      "plannerInputEstimate": 152,
+      "narratorInputEstimate": 41,
+      "mandatoryContextIncluded": true,
+      "storyMemoryIncluded": false,
+      "episodicRecallIncluded": false,
+      "providerRequests": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 6048,
+          "httpStatus": 200
+        },
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 9024,
+          "httpStatus": 200
+        }
+      ],
+      "grade": "failure",
+      "durationMs": 5957
+    },
+    {
+      "turn": 2,
+      "tier": "high",
+      "stateVersion": 2,
+      "plannerContextId": "ctx-f8db61f5",
+      "narratorContextId": "ctx-f564e7fc",
+      "plannerReserveTokens": 8192,
+      "narratorReserveTokens": 4096,
+      "plannerInputEstimate": 350,
+      "narratorInputEstimate": 233,
+      "mandatoryContextIncluded": true,
+      "storyMemoryIncluded": false,
+      "episodicRecallIncluded": true,
+      "providerRequests": [
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12192,
+          "httpStatus": 200
+        },
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12096,
+          "httpStatus": 200
+        }
+      ],
+      "grade": "success",
+      "durationMs": 28086
+    },
+    {
+      "turn": 3,
+      "tier": "max",
+      "stateVersion": 3,
+      "plannerContextId": "ctx-fc113af3",
+      "narratorContextId": "ctx-c7a53f7a",
+      "plannerReserveTokens": 24576,
+      "narratorReserveTokens": 12288,
+      "plannerInputEstimate": 1239,
+      "narratorInputEstimate": 1197,
+      "mandatoryContextIncluded": true,
+      "storyMemoryIncluded": true,
+      "episodicRecallIncluded": true,
+      "providerRequests": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 28576,
+          "httpStatus": 200
+        },
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 20288,
+          "httpStatus": 200
+        }
+      ],
+      "grade": "failure",
+      "durationMs": 32960
+    }
+  ],
+  "storyMemory": {
+    "status": "clean",
+    "throughStateVersion": 2,
+    "selectedTier": "max",
+    "reserveTokens": 24576,
+    "wireMaxTokens": 28576,
+    "usage": {
+      "inputTokens": 929,
+      "outputTokens": 1776,
+      "reasoningTokens": 902,
+      "cachedInputTokens": 64,
+      "estimated": false
+    },
+    "episodeRecordCount": 3
+  },
+  "longNovelBudgetPressure": {
+    "sourceTokenDemand": 6865366,
+    "lowHardInputTokens": 1020288,
+    "maxHardInputTokens": 975232,
+    "lowOptionalInputTokens": 752230,
+    "maxOptionalInputTokens": 716185,
+    "maxShrankOptional": true,
+    "mandatoryInputTokens": 80000
+  },
+  "logicalRequests": [
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "low",
+      "reasoningReserveTokens": 2048,
+      "maxOutputTokens": 6048,
+      "logicalRequestId": "r6:direct-planner:low",
+      "durationMs": 2380,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 38,
+        "reasoningTokens": 7,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 6048,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "high",
+      "reasoningReserveTokens": 8192,
+      "maxOutputTokens": 12192,
+      "logicalRequestId": "r6:direct-planner:high",
+      "durationMs": 1904,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 74,
+        "reasoningTokens": 42,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12192,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "max",
+      "reasoningReserveTokens": 24576,
+      "maxOutputTokens": 28576,
+      "logicalRequestId": "r6:direct-planner:max",
+      "durationMs": 2626,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 84,
+        "reasoningTokens": 48,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 28576,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": null,
+      "role": "Extractor",
+      "reasoningTier": "low",
+      "reasoningReserveTokens": null,
+      "maxOutputTokens": 8000,
+      "logicalRequestId": null,
+      "durationMs": 14042,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 6014,
+        "outputTokens": 594,
+        "reasoningTokens": 421,
+        "cachedInputTokens": 0,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 8000,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "low",
+      "reasoningReserveTokens": 2048,
+      "maxOutputTokens": 6048,
+      "logicalRequestId": "planner:campaign-r6-closeout-main:turn-0001",
+      "durationMs": 3120,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 521,
+        "outputTokens": 163,
+        "reasoningTokens": 5,
+        "cachedInputTokens": 0,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 6048,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "narrator",
+      "role": "Narrator",
+      "reasoningTier": "low",
+      "reasoningReserveTokens": 1024,
+      "maxOutputTokens": 9024,
+      "logicalRequestId": "narrator:campaign-r6-closeout-main:turn-0001",
+      "durationMs": 2816,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 264,
+        "outputTokens": 84,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "low",
+          "clearThinking": false,
+          "maxTokens": 9024,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "high",
+      "reasoningReserveTokens": 8192,
+      "maxOutputTokens": 12192,
+      "logicalRequestId": "planner:campaign-r6-closeout-main:turn-0002",
+      "durationMs": 19358,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 719,
+        "outputTokens": 1032,
+        "reasoningTokens": 823,
+        "cachedInputTokens": 0,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12192,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "narrator",
+      "role": "Narrator",
+      "reasoningTier": "high",
+      "reasoningReserveTokens": 4096,
+      "maxOutputTokens": 12096,
+      "logicalRequestId": "narrator:campaign-r6-closeout-main:turn-0002",
+      "durationMs": 8719,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 470,
+        "outputTokens": 364,
+        "reasoningTokens": 193,
+        "cachedInputTokens": 0,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "high",
+          "clearThinking": false,
+          "maxTokens": 12096,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "memory_checkpoint",
+      "role": "Summarizer",
+      "reasoningTier": "max",
+      "reasoningReserveTokens": 24576,
+      "maxOutputTokens": 28576,
+      "logicalRequestId": "memory:campaign-r6-closeout-main:v0-2",
+      "durationMs": 34550,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 929,
+        "outputTokens": 1776,
+        "reasoningTokens": 902,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 28576,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "planner",
+      "role": "Planner",
+      "reasoningTier": "max",
+      "reasoningReserveTokens": 24576,
+      "maxOutputTokens": 28576,
+      "logicalRequestId": "planner:campaign-r6-closeout-main:turn-0003",
+      "durationMs": 18602,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 1438,
+        "outputTokens": 931,
+        "reasoningTokens": 691,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 28576,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    },
+    {
+      "requestKind": "narrator",
+      "role": "Narrator",
+      "reasoningTier": "max",
+      "reasoningReserveTokens": 12288,
+      "maxOutputTokens": 20288,
+      "logicalRequestId": "narrator:campaign-r6-closeout-main:turn-0003",
+      "durationMs": 14352,
+      "contentPresent": true,
+      "usage": {
+        "inputTokens": 1249,
+        "outputTokens": 676,
+        "reasoningTokens": 465,
+        "cachedInputTokens": 64,
+        "estimated": false
+      },
+      "wireAttempts": [
+        {
+          "reasoningEffort": "max",
+          "clearThinking": false,
+          "maxTokens": 20288,
+          "httpStatus": 200
+        }
+      ],
+      "outcome": "completed"
+    }
+  ],
+  "ledger": [
+    {
+      "requestKind": "planner",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "low",
+      "reserveTokens": 2048,
+      "wireOutputTokens": 6048,
+      "inputTokens": 521,
+      "outputTokens": 163,
+      "reasoningTokens": 5,
+      "cachedInputTokens": 0,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "narrator",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "low",
+      "reserveTokens": 1024,
+      "wireOutputTokens": 9024,
+      "inputTokens": 264,
+      "outputTokens": 84,
+      "reasoningTokens": 0,
+      "cachedInputTokens": 0,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "planner",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "high",
+      "reserveTokens": 8192,
+      "wireOutputTokens": 12192,
+      "inputTokens": 719,
+      "outputTokens": 1032,
+      "reasoningTokens": 823,
+      "cachedInputTokens": 0,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "narrator",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "high",
+      "reserveTokens": 4096,
+      "wireOutputTokens": 12096,
+      "inputTokens": 470,
+      "outputTokens": 364,
+      "reasoningTokens": 193,
+      "cachedInputTokens": 0,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "memory_checkpoint",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "max",
+      "reserveTokens": 24576,
+      "wireOutputTokens": 28576,
+      "inputTokens": 929,
+      "outputTokens": 1776,
+      "reasoningTokens": 902,
+      "cachedInputTokens": 64,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "planner",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "max",
+      "reserveTokens": 24576,
+      "wireOutputTokens": 28576,
+      "inputTokens": 1438,
+      "outputTokens": 931,
+      "reasoningTokens": 691,
+      "cachedInputTokens": 64,
+      "estimatedUsage": false
+    },
+    {
+      "requestKind": "narrator",
+      "status": "succeeded",
+      "attempt": 1,
+      "reasoningTier": "max",
+      "reserveTokens": 12288,
+      "wireOutputTokens": 20288,
+      "inputTokens": 1249,
+      "outputTokens": 676,
+      "reasoningTokens": 465,
+      "cachedInputTokens": 64,
+      "estimatedUsage": false
+    }
+  ],
+  "acceptance": {
+    "directPlannerProviderTiers": true,
+    "shortStoryTurnTierSwitchAndNarratorBudget": true,
+    "storyMemoryKernelLedgerMaxTier": true,
+    "episodicRecallInPlannerContext": true,
+    "longNovelMaxTierOptionalContextShrink": true
+  },
+  "physicalRequestCount": 11,
+  "physicalRequestLimit": 28
+}

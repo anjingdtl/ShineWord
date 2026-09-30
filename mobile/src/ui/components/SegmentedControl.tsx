@@ -30,17 +30,15 @@ export function SegmentedControl<T extends string>(props: {
 }): React.JSX.Element {
   const { theme } = useTheme();
   const block = props.block ?? true;
-  // Segments are visually compact (a `compact` row is ~23dp tall, the default
-  // row's press surface is 36dp), so the shortfall up to the 44dp floor is
-  // added as vertical-only hitSlop. Horizontal slop is deliberately zero: the
-  // segments sit shoulder-to-shoulder and an overlapping left/right slop would
-  // make taps on the gap ambiguous (plan §4).
+  // Default segments expose a visible 44dp target. Compact rows keep their
+  // denser appearance and add only vertical hitSlop to reach the same floor.
+  // Horizontal slop stays zero because adjacent segments share their edges.
   const hitSlop = useMemo(() => {
     const type = props.compact ? theme.type.label : theme.type.small;
     const paddingVertical = props.compact ? theme.space.xs : theme.space.sm;
     const visualHeight = props.compact
       ? paddingVertical * 2 + type.lineHeight
-      : Math.max(theme.touch.min - theme.space.sm, paddingVertical * 2 + type.lineHeight);
+      : theme.touch.min;
     const pad = Math.max(0, Math.ceil((theme.touch.min - visualHeight) / 2));
     return { top: pad, bottom: pad, left: 0, right: 0 };
   }, [props.compact, theme]);
@@ -80,7 +78,7 @@ export function SegmentedControl<T extends string>(props: {
                 paddingVertical: props.compact ? theme.space.xs : theme.space.sm,
                 paddingHorizontal: theme.space.md,
                 opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
-                minHeight: props.compact ? undefined : theme.touch.min - theme.space.sm,
+                minHeight: props.compact ? undefined : theme.touch.min,
               },
             ]}>
             {option.icon ? <View style={{ marginRight: theme.space.xs }}>{option.icon}</View> : null}
