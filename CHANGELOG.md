@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-30
+
+### Added — Reasoning & LLM Governance Closeout
+
+- 设置页支持 Low / High / Max 三档思考强度，并显示 Planner 预算预览；自定义模型上下文窗口与最大输出能力可保持 Unknown 或由用户填写。
+- 统一 Reasoning Policy 将冻结档位同时映射到 Provider 参数、Reasoning Reserve 与 wire 输出预算；Planner、Narrator、Story Memory、Summarizer、World Build 及渐进式开篇请求均复用预算与账本治理。
+- Legacy `off` 在 Profile / Frozen Run 兼容边界迁移为 Low；新 Profile 和新 Run 只保存 Low / High / Max。Reasoning-only 有界恢复保持用户所选档位，不关闭 Thinking。
+- World Extract 与 Group Extract 复用结构化输出管线，继续执行本地证据引文校验；渐进式开篇按 Max 预留收缩来源上下文，保留首幕证据范围并将请求写入 Ledger。
+- 新增 reasoning usage 按 profile、档位、请求种类的可校准统计基础；usage 未知保持 Unknown，不按 0 处理。
+
+- 升级版本至 `0.4.1` / `versionCode=40100`。
+
 ## [0.4.0] - 2026-09-30
 
 ### Added — LLM 上下文与长期记忆基础设施（M0–M6）与版本管理规范
