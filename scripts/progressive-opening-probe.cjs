@@ -176,6 +176,10 @@ function requestSample(apiKey, sample, timeoutMs, deadlineAt) {
       model: MODEL,
       messages: sample.messages,
       max_tokens: sample.maxOutputTokens,
+      ...(sample.reasoningTier ? {
+        reasoning_effort: sample.reasoningTier,
+        thinking: { clear_thinking: false },
+      } : {}),
       stream: true,
       stream_options: { include_usage: true },
       response_format: { type: 'json_object' },
@@ -281,15 +285,25 @@ async function main() {
   }
   const key = readKey(args.config);
   if (args['opening-dossier'] === 'true') {
-    const { extractOpeningDossier } = require('../dist/application/worldPackage/progressiveOpening');
+    const { extractOpeningDossier, openingSourceBudgetForProfile } = require('../dist/application/worldPackage/progressiveOpening');
     const { importTxtSource, sliceByCodePoints } = require('../dist/application/import/txtImport');
     const bytes = fs.readFileSync(args.source);
     const sha = { sha256BytesHex: async value => require('node:crypto').createHash('sha256').update(value).digest('hex') };
     const decoder = { decode: (value, encoding) => new TextDecoder(encoding === 'utf-8-sig' ? 'utf-8' : encoding).decode(value) };
     const parsed = await importTxtSource(bytes, sha, decoder);
-    const inputCodePoints = Math.min(parsed.codePointCount, 8_000);
-    const outputTokens = Number(args['dossier-output-tokens'] || 8_000);
-    if (!Number.isInteger(outputTokens) || outputTokens < 1 || outputTokens > 8_000) throw new Error('usage');
+    const businessOutputTokens = Number(args['dossier-output-tokens'] || 8_000);
+    if (!Number.isInteger(businessOutputTokens) || businessOutputTokens < 2_000 || businessOutputTokens > 8_000) throw new Error('usage');
+    const profile = {
+      id: 'progressive-opening-probe', name: 'progressive opening probe', endpoint: ENDPOINT,
+      model: MODEL, keyRef: 'process-only', reasoningTier: 'low', reasoningDialect: 'glm',
+      contentOutputTokens: businessOutputTokens,
+      capabilities: {
+        contextWindow: 1_048_576, maxOutputTokens: 131_072,
+        supportsJson: true, supportsStreaming: true, reportsUsage: true,
+      },
+    };
+    const budget = openingSourceBudgetForProfile(profile, parsed.codePointCount);
+    const inputCodePoints = budget.sourceCodePoints;
     const sourceExcerpt = sliceByCodePoints(parsed.text, 0, inputCodePoints);
     const startedAt = new Date().toISOString();
     const runStarted = Date.now();
@@ -301,7 +315,8 @@ async function main() {
     try {
       await extractOpeningDossier({
         sourceExcerpt,
-        maxOutputTokens: outputTokens,
+        budget,
+        ledger: { logicalRequestId: `progressive-opening-probe:${parsed.sourceSha256Hex}`, worldId: 'progressive-opening-probe' },
         provider: {
           complete: async request => {
             if (physicalRequests >= 2) throw new Error('physical_request_cap');
@@ -309,6 +324,7 @@ async function main() {
             const sample = {
               label: `opening-dossier-${physicalRequests}`,
               kind: 'opening-dossier',
+              reasoningTier: request.reasoningTier,
               inputCodePoints,
               maxOutputTokens: request.maxOutputTokens,
               messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.user }],

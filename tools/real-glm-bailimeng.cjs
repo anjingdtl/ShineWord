@@ -20,6 +20,8 @@ const D = relative => require(path.join(ROOT, 'dist', relative));
 
 const { importTxtSource } = D('application/import/txtImport');
 const { OpenAICompatibleProvider } = D('application/llm/openAICompatible');
+const { LedgeredProvider } = D('application/llm/requestLedger');
+const { llmModelProfileFingerprint } = D('application/llm/profileFingerprint');
 const { MemorySecretStore } = D('application/llm/memorySecretStore');
 const { SqliteLlmLedgerStore } = D('infra/sqlite/sqliteLlmLedgerStore');
 const { SqliteStoryMemoryStore } = D('application/memory/storyMemoryRepository');
@@ -151,47 +153,35 @@ async function main() {
   const profile = {
     id: 'glm-test', name: 'GLM test', endpoint, model, keyRef: 'glm.test',
     capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 1_048_576, maxOutputTokens: 32_768 },
-    reasoningEffort: 'low', reasoningReserveTokens: 2_048,
+    reasoningTier: 'low', reasoningDialect: 'glm',
   };
 
   let physical = 0;
   const rawProvider = new OpenAICompatibleProvider(profile, secrets, new FetchTransport(), 240_000);
   const ledgerStore = new SqliteLlmLedgerStore(adapter);
-  const counting = {
+  const counted = {
     async complete(request) {
       physical += 1;
       if (physical > MAX_PHYSICAL_REQUESTS) throw new Error(`physical budget exceeded: ${physical}`);
-      const response = await rawProvider.complete(request);
-      if (request.ledger) {
-        // Record into the durable ledger just like the session would.
-        const attempt = await ledgerStore.beginAttempt({
-          logicalRequestId: request.ledger.logicalRequestId,
-          requestKind: request.ledger.requestKind,
-          branchId: request.ledger.branchId,
-          stateVersion: request.ledger.stateVersion,
-          modelProfileFingerprint: 'glm-m6b',
-        }, Date.now());
-        await ledgerStore.updateAttempt(attempt.attemptId, { status: 'sent' });
-        await ledgerStore.updateAttempt(attempt.attemptId, {
-          status: 'succeeded',
-          inputTokens: response.usage?.inputTokens ?? null,
-          outputTokens: response.usage?.outputTokens ?? null,
-          reasoningTokens: response.usage?.reasoningTokens ?? null,
-          cachedInputTokens: response.usage?.cachedInputTokens ?? null,
-          estimatedUsage: response.usage?.estimated ? 1 : 0,
-          finishedAt: Date.now(),
-        });
-      }
-      return response;
+      return rawProvider.complete(request);
     },
   };
+  const counting = new LedgeredProvider(counted, ledgerStore, {
+    modelProfileFingerprint: llmModelProfileFingerprint(profile),
+  });
 
   // ------------------------------------------------------- progressive opening
   const budget = openingSourceBudgetForProfile(profile, parsed.codePointCount);
   const sourceExcerpt = Array.from(parsed.text).slice(0, budget.sourceCodePoints).join('');
   const dossierStart = Date.now();
   const dossierResult = await extractOpeningDossier({
-    provider: counting, sourceExcerpt, maxOutputTokens: budget.maxOutputTokens,
+    provider: counting,
+    sourceExcerpt,
+    budget,
+    ledger: {
+      logicalRequestId: `world-opening-dossier:${worldId}:${parsed.sourceSha256Hex}`,
+      worldId,
+    },
   });
   const compileResult = await compileProgressiveOpeningPackage({
     worldStore, sha256Hex: sha.sha256Hex, worldId,
@@ -242,7 +232,7 @@ async function main() {
     episodic: { store: new SqliteEpisodicStore(adapter) },
     hashProvider: sha,
     random: { nextIntInclusive: (min, max) => min + Math.floor(Math.random() * (max - min + 1)) },
-  }, counting, profile);
+  }, counted, profile);
 
   for (let i = 0; i < TURN_INTENTS.length; i += 1) {
     const intent = TURN_INTENTS[i];

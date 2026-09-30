@@ -1,6 +1,6 @@
 import type { BookSection, ContentEntry, Provenance, WorldPackageManifest } from '../../domain/content/types';
-import type { ApiProfile, LlmPhysicalRequestMetric, LlmProvider, LlmRequest, LlmUsage } from '../llm/types';
-import { LlmRequestFailure } from '../llm/types';
+import type { ApiProfile, LlmPhysicalRequestMetric, LlmProvider, LlmRequest, LlmUsage, ReasoningTier } from '../llm/types';
+import { LlmRequestFailure, normalizeReasoningTier } from '../llm/types';
 import type { FactSourceSpan, StoredChapter } from '../ports/worldStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
@@ -8,12 +8,15 @@ import { codePointLength } from '../../domain/world/textOffsets';
 import { parseStrictJsonObject } from '../llm/json';
 import { createProgressiveBaselineEntries, buildSections } from './buildPackageFromCanon';
 import { publishWorldPackage } from './publish';
-import { modelBudgetFromProfile } from '../worldBuild/profileModelBudget';
+import { resolveModelCapabilities } from '../llm/capabilityResolver';
+import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
+import { reasoningDialectForModel } from '../llm/reasoningPolicy';
+import { estimateTokens } from '../context/tokenEstimate';
 
 export const OPENING_DOSSIER_VERSION = 'opening-dossier-1';
 export const OPENING_SOURCE_BUDGET_CODE_POINTS = 8_000;
 const OPENING_EVIDENCE_BUDGET_CODE_POINTS = 1_600;
-const DOSSIER_OUTPUT_TOKEN_LIMIT = 8_000;
+const DOSSIER_BUSINESS_OUTPUT_TOKEN_LIMIT = 8_000;
 
 /**
  * Uses the saved phone profile before reading/requesting. Two model tokens per
@@ -22,30 +25,100 @@ const DOSSIER_OUTPUT_TOKEN_LIMIT = 8_000;
  */
 export function openingSourceBudgetForProfile(profile: ApiProfile, availableCodePoints: number): {
   sourceCodePoints: number;
+  businessOutputTokens: number;
   maxOutputTokens: number;
+  reasoningTier: ReasoningTier;
+  reasoningReserveTokens: number;
+  reasoningPolicyVersion: string;
 } {
-  const modelBudget = modelBudgetFromProfile(profile);
-  // The dossier wire ceiling (DOSSIER_OUTPUT_TOKEN_LIMIT) must host BOTH the
-  // content and the reasoning reserve - thinking stays enabled (policy
-  // 2026-09-30), so the reserve shrinks the content slice instead of
-  // pushing requestTokens past the ceiling.
-  const contentTokens = Math.max(
-    512,
-    Math.min(
-      DOSSIER_OUTPUT_TOKEN_LIMIT - modelBudget.reasoningReserveTokens,
-      modelBudget.maxContentOutputTokens,
-      DOSSIER_OUTPUT_TOKEN_LIMIT,
-    ),
-  );
-  const requestTokens = contentTokens + modelBudget.reasoningReserveTokens;
-  if (requestTokens > DOSSIER_OUTPUT_TOKEN_LIMIT) {
+  if (!Number.isInteger(availableCodePoints) || availableCodePoints < 1) {
     throw new OpeningPreparationError('profile_budget');
   }
-  const promptAllowance = modelBudget.contextWindowTokens - requestTokens
-    - modelBudget.reserveTokens - 1_500;
+  const contextWindowTokens = profile.capabilities.contextWindow;
+  const modelMaxOutputTokens = profile.capabilities.maxOutputTokens;
+  if (!Number.isInteger(contextWindowTokens) || (contextWindowTokens ?? 0) < 1
+    || !Number.isInteger(modelMaxOutputTokens) || (modelMaxOutputTokens ?? 0) < 1) {
+    throw new OpeningPreparationError('profile_budget');
+  }
+  const capabilities = resolveModelCapabilities({
+    declared: {
+      contextWindowTokens,
+      maxOutputTokens: modelMaxOutputTokens,
+      supportsJsonMode: profile.capabilities.supportsJson,
+      reportsUsage: profile.capabilities.reportsUsage,
+      supportsPromptCache: profile.capabilities.supportsPromptCache,
+      reasoningUsageReported: profile.capabilities.reportsUsage,
+    },
+    reasoningMode: 'always_on',
+  });
   const desired = Math.min(availableCodePoints, OPENING_SOURCE_BUDGET_CODE_POINTS);
-  if (promptAllowance < desired * 2) throw new OpeningPreparationError('profile_budget');
-  return { sourceCodePoints: desired, maxOutputTokens: requestTokens };
+  const minimumEvidenceSource = Math.min(availableCodePoints, OPENING_EVIDENCE_BUDGET_CODE_POINTS);
+  const configuredBusinessOutput = Math.floor(profile.contentOutputTokens ?? 16_384);
+  const businessOutputTarget = Math.min(DOSSIER_BUSINESS_OUTPUT_TOKEN_LIMIT, configuredBusinessOutput);
+  const requestKind = 'world_extract' as const;
+  const promptProtocolTokens = estimateTokens([
+    DOSSIER_SYSTEM,
+    '仅使用以下小说开头整理第一幕。输入可能包含更后的内容，必须忽略它们；所有引文限制在本段的前 1600 个码点。',
+    '小说开头（本段最多 8000 个码点）：',
+  ].join('\n')) + 1_500;
+  const reasoningTier = normalizeReasoningTier(profile.reasoningTier ?? profile.reasoningEffort);
+  const reasoningDialect = profile.reasoningDialect ?? reasoningDialectForModel(profile.model);
+  let plan: ReturnType<typeof planLlmRequest>;
+  try {
+    plan = planLlmRequest({
+      capabilities,
+      requestKind,
+      // Protocol/schema and citation instructions are mandatory. The source
+      // range is a separately allocated demand, so higher reasoning tiers
+      // shrink that range before their reserves are clamped to preserve it.
+      estimatedMandatoryInputTokens: promptProtocolTokens,
+      businessOutputDemand: {
+        minimum: DEFAULT_OUTPUT_DEMANDS.world_extract.minimum,
+        target: businessOutputTarget,
+        maximum: businessOutputTarget,
+      },
+      contextDemands: [{
+        id: 'progressive-opening-source-range',
+        board: 'sourceEvidence',
+        requirement: 'mandatory',
+        priority: 100,
+        relevance: 1,
+        estimatedTokens: desired * 2,
+        minTokens: minimumEvidenceSource * 2,
+        targetTokens: desired * 2,
+        clipMode: 'text',
+      }],
+      providerWireMaxOutputTokens: profile.capabilities.maxOutputTokens,
+      reasoningPolicy: {
+        tier: reasoningTier,
+        providerDialect: reasoningDialect,
+        model: profile.model,
+      },
+    });
+  } catch {
+    throw new OpeningPreparationError('profile_budget');
+  }
+  const sourceTokens = plan.allocation?.allocations
+    .find(item => item.id === 'progressive-opening-source-range')?.allocated ?? 0;
+  const sourceCodePoints = Math.min(desired, Math.floor(sourceTokens / 2));
+  if (sourceCodePoints < minimumEvidenceSource || !plan.reasoningPolicy) {
+    throw new OpeningPreparationError('profile_budget');
+  }
+  return {
+    sourceCodePoints,
+    businessOutputTokens: plan.requestedOutputTokens,
+    maxOutputTokens: plan.wireOutputTokens,
+    reasoningTier: plan.reasoningPolicy.tier,
+    reasoningReserveTokens: plan.reasoningPolicy.reserveTokens,
+    reasoningPolicyVersion: plan.reasoningPolicy.policyVersion,
+  };
+}
+
+export type OpeningSourceBudget = ReturnType<typeof openingSourceBudgetForProfile>;
+
+export interface OpeningDossierLedgerIdentity {
+  logicalRequestId: string;
+  worldId: string;
 }
 
 /** Only facts needed to establish the first playable scene are accepted. */
@@ -117,9 +190,21 @@ const DOSSIER_SYSTEM = [
 ].join('\n');
 
 /** Canonical request construction is shared by the app and the live probe. */
-export function openingDossierRequest(sourceExcerpt: string, maxOutputTokens = DOSSIER_OUTPUT_TOKEN_LIMIT): LlmRequest {
-  if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > DOSSIER_OUTPUT_TOKEN_LIMIT) {
-    throw new Error('Opening dossier output allowance is invalid.');
+export function openingDossierRequest(
+  sourceExcerpt: string,
+  budget: OpeningSourceBudget,
+  ledger: OpeningDossierLedgerIdentity,
+): LlmRequest {
+  if (!Number.isInteger(budget.businessOutputTokens)
+    || budget.businessOutputTokens < DEFAULT_OUTPUT_DEMANDS.world_extract.minimum
+    || !Number.isInteger(budget.reasoningReserveTokens)
+    || budget.reasoningReserveTokens < 1
+    || budget.maxOutputTokens !== budget.businessOutputTokens + budget.reasoningReserveTokens
+    || !Number.isInteger(budget.sourceCodePoints)
+    || budget.sourceCodePoints < 1
+    || !ledger.logicalRequestId.trim()
+    || !ledger.worldId.trim()) {
+    throw new Error('Opening dossier frozen request budget is invalid.');
   }
   return {
     role: 'Extractor',
@@ -129,8 +214,17 @@ export function openingDossierRequest(sourceExcerpt: string, maxOutputTokens = D
       '小说开头（本段最多 8000 个码点）：',
       sourceExcerpt,
     ].join('\n'),
-    maxOutputTokens,
+    maxOutputTokens: budget.maxOutputTokens,
     jsonMode: true,
+    reasoningTier: budget.reasoningTier,
+    reasoningReserveTokens: budget.reasoningReserveTokens,
+    reasoningPolicyVersion: budget.reasoningPolicyVersion,
+    requestKind: 'world_extract',
+    ledger: {
+      logicalRequestId: ledger.logicalRequestId,
+      requestKind: 'world_extract',
+      worldId: ledger.worldId,
+    },
   };
 }
 
@@ -180,9 +274,13 @@ function sourceFailureMetrics(error: unknown): LlmPhysicalRequestMetric[] {
 export async function extractOpeningDossier(input: {
   provider: LlmProvider;
   sourceExcerpt: string;
-  maxOutputTokens?: number;
+  budget: OpeningSourceBudget;
+  ledger: OpeningDossierLedgerIdentity;
 }): Promise<OpeningDossierResult> {
-  const request = openingDossierRequest(input.sourceExcerpt, input.maxOutputTokens);
+  if (codePointLength(input.sourceExcerpt) > input.budget.sourceCodePoints) {
+    throw new OpeningPreparationError('profile_budget');
+  }
+  const request = openingDossierRequest(input.sourceExcerpt, input.budget, input.ledger);
   let firstText: string;
   let metrics: LlmPhysicalRequestMetric[] = [];
   let usage: LlmUsage | null = null;

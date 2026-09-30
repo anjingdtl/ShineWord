@@ -7,7 +7,10 @@ const { createHash } = require('node:crypto');
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 const { applySqliteMigrations } = require('../dist/infra/sqlite/migrations');
 const { SqliteWorldStore } = require('../dist/infra/sqlite/sqliteWorldStore');
+const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
+const { LedgeredProvider } = require('../dist/application/llm/requestLedger');
 const { extractOpeningDossier, compileProgressiveOpeningPackage } = require('../dist/application/worldPackage/progressiveOpening');
+const { openingSourceBudgetForProfile } = require('../dist/application/worldPackage/progressiveOpening');
 const { createCampaign } = require('../dist/application/campaign/createCampaign');
 const { encodeWorldPackageArchive, decodeWorldPackageArchive, importPortableWorldPackage } = require('../dist/application/export/worldPackageArchive');
 
@@ -54,14 +57,38 @@ function dossierJson(overrides = {}) {
   });
 }
 
+function openingProfile(reasoningTier = 'low', contextWindow = 65_536, maxOutputTokens = 65_536) {
+  return {
+    id: 'glm-test', name: 'GLM test', endpoint: 'https://example.invalid/v4', model: 'GLM-5.3-Flash', keyRef: 'test',
+    capabilities: { contextWindow, maxOutputTokens, supportsJson: true, reportsUsage: true },
+    reasoningTier, reasoningDialect: 'glm', contentOutputTokens: 16_384,
+  };
+}
+
+function openingLedgerIdentity(worldId) {
+  return { worldId, logicalRequestId: `world-opening-dossier:${worldId}:source-sha` };
+}
+
+function openingBudget(sourceCodePoints, tier = 'low') {
+  return openingSourceBudgetForProfile(openingProfile(tier), sourceCodePoints);
+}
+
 test('opening dossier accepts one bounded cited response and limits repair to one extra call', async () => {
   const source = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。' + '后文秘密：角色其实是失踪的皇子。';
+  const budget = openingBudget(Array.from(source).length);
+  const ledger = openingLedgerIdentity('w-opening-request');
   let calls = 0;
   const result = await extractOpeningDossier({
     sourceExcerpt: source,
+    budget,
+    ledger,
     provider: { complete: async request => {
       calls += 1;
-      assert.equal(request.maxOutputTokens, 8000);
+      assert.equal(request.maxOutputTokens, budget.maxOutputTokens);
+      assert.equal(request.reasoningTier, 'low');
+      assert.equal(request.reasoningReserveTokens, budget.reasoningReserveTokens);
+      assert.equal(request.requestKind, 'world_extract');
+      assert.deepEqual(request.ledger, { ...ledger, requestKind: 'world_extract' });
       assert.equal(request.vendorOptions, undefined, 'the opening path does not disable reasoning');
       return { text: dossierJson(), usage: { inputTokens: 200, outputTokens: 150, reasoningTokens: 30, estimated: false },
         requestMetrics: [{ attempt: 1, durationMs: 90, httpStatus: 200, outcome: 'completed' }] };
@@ -76,6 +103,8 @@ test('opening dossier accepts one bounded cited response and limits repair to on
   let repairCalls = 0;
   const repaired = await extractOpeningDossier({
     sourceExcerpt: source,
+    budget,
+    ledger: openingLedgerIdentity('w-opening-repair'),
     provider: { complete: async () => {
       repairCalls += 1;
       return { text: repairCalls === 1
@@ -88,12 +117,77 @@ test('opening dossier accepts one bounded cited response and limits repair to on
   assert.equal(repaired.repairUsed, true);
 });
 
+test('progressive opening freezes Low/High/Max through the shared budget kernel and shrinks Max source input', async () => {
+  const sourceCodePoints = 8_000;
+  const low = openingBudget(sourceCodePoints, 'low');
+  const high = openingBudget(sourceCodePoints, 'high');
+  const max = openingBudget(sourceCodePoints, 'max');
+
+  assert.ok(low.reasoningReserveTokens < high.reasoningReserveTokens);
+  assert.ok(high.reasoningReserveTokens < max.reasoningReserveTokens);
+  assert.ok(low.maxOutputTokens < high.maxOutputTokens);
+  assert.ok(high.maxOutputTokens < max.maxOutputTokens);
+  assert.equal(low.sourceCodePoints, sourceCodePoints);
+  assert.ok(max.sourceCodePoints >= 1_600, 'the first-scene evidence range remains available');
+  assert.ok(max.sourceCodePoints < high.sourceCodePoints);
+  assert.equal(max.maxOutputTokens, max.businessOutputTokens + max.reasoningReserveTokens);
+
+  for (const budget of [low, high, max]) {
+    const seen = [];
+    const excerpt = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。';
+    await extractOpeningDossier({
+      sourceExcerpt: excerpt,
+      budget,
+      ledger: openingLedgerIdentity(`w-${budget.reasoningTier}`),
+      provider: { complete: async request => {
+        seen.push(request);
+        return { text: dossierJson() };
+      } },
+    });
+    assert.equal(seen[0].reasoningTier, budget.reasoningTier);
+    assert.equal(seen[0].reasoningReserveTokens, budget.reasoningReserveTokens);
+    assert.equal(seen[0].maxOutputTokens, budget.maxOutputTokens);
+  }
+});
+
+test('opening JSON/evidence repair is a second ledgered physical attempt under the same logical request', async () => {
+  const source = '青石巷口的灯还亮着。巷口传来一阵急促脚步声。她循声望去。';
+  const budget = openingBudget(Array.from(source).length, 'high');
+  const identity = openingLedgerIdentity('w-opening-ledger');
+  const db = dbWithSchema();
+  const adapter = new NodeSqliteAdapter(db);
+  const ledger = new SqliteLlmLedgerStore(adapter);
+  let providerCalls = 0;
+  try {
+    const provider = new LedgeredProvider({ complete: async () => {
+      providerCalls += 1;
+      return { text: providerCalls === 1
+        ? dossierJson({ locationQuote: '这条引文不在原文里。' })
+        : dossierJson() };
+    } }, ledger, { modelProfileFingerprint: 'redacted-profile-fingerprint' });
+    const result = await extractOpeningDossier({ sourceExcerpt: source, budget, ledger: identity, provider });
+    const attempts = await ledger.listAttempts(identity.logicalRequestId);
+    assert.equal(result.repairUsed, true);
+    assert.equal(providerCalls, 2);
+    assert.deepEqual(attempts.map(attempt => attempt.attemptNo), [1, 2]);
+    assert.ok(attempts.every(attempt => attempt.status === 'succeeded'));
+    assert.ok(attempts.every(attempt => attempt.requestKind === 'world_extract'));
+    assert.ok(attempts.every(attempt => attempt.reasoningTier === 'high'));
+    assert.ok(attempts.every(attempt => attempt.reasoningReserveTokens === budget.reasoningReserveTokens));
+    assert.ok(attempts.every(attempt => attempt.wireOutputTokens === budget.maxOutputTokens));
+  } finally {
+    db.close();
+  }
+});
+
 test('opening evidence after the first-scene budget cannot be compiled or leaked in error text', async () => {
   const source = '开头地点灯火通明。' + '甲'.repeat(1_700) + '后段秘密人物登场。';
   const quote = '后段秘密人物登场。';
   let calls = 0;
   await assert.rejects(() => extractOpeningDossier({
     sourceExcerpt: source,
+    budget: openingBudget(Array.from(source).length),
+    ledger: openingLedgerIdentity('w-opening-late-evidence'),
     provider: { complete: async () => {
       calls += 1;
       return { text: dossierJson({
@@ -114,18 +208,20 @@ test('opening preparation failures expose a desensitized stage code for each fai
   const answer = (text) => ({ complete: async () => ({ text }) });
 
   await assert.rejects(
-    () => extractOpeningDossier({ sourceExcerpt: source, provider: answer('这不是 JSON') }),
+    () => extractOpeningDossier({ sourceExcerpt: source, budget: openingBudget(Array.from(source).length), ledger: openingLedgerIdentity('w-opening-json'), provider: answer('这不是 JSON') }),
     error => error.errorCode === 'invalid_dossier:json_parse',
   );
 
   await assert.rejects(
-    () => extractOpeningDossier({ sourceExcerpt: source, provider: answer(dossierJson({ initialGoal: '' })) }),
+    () => extractOpeningDossier({ sourceExcerpt: source, budget: openingBudget(Array.from(source).length), ledger: openingLedgerIdentity('w-opening-schema'), provider: answer(dossierJson({ initialGoal: '' })) }),
     error => error.errorCode === 'invalid_dossier:schema',
   );
 
   await assert.rejects(
     () => extractOpeningDossier({
       sourceExcerpt: source,
+      budget: openingBudget(Array.from(source).length),
+      ledger: openingLedgerIdentity('w-opening-citation'),
       provider: answer(dossierJson({ locationQuote: '这条引文并不在原文里。' })),
     }),
     error => error.errorCode === 'invalid_dossier:citation',

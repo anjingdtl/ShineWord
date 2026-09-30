@@ -10,6 +10,21 @@ Candidate package version used for the first signed Release install: V0.4.0 / ve
 - The runner read the configured GLM key file in-process only. It never prints or persists the key, Authorization header, prompt, provider response text, or novel excerpts. Its output is the sanitized companion file `R6_REAL_GLM_METRICS.json`.
 - Three direct Planner calls returned HTTP 200 with captured request parameters `reasoning_effort=low/high/max`, `thinking.clear_thinking=false`, and `max_tokens=6,048/12,192/28,576`. Cold-start reserves were 2,048/8,192/24,576; the same-model hard input limits decreased from 1,034,336 to 1,028,192 to 1,011,808. Actual reasoning usage was observed, not asserted to be monotonic.
 - 《白篱梦》 was locally analyzed and used for three real turns, selecting Low, High, and Max in sequence. The report records only file metadata, token counts, timing, context IDs, provider parameters, and redacted outcome flags. Planner, Narrator, Max Story Memory checkpoint, and Episodic Recall all ran. The three planner context IDs were distinct; mandatory state was retained.
+- The refreshed R6 run also sent the progressive-opening dossier through the
+  common `world_extract` plan and Ledger. Its Low request used a 4,096-token
+  reserve, 8,000 business-output tokens, and a 12,096-token wire ceiling; the
+  succeeded ledger row recorded the same tier/reserve/wire values and 464
+  provider-reported reasoning tokens. The dossier response passed strict local
+  JSON, quote, and chapter-span validation before package compilation.
+- A live opening response is not treated as trusted evidence by itself. One
+  earlier bounded post-fix attempt ended in `OpeningPreparationError` after
+  two completed HTTP responses; its fine-grained code was not captured and the
+  response text was not saved. The refreshed run passed on its first physical
+  request. Deterministic tests separately verify one bounded JSON/evidence
+  repair increments the Ledger attempt number under the same logical request ID.
+- The three turn fixture records successful HTTP/provider completion and the
+  requested tier/context routing. Its action grades were `failure`; this closeout
+  does not claim game-outcome quality from those intents.
 - 凡人修仙传 was locally analyzed for pressure only. No API requests were issued against this long novel. The Max allocation reduced optional input capacity compared with Low while retaining mandatory input.
 - The sanitized live gate used 11 provider requests against a bounded runner allowance of 28. It did not run every possible model/request-tier combination.
 

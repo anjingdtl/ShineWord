@@ -46,6 +46,20 @@ fencing behavior remain the run coordinator's authorities.
   Timeline, and book mapping use the same parser. Segment/chunk quote matching
   and evidence validation remain local and unchanged, so tolerant JSON
   extraction cannot make a fabricated quote acceptable.
+- Progressive opening dossier generation (the source-import opening path) now
+  uses the same `world_extract` Budget Kernel. Its protocol stays mandatory;
+  the source excerpt is a separate mandatory elastic demand with a 1,600-code-
+  point evidence floor. Low/High/Max reserve is frozen before that source
+  range is allocated, so Max reduces the excerpt instead of shrinking its
+  reserve to preserve the full 8,000-code-point candidate.
+- Progressive opening uses an 8,000-token business-output ceiling; its wire
+  ceiling is the Kernel's `business output + reasoning reserve`. Requests carry
+  the frozen tier, reserve, policy version, `world_extract` kind, and a stable
+  `world-opening-dossier:<worldId>:<sourceSha>` logical ID through
+  `LedgeredProvider`. The one bounded evidence/JSON repair creates the next
+  physical attempt under the same logical ID.
+- Opening dossier output still passes strict JSON parsing and the original
+  first-scene quote and chapter-span checks before package compilation.
 
 ## Verification
 
@@ -59,14 +73,20 @@ fencing behavior remain the run coordinator's authorities.
 - Targeted tests passed: `reasoning-worldbuild-governance`,
   `progressive-opening-g0`, `resident-build-p0`, `resident-build-p2`, and
   `unified-build-p1` (31/31 in the last targeted run).
-- Core and mobile typechecks passed after the code changes. Full Core regression,
-  final search audit, Android build/AVD checks, real GLM calls, and CI are
-  recorded separately in R6 and the final report.
+- Progressive opening-specific coverage now checks all three tiers, the
+  64K-window Max source shrink with the evidence floor intact, exact wire
+  output composition, and ledger attempt numbers across a bounded repair.
+- After the progressive-opening follow-up, `npm run verify:core` passed
+  441/441, mobile typecheck passed, and `npm run apk:debug --prefix mobile`
+  built successfully. The refreshed real GLM check records the opening
+  `world_extract` request and ledger alongside the other R6 calls.
 
 ## Review notes
 
-- No World Build path in the active streaming or legacy device importer sends
-  extraction or mapping requests without the shared budget and ledger wrapper.
+- No active streaming, unified-build, or progressive-opening import path sends
+  an extraction or mapping request without the shared budget and ledger
+  wrapper. The progressive-opening path was the final exception found in the
+  R6 audit and is closed by the follow-up above.
 - No `indexOf('{')` / `lastIndexOf('}')` extraction parser remains in the
   World Extract, Group Extract, Registry, Timeline, or book-mapping paths.
 - The default planner fixture's 128K capability remains a named legacy test
@@ -75,8 +95,9 @@ fencing behavior remain the run coordinator's authorities.
   surface in World Build planning; it is normalized into the product tier and
   is not persisted in new frozen run configs.
 
-## Not yet verified
+## R5/R6 boundary
 
-This stage does not claim real GLM Low/High/Max completion, on-device frozen-run
-behavior under a live profile edit, release APK verification, or CI status.
-Those checks belong to R6.
+R5 originally deferred real GLM completion, on-device checks, release APK
+verification, and CI. The R6 report records those later checks. The progressive
+opening governance fix was added during the R6 audit, then covered by the
+deterministic tests and refreshed host-side GLM run referenced there.

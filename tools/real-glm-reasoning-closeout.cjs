@@ -26,6 +26,7 @@ const { reasoningDialectForModel } = D('application/llm/reasoningPolicy');
 const { normalizeReasoningTier } = D('application/llm/types');
 const { parseStructuredOutput } = D('application/llm/structuredOutput');
 const { LedgeredProvider, classifyLlmFailure } = D('application/llm/requestLedger');
+const { llmModelProfileFingerprint } = D('application/llm/profileFingerprint');
 const { SqliteLlmLedgerStore } = D('infra/sqlite/sqliteLlmLedgerStore');
 const { applySqliteMigrations } = D('infra/sqlite/migrations');
 const { BUILTIN_MIGRATIONS } = D('infra/sqlite/builtinMigrations');
@@ -325,13 +326,31 @@ async function runShortStorySession(input) {
   const profile = profileFor(input.model, input.endpoint, 'low');
   const rawProvider = new OpenAICompatibleProvider(profile, secrets, input.transport, 240_000);
   const provider = instrumentProvider(rawProvider, profile);
+  const openingProvider = new LedgeredProvider(provider, ledgerStore, {
+    modelProfileFingerprint: llmModelProfileFingerprint(profile),
+  });
 
   activeStage = 'short_story_opening';
   const openingBudget = openingSourceBudgetForProfile(profile, parsed.codePointCount);
   const excerpt = Array.from(parsed.text).slice(0, openingBudget.sourceCodePoints).join('');
   const dossierResult = await extractOpeningDossier({
-    provider, sourceExcerpt: excerpt, maxOutputTokens: openingBudget.maxOutputTokens,
+    provider: openingProvider,
+    sourceExcerpt: excerpt,
+    budget: openingBudget,
+    ledger: {
+      logicalRequestId: `world-opening-dossier:${worldId}:${metadata.sha256}`,
+      worldId,
+    },
   });
+  report.opening = {
+    requestKind: 'world_extract',
+    tier: openingBudget.reasoningTier,
+    reserveTokens: openingBudget.reasoningReserveTokens,
+    businessOutputTokens: openingBudget.businessOutputTokens,
+    wireOutputTokens: openingBudget.maxOutputTokens,
+    sourceCodePoints: openingBudget.sourceCodePoints,
+    physicalRequests: dossierResult.physicalRequests,
+  };
   const compiled = await compileProgressiveOpeningPackage({
     worldStore, sha256Hex, worldId, sourceSha256: metadata.sha256,
     sourceExcerpt: excerpt, sourceEndCodePoint: openingBudget.sourceCodePoints,
@@ -581,6 +600,13 @@ async function main() {
     && report.storyMemory.reserveTokens >= (report.storyMemory.selectedTier === 'max' ? 12_288 : 4_096)
     && report.ledger?.some(row => row.requestKind === 'memory_checkpoint'
       && row.status === 'succeeded' && row.reasoningTier === report.storyMemory.selectedTier);
+  const progressiveOpeningGovernancePass = report.opening?.tier === 'low'
+    && report.opening.reserveTokens >= 2_048
+    && report.opening.wireOutputTokens === report.opening.businessOutputTokens + report.opening.reserveTokens
+    && report.ledger?.some(row => row.requestKind === 'world_extract'
+      && row.status === 'succeeded' && row.reasoningTier === report.opening.tier
+      && row.reserveTokens === report.opening.reserveTokens
+      && row.wireOutputTokens === report.opening.wireOutputTokens);
   const episodicRecallPass = report.storyTurns.at(-1)?.episodicRecallIncluded === true
     && (report.storyMemory?.episodeRecordCount ?? 0) >= 2;
   const longPressurePass = report.longNovelBudgetPressure?.maxShrankOptional === true
@@ -589,6 +615,7 @@ async function main() {
     directPlannerProviderTiers: directTierMappingPass,
     shortStoryTurnTierSwitchAndNarratorBudget: storyTierSwitchPass,
     storyMemoryKernelLedgerMaxTier: storyMemoryPass,
+    progressiveOpeningKernelLedger: progressiveOpeningGovernancePass,
     episodicRecallInPlannerContext: episodicRecallPass,
     longNovelMaxTierOptionalContextShrink: longPressurePass,
   };
@@ -598,10 +625,11 @@ async function main() {
 }
 
 main().catch(async error => {
-  const code = error?.safeCode ?? (typeof error?.code === 'string' ? error.code : 'unexpected_failure');
+  const code = error?.safeCode ?? error?.errorCode
+    ?? (typeof error?.code === 'string' ? error.code : 'unexpected_failure');
   report.failure = {
     stage: activeStage,
-    code: /^[A-Za-z0-9_]+$/.test(code) ? code : 'unexpected_failure',
+    code: /^[A-Za-z0-9_:]+$/.test(code) ? code : 'unexpected_failure',
     errorType: typeof error?.name === 'string' ? error.name : 'unknown',
   };
   try { await writeReport(); } catch { /* report failure contains no source or credential */ }

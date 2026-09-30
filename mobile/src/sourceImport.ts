@@ -655,7 +655,7 @@ async function prepareProgressiveOpening(input: {
     input.sourceManifest.codePointCount,
     8_000,
   );
-  const sourceExcerpt = await sourceStore.readRange(input.sourceId, 0, sourceExcerptCodePoints);
+  const sourceExcerptCandidate = await sourceStore.readRange(input.sourceId, 0, sourceExcerptCodePoints);
   let requestBudget: ReturnType<typeof openingSourceBudgetForProfile>;
   try {
     requestBudget = openingSourceBudgetForProfile(input.profile, input.sourceManifest.codePointCount);
@@ -664,7 +664,7 @@ async function prepareProgressiveOpening(input: {
     await recordOpeningJob({
       worldStore,
       worldId,
-      sourceExcerpt,
+      sourceExcerpt: sourceExcerptCandidate,
       model: input.profile.model,
       status: 'failed',
       requestMetrics: [],
@@ -679,6 +679,7 @@ async function prepareProgressiveOpening(input: {
   }
   const sourceEndCodePoint = requestBudget.sourceCodePoints;
   if (sourceEndCodePoint <= 0) throw new Error('小说没有可用于开局的文本。');
+  const sourceExcerpt = Array.from(sourceExcerptCandidate).slice(0, sourceEndCodePoint).join('');
   if (!sourceExcerpt.trim()) throw new Error('小说开头没有可用于开局的文本。');
   const localChapters = await worldStore.getChapters(worldId);
   const extractionStartedAt = Date.now();
@@ -686,12 +687,16 @@ async function prepareProgressiveOpening(input: {
   let physicalRequests = 0;
   let usage: import('../../src/application/llm/types').LlmUsage | null = null;
   let dossierResult: Awaited<ReturnType<typeof extractOpeningDossier>> | null = null;
-  const provider = new OpenAICompatibleProvider(
-    input.profile,
-    new KeychainSecretStore(),
-    new FetchHttpTransport(),
-    180_000,
-    { maxPhysicalRequests: 1 },
+  const provider = new LedgeredProvider(
+    new OpenAICompatibleProvider(
+      input.profile,
+      new KeychainSecretStore(),
+      new FetchHttpTransport(),
+      180_000,
+      { maxPhysicalRequests: 1 },
+    ),
+    runtime.llmLedger,
+    { modelProfileFingerprint: llmModelProfileFingerprint(input.profile) },
   );
   try {
     input.onProgress({
@@ -701,7 +706,11 @@ async function prepareProgressiveOpening(input: {
     dossierResult = await extractOpeningDossier({
       provider,
       sourceExcerpt,
-      maxOutputTokens: requestBudget.maxOutputTokens,
+      budget: requestBudget,
+      ledger: {
+        logicalRequestId: `world-opening-dossier:${worldId}:${input.sourceManifest.rawSha256Hex}`,
+        worldId,
+      },
     });
     requestMetrics.push(...dossierResult.requestMetrics);
     physicalRequests = dossierResult.physicalRequests;
