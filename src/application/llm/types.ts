@@ -6,6 +6,31 @@ export type LlmRole =
   | 'Checker'
   | 'Summarizer';
 
+/** User-selectable reasoning depth. Legacy `off` is not a product tier. */
+export type ReasoningTier = 'low' | 'high' | 'max';
+
+/** Provider protocol adapter selected for reasoning parameters. */
+export type ReasoningDialect = 'deepseek' | 'glm' | 'generic' | 'unsupported';
+
+/** Persisted/request compatibility only; normalize `off` to `low` at boundaries. */
+export type LegacyReasoningEffort = 'off' | 'low' | 'high';
+
+export type LlmRequestKind =
+  | 'planner'
+  | 'narrator'
+  | 'memory_checkpoint'
+  | 'memory_repair'
+  | 'world_extract'
+  | 'world_mapping'
+  | 'world_adjudication'
+  | 'summarizer';
+
+export function normalizeReasoningTier(value: unknown): ReasoningTier {
+  if (value === 'high' || value === 'max') return value;
+  // Missing/legacy `off` values migrate to the lowest supported thinking tier.
+  return 'low';
+}
+
 export interface LlmUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -63,8 +88,12 @@ export interface LlmRequest {
   vendorOptions?: {
     thinkingDisabled?: boolean;
   };
-  /** Reasoning effort passthrough ('off' = non-thinking; 1M plan §3.2). */
-  reasoningEffort?: 'off' | 'low' | 'high';
+  /** Explicit product tier selected when this request's policy was frozen. */
+  reasoningTier?: ReasoningTier;
+  /** Request kind for the shared reasoning and budget policy. */
+  requestKind?: LlmRequestKind;
+  /** @deprecated Historical payload compatibility; new callers use reasoningTier. */
+  reasoningEffort?: LegacyReasoningEffort;
   /**
    * Extra user messages appended AFTER `user` (resident mode: [0]=system,
    * [1]=whole-book user, [2]=per-unit scope instruction). The prefix formed
@@ -119,8 +148,12 @@ export interface ApiProfile {
   contentOutputTokens?: number;
   /** Chain-of-thought reserve on top of the content budget (GLM low = 2,048). */
   reasoningReserveTokens?: number;
-  /** Reasoning effort passthrough; 'off' = non-thinking extraction. */
-  reasoningEffort?: 'off' | 'low' | 'high';
+  /** Product reasoning tier. Old profiles are normalized during load. */
+  reasoningTier?: ReasoningTier;
+  /** Optional explicit adapter override; generic is inferred from model name otherwise. */
+  reasoningDialect?: ReasoningDialect;
+  /** @deprecated Historical profile compatibility; migrate `off` to `low`. */
+  reasoningEffort?: LegacyReasoningEffort;
   /** Resident-build worker concurrency (1-4; default 3). */
   concurrency?: number;
   /** Provider tokens-per-minute limit for conservative scheduling (§6). */

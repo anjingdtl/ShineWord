@@ -12,8 +12,10 @@
  * is a list of consecutive chunk ranges plus a coverage ledger.
  */
 import type { SourceChapter, SourceChunk } from '../../domain/world/types';
+import type { LegacyReasoningEffort } from '../llm/types';
 
-export type ReasoningEffort = 'off' | 'low' | 'high';
+/** @deprecated Compatibility alias for old frozen world-build records. */
+export type ReasoningEffort = LegacyReasoningEffort;
 
 export interface ModelBudget {
   /** Verified context window of the model, in tokens. */
@@ -22,7 +24,7 @@ export interface ModelBudget {
   maxContentOutputTokens: number;
   /** Chain-of-thought reserve on top of the content budget (GLM low = 2,048). */
   reasoningReserveTokens: number;
-  /** Requested reasoning effort; 'off' means non-thinking extraction. */
+  /** @deprecated Legacy run compatibility; new runs use the shared tier policy. */
   reasoningEffort: ReasoningEffort;
   /** Probe-determined prefix-cache support (resident-mode gate). */
   supportsPromptCache: boolean;

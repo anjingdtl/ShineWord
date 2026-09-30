@@ -7,6 +7,14 @@ import type {
   LlmPhysicalRequestMetric,
   SecretStore,
 } from './types';
+import { normalizeReasoningTier } from './types';
+import {
+  providerReasoningParamsForTier,
+  reasoningDialectForModel,
+  type ReasoningDialect,
+} from './reasoningPolicy';
+
+export type { ReasoningDialect } from './reasoningPolicy';
 
 export interface HttpRequest {
   url: string;
@@ -89,55 +97,27 @@ function normalizeEndpoint(endpoint: string): string {
   return `${trimmed}/chat/completions`;
 }
 
-export type ReasoningDialect = 'deepseek' | 'glm' | 'generic';
-
 /**
  * Vendor dialect for reasoning-parameter shaping (request layer only). This
  * routes REQUEST PARAMETERS, never capability assumptions: probing, not
  * branding, decides what a model can do (plan §13).
  */
 export function reasoningDialect(model: string): ReasoningDialect {
-  const lower = model.toLowerCase();
-  if (lower.includes('deepseek')) return 'deepseek';
-  if (lower.includes('glm')) return 'glm';
-  return 'generic';
+  return reasoningDialectForModel(model);
 }
 
-/**
- * Dialect-shaped reasoning passthrough (1M plan §3.2). Nothing is sent when
- * the request declares no effort - the provider default (reasoning ON for
- * reasoning models, policy 2026-09-27) stays untouched.
- * - DeepSeek: 'off' flips the non-thinking switch; low/high leave the binary
- *   thinking mode enabled.
- * - GLM: low/high map to reasoning_effort plus thinking.clear_thinking=false
- *   (keep turn-to-turn thinking context, official guidance); thinking cannot
- *   be disabled, so 'off' sends nothing.
- * - generic: low/high pass through as reasoning_effort.
- */
-/**
- * Vendor thinking-TIER parameters (policy 2026-09-30: thinking is never
- * disabled; 'off' degrades to the vendor's lowest tier, it never turns
- * thinking off). The two dialects differ, verified live 2026-09-30:
- *  - DeepSeek: native switch `thinking` stays ENABLED with a bounded
- *    `budget_tokens` per tier (reasoning_effort alone was not honored).
- *  - GLM: native tier parameter `reasoning_effort` + clear_thinking:false.
- */
 function applyReasoningParams(
   body: Record<string, unknown>,
   dialect: ReasoningDialect,
-  effort: 'off' | 'low' | 'high' | undefined,
+  tier: 'low' | 'high' | 'max',
 ): void {
-  const tier = effort === 'high' ? 'high' : 'low'; // 'off'/undefined -> lowest tier
-  if (dialect === 'deepseek') {
-    body.thinking = { type: 'enabled', budget_tokens: tier === 'high' ? 16_384 : 4_096 };
-    return;
-  }
-  if (dialect === 'glm') {
-    body.reasoning_effort = tier;
-    body.thinking = { clear_thinking: false };
-    return;
-  }
-  body.reasoning_effort = tier;
+  Object.assign(body, providerReasoningParamsForTier(dialect, tier));
+}
+
+function isUnsupportedReasoningParameter(status: number, message: string | undefined): boolean {
+  if (status !== 400 || !message) return false;
+  return /(unknown|unsupported|unrecognized|not supported|unexpected|extra inputs? are not permitted).{0,100}(reasoning_effort|thinking)|(reasoning_effort|thinking).{0,100}(unknown|unsupported|unrecognized|not supported|unexpected)/i
+    .test(message);
 }
 
 function messageText(
@@ -207,7 +187,13 @@ export class OpenAICompatibleProvider implements LlmProvider {
     };
     const requestUrl = normalizeEndpoint(this.profile.endpoint);
 
-    const dialect = reasoningDialect(this.profile.model);
+    const dialect = this.profile.reasoningDialect ?? reasoningDialect(this.profile.model);
+    const reasoningTier = normalizeReasoningTier(
+      request.reasoningTier
+        ?? this.profile.reasoningTier
+        ?? request.reasoningEffort
+        ?? this.profile.reasoningEffort,
+    );
 
     while (true) {
       // Resident-mode request structure: [system, user, ...followUps]. The
@@ -232,7 +218,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       // Policy 2026-09-30: model thinking is NEVER disabled - neither by
       // request nor by profile. The effort only selects the vendor's THINKING
       // TIER (DeepSeek and GLM parameters differ; see applyReasoningParams).
-      applyReasoningParams(body, dialect, request.reasoningEffort);
+      applyReasoningParams(body, dialect, reasoningTier);
 
       let response: HttpResponse;
       const physicalStartedAt = Date.now();
@@ -289,6 +275,12 @@ export class OpenAICompatibleProvider implements LlmProvider {
           errorCategory: 'provider_http',
           timings: response.timings,
         });
+        if (isUnsupportedReasoningParameter(response.status, parsed.error?.message)) {
+          throw new LlmRequestFailure(
+            '当前端点可能不支持思考档位参数（reasoning_effort/thinking）；请核对端点协议配置。',
+            requestMetrics,
+          );
+        }
         throw new LlmRequestFailure(parsed.error?.message || `LLM provider HTTP ${response.status}.`, requestMetrics);
       }
 

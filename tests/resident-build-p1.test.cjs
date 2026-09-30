@@ -63,43 +63,45 @@ function captureTransport(requests, extraUsage = {}) {
   };
 }
 
-test('T3 DeepSeek dialect: thinking stays ENABLED with a tier budget; never disabled (policy 2026-09-30)', async () => {
+test('DeepSeek dialect: reasoning_effort carries low/high/max while thinking stays enabled', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('k.ds', 'sk');
-  const requests = [];
-  const provider = new OpenAICompatibleProvider(deepseekProfile(), secrets, captureTransport(requests));
-  const result = await provider.complete({
-    role: 'Extractor', system: 'sys', user: 'body',
-    maxOutputTokens: 16_384, jsonMode: true, reasoningEffort: 'off',
-  });
-  assert.equal(requests.length, 1);
-  const body = JSON.parse(requests[0].body);
-  // 'off' degrades to the LOWEST tier - the disable switch is gone.
-  assert.deepEqual(body.thinking, { type: 'enabled', budget_tokens: 4_096 }, 'DeepSeek low-tier thinking budget');
-  assert.equal(body.reasoning_effort, undefined, 'DeepSeek tiers ride thinking.budget_tokens, not reasoning_effort');
-  assert.equal(body.max_tokens, 16_384, 'content-only budget (reserve = 0)');
-  assert.equal(result.usage.cachedInputTokens, 90);
-  assert.equal(result.usage.reasoningTokens, 5);
+  for (const tier of ['low', 'high', 'max']) {
+    const requests = [];
+    const provider = new OpenAICompatibleProvider(deepseekProfile(), secrets, captureTransport(requests));
+    const result = await provider.complete({
+      role: 'Extractor', system: 'sys', user: 'body',
+      maxOutputTokens: 16_384, jsonMode: true, reasoningTier: tier,
+    });
+    assert.equal(requests.length, 1);
+    const body = JSON.parse(requests[0].body);
+    assert.deepEqual(body.thinking, { type: 'enabled' });
+    assert.equal(body.reasoning_effort, tier);
+    assert.equal(body.max_tokens, 16_384, 'content-only budget (reserve = 0)');
+    assert.equal(result.usage.cachedInputTokens, 90);
+    assert.equal(result.usage.reasoningTokens, 5);
+  }
 });
 
-test('T3 GLM dialect: reasoning_effort=low, clear_thinking=false, max_tokens = content + reserve', async () => {
+test('GLM dialect sends exact low/high/max tiers, clear_thinking=false, and content + reserve', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('k.glm', 'sk');
-  const requests = [];
-  const provider = new OpenAICompatibleProvider(glmProfile(), secrets, captureTransport(requests));
-  await provider.complete({
-    role: 'Extractor', system: 'sys', user: 'body',
-    maxOutputTokens: 16_384 + 2_048, jsonMode: true, reasoningEffort: 'low',
-  });
-  const body = JSON.parse(requests[0].body);
-  assert.equal(body.reasoning_effort, 'low');
-  assert.deepEqual(body.thinking, { clear_thinking: false });
-  assert.equal(body.max_tokens, 18_432, 'content budget + reasoning reserve');
-  // Hard-constraint margin: max_tokens stays >= 8k below the model ceiling.
-  assert.ok(131_072 - body.max_tokens >= 8_192);
+  for (const tier of ['low', 'high', 'max']) {
+    const requests = [];
+    const provider = new OpenAICompatibleProvider(glmProfile(), secrets, captureTransport(requests));
+    await provider.complete({
+      role: 'Extractor', system: 'sys', user: 'body',
+      maxOutputTokens: 16_384 + 2_048, jsonMode: true, reasoningTier: tier,
+    });
+    const body = JSON.parse(requests[0].body);
+    assert.equal(body.reasoning_effort, tier);
+    assert.deepEqual(body.thinking, { clear_thinking: false });
+    assert.equal(body.max_tokens, 18_432, 'content budget + reasoning reserve');
+    assert.ok(131_072 - body.max_tokens >= 8_192);
+  }
 });
 
-test('no explicit effort still sends the lowest thinking tier - never an opt-out (policy 2026-09-30)', async () => {
+test('no explicit tier uses the compatibility default low and never disables thinking', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('k.glm', 'sk');
   const requests = [];
@@ -107,7 +109,7 @@ test('no explicit effort still sends the lowest thinking tier - never an opt-out
   await provider.complete({ role: 'Narrator', system: 's', user: 'u', maxOutputTokens: 500 });
   const body = JSON.parse(requests[0].body);
   assert.deepEqual(body.thinking, { clear_thinking: false }, 'thinking stays on');
-  assert.equal(body.reasoning_effort, 'low', 'lowest tier when effort is unset');
+  assert.equal(body.reasoning_effort, 'low', 'compatibility fallback is the lowest tier');
 });
 
 test('resident shape: followUpUserMessages append after the byte-stable system+user prefix', async () => {
@@ -146,6 +148,27 @@ test('reasoning dialect routing is model-name based and request-layer only', () 
   assert.equal(reasoningDialect('GLM-5.3-Flash'), 'glm');
   assert.equal(reasoningDialect('glm-4-plus'), 'glm');
   assert.equal(reasoningDialect('qwen-max'), 'generic');
+});
+
+test('a generic endpoint rejecting the reasoning field fails once with an actionable tier message', async () => {
+  const secrets = new MemorySecretStore();
+  await secrets.set('k.generic', 'sk');
+  let calls = 0;
+  const profile = {
+    ...glmProfile(), model: 'custom-model', keyRef: 'k.generic', reasoningDialect: 'generic',
+  };
+  const provider = new OpenAICompatibleProvider(profile, secrets, {
+    async post(request) {
+      calls += 1;
+      assert.equal(JSON.parse(request.body).reasoning_effort, 'max');
+      return { status: 400, body: JSON.stringify({ error: { message: 'Unknown field reasoning_effort' } }) };
+    },
+  });
+  await assert.rejects(
+    provider.complete({ role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100, reasoningTier: 'max' }),
+    /当前端点可能不支持思考档位参数/,
+  );
+  assert.equal(calls, 1, 'unsupported field does not trigger a retry');
 });
 
 test('probe v2 detects prefix cache from cached_tokens on the repeated long prompt', async () => {

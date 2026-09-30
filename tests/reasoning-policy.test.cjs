@@ -1,0 +1,95 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  REASONING_CALIBRATION_MIN_SAMPLES,
+  REASONING_RESERVE_POLICY,
+  providerReasoningParamsForTier,
+  reasoningDialectForModel,
+  resolveReasoningPolicy,
+  ReasoningCapabilityInsufficientError,
+  ReasoningDialectUnsupportedError,
+} = require('../dist/application/llm/reasoningPolicy');
+const { normalizeReasoningTier } = require('../dist/application/llm/types');
+
+const kinds = Object.keys(REASONING_RESERVE_POLICY);
+const tiers = ['low', 'high', 'max'];
+
+test('one cold-start policy has strictly increasing reserves for every request kind', () => {
+  for (const requestKind of kinds) {
+    const reserves = REASONING_RESERVE_POLICY[requestKind].target;
+    assert.ok(reserves.low < reserves.high, `${requestKind}: low < high`);
+    assert.ok(reserves.high < reserves.max, `${requestKind}: high < max`);
+  }
+  assert.ok(REASONING_RESERVE_POLICY.narrator.target.high < REASONING_RESERVE_POLICY.planner.target.high,
+    'Narrator keeps an independent, smaller reserve than Planner');
+});
+
+test('provider dialects preserve all three product tiers and never disable thinking', () => {
+  for (const tier of tiers) {
+    assert.deepEqual(providerReasoningParamsForTier('glm', tier), {
+      reasoning_effort: tier,
+      thinking: { clear_thinking: false },
+    });
+    assert.deepEqual(providerReasoningParamsForTier('deepseek', tier), {
+      thinking: { type: 'enabled' },
+      reasoning_effort: tier,
+    });
+    assert.deepEqual(providerReasoningParamsForTier('generic', tier), {
+      reasoning_effort: tier,
+    });
+  }
+});
+
+test('legacy off normalizes only at the compatibility boundary', () => {
+  assert.equal(normalizeReasoningTier('off'), 'low');
+  assert.equal(normalizeReasoningTier(undefined), 'low');
+  assert.equal(normalizeReasoningTier('low'), 'low');
+  assert.equal(normalizeReasoningTier('high'), 'high');
+  assert.equal(normalizeReasoningTier('max'), 'max');
+});
+
+test('reserve is clamped below both the model and wire ceilings while preserving the requested tier', () => {
+  const result = resolveReasoningPolicy({
+    providerDialect: 'glm', model: 'glm-test', tier: 'high', requestKind: 'planner',
+    modelMaxOutputTokens: 10_000, contextWindowTokens: 32_000,
+    providerWireMaxOutputTokens: 6_000,
+  });
+  assert.equal(result.tier, 'high');
+  assert.equal(result.effectiveTier, 'high');
+  assert.equal(result.reserveTokens, 5_100);
+  assert.equal(result.reserveClamped, true);
+  assert.ok(result.reserveTokens < 10_000);
+  assert.ok(result.reserveTokens + 900 <= 6_000);
+});
+
+test('insufficient output capacity rejects max instead of silently downgrading its reserve or tier', () => {
+  assert.throws(() => resolveReasoningPolicy({
+    providerDialect: 'glm', model: 'small-model', tier: 'max', requestKind: 'planner',
+    modelMaxOutputTokens: 10_000, contextWindowTokens: 32_000,
+    providerWireMaxOutputTokens: 6_000,
+  }), error => error instanceof ReasoningCapabilityInsufficientError
+    && /minimum max reasoning budget/.test(error.message));
+});
+
+test('reasoning usage calibration waits for enough known samples and uses P95 with 25 percent headroom', () => {
+  const input = {
+    providerDialect: 'generic', model: 'm', tier: 'high', requestKind: 'planner',
+    modelMaxOutputTokens: 131_072, contextWindowTokens: 1_048_576,
+  };
+  const cold = resolveReasoningPolicy({ ...input, historicalStats: { sampleCount: REASONING_CALIBRATION_MIN_SAMPLES - 1, p95: 12_000 } });
+  assert.equal(cold.reserveSource, 'cold_start');
+  assert.equal(cold.reserveTokens, 8_192);
+
+  const calibrated = resolveReasoningPolicy({ ...input, historicalStats: { sampleCount: 8, p95: 12_000 } });
+  assert.equal(calibrated.reserveSource, 'usage_calibrated');
+  assert.equal(calibrated.reserveTokens, 15_000);
+  assert.equal(calibrated.p95ReasoningTokens, 12_000);
+});
+
+test('model dialect detection is request policy routing, and unsupported is explicit', () => {
+  assert.equal(reasoningDialectForModel('DeepSeek-V4.1-Flash'), 'deepseek');
+  assert.equal(reasoningDialectForModel('glm-5.3-flash'), 'glm');
+  assert.equal(reasoningDialectForModel('custom-endpoint-model'), 'generic');
+  assert.throws(() => providerReasoningParamsForTier('unsupported', 'max'), ReasoningDialectUnsupportedError);
+});

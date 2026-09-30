@@ -7,6 +7,9 @@
 
 import type { ContextDemand, ElasticAllocationResult } from '../context/contextTypes';
 import type { RequestEnvelope } from '../context/modelEnvelope';
+import type { LlmRequestKind } from './types';
+
+export type { LlmRequestKind } from './types';
 
 export type CapabilitySource =
   | 'user_declared'
@@ -30,16 +33,6 @@ export interface FrozenModelCapabilities {
   reasoningMode: 'none' | 'optional' | 'always_on' | 'unknown';
   reasoningUsageReported: boolean;
 }
-
-export type LlmRequestKind =
-  | 'planner'
-  | 'narrator'
-  | 'memory_checkpoint'
-  | 'memory_repair'
-  | 'world_extract'
-  | 'world_mapping'
-  | 'world_adjudication'
-  | 'summarizer';
 
 /** Business output demand - what the task needs, not what the model has. */
 export interface OutputDemand {

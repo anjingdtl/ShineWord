@@ -14,29 +14,14 @@ import { deriveMaxOutputTokens } from './capabilityResolver';
 import type { FrozenLlmRequestPlan, LlmRequestPlanningInput, RequestBudgetTrace } from './requestPlan';
 import { BudgetInfeasibleError, stableFingerprint } from './requestPlan';
 
+export { DEFAULT_OUTPUT_DEMANDS } from './requestDemands';
+
 /** Default CoT reserve per reasoning mode (GLM low tier ≈ 2,048; plan §11). */
 const DEFAULT_REASONING_RESERVE: Record<'none' | 'optional' | 'always_on' | 'unknown', number> = {
   none: 0,
   optional: 0,
   always_on: 2_048,
   unknown: 1_024,
-};
-
-/**
- * First-version business output demands per request kind (plan §10). These
- * are task needs, NOT model capabilities; the kernel still caps the grant by
- * model/wire ceilings and blocks when the minimum cannot fit.
- */
-export const DEFAULT_OUTPUT_DEMANDS: Record<LlmRequestPlanningInput['requestKind'],
-  { minimum: number; target: number; maximum: number }> = {
-  planner: { minimum: 900, target: 1_800, maximum: 4_000 },
-  narrator: { minimum: 800, target: 2_500, maximum: 8_000 },
-  memory_checkpoint: { minimum: 700, target: 1_600, maximum: 4_000 },
-  memory_repair: { minimum: 600, target: 1_200, maximum: 3_000 },
-  world_extract: { minimum: 2_000, target: 6_000, maximum: 16_000 },
-  world_mapping: { minimum: 1_500, target: 4_000, maximum: 12_000 },
-  world_adjudication: { minimum: 900, target: 2_000, maximum: 6_000 },
-  summarizer: { minimum: 400, target: 800, maximum: 2_000 },
 };
 
 export function planLlmRequest(input: LlmRequestPlanningInput): FrozenLlmRequestPlan {
