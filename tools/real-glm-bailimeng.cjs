@@ -222,11 +222,11 @@ async function main() {
   const created = await createCampaign({
     db: adapter, worldStore, campaignId, title: '白篱梦十回合', worldId,
     packageRevision: published.manifest.revision,
-    anchor: { worldTimeOrder: 0, locationId: `${worldId}-opening-location` },
+    anchor: { worldTimeOrder: 0, locationId: 'opening-location' },
     protagonist: {
       actorId: 'actor-mei', kind: 'original', name: '梅映雪',
-      attributes: { physique: 2, agility: 3, insight: 3, knowledge: 2, willpower: 2, social: 2 },
-      initialSkills: ['stealth', 'observation', 'diplomacy', 'medicine', 'athletics'],
+      attributes: { physique: 2, agility: 3, insight: 2, knowledge: 1, willpower: 1, social: 1 },
+      initialSkills: ['stealth', 'observation', 'diplomacy'],
     },
     goal: '弄清白篱院隐藏的秘密', createdAt: new Date().toISOString(),
   });

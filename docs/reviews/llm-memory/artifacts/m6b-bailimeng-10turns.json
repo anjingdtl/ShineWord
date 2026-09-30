@@ -1,0 +1,327 @@
+{
+  "generatedAt": "2026-09-30T02:20:10.684Z",
+  "novel": {
+    "file": "《白篱梦》.TXT",
+    "sha256": "6faa89e68bba97a96e1dacc0cc969de2b3217dc9c59167e9bfdb2b9e27971c81",
+    "bytes": 3065535,
+    "codePoints": 965458,
+    "chapters": 300,
+    "chunks": 944,
+    "splitStrategy": "standard"
+  },
+  "importMs": 123,
+  "opening": {
+    "ms": 13203,
+    "physicalRequests": 1,
+    "repairUsed": false,
+    "revision": 2,
+    "entries": 11
+  },
+  "turns": [
+    {
+      "n": 1,
+      "turnId": "turn-0001",
+      "stateVersion": 1,
+      "grade": "automatic",
+      "dice": null,
+      "resumed": false,
+      "narrativeChars": 269,
+      "ms": 11064,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState"
+      ],
+      "recall": {
+        "included": false
+      }
+    },
+    {
+      "n": 2,
+      "turnId": "turn-0002",
+      "stateVersion": 2,
+      "grade": "success",
+      "dice": "1d6: [6]",
+      "resumed": false,
+      "narrativeChars": 261,
+      "ms": 10635,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 56,
+        "mentionsTurn2": false
+      }
+    },
+    {
+      "n": 3,
+      "turnId": "turn-0003",
+      "stateVersion": 3,
+      "grade": "failure",
+      "dice": "2d6: [3, 3]",
+      "resumed": false,
+      "narrativeChars": 252,
+      "ms": 9894,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 103,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 4,
+      "turnId": "turn-0004",
+      "stateVersion": 4,
+      "grade": "failure",
+      "dice": "2d6: [2, 4]",
+      "resumed": false,
+      "narrativeChars": 249,
+      "ms": 11864,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 142,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 5,
+      "turnId": "turn-0005",
+      "stateVersion": 5,
+      "grade": "severe_failure",
+      "dice": "3d6: [1, 2, 1]",
+      "resumed": false,
+      "narrativeChars": 219,
+      "ms": 15615,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 185,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 6,
+      "failed": true,
+      "error": "未知地点「main-hall」：只能移动到当前所在或世界场景中存在的地点。",
+      "ms": 5443
+    },
+    {
+      "n": 7,
+      "turnId": "turn-0006",
+      "stateVersion": 6,
+      "grade": "automatic",
+      "dice": null,
+      "resumed": false,
+      "narrativeChars": 274,
+      "ms": 12433,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 223,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 8,
+      "turnId": "turn-0007",
+      "stateVersion": 7,
+      "grade": "failure",
+      "dice": "1d6: [3]",
+      "resumed": false,
+      "narrativeChars": 292,
+      "ms": 14448,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 284,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 9,
+      "turnId": "turn-0008",
+      "stateVersion": 8,
+      "grade": "automatic",
+      "dice": null,
+      "resumed": false,
+      "narrativeChars": 187,
+      "ms": 10478,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 273,
+        "mentionsTurn2": true
+      }
+    },
+    {
+      "n": 10,
+      "turnId": "turn-0009",
+      "stateVersion": 9,
+      "grade": "failure",
+      "dice": "1d6: [3]",
+      "resumed": false,
+      "narrativeChars": 240,
+      "ms": 12447,
+      "plannerBoards": [
+        "worldKnowledge",
+        "currentState",
+        "storyMemory",
+        "recentHistory",
+        "authority"
+      ],
+      "narratorBoards": [
+        "currentState",
+        "storyMemory",
+        "recentHistory"
+      ],
+      "recall": {
+        "included": true,
+        "chars": 252,
+        "mentionsTurn2": true
+      }
+    }
+  ],
+  "memory": {
+    "status": "clean",
+    "through": 8,
+    "fingerprintPrefix": "24f0ba91",
+    "characters": 1,
+    "relationships": 1,
+    "conflicts": 2,
+    "threads": 2,
+    "beats": 8,
+    "lastPatch": "smp:camp-m6b-main:0-8"
+  },
+  "episodic": {
+    "rows": 9,
+    "versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ]
+  },
+  "ledger": {
+    "byKind": [
+      {
+        "request_kind": "memory_checkpoint",
+        "status": "sent",
+        "n": 1
+      },
+      {
+        "request_kind": "memory_checkpoint",
+        "status": "succeeded",
+        "n": 2
+      },
+      {
+        "request_kind": "narrator",
+        "status": "succeeded",
+        "n": 18
+      },
+      {
+        "request_kind": "planner",
+        "status": "succeeded",
+        "n": 20
+      }
+    ],
+    "usage": {
+      "input": 73980,
+      "output": 11788,
+      "reasoning": 804,
+      "cached": 6400
+    },
+    "physicalRequests": 22
+  },
+  "recallCheck": {
+    "earlyEventTurn": 2,
+    "mentionTurn": 9,
+    "recallCandidatePresentAt9": true,
+    "recallMentionsTurn2": true
+  }
+}
