@@ -6,6 +6,8 @@ import { stableFingerprint } from '../llm/requestPlan';
 import { LedgeredProvider } from '../llm/requestLedger';
 import type { LlmRequestLedgerStore } from '../ports/llmLedger';
 import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
+import type { SqliteEpisodicStore } from '../memory/episodicStore';
+import { episodicRecordFromTurn } from '../memory/episodicStore';
 import { runStoryMemoryMaintenance, shouldRunMaintenance } from '../memory/storyMemoryMaintenance';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
@@ -84,6 +86,8 @@ export interface SessionDeps {
   llmLedger?: LlmRequestLedgerStore;
   /** Story Memory V2 dual-track maintenance (infrastructure plan M3). */
   storyMemory?: { store: SqliteStoryMemoryStore };
+  /** Episodic recall index (infrastructure plan M4). */
+  episodic?: { store: SqliteEpisodicStore };
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -1580,29 +1584,44 @@ export class CampaignSession {
       }
     }
 
-    // Story Memory V2 dual-track maintenance (infrastructure plan M3):
-    // return-first - the cadence gate and any checkpoint LLM run in the
-    // background and can never block or fail this committed turn.
-    if (this.deps.storyMemory) {
-      const { store } = this.deps.storyMemory;
-      void shouldRunMaintenance({
-        store,
-        turnStore: this.deps.turns,
-        branchId: options.branchId,
-        currentStateVersion: result.stateVersion,
-      })
-        .then(decision => (decision.should
-          ? runStoryMemoryMaintenance({
-            provider: this.provider,
-            store,
+    // Story Memory V2 dual-track maintenance (infrastructure plan M3) +
+    // episodic index write (M4): return-first - the cadence gate, the index
+    // row write and any checkpoint LLM run in the background and can never
+    // block or fail this committed turn.
+    void (async () => {
+      try {
+        const committed = await this.deps.turns.listCommittedTurns(options.branchId);
+        const latest = committed.find(turn => turn.stateVersion === result.stateVersion);
+        if (latest && this.deps.episodic) {
+          const record = episodicRecordFromTurn({ entry: latest });
+          const namesById = new Map(plannerCards.map(card => [card.actorId, card.name]));
+          record.keywords = record.actorIds
+            .map(actorId => namesById.get(actorId))
+            .filter((name): name is string => Boolean(name));
+          await this.deps.episodic.store.saveTurnRecord(record);
+        }
+        if (this.deps.storyMemory) {
+          const decision = await shouldRunMaintenance({
+            store: this.deps.storyMemory.store,
             turnStore: this.deps.turns,
             branchId: options.branchId,
             currentStateVersion: result.stateVersion,
-            actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
-          })
-          : undefined))
-        .catch(() => undefined);
-    }
+          });
+          if (decision.should) {
+            await runStoryMemoryMaintenance({
+              provider: this.provider,
+              store: this.deps.storyMemory.store,
+              turnStore: this.deps.turns,
+              branchId: options.branchId,
+              currentStateVersion: result.stateVersion,
+              actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
+            });
+          }
+        }
+      } catch {
+        // Background memory/index maintenance must never fail a played turn.
+      }
+    })();
 
     return {
       turnId,

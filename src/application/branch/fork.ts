@@ -254,6 +254,15 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
         WHERE branch_id = ? AND to_state_version <= ?`,
       [input.targetBranchId, input.sourceBranchId, targetStateVersion],
     );
+    // Episodic index rows <= fork travel with the branch (plan §67); recall
+    // on the new branch can never surface the source branch's future.
+    await tx.execute(
+      `INSERT INTO episodic_turn_index (branch_id, turn_id, state_version, search_text, metadata_json, invalid_at_state_version)
+       SELECT ?, turn_id, state_version, search_text, metadata_json, invalid_at_state_version
+         FROM episodic_turn_index
+        WHERE branch_id = ? AND state_version <= ?`,
+      [input.targetBranchId, input.sourceBranchId, targetStateVersion],
+    );
 
     // Story-memory isolation (plan §28, §67): replay the source patch chain
     // up to the fork version onto the new branch. Post-fork memory never

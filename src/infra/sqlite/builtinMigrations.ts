@@ -972,6 +972,20 @@ CREATE INDEX IF NOT EXISTS idx_story_memory_patches_branch
   ON story_memory_patches(branch_id, to_state_version);
 `;
 
+export const EPISODIC_RECALL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS episodic_turn_index (
+  branch_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL,
+  search_text TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  invalid_at_state_version INTEGER,
+  PRIMARY KEY(branch_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_episodic_turn_index_branch
+  ON episodic_turn_index(branch_id, state_version);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -993,4 +1007,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 18, name: 'unified_build_p3_stages', sql: UNIFIED_BUILD_P3_SCHEMA_SQL },
   { version: 19, name: 'llm_request_ledger', sql: LLM_REQUEST_LEDGER_SCHEMA_SQL },
   { version: 20, name: 'story_memory_v2', sql: STORY_MEMORY_V2_SCHEMA_SQL },
+  { version: 21, name: 'episodic_recall_v2', sql: EPISODIC_RECALL_SCHEMA_SQL },
 ];

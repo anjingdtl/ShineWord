@@ -49,6 +49,7 @@ export async function createSession(
       sourceStore: runtime.sourceStore,
       llmLedger: runtime.llmLedger,
       storyMemory: { store: runtime.storyMemory },
+      episodic: { store: runtime.episodic },
       hashProvider: nativeSha256,
       random: new RejectionSamplingRandomSource(createNativeRandomBytes()),
     },
