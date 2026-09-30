@@ -13,6 +13,12 @@ import { recallEpisodes, renderEpisodicRecall } from '../memory/episodicRetrieve
 import { compilePreviousMemoryView } from '../memory/storyMemoryCompiler';
 import { resolveModelCapabilities } from '../llm/capabilityResolver';
 import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestBudgetKernel';
+import { normalizeReasoningTier } from '../llm/types';
+import {
+  reasoningDialectForModel,
+  REASONING_ONLY_RESERVE_MULTIPLIER,
+  REASONING_POLICY_VERSION,
+} from '../llm/reasoningPolicy';
 import type { FrozenModelCapabilities } from '../llm/requestPlan';
 import {
   buildCandidate,
@@ -1019,11 +1025,9 @@ export class CampaignSession {
           reportsUsage: caps?.reportsUsage,
           supportsPromptCache: caps?.supportsPromptCache,
         },
-        // OpenAI-compatible providers bill reasoning inside completion
-        // tokens, so the kernel uses the inside_completion dialect.
-        reasoningMode: this.profile.reasoningEffort && this.profile.reasoningEffort !== 'off'
-          ? 'always_on'
-          : 'unknown',
+        // Reasoning is a product preference for every new request. Legacy
+        // `off` values normalize to low at the profile boundary.
+        reasoningMode: 'always_on',
       });
     }
     return this.cachedTurnCapabilities;
@@ -1046,14 +1050,26 @@ export class CampaignSession {
     recentHistory: ReadonlyArray<{ turnId: string; publicSummary: string; narrativeText: string | null; stateVersion?: number }>;
   }): Promise<{
     plannerText: string;
-    plannerOutputTokens: number;
+    plannerWireOutputTokens: number;
     narratorText: string;
-    narratorOutputTokens: number;
+    narratorWireOutputTokens: number;
+    reasoningTier: ReturnType<typeof normalizeReasoningTier>;
+    plannerReasoningReserveTokens: number | null;
+    narratorReasoningReserveTokens: number | null;
+    plannerReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext };
+    narratorReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext };
+    reasoningPolicyVersion: string;
     plannerContext: FrozenTurnContext;
     narratorContext: FrozenTurnContext;
   }> {
     const queryText = `${input.intent} ${input.goal}`.trim();
     const capabilities = this.turnCapabilities();
+    const reasoningTier = normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort);
+    const reasoningPolicy = {
+      tier: reasoningTier,
+      providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model),
+      model: this.profile.model,
+    };
 
     const plannerCandidates = candidatesFromParts(input.parts, queryText);
 
@@ -1131,8 +1147,7 @@ export class CampaignSession {
       capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
-      reasoningBudget: 'inside_completion',
-      reasoningReserveTokens: this.profile.reasoningReserveTokens,
+      reasoningPolicy,
     });
 
     // Narrator context (plan §59): scene + party + recent story + memory.
@@ -1166,15 +1181,66 @@ export class CampaignSession {
       capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
-      reasoningBudget: 'inside_completion',
-      reasoningReserveTokens: this.profile.reasoningReserveTokens,
+      reasoningPolicy,
     });
+
+    // A reasoning_only response gets one application-level retry. Its frozen
+    // policy keeps the same tier while reserving 50% more reasoning, which
+    // lets the elastic planner shed optional context before dispatch.
+    const recoveryPolicy = {
+      ...reasoningPolicy,
+      reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
+    };
+    const plannerRecoveryPlan = planTurnContext({
+      requestKind: 'planner', branchId: input.branchId, stateVersion: input.stateVersion,
+      candidates: plannerCandidates, capabilities,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      reasoningPolicy: recoveryPolicy,
+    });
+    const narratorRecoveryPlan = planTurnContext({
+      requestKind: 'narrator', branchId: input.branchId, stateVersion: input.stateVersion,
+      candidates: narratorCandidates, capabilities,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      reasoningPolicy: recoveryPolicy,
+    });
+    const plannerReasoningRecovery = !plannerRecoveryPlan.context.legacyFallback
+      && typeof plannerRecoveryPlan.context.reasoning?.reserveTokens === 'number'
+      && typeof plannerPlan.context.reasoning?.reserveTokens === 'number'
+      && plannerRecoveryPlan.context.reasoning.reserveTokens > plannerPlan.context.reasoning.reserveTokens
+      ? {
+          worldContext: renderFrozenContext(plannerRecoveryPlan.context),
+          wireOutputTokens: plannerRecoveryPlan.wireOutputTokens,
+          reserveTokens: plannerRecoveryPlan.context.reasoning.reserveTokens,
+          context: plannerRecoveryPlan.context,
+        }
+      : undefined;
+    const narratorReasoningRecovery = !narratorRecoveryPlan.context.legacyFallback
+      && typeof narratorRecoveryPlan.context.reasoning?.reserveTokens === 'number'
+      && typeof narratorPlan.context.reasoning?.reserveTokens === 'number'
+      && narratorRecoveryPlan.context.reasoning.reserveTokens > narratorPlan.context.reasoning.reserveTokens
+      ? {
+          worldContext: renderFrozenContext(narratorRecoveryPlan.context),
+          wireOutputTokens: narratorRecoveryPlan.wireOutputTokens,
+          reserveTokens: narratorRecoveryPlan.context.reasoning.reserveTokens,
+          context: narratorRecoveryPlan.context,
+        }
+      : undefined;
 
     return {
       plannerText: renderFrozenContext(plannerPlan.context),
-      plannerOutputTokens: plannerPlan.requestedOutputTokens,
+      plannerWireOutputTokens: plannerPlan.wireOutputTokens,
       narratorText: renderFrozenContext(narratorPlan.context),
-      narratorOutputTokens: narratorPlan.requestedOutputTokens,
+      narratorWireOutputTokens: narratorPlan.wireOutputTokens,
+      reasoningTier,
+      plannerReasoningReserveTokens: plannerPlan.context.reasoning?.reserveTokens ?? null,
+      narratorReasoningReserveTokens: narratorPlan.context.reasoning?.reserveTokens ?? null,
+      plannerReasoningRecovery,
+      narratorReasoningRecovery,
+      reasoningPolicyVersion: plannerPlan.context.reasoning?.policyVersion
+        ?? narratorPlan.context.reasoning?.policyVersion
+        ?? REASONING_POLICY_VERSION,
       plannerContext: plannerPlan.context,
       narratorContext: narratorPlan.context,
     };
@@ -1713,9 +1779,19 @@ export class CampaignSession {
         turnId,
         playerIntent: options.intent,
         worldContext: plannerWorldContext,
-        plannerOutputTokens: turnBundle.plannerOutputTokens,
+        plannerWireOutputTokens: turnBundle.plannerWireOutputTokens,
+        reasoningTier: turnBundle.reasoningTier,
+        plannerReasoningReserveTokens: turnBundle.plannerReasoningReserveTokens,
+        narratorReasoningReserveTokens: turnBundle.narratorReasoningReserveTokens,
+        plannerReasoningRecovery: turnBundle.plannerReasoningRecovery,
+        narratorReasoningRecovery: turnBundle.narratorReasoningRecovery,
+        reasoningPolicyVersion: turnBundle.reasoningPolicyVersion,
         narratorWorldContext: turnBundle.narratorText,
-        narratorOutputTokens: turnBundle.narratorOutputTokens,
+        narratorWireOutputTokens: turnBundle.narratorWireOutputTokens,
+        onReasoningRecovery: (role, context) => {
+          if (role === 'planner') this.lastTurnContexts.planner = context;
+          else this.lastTurnContexts.narrator = context;
+        },
         ...(contentManifest ? { expectedContentDependency: contentDependencyBinding(contentManifest) } : {}),
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
@@ -1855,6 +1931,12 @@ export class CampaignSession {
               branchId: options.branchId,
               currentStateVersion: result.stateVersion,
               actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
+              capabilities: this.turnCapabilities(),
+              reasoningPolicy: {
+                tier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
+                providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model),
+                model: this.profile.model,
+              },
             });
           }
         }

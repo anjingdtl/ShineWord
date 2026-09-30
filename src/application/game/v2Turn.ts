@@ -10,7 +10,9 @@ import {
 import { assertValidActionContract } from '../../domain/turns/contracts';
 import type { ActionContract } from '../../domain/turns/types';
 import type { ContentDependencyBinding } from '../../domain/content/types';
-import type { LlmProvider } from '../llm/types';
+import type { LlmProvider, LlmRequest, ReasoningTier } from '../llm/types';
+import { classifyLlmFailure } from '../llm/requestLedger';
+import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { parseStrictJsonObject } from '../llm/json';
 import { parseStructuredOutput } from '../llm/structuredOutput';
 import { ACTION_FIELD_ALIASES } from './llmTurn';
@@ -29,6 +31,13 @@ export interface NarrativeCandidate {
   turnId: string;
   outcomeGrade: string;
   text: string;
+}
+
+export interface TurnReasoningRecoveryPlan {
+  worldContext: string;
+  wireOutputTokens: number;
+  reserveTokens: number;
+  context: FrozenTurnContext;
 }
 
 export interface RunV2TurnInput {
@@ -60,12 +69,19 @@ export interface RunV2TurnInput {
   settlementFor?(grade: RollGrade, contract: ActionContract): Promise<TurnSettlementPlan>;
   now?: () => string;
   budget?: TurnRequestBudget;
-  /** Kernel-resolved planner output budget (infrastructure plan M5). */
-  plannerOutputTokens?: number;
+  /** The tier/reserves and wire ceiling frozen alongside both contexts. */
+  reasoningTier: ReasoningTier;
+  plannerReasoningReserveTokens: number | null;
+  narratorReasoningReserveTokens: number | null;
+  reasoningPolicyVersion: string;
+  /** Kernel-resolved provider wire output ceilings, including reasoning. */
+  plannerWireOutputTokens: number;
+  narratorWireOutputTokens: number;
+  plannerReasoningRecovery?: TurnReasoningRecoveryPlan;
+  narratorReasoningRecovery?: TurnReasoningRecoveryPlan;
+  onReasoningRecovery?: (role: 'planner' | 'narrator', context: FrozenTurnContext) => void;
   /** Independent narrator context (never the full planner context, §59). */
   narratorWorldContext?: string;
-  /** Kernel-resolved narrator output budget. */
-  narratorOutputTokens?: number;
   usageRecorder?: (record: {
     role: 'Planner' | 'Narrator';
     inputTokens: number | null;
@@ -210,18 +226,23 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     // failure is final - the proposal channel stays strict.
     const requestPlanner = async (repairErrors?: string[]): Promise<PlannerProposal> => {
       budget.consume('Planner');
-      const planned = await input.provider.complete({
+      const makeRequest = (worldContext: string, maxOutputTokens: number, reserveTokens: number | null): LlmRequest => ({
         role: 'Planner',
         system: plannerV2System(),
         user: JSON.stringify({
           turnId: input.turnId,
           expectedStateVersion: state.stateVersion,
           playerIntent: input.playerIntent,
-          worldContext: input.worldContext ?? '',
+          worldContext,
           ...(repairErrors ? { repairInstructions: `Your previous proposal was rejected: ${repairErrors.join('; ')}. Output the corrected complete JSON proposal only.` } : {}),
         }),
-        maxOutputTokens: input.plannerOutputTokens ?? 1200,
+        maxOutputTokens,
+        ...(input.plannerReasoningRecovery ? { maxPhysicalRequests: 1 } : {}),
         jsonMode: true,
+        reasoningTier: input.reasoningTier,
+        reasoningReserveTokens: reserveTokens,
+        reasoningPolicyVersion: input.reasoningPolicyVersion,
+        requestKind: 'planner',
         ledger: {
           logicalRequestId: `planner:${input.branchId}:${input.turnId}`,
           requestKind: 'planner',
@@ -229,6 +250,21 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
           stateVersion: state.stateVersion,
         },
       });
+      let planned;
+      try {
+        planned = await input.provider.complete(makeRequest(
+          input.worldContext ?? '', input.plannerWireOutputTokens, input.plannerReasoningReserveTokens,
+        ));
+      } catch (error) {
+        const recovery = input.plannerReasoningRecovery;
+        if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
+        budget.consume('Planner');
+        input.onReasoningRecovery?.('planner', recovery.context);
+        planned = await input.provider.complete({
+          ...makeRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
+          maxPhysicalRequests: 1,
+        });
+      }
       recordUsage(input, 'Planner', planned);
       return parseStructuredOutput<PlannerProposal>(planned.text, {
         label: 'Planner proposal',
@@ -301,7 +337,11 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   let narrative = await input.narratives.get(input.branchId, input.turnId);
   if (!narrative) {
     budget.consume('Narrator');
-    const narrated = await input.provider.complete({
+    const makeNarratorRequest = (
+      worldContext: string,
+      maxOutputTokens: number,
+      reserveTokens: number | null,
+    ): LlmRequest => ({
       role: 'Narrator',
       system: narratorSystem(),
       user: JSON.stringify({
@@ -309,7 +349,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         playerIntent: input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
-        worldContext: input.narratorWorldContext ?? '',
+        worldContext,
         roll: rollRecord
           ? {
               diceCount: rollRecord.diceCount,
@@ -320,8 +360,13 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
             }
           : null,
       }),
-      maxOutputTokens: input.narratorOutputTokens ?? 1500,
+      maxOutputTokens,
+      ...(input.narratorReasoningRecovery ? { maxPhysicalRequests: 1 } : {}),
       jsonMode: true,
+      reasoningTier: input.reasoningTier,
+      reasoningReserveTokens: reserveTokens,
+      reasoningPolicyVersion: input.reasoningPolicyVersion,
+      requestKind: 'narrator',
       ledger: {
         logicalRequestId: `narrator:${input.branchId}:${input.turnId}`,
         requestKind: 'narrator',
@@ -329,6 +374,21 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         stateVersion: contract.expectedStateVersion,
       },
     });
+    let narrated;
+    try {
+      narrated = await input.provider.complete(makeNarratorRequest(
+        input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
+      ));
+    } catch (error) {
+      const recovery = input.narratorReasoningRecovery;
+      if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
+      budget.consume('Narrator');
+      input.onReasoningRecovery?.('narrator', recovery.context);
+      narrated = await input.provider.complete({
+        ...makeNarratorRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
+        maxPhysicalRequests: 1,
+      });
+    }
     const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
       label: 'Narrator candidate',
     }).value;

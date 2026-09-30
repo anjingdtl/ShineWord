@@ -442,7 +442,7 @@ test('branch delta publication, frozen Planner dependency, fork/save/archive res
       progressiveTurnContext, hashProvider: sha,
       random: { nextBytes: async length => new Uint8Array(length).fill(7) },
     }, provider, { model: 'test', id: 'test', name: 'test', endpoint: 'http://localhost', keyRef: 'unused',
-      capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: false, contextWindow: 8000, maxOutputTokens: 1000 } });
+      capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: false, contextWindow: 8000, maxOutputTokens: 4096 } });
 
     const firstTurn = await session.playTurn({ campaignId: fixture.opening.campaignId,
       branchId: fixture.campaign.branchId, intent: '观察巷口' });

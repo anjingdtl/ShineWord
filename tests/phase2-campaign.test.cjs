@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash } = require('node:crypto');
+const { LlmRequestFailure } = require('../dist/application/llm/types');
 
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
@@ -636,8 +637,7 @@ test('M5: playTurn routes planner/narrator through kernel budgets and separate c
   }, provider, {
     endpoint: 'https://x', model: 'glm-test', keyRef: 'kr',
     capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 32_000, maxOutputTokens: 8_192 },
-    reasoningEffort: 'low',
-    reasoningReserveTokens: 2_048,
+    reasoningTier: 'low',
   });
 
   await session.playTurn({ campaignId: 'camp-ctx', branchId: 'camp-ctx-main', intent: '雨夜潜行接近书阁' });
@@ -646,10 +646,13 @@ test('M5: playTurn routes planner/narrator through kernel budgets and separate c
   const narratorRequest = provider.requests.find(request => request.role === 'Narrator');
   assert.ok(plannerRequest && narratorRequest);
 
-  // Kernel budgets, not the legacy fixed 1200/1500 (planner demand maximum
-  // 4000 fits the declared 8192 ceiling with the GLM reserve inside).
-  assert.equal(plannerRequest.maxOutputTokens, 4_000);
+  // Kernel wire budgets include separate business output + reasoning reserve.
+  assert.equal(plannerRequest.reasoningTier, 'low');
+  assert.equal(plannerRequest.reasoningReserveTokens, 2_048);
+  assert.equal(plannerRequest.maxOutputTokens, 6_048);
   assert.notEqual(narratorRequest.maxOutputTokens, 1_500);
+  assert.equal(narratorRequest.reasoningTier, 'low');
+  assert.equal(narratorRequest.reasoningReserveTokens, 1_024);
 
   // Separate frozen contexts: the narrator payload carries its own
   // worldContext, never the full planner context.
@@ -667,6 +670,96 @@ test('M5: playTurn routes planner/narrator through kernel budgets and separate c
   assert.notEqual(contexts.planner.contextId, contexts.narrator.contextId);
   assert.equal(contexts.narrator.included.some(item => item.board === 'worldKnowledge'), false);
   assert.equal(contexts.narrator.included.some(item => item.board === 'sourceEvidence'), false);
+});
+
+test('M5: one frozen Low/High/Max tier drives planner provider and context budgets', async () => {
+  const observed = [];
+  for (const tier of ['low', 'high', 'max']) {
+    const db = setupDb();
+    const adapter = new NodeSqliteAdapter(db);
+    const worldStore = new SqliteWorldStore(adapter);
+    await seedWorld(db, worldStore);
+    await createSampleCampaign(db, adapter, worldStore, `camp-tier-${tier}`);
+    const provider = new CapturingProvider();
+    const session = new CampaignSession({
+      db: adapter,
+      turns: new SqliteTurnStore(adapter),
+      game: new SqliteGameStore(adapter),
+      worldStore,
+      narratives: new SqliteNarrativeStore(adapter),
+      hashProvider: sha,
+      random: RNG,
+    }, provider, {
+      endpoint: 'https://x', model: 'GLM-5.3-Flash', keyRef: 'kr',
+      reasoningTier: tier,
+      reasoningDialect: 'glm',
+      capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 32_000, maxOutputTokens: 30_000 },
+    });
+    await session.playTurn({ campaignId: `camp-tier-${tier}`, branchId: `camp-tier-${tier}-main`, intent: '雨夜潜行接近书阁' });
+    const plannerRequest = provider.requests.find(request => request.role === 'Planner');
+    const narratorRequest = provider.requests.find(request => request.role === 'Narrator');
+    assert.ok(plannerRequest && narratorRequest);
+    assert.equal(plannerRequest.reasoningTier, tier);
+    assert.equal(plannerRequest.reasoningReserveTokens, { low: 2_048, high: 8_192, max: 24_576 }[tier]);
+    assert.equal(plannerRequest.maxOutputTokens, 4_000 + plannerRequest.reasoningReserveTokens);
+    assert.equal(narratorRequest.reasoningTier, tier);
+    assert.equal(narratorRequest.reasoningReserveTokens, { low: 1_024, high: 4_096, max: 12_288 }[tier]);
+    assert.ok(session.lastTurnContexts.planner.reasoning.reserveTokens > 0);
+    assert.equal(session.lastTurnContexts.planner.reasoning.tier, tier);
+    assert.ok(session.lastTurnContexts.planner.included.some(item => item.board === 'currentState'), 'mandatory current state survives');
+    observed.push({ tier, contextId: session.lastTurnContexts.planner.contextId });
+    db.close();
+  }
+  assert.equal(new Set(observed.map(entry => entry.contextId)).size, 3, 'tier/reserve changes freeze distinct context IDs');
+});
+
+test('M5: reasoning_only retries Planner at the same tier with a boosted reserve and smaller context', async () => {
+  const db = setupDb();
+  try {
+    const adapter = new NodeSqliteAdapter(db);
+    const worldStore = new SqliteWorldStore(adapter);
+    await seedWorld(db, worldStore);
+    await createSampleCampaign(db, adapter, worldStore, 'camp-reasoning-recovery');
+    const provider = new CapturingProvider();
+    const baseComplete = provider.complete.bind(provider);
+    let failedOnce = false;
+    provider.complete = async request => {
+      if (request.role === 'Planner' && !failedOnce) {
+        failedOnce = true;
+        provider.requests.push(request);
+        throw new LlmRequestFailure('reasoning-only fixture', [{
+          attempt: 1, durationMs: 1, httpStatus: 200, outcome: 'reasoning_only', completionState: 'reasoning_only',
+        }]);
+      }
+      return baseComplete(request);
+    };
+    const session = new CampaignSession({
+      db: adapter,
+      turns: new SqliteTurnStore(adapter),
+      game: new SqliteGameStore(adapter),
+      worldStore,
+      narratives: new SqliteNarrativeStore(adapter),
+      hashProvider: sha,
+      random: RNG,
+    }, provider, {
+      endpoint: 'https://x', model: 'GLM-5.3-Flash', keyRef: 'kr',
+      reasoningTier: 'high', reasoningDialect: 'glm',
+      capabilities: { supportsJson: true, supportsStreaming: false, reportsUsage: true, contextWindow: 32_000, maxOutputTokens: 30_000 },
+    });
+    await session.playTurn({ campaignId: 'camp-reasoning-recovery', branchId: 'camp-reasoning-recovery-main', intent: '雨夜潜行接近书阁' });
+    const plannerRequests = provider.requests.filter(request => request.role === 'Planner');
+    assert.equal(plannerRequests.length, 2);
+    assert.deepEqual(plannerRequests.map(request => request.reasoningTier), ['high', 'high']);
+    assert.deepEqual(plannerRequests.map(request => request.reasoningReserveTokens), [8_192, 12_288]);
+    assert.equal(plannerRequests[0].ledger.logicalRequestId, plannerRequests[1].ledger.logicalRequestId);
+    const firstContext = JSON.parse(plannerRequests[0].user).worldContext;
+    const retryContext = JSON.parse(plannerRequests[1].user).worldContext;
+    assert.ok(retryContext.length <= firstContext.length, 'the reserve increase lets optional context shrink');
+    assert.equal(session.lastTurnContexts.planner.reasoning.tier, 'high');
+    assert.equal(session.lastTurnContexts.planner.reasoning.reserveTokens, 12_288);
+  } finally {
+    db.close();
+  }
 });
 
 test('M5: unknown capabilities degrade to the legacy path without breaking play', async () => {
