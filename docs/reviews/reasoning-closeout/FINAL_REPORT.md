@@ -4,7 +4,7 @@
 基线：`origin/main` / `77cdc9dd42b84dc23b3b8047b90b41590487f3ca`
 工作分支：`feature/reasoning-governance-closeout`
 版本：V0.4.1 / versionCode 40100
-PR：[#7](https://github.com/anjingdtl/ShineWord/pull/7)，保持 Draft，未合并
+PR：[#7](https://github.com/anjingdtl/ShineWord/pull/7)，已于 2026-09-30T08:26:56Z 随 `main` 快进推送自动合并
 
 ## 结论
 
@@ -82,8 +82,8 @@ Ledger 按 profile fingerprint、tier、request kind 存储 provider-reported re
 | `git diff --check` | PASS（仅 Windows LF/CRLF 工作副本提示） |
 | `npm run apk:debug --prefix mobile` | PASS，V0.4.1 Debug APK 构建成功，91.76 MB |
 | Release JS bundle / Release APK | PASS；`createBundleReleaseJsAndAssets --rerun-tasks` 后 `assembleRelease` 与仓库校验脚本通过 |
-| GitHub Core Verify | PASS，run `36687226389` |
-| GitHub Android Verify | PASS，run `36687226621` |
+| GitHub Core Verify | PASS，`main` 提交 `08e2428` run `36689762279` |
+| GitHub Android Verify | PASS，`main` 提交 `08e2428` run `36689762299` |
 
 CI 的既有工具链弃用提示不是失败：GitHub runner 提醒 Actions Node 20 迁移和 `setup-java@v4` 弃用。
 
