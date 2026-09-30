@@ -14,6 +14,16 @@ const {
   extractMemorySignals,
 } = require('../dist/application/memory/storyMemoryPolicy');
 const { runStoryMemoryMaintenance, shouldRunMaintenance } = require('../dist/application/memory/storyMemoryMaintenance');
+const { resolveModelCapabilities } = require('../dist/application/llm/capabilityResolver');
+const { LlmRequestFailure } = require('../dist/application/llm/types');
+
+const MEMORY_CAPABILITIES = resolveModelCapabilities({
+  declared: { contextWindowTokens: 128_000, maxOutputTokens: 8_192 },
+  reasoningMode: 'always_on',
+});
+const MEMORY_REASONING_POLICY = {
+  tier: 'low', providerDialect: 'generic', model: 'test-memory-model',
+};
 
 class NodeSqliteAdapter {
   constructor(db) { this.db = db; }
@@ -357,6 +367,7 @@ async function maintenanceFixture(turns, responses, options = {}) {
   const adapter = await memoryDb();
   const store = new SqliteStoryMemoryStore(adapter);
   const provider = scriptedProvider(responses);
+  const { capabilities, reasoningPolicy, ...maintenanceOptions } = options;
   const result = await runStoryMemoryMaintenance({
     provider,
     store,
@@ -364,7 +375,9 @@ async function maintenanceFixture(turns, responses, options = {}) {
     branchId: 'b1',
     currentStateVersion: options.current ?? turns.length,
     actors: [{ actorId: 'player', name: '主角' }, { actorId: 'npc-1', name: '白山君' }],
-    ...options,
+    capabilities: capabilities ?? MEMORY_CAPABILITIES,
+    reasoningPolicy: reasoningPolicy ?? MEMORY_REASONING_POLICY,
+    ...maintenanceOptions,
   });
   const state = await store.getState('b1');
   return { result, state, store, provider, adapter };
@@ -405,7 +418,62 @@ test('maintenance: invalid patch gets one repair round, then clean apply', async
   assert.ok(state.characters['npc-1']);
   assert.equal(provider.requests.length, 2);
   assert.ok(provider.requests[1].user.includes('rejected'), 'repair round feeds errors back');
-  assert.equal(provider.requests[1].ledger.requestKind, 'memory_checkpoint');
+  assert.equal(provider.requests[0].requestKind, 'memory_checkpoint');
+  assert.equal(provider.requests[0].reasoningTier, 'low');
+  assert.equal(provider.requests[0].reasoningReserveTokens, 2_048);
+  assert.equal(provider.requests[0].maxOutputTokens, 6_048, 'wire ceiling includes business output and reasoning reserve');
+  assert.equal(provider.requests[1].ledger.requestKind, 'memory_repair');
+  assert.equal(provider.requests[1].reasoningTier, 'low', 'repair keeps the same user-selected tier');
+  assert.equal(provider.requests[1].maxOutputTokens, 5_048, 'repair has its own business output demand');
+});
+
+test('maintenance: reasoning_only retries same logical batch/tier with a larger policy reserve', async () => {
+  const { result, provider } = await maintenanceFixture([turnRow(1), turnRow(2)], [
+    async () => { throw new LlmRequestFailure('reasoning-only', [{
+      attempt: 1, durationMs: 12, httpStatus: 200, outcome: 'reasoning_only', completionState: 'reasoning_only',
+    }]); },
+    patchFor({ fromStateVersion: 0, toStateVersion: 2 }),
+  ]);
+  assert.equal(result.status, 'clean');
+  assert.equal(provider.requests.length, 2);
+  assert.equal(provider.requests[0].ledger.logicalRequestId, provider.requests[1].ledger.logicalRequestId);
+  assert.equal(provider.requests[0].reasoningTier, 'low');
+  assert.equal(provider.requests[1].reasoningTier, 'low');
+  assert.equal(provider.requests[0].reasoningReserveTokens, 2_048);
+  assert.equal(provider.requests[1].reasoningReserveTokens, 3_072);
+  assert.ok(provider.requests[1].maxOutputTokens > provider.requests[0].maxOutputTokens);
+});
+
+test('maintenance: max reasoning shrinks a whole-turn batch before sending it', async () => {
+  const turns = Array.from({ length: 8 }, (_, index) => turnRow(index + 1, {
+    summary: `事件${index + 1}: ${'证据'.repeat(700)}`,
+    narrative: `叙述${index + 1}: ${'动作与对话'.repeat(2_000)}`,
+  }));
+  const capabilities = resolveModelCapabilities({
+    declared: { contextWindowTokens: 40_000, maxOutputTokens: 32_768 },
+    reasoningMode: 'always_on',
+  });
+  const provider = scriptedProvider([
+    patchFor({ fromStateVersion: 0, toStateVersion: 4 }, { narrative: { currentObjective: '前四回合' } }),
+    patchFor({ fromStateVersion: 4, toStateVersion: 8 }, { narrative: { currentObjective: '后四回合' } }),
+  ]);
+  const adapter = await memoryDb();
+  const store = new SqliteStoryMemoryStore(adapter);
+  const result = await runStoryMemoryMaintenance({
+    provider, store, turnStore: fakeTurnStore(turns), branchId: 'b1', currentStateVersion: 8,
+    actors: [{ actorId: 'player', name: '主角' }, { actorId: 'npc-1', name: '白山君' }],
+    capabilities,
+    reasoningPolicy: { tier: 'max', providerDialect: 'generic', model: 'test-memory-model' },
+  });
+  assert.equal(result.status, 'clean');
+  assert.equal(provider.requests.length, 2);
+  assert.equal(provider.requests[0].ledger.logicalRequestId, 'memory:b1:v0-4');
+  assert.equal(provider.requests[0].reasoningTier, 'max');
+  assert.equal(provider.requests[0].reasoningReserveTokens, 24_576);
+  assert.match(provider.requests[0].user, /"toStateVersion":4/);
+  assert.doesNotMatch(provider.requests[0].user, /"turnId":"t-8"/);
+  assert.equal(provider.requests[1].ledger.logicalRequestId, 'memory:b1:v4-8');
+  assert.equal((await store.getState('b1')).throughStateVersion, 8);
 });
 
 test('maintenance: repeated failures mark memory failed but never throw (no-stall)', async () => {
@@ -429,6 +497,15 @@ test('maintenance: 16 turns split into batches of 8 across one run', async () =>
   assert.equal(result.appliedPatchIds.length, 2);
   assert.equal(state.throughStateVersion, 16);
   assert.equal(state.narrative.currentObjective, '下半');
+});
+
+test('maintenance: request cap reports partial coverage instead of clean', async () => {
+  const { result, state } = await maintenanceFixture([turnRow(1), turnRow(2)], [
+    patchFor({ fromStateVersion: 0, toStateVersion: 1 }),
+  ], { maxBatchTurns: 1, maxAttempts: 1 });
+  assert.equal(result.status, 'partial');
+  assert.equal(result.throughStateVersion, 1);
+  assert.equal(state.throughStateVersion, 1);
 });
 
 test('maintenance: hard gap fails closed without LLM', async () => {
@@ -470,6 +547,7 @@ test('fork: branch-B inherits patches <= fork version and never the source futur
   await runStoryMemoryMaintenance({
     provider, store, turnStore: fakeTurnStore(turns), branchId: 'b1',
     currentStateVersion: 12, actors: [{ actorId: 'player', name: 'p' }, { actorId: 'npc-1', name: 'n' }],
+    capabilities: MEMORY_CAPABILITIES, reasoningPolicy: MEMORY_REASONING_POLICY,
   });
 
   // Fork b1 -> b2 inside a transaction, at v9 (patches <= 9 keep only 0-8).

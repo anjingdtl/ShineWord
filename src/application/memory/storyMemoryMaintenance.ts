@@ -9,7 +9,16 @@
  */
 
 import type { LlmProvider } from '../llm/types';
+import {
+  REASONING_ONLY_RESERVE_MULTIPLIER,
+  type ReasoningPolicySelection,
+} from '../llm/reasoningPolicy';
+import type { FrozenModelCapabilities } from '../llm/requestPlan';
+import { BudgetInfeasibleError } from '../llm/requestPlan';
+import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
+import { classifyLlmFailure } from '../llm/requestLedger';
 import { parseStructuredOutput } from '../llm/structuredOutput';
+import { estimateTokens } from '../context/tokenEstimate';
 import type { SqliteStoryMemoryStore } from './storyMemoryRepository';
 import type { CommittedTurnHistoryEntry } from '../../infra/sqlite/sqliteTurnStore';
 import { emptyStoryMemoryState, type StoryMemoryState } from './storyMemoryTypes';
@@ -34,10 +43,12 @@ export interface MemoryCheckpointRunInput {
   now?: () => string;
   maxBatchTurns?: number;
   maxAttempts?: number;
+  capabilities: FrozenModelCapabilities;
+  reasoningPolicy: ReasoningPolicySelection;
 }
 
 export interface MemoryCheckpointRunResult {
-  status: 'clean' | 'skipped' | 'failed' | 'hard_gap';
+  status: 'clean' | 'partial' | 'skipped' | 'failed' | 'hard_gap';
   throughStateVersion: number;
   appliedPatchIds: string[];
   error?: string;
@@ -100,33 +111,50 @@ export async function runStoryMemoryMaintenance(
       return result;
     }
 
-    const batch = pending.slice(0, maxBatchTurns);
-    const lastBatchTurn = batch[batch.length - 1];
-    if (!lastBatchTurn) break;
-    const from = base.throughStateVersion;
-    const to = lastBatchTurn.stateVersion;
-    const batchTurnIds = new Set(batch.map(turn => turn.turnId));
-
-    const checkpoint = await runSingleCheckpoint({
-      provider: input.provider,
-      state: base,
-      actors: input.actors,
-      batch,
-      fromStateVersion: from,
-      toStateVersion: to,
-      allowedActorIds: knownActors,
-      branchId: input.branchId,
-      store: input.store,
-      batchTurnIds,
-      now,
-      repairRounds: 1,
-    });
+    let batchSize = Math.min(maxBatchTurns, pending.length);
+    let batch: CommittedTurnHistoryEntry[] = [];
+    let checkpoint: SingleCheckpointResult | undefined;
+    while (batchSize > 0) {
+      batch = pending.slice(0, batchSize);
+      const lastBatchTurn = batch[batch.length - 1];
+      if (!lastBatchTurn) break;
+      const from = base.throughStateVersion;
+      const to = lastBatchTurn.stateVersion;
+      checkpoint = await runSingleCheckpoint({
+        provider: input.provider,
+        state: base,
+        actors: input.actors,
+        batch,
+        fromStateVersion: from,
+        toStateVersion: to,
+        allowedActorIds: knownActors,
+        branchId: input.branchId,
+        store: input.store,
+        batchTurnIds: new Set(batch.map(turn => turn.turnId)),
+        now,
+        repairRounds: 1,
+        capabilities: input.capabilities,
+        reasoningPolicy: input.reasoningPolicy,
+      });
+      if (checkpoint.status !== 'too_large' || batchSize === 1) break;
+      batchSize = Math.max(1, Math.floor(batchSize / 2));
+    }
+    if (!checkpoint || checkpoint.status === 'too_large') {
+      result.status = 'failed';
+      result.error = checkpoint?.error ?? 'Story memory batch could not be planned.';
+      result.throughStateVersion = base.throughStateVersion;
+      await input.store.markStatus(input.branchId, 'failed', {
+        dirtyFromStateVersion: base.throughStateVersion + 1,
+        updatedAt: now(),
+      });
+      return result;
+    }
     if (checkpoint.status !== 'applied') {
       result.status = 'failed';
       result.error = checkpoint.error;
       result.throughStateVersion = base.throughStateVersion;
       await input.store.markStatus(input.branchId, 'failed', {
-        dirtyFromStateVersion: from + 1,
+        dirtyFromStateVersion: base.throughStateVersion + 1,
         updatedAt: now(),
       });
       return result;
@@ -136,6 +164,12 @@ export async function runStoryMemoryMaintenance(
     result.throughStateVersion = state.throughStateVersion;
     result.status = 'clean';
   }
+  if (result.status === 'clean' && allTurns.some(turn =>
+    turn.stateVersion > state.throughStateVersion && turn.stateVersion <= input.currentStateVersion)) {
+    result.status = 'partial';
+    result.error = `Memory checkpoint request cap reached; coverage is current through v${state.throughStateVersion}.`;
+  }
+  result.throughStateVersion = state.throughStateVersion;
   return result;
 }
 
@@ -152,10 +186,13 @@ interface SingleCheckpointInput {
   batchTurnIds: ReadonlySet<string>;
   now: () => string;
   repairRounds: number;
+  capabilities: FrozenModelCapabilities;
+  reasoningPolicy: ReasoningPolicySelection;
 }
 
 type SingleCheckpointResult =
   | { status: 'applied'; patchId: string; state: StoryMemoryState }
+  | { status: 'too_large'; error: string }
   | { status: 'rejected'; error: string };
 
 async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<SingleCheckpointResult> {
@@ -177,21 +214,80 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
 
   let repairErrors: string[] | undefined;
   for (let round = 0; round <= input.repairRounds; round += 1) {
-    const response = await input.provider.complete({
-      role: 'Summarizer',
+    const requestKind = repairErrors ? 'memory_repair' as const : 'memory_checkpoint' as const;
+    const user = repairErrors
+      ? compiled.user + `\nYour previous patch was rejected: ${repairErrors.join('; ')}. Return the corrected complete patch only.`
+      : compiled.user;
+    const planRequest = (reasoningPolicy: ReasoningPolicySelection) => planLlmRequest({
+        capabilities: input.capabilities,
+        requestKind,
+        estimatedMandatoryInputTokens: estimateTokens(compiled.system) + 96,
+        businessOutputDemand: DEFAULT_OUTPUT_DEMANDS[requestKind],
+        contextDemands: [{
+          id: 'story-memory-request', board: 'storyMemory', requirement: 'mandatory',
+          priority: 100, relevance: 1,
+          estimatedTokens: estimateTokens(user), minTokens: estimateTokens(user),
+          targetTokens: estimateTokens(user), clipMode: 'whole_item',
+        }],
+        reasoningPolicy,
+      });
+    let plan;
+    try {
+      plan = planRequest(input.reasoningPolicy);
+    } catch (error) {
+      if (round === 0 && error instanceof BudgetInfeasibleError) {
+        return { status: 'too_large', error: error.message };
+      }
+      return { status: 'rejected', error: error instanceof Error ? error.message : String(error) };
+    }
+
+    const makeRequest = (outputPlan: typeof plan) => ({
+      role: 'Summarizer' as const,
       system: compiled.system,
-      user: repairErrors
-        ? compiled.user + `\nYour previous patch was rejected: ${repairErrors.join('; ')}. Return the corrected complete patch only.`
-        : compiled.user,
-      maxOutputTokens: 1_600,
+      user,
+      maxOutputTokens: outputPlan.wireOutputTokens,
+      maxPhysicalRequests: 1,
       jsonMode: true,
+      reasoningTier: outputPlan.reasoningPolicy?.tier,
+      reasoningReserveTokens: outputPlan.reasoningPolicy?.reserveTokens,
+      reasoningPolicyVersion: outputPlan.reasoningPolicy?.policyVersion,
+      requestKind,
       ledger: {
         logicalRequestId: `memory:${input.branchId}:v${input.fromStateVersion}-${input.toStateVersion}`,
-        requestKind: 'memory_checkpoint',
+        requestKind,
         branchId: input.branchId,
         stateVersion: input.toStateVersion,
       },
     });
+
+    let response;
+    try {
+      response = await input.provider.complete(makeRequest(plan));
+    } catch (error) {
+      if (classifyLlmFailure(error) !== 'reasoning_only') {
+        return { status: 'rejected', error: error instanceof Error ? error.message : String(error) };
+      }
+      let boostedPlan;
+      try {
+        boostedPlan = planRequest({
+          ...input.reasoningPolicy,
+          reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
+        });
+      } catch (retryError) {
+        if (round === 0 && retryError instanceof BudgetInfeasibleError) {
+          return { status: 'too_large', error: retryError.message };
+        }
+        return { status: 'rejected', error: retryError instanceof Error ? retryError.message : String(retryError) };
+      }
+      if ((boostedPlan.reasoningPolicy?.reserveTokens ?? 0) <= (plan.reasoningPolicy?.reserveTokens ?? 0)) {
+        return { status: 'rejected', error: 'Reasoning-only retry cannot increase the reserve within the declared capability ceiling.' };
+      }
+      try {
+        response = await input.provider.complete(makeRequest(boostedPlan));
+      } catch (retryError) {
+        return { status: 'rejected', error: retryError instanceof Error ? retryError.message : String(retryError) };
+      }
+    }
 
     let parsed: unknown;
     try {

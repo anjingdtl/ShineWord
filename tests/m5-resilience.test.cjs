@@ -7,6 +7,7 @@ const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations')
 const { FaultInjectionTransport, postWithRetry, withCancellation, CancellationToken, DEFAULT_RETRY_POLICY } = require('../dist/application/llm/resilient');
 const { probeCapabilities } = require('../dist/application/llm/capabilities');
 const { summarizeRange } = require('../dist/application/memory/summarizer');
+const { resolveModelCapabilities } = require('../dist/application/llm/capabilityResolver');
 const { settleTurnProgress, settleRelationships } = require('../dist/application/game/turnSettlement');
 const { trainSkill, isTrainable } = require('../dist/domain/progression/growth');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
@@ -160,8 +161,10 @@ test('summarizer builds range memory and rejects empty summaries', async () => {
         .run(`turn-${String(i).padStart(4, '0')}`);
     }
 
+    let capturedRequest;
     const provider = {
       async complete(request) {
+        capturedRequest = request;
         const payload = JSON.parse(request.user);
         assert.equal(payload.role, 'Summarizer');
         assert.equal(payload.turnSummaries.length, 8);
@@ -172,8 +175,17 @@ test('summarizer builds range memory and rejects empty summaries', async () => {
     const result = await summarizeRange({
       provider, gameStore, turnStore, branchId: 'b-sum',
       fromStateVersion: 1, toStateVersion: 8,
+      capabilities: resolveModelCapabilities({
+        declared: { contextWindowTokens: 128_000, maxOutputTokens: 8_192 },
+        reasoningMode: 'always_on',
+      }),
+      reasoningPolicy: { tier: 'low', providerDialect: 'generic', model: 'summary-test-model' },
     });
     assert.equal(result.memory.kind, 'turn_range_summary');
+    assert.equal(capturedRequest.requestKind, 'summarizer');
+    assert.equal(capturedRequest.reasoningTier, 'low');
+    assert.equal(capturedRequest.reasoningReserveTokens, 1_024);
+    assert.equal(capturedRequest.maxOutputTokens, 3_024, 'kernel output includes business budget and reasoning reserve');
     const memories = await gameStore.listMemories('b-sum');
     assert.equal(memories.length, 1);
     assert.ok(memories[0].summary.includes('藏书阁'));
@@ -181,6 +193,11 @@ test('summarizer builds range memory and rejects empty summaries', async () => {
     await assert.rejects(summarizeRange({
       provider, gameStore, turnStore, branchId: 'b-sum',
       fromStateVersion: 1, toStateVersion: 4,
+      capabilities: resolveModelCapabilities({
+        declared: { contextWindowTokens: 128_000, maxOutputTokens: 8_192 },
+        reasoningMode: 'always_on',
+      }),
+      reasoningPolicy: { tier: 'low', providerDialect: 'generic', model: 'summary-test-model' },
     }), /at least 8/);
   } finally {
     db.close();

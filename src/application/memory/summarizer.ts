@@ -1,5 +1,13 @@
-import type { LlmProvider } from '../llm/types';
+import type { LlmProvider, LlmRequest } from '../llm/types';
+import {
+  REASONING_ONLY_RESERVE_MULTIPLIER,
+  type ReasoningPolicySelection,
+} from '../llm/reasoningPolicy';
+import type { FrozenModelCapabilities } from '../llm/requestPlan';
+import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
+import { classifyLlmFailure } from '../llm/requestLedger';
 import { parseStructuredOutput } from '../llm/structuredOutput';
+import { estimateTokens } from '../context/tokenEstimate';
 import { buildSummaryRequest, SUMMARY_INTERVAL_TURNS } from './retrieval';
 import type { MemoryRecord, SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import type { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
@@ -22,6 +30,8 @@ export async function summarizeRange(input: {
   branchId: string;
   fromStateVersion: number;
   toStateVersion: number;
+  capabilities: FrozenModelCapabilities;
+  reasoningPolicy: ReasoningPolicySelection;
   now?: () => string;
 }): Promise<SummarizerResult> {
   if (input.toStateVersion - input.fromStateVersion + 1 < SUMMARY_INTERVAL_TURNS) {
@@ -39,17 +49,37 @@ export async function summarizeRange(input: {
   }
 
   const payload = buildSummaryRequest(input.fromStateVersion, input.toStateVersion, turnSummaries);
-  const response = await input.provider.complete({
+  const system = [
+    'You are ShineWord Summarizer.',
+    'Output exactly JSON: {"summary": string}.',
+    'Summarize what happened in 120 Chinese characters or fewer.',
+    'Never restate numeric state; numbers are read from authoritative storage.',
+  ].join(' ');
+  const user = JSON.stringify(payload);
+  const planRequest = (reasoningPolicy: ReasoningPolicySelection) => planLlmRequest({
+    capabilities: input.capabilities,
+    requestKind: 'summarizer',
+    estimatedMandatoryInputTokens: estimateTokens(system) + 96,
+    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.summarizer,
+    contextDemands: [{
+      id: 'summarizer-range', board: 'storyMemory', requirement: 'mandatory',
+      priority: 100, relevance: 1,
+      estimatedTokens: estimateTokens(user), minTokens: estimateTokens(user),
+      targetTokens: estimateTokens(user), clipMode: 'whole_item',
+    }],
+    reasoningPolicy,
+  });
+  const makeRequest = (outputPlan: ReturnType<typeof planRequest>): LlmRequest => ({
     role: 'Summarizer',
-    system: [
-      'You are ShineWord Summarizer.',
-      'Output exactly JSON: {"summary": string}.',
-      'Summarize what happened in 120 Chinese characters or fewer.',
-      'Never restate numeric state; numbers are read from authoritative storage.',
-    ].join(' '),
-    user: JSON.stringify(payload),
-    maxOutputTokens: 800,
+    system,
+    user,
+    maxOutputTokens: outputPlan.wireOutputTokens,
+    maxPhysicalRequests: 1,
     jsonMode: true,
+    reasoningTier: outputPlan.reasoningPolicy?.tier,
+    reasoningReserveTokens: outputPlan.reasoningPolicy?.reserveTokens,
+    reasoningPolicyVersion: outputPlan.reasoningPolicy?.policyVersion,
+    requestKind: 'summarizer',
     ledger: {
       logicalRequestId: `summarizer:${input.branchId}:${input.fromStateVersion}-${input.toStateVersion}`,
       requestKind: 'summarizer',
@@ -57,6 +87,21 @@ export async function summarizeRange(input: {
       stateVersion: input.toStateVersion,
     },
   });
+  const plan = planRequest(input.reasoningPolicy);
+  let response;
+  try {
+    response = await input.provider.complete(makeRequest(plan));
+  } catch (error) {
+    if (classifyLlmFailure(error) !== 'reasoning_only') throw error;
+    const boostedPlan = planRequest({
+      ...input.reasoningPolicy,
+      reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
+    });
+    if ((boostedPlan.reasoningPolicy?.reserveTokens ?? 0) <= (plan.reasoningPolicy?.reserveTokens ?? 0)) {
+      throw error;
+    }
+    response = await input.provider.complete(makeRequest(boostedPlan));
+  }
 
   const parsed = parseStructuredOutput<{ summary?: unknown }>(response.text, {
     label: 'Summarizer summary',
