@@ -42,6 +42,31 @@ Candidate package version used for the first signed Release install: V0.4.0 / ve
 - Only `ShineQA` was used for Release. Its preinstalled `com.shineword.app` had the same version and signing certificate. `adb install -r` succeeded, preserving app data; force-stop and cold launch succeeded, and the release JS entrypoint started. High and Max each changed the visible reserve preview as expected.
 - This stage report records the pre-version-bump Release candidate. The V0.4.1 package, final release AVD update, CI after version bump, and final matrix are closed in `FINAL_REPORT.md`.
 
+## Final V0.4.1 signed Release verification
+
+- Version gates reported `0.4.1` / versionCode `40100`. The release JavaScript
+  bundle was regenerated with `createBundleReleaseJsAndAssets --rerun-tasks`
+  before `assembleRelease`; the repository APK script then verified package
+  metadata, the expected signing certificate, one signer, V2 signature, and
+  4-byte alignment.
+- Final artifact:
+  `dist/apk/release/ShineWord-V0.4.1-release.apk`, package
+  `com.shineword.app`, 47,328,370 bytes, SHA-256
+  `6E463DE8CCC89C4DF52C79E43BEB888CD7E1BB66C781DDC1030F4EBF38D5E828`.
+  The public certificate digest matched the repository's configured release
+  certificate. No signing secret was printed or recorded.
+- Only the `ShineQA` Release AVD was running. The V0.4.1 APK installed with
+  `adb install -r`, package inspection returned versionName `0.4.1` and
+  versionCode `40100`, and `am start -W` reported `LaunchState: COLD` for
+  `com.shineword.app/.MainActivity`. No app crash markers were found in the
+  fresh launch logs. The AVD was shut down afterwards; `adb devices` was empty.
+- Post-version gates: Core 441/441, root typecheck, mobile typecheck,
+  `verify:version`, `git diff --check`, and V0.4.1 Debug APK build passed.
+  Core Verify run `36687226389` and Android Verify run `36687226621` passed for
+  code/version commit `9da19591d9f2d2b3f0dee9b256f93114387f47fe`.
+- This verifies a signed release APK build and installation, not a GitHub
+  Release publication. No tag or public Release was created in this closeout.
+
 ## External validation boundaries
 
 - DeepSeek was not tested against a live service because this run had no DeepSeek credentials. Its dialect mapping is covered by deterministic tests only.
