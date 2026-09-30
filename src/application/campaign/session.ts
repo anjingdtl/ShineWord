@@ -5,6 +5,8 @@ import type { LlmProvider } from '../llm/types';
 import { stableFingerprint } from '../llm/requestPlan';
 import { LedgeredProvider } from '../llm/requestLedger';
 import type { LlmRequestLedgerStore } from '../ports/llmLedger';
+import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
+import { runStoryMemoryMaintenance, shouldRunMaintenance } from '../memory/storyMemoryMaintenance';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
@@ -80,6 +82,8 @@ export interface SessionDeps {
   /** Durable physical-request ledger (infrastructure plan M2); optional so
    * pure-domain tests can omit it, but production always provides it. */
   llmLedger?: LlmRequestLedgerStore;
+  /** Story Memory V2 dual-track maintenance (infrastructure plan M3). */
+  storyMemory?: { store: SqliteStoryMemoryStore };
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -1574,6 +1578,30 @@ export class CampaignSession {
           isCurrent: async () => (await this.deps.turns.getState(options.branchId))?.stateVersion === nextState.stateVersion,
         }).catch(() => undefined);
       }
+    }
+
+    // Story Memory V2 dual-track maintenance (infrastructure plan M3):
+    // return-first - the cadence gate and any checkpoint LLM run in the
+    // background and can never block or fail this committed turn.
+    if (this.deps.storyMemory) {
+      const { store } = this.deps.storyMemory;
+      void shouldRunMaintenance({
+        store,
+        turnStore: this.deps.turns,
+        branchId: options.branchId,
+        currentStateVersion: result.stateVersion,
+      })
+        .then(decision => (decision.should
+          ? runStoryMemoryMaintenance({
+            provider: this.provider,
+            store,
+            turnStore: this.deps.turns,
+            branchId: options.branchId,
+            currentStateVersion: result.stateVersion,
+            actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
+          })
+          : undefined))
+        .catch(() => undefined);
     }
 
     return {

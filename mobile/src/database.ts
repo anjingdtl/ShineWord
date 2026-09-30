@@ -7,6 +7,7 @@ import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 import { SqliteLlmLedgerStore } from '../../src/infra/sqlite/sqliteLlmLedgerStore';
+import { SqliteStoryMemoryStore } from '../../src/application/memory/storyMemoryRepository';
 import { recoverInterruptedAttempts } from '../../src/application/llm/requestLedger';
 import { probeFts5 } from '../../src/infra/sqlite/ftsCapability';
 import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
@@ -24,6 +25,7 @@ export interface MobileDatabaseRuntime {
   worldStore: SqliteWorldStore;
   sourceStore: SqliteSourceStore;
   llmLedger: SqliteLlmLedgerStore;
+  storyMemory: SqliteStoryMemoryStore;
   sqliteCapabilities: { fts5: boolean };
   progressiveTurnContext: ProgressiveTurnContextService;
 }
@@ -70,6 +72,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     worldStore,
     sourceStore,
     llmLedger,
+    storyMemory: new SqliteStoryMemoryStore(db),
     sqliteCapabilities: { fts5 },
     progressiveTurnContext,
   };

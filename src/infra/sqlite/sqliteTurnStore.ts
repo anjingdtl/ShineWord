@@ -89,6 +89,8 @@ export interface CommittedTurnHistoryEntry {
   narrativeText: string | null;
   narrativeStatus: NarrativeStatus | null;
   rollRecord: RollRecord | null;
+  /** Effects actually committed for this turn (memory-signal extraction). */
+  effects: EffectOperation[];
   committedAt: string;
 }
 
@@ -280,6 +282,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
           ? null
           : (row.narrative_status as NarrativeStatus),
         rollRecord: roll,
+        effects: parseJson<EffectOperation[]>(row.effects_json, 'turns.effects_json'),
         committedAt: row.committed_at,
       };
     });

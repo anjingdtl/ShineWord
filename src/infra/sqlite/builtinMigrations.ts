@@ -944,6 +944,34 @@ CREATE INDEX IF NOT EXISTS idx_llm_request_attempts_status
   ON llm_request_attempts(status);
 `;
 
+export const STORY_MEMORY_V2_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS story_memory_states (
+  branch_id TEXT PRIMARY KEY,
+  through_state_version INTEGER NOT NULL,
+  state_json TEXT NOT NULL,
+  state_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dirty_from_state_version INTEGER,
+  last_applied_patch_id TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS story_memory_patches (
+  patch_id TEXT PRIMARY KEY,
+  branch_id TEXT NOT NULL,
+  from_state_version INTEGER NOT NULL,
+  to_state_version INTEGER NOT NULL,
+  base_fingerprint TEXT NOT NULL,
+  result_fingerprint TEXT,
+  patch_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  applied_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_story_memory_patches_branch
+  ON story_memory_patches(branch_id, to_state_version);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -964,4 +992,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 17, name: 'unified_build_p1', sql: UNIFIED_BUILD_P1_SCHEMA_SQL },
   { version: 18, name: 'unified_build_p3_stages', sql: UNIFIED_BUILD_P3_SCHEMA_SQL },
   { version: 19, name: 'llm_request_ledger', sql: LLM_REQUEST_LEDGER_SCHEMA_SQL },
+  { version: 20, name: 'story_memory_v2', sql: STORY_MEMORY_V2_SCHEMA_SQL },
 ];
