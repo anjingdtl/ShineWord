@@ -12,11 +12,12 @@
  * entries and never lets the registry bypass any validation gate.
  */
 import type { LlmRequest, LlmResponse } from '../llm/types';
-import { parseStrictJsonObject } from '../llm/json';
+import { parseStructuredOutput } from '../llm/structuredOutput';
 import type { WorldStore } from '../ports/worldStore';
 import type { StoredEntity } from '../ports/worldStore';
 import { entityIdFor } from './extraction';
 import type { ReasoningEffort } from '../worldBuild/groupPlanner';
+import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../worldBuild/llmRequest';
 
 export const BOOK_REGISTRY_VERSION = 'book-registry-1';
 /** Pass 0 output stays a bounded inventory (plan §4.3: "输出 ≤8K"). */
@@ -89,6 +90,7 @@ export interface BuildBookRegistryInput {
   contentHash: string;
   maxOutputTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  governance?: WorldBuildRequestGovernance;
 }
 
 /**
@@ -106,9 +108,12 @@ function registryResultJson(entities: readonly RegistryEntity[]): string {
 
 export async function buildBookRegistry(input: BuildBookRegistryInput): Promise<BookRegistry> {
   const jobId = registryJobId(input.worldId);
+  const checkpointVersion = input.governance
+    ? `${BOOK_REGISTRY_VERSION}#${input.governance.profile.reasoningTier ?? 'low'}`
+    : BOOK_REGISTRY_VERSION;
   const existing = await input.worldStore.getJob(input.worldId, jobId);
   if (existing?.status === 'done' && existing.contentHash === input.contentHash
-    && existing.extractorVersion === BOOK_REGISTRY_VERSION && existing.resultJson) {
+    && existing.extractorVersion === checkpointVersion && existing.resultJson) {
     const stored = JSON.parse(existing.resultJson) as {
       entities?: Array<{ entityKey?: unknown; key?: unknown; type?: unknown; name?: unknown; aliases?: unknown }>;
     };
@@ -134,15 +139,24 @@ export async function buildBookRegistry(input: BuildBookRegistryInput): Promise<
     return { entities, reused: true };
   }
 
-  const response = await input.complete({
+  const baseRequest: LlmRequest = {
     role: 'WorldMapper',
     system: REGISTRY_SYSTEM,
     user: input.segmentBody,
     maxOutputTokens: input.maxOutputTokens ?? REGISTRY_MAX_OUTPUT_TOKENS,
     jsonMode: true,
     reasoningEffort: input.reasoningEffort ?? REGISTRY_REASONING_EFFORT,
-  });
-  const raw = parseStrictJsonObject<RawRegistry>(response.text, 'BookRegistrar output');
+  };
+  const request = input.governance
+    ? governWorldBuildRequest({
+      request: baseRequest,
+      requestKind: 'registry',
+      logicalRequestId: `world-registry:${input.governance.runId}:${input.worldId}:${input.contentHash}`,
+      governance: input.governance,
+    })
+    : baseRequest;
+  const response = await input.complete(request);
+  const raw = parseStructuredOutput<RawRegistry>(response.text, { label: 'BookRegistrar output' }).value;
   const entities: RegistryEntity[] = [];
   const seenKeys = new Set<string>();
   for (const candidate of raw.entities ?? []) {
@@ -184,7 +198,7 @@ export async function buildBookRegistry(input: BuildBookRegistryInput): Promise<
     status: 'done',
     attempts: (existing?.attempts ?? 0) + 1,
     contentHash: input.contentHash,
-    extractorVersion: BOOK_REGISTRY_VERSION,
+    extractorVersion: checkpointVersion,
     modelFingerprint: input.modelFingerprint,
     usageJson: response.usage ? JSON.stringify(response.usage) : null,
     resultJson: registryResultJson(entities),

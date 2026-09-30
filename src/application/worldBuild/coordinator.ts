@@ -21,6 +21,7 @@ import type { WorldStore, WorldRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
+import { BudgetInfeasibleError } from '../llm/requestPlan';
 import {
   DEFAULT_MODEL_BUDGET,
   DEFAULT_PROMPT_OVERHEAD_TOKENS,
@@ -37,6 +38,7 @@ import {
 } from './chapterBatchPlanner';
 import { revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
+import { deriveSafetyMargin } from '../context/modelEnvelope';
 
 export const PIPELINE_VERSION = 'pipeline-unified-1';
 export const PLAN_VERSION_CHUNK = 'plan-chunk-1';
@@ -53,7 +55,7 @@ export const DEFAULT_WORKER_CONCURRENCY = 3;
 export const MAX_WORKER_CONCURRENCY = 4;
 /** Conservative TPM scheduling share (plan §6); cached traffic counts fully. */
 export const TPM_SCHEDULING_RATIO = 0.7;
-/** Reasoning-reserve bump ladder for reasoning_only retries (plan §3.3). */
+/** Legacy reserve helper retained for imported run records and compatibility tests. */
 const REASONING_RESERVE_LADDER = [2_048, 4_096, 8_192, 16_384, 32_768] as const;
 
 export function nextReasoningReserve(current: number): number {
@@ -71,6 +73,8 @@ export interface UnitExtractor {
     chunk: SourceChunk;
     chunkText: string;
     worldId: string;
+    route?: string;
+    reserveMultiplier?: number;
   }): Promise<ExtractionResult>;
 }
 
@@ -185,7 +189,13 @@ export function assessResidentViability(
   }
   const bookTokens = chunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0);
   const total = bookTokens + DEFAULT_PROMPT_OVERHEAD_TOKENS;
-  const allowed = Math.floor(budget.contextWindowTokens * RESIDENT_WINDOW_RATIO);
+  const hardInput = budget.contextWindowTokens - budget.maxContentOutputTokens
+    - budget.reasoningReserveTokens - budget.reserveTokens
+    - deriveSafetyMargin(budget.contextWindowTokens);
+  const allowed = Math.min(
+    Math.floor(budget.contextWindowTokens * RESIDENT_WINDOW_RATIO),
+    hardInput,
+  );
   if (total > allowed) {
     return {
       viable: false,
@@ -689,8 +699,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     const metrics = group.requestMetrics ?? [];
     const last = metrics[metrics.length - 1];
     const outputTokens = last?.usage?.outputTokens;
-    if (typeof outputTokens !== 'number' || chunkCount < 1) return;
-    const reasoningTokens = typeof last?.usage?.reasoningTokens === 'number' ? last.usage.reasoningTokens : 0;
+    if (typeof outputTokens !== 'number' || typeof last?.usage?.reasoningTokens !== 'number' || chunkCount < 1) return;
+    const reasoningTokens = last.usage.reasoningTokens;
     calibrator.record(Math.max(0, outputTokens - reasoningTokens), chunkCount);
   };
 
@@ -706,14 +716,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     });
   };
 
-  /**
-   * reasoning_only handling (plan §3.3): bump the reasoning reserve one
-   * ladder step and retry the SAME unit once before any split. The provider
-   * has already grown its own budget twice by the time we see the failure.
-   */
+  /** Retry the same unit once at the frozen tier with a bounded reserve increase. */
   const runWithReasoningReserveBump = async (
     unit: BuildUnitRecord,
-    makeRequest: (maxOutputTokens?: number) => Promise<GroupExtractionResult>,
+    makeRequest: (reserveMultiplier?: number) => Promise<GroupExtractionResult>,
   ): Promise<GroupExtractionResult> => {
     try {
       return await makeRequest();
@@ -727,9 +733,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           unit.unitId, fencingToken, error.requestMetrics, now(),
         );
       }
-      const bumpedReserve = nextReasoningReserve(deps.budget.reasoningReserveTokens);
-      const bumpedOutput = deps.budget.maxContentOutputTokens + bumpedReserve;
-      return await makeRequest(bumpedOutput);
+      return await makeRequest(1.5);
     }
   };
 
@@ -866,9 +870,20 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (ranges.length === 1 && !resident) {
         const chunk = pendingChunks[0]!;
         const chunkText = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
-        const extraction = await deps.extractor.extract({
-          unitId: unit.unitId, chunk, chunkText, worldId: run.worldId,
-        });
+        const extractInput = {
+          unitId: unit.unitId, chunk, chunkText, worldId: run.worldId, route: route ?? 'all',
+        };
+        let extraction: ExtractionResult;
+        try {
+          extraction = await deps.extractor.extract(extractInput);
+        } catch (error) {
+          if (!isReasoningOnlyFailure(error) || !deps.budget || reasoningBumpRetried.has(unit.unitId)) throw error;
+          reasoningBumpRetried.add(unit.unitId);
+          if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
+            await deps.runStore.appendUnitRequestMetrics(unit.unitId, fencingToken, error.requestMetrics, now());
+          }
+          extraction = await deps.extractor.extract({ ...extractInput, reserveMultiplier: 1.5 });
+        }
         if (deps.signal?.aborted) return 'paused';
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         const committed = await commitExtractionForChunks(
@@ -892,14 +907,14 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         if (resident && bookSegments) {
           const firstSegment = globalSegmentIndexOf.get(ranges[0]!.chunkId) ?? 1;
           const lastSegment = globalSegmentIndexOf.get(ranges[ranges.length - 1]!.chunkId) ?? firstSegment;
-          const makeRequest = async (maxOutputTokens?: number): Promise<GroupExtractionResult> =>
+          const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extractResident({
               unitId: unit.unitId,
               segments: bookSegments,
               scope: { firstSegment, lastSegment },
               worldId: run.worldId,
               registrySummary,
-              maxOutputTokens,
+              reserveMultiplier,
               route: route ?? undefined,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
@@ -916,9 +931,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               text,
             });
           }
-          const makeRequest = async (maxOutputTokens?: number): Promise<GroupExtractionResult> =>
+          const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extract({
-              unitId: unit.unitId, segments, worldId: run.worldId, maxOutputTokens,
+              unitId: unit.unitId, segments, worldId: run.worldId, reserveMultiplier,
               route: route ?? undefined,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
@@ -961,11 +976,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (lostLease) return 'lost_lease';
       if (deps.signal?.aborted) return 'paused';
       const message = error instanceof Error ? error.message : String(error);
-      const classification = classifyExtractionError(message);
+      const classification = classifyExtractionError(message, error);
       const persistedMessage = error instanceof LlmRequestFailure
         ? safeProviderFailureText(error, classification)
         : message.slice(0, 500);
-      if (classification === 'truncation' && ranges.length > 1) {
+      if ((classification === 'truncation' || classification === 'budget_infeasible') && ranges.length > 1) {
         // Transactional split (plan §7.2, generalized by §5 calibration): the
         // oversized group is replaced by calibrated, output-budget-fitting
         // child units; the parent is canceled and never counts.
@@ -1182,7 +1197,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   }
 }
 
-type ErrorClass = 'network' | 'rate_limit' | 'config' | 'truncation' | 'unknown';
+type ErrorClass = 'network' | 'rate_limit' | 'config' | 'truncation' | 'budget_infeasible' | 'unknown';
 
 /** World-side done check (C1 guards) for one chunk. */
 async function isChunkDone(
@@ -1326,7 +1341,8 @@ async function commitResolvedChunk(
   });
 }
 
-function classifyExtractionError(message: string): ErrorClass {
+function classifyExtractionError(message: string, error?: unknown): ErrorClass {
+  if (error instanceof BudgetInfeasibleError) return 'budget_infeasible';
   const lower = message.toLowerCase();
   if (lower.includes('429') || lower.includes('rate limit') || lower.includes('rate_limit')) return 'rate_limit';
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key') || lower.includes('invalid api')) return 'config';

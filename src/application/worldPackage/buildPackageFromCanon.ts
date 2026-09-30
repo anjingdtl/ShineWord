@@ -2,7 +2,7 @@ import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { StoredEntity, StoredEvent, StoredFact, StoredRuleMapping } from '../../application/ports/worldStore';
 import { SHINEWORD_RULESET_VERSION } from '../../domain/rules/ruleset';
 import { ruleMappingIdFor } from '../world/extraction';
-import { parseStrictJsonObject } from '../llm/json';
+import { parseStructuredOutput } from '../llm/structuredOutput';
 import type {
   BookSection,
   ContentEntry,
@@ -34,6 +34,8 @@ export interface MappingCompleteRequest {
   user: string;
   maxOutputTokens?: number;
   jsonMode?: boolean;
+  /** Stable logical request identity for ledger attempt numbering. */
+  logicalRequestId?: string;
 }
 
 export interface MappingProvider {
@@ -50,6 +52,8 @@ export interface BuildPackageInput {
   provider: MappingProvider;
   sha256Hex(input: string): Promise<string> | string;
   worldId: string;
+  /** Frozen World Build run identity, used to keep map batches stable on retry. */
+  runId?: string;
   sourceSha256: string;
   mappingVersion: string;
   createdAt: string;
@@ -888,9 +892,10 @@ async function requestMappingProposals(
       user: buildMapperUserPrompt(batch, relatedEntities, relatedEvents),
       maxOutputTokens: input.resident ? RESIDENT_MAPPING_MAX_OUTPUT_TOKENS : MAPPING_MAX_OUTPUT_TOKENS,
       jsonMode: true,
+      logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${batchJobId}`,
     });
     if (input.signal?.aborted) throw new Error('World package mapping canceled.');
-    const raw = parseStrictJsonObject<Record<string, unknown>>(response.text, 'WorldMapper mapping output');
+    const raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
     const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
     if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
       throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');

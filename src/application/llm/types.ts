@@ -23,6 +23,8 @@ export type LlmRequestKind =
   | 'world_extract'
   | 'world_mapping'
   | 'world_adjudication'
+  | 'timeline'
+  | 'registry'
   | 'summarizer';
 
 export function normalizeReasoningTier(value: unknown): ReasoningTier {

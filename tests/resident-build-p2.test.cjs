@@ -270,7 +270,7 @@ test('T4 two workers extract each unit exactly once and commit each chunk once',
   }
 });
 
-test('T6 reasoning_only bumps the reserve once before any split (mock)', async () => {
+test('T6 reasoning_only retries once at the same tier with a bounded reserve boost (mock)', async () => {
   const db = setupDb();
   try {
     const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-t6');
@@ -295,7 +295,7 @@ test('T6 reasoning_only bumps the reserve once before any split (mock)', async (
     const groupExtractor = {
       version: inner.version,
       async extract(input) {
-        calls.push(input.maxOutputTokens);
+        calls.push(input.reserveMultiplier);
         if (!reasoningOnlyFired) {
           reasoningOnlyFired = true;
           throw new LlmRequestFailure('模型只输出了思维链，未产生正文。', [{
@@ -314,13 +314,11 @@ test('T6 reasoning_only bumps the reserve once before any split (mock)', async (
     }, 'run-t6');
 
     assert.equal(reasoningOnlyFired, true, 'the mock fired the reasoning_only path');
-    // Exactly ONE retry ran at the bumped budget: content 8000 + the next
-    // ladder reserve (2048 -> 4096) = 12096; every other call used the
-    // extractor default (undefined). One extra call in total.
+    // Exactly ONE retry ran with the same tier and 1.5 reserve multiplier;
+    // every other call used the initial frozen reserve. One extra call total.
     const planned = (await runStore.listUnits('run-t6')).filter(u => u.parentUnitId === null).length;
     assert.equal(calls.length, planned + 1, 'exactly one extra physical call for the bump retry');
-    const bumped = 8_000 + nextReasoningReserve(2_048);
-    assert.equal(calls.filter(value => value === bumped).length, 1, `one retry at ${bumped}`);
+    assert.equal(calls.filter(value => value === 1.5).length, 1, 'one same-tier reserve retry');
     assert.equal(done.completed, true, 'the bumped retry completed the unit');
     const units = await runStore.listUnits('run-t6');
     assert.equal(units.filter(unit => unit.parentUnitId !== null).length, 0,

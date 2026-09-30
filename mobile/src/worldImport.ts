@@ -22,6 +22,13 @@ import { summarizeWorldPreparation } from '../../src/application/worldPackage/pr
 import { buildWholeSourceRanges } from '../../src/application/worldPackage/sourceScope';
 import { CodePointOffsetIndex } from '../../src/domain/world/textOffsets';
 import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
+import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
+import { freezeRunConfig, providerProfileFromFrozen } from '../../src/application/worldBuild/runConfig';
+import { governWorldBuildRequest } from '../../src/application/worldBuild/llmRequest';
+import { LedgeredProvider } from '../../src/application/llm/requestLedger';
+import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
+import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
+import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
 
 /**
  * The import pipeline's byte-hash provider (closeout C1). Every call hashes
@@ -297,13 +304,32 @@ export async function buildWorldOnDevice(
   const worldId = existing?.worldId ?? `world-${Date.now().toString(36)}`;
   const resumed = Boolean(existing);
 
-  const provider = new OpenAICompatibleProvider(
-    profile,
+  const budget = modelBudgetFromProfile(profile);
+  const frozen = freezeRunConfig(profile, budget);
+  const frozenProfile = providerProfileFromFrozen(frozen);
+  const runId = `legacy-import:${worldId}`;
+  const modelProfileFingerprint = llmModelProfileFingerprint(frozenProfile);
+  const governance = {
+    profile: frozenProfile,
+    runId,
+    worldId,
+    modelProfileFingerprint,
+    frozenReserveTokensByRequestKind: frozen.reasoningReservePolicy.reserves,
+  };
+  const scheduler = new GlobalRateScheduler({
+    rpm: frozen.rpm,
+    tpm: frozen.tpm,
+    maxConcurrent: 1,
+  });
+  const provider = new RateScheduledProvider(new LedgeredProvider(new OpenAICompatibleProvider(
+    frozenProfile,
     new KeychainSecretStore(),
     new FetchHttpTransport(),
     300_000,
+  ), runtime.llmLedger, { modelProfileFingerprint }), scheduler);
+  const extractor = new LlmChunkExtractor(
+    request => provider.complete(request), budget.maxContentOutputTokens, governance,
   );
-  const extractor = new LlmChunkExtractor(request => provider.complete(request));
 
   const result = await buildWorldFromTxt({
     worldId,
@@ -360,12 +386,21 @@ export async function buildWorldOnDevice(
     worldStore,
     provider: {
       // The mapper always speaks as WorldMapper; adapter aligns the role type.
-      complete: async request => provider.complete({ ...request, role: 'WorldMapper', maxOutputTokens: request.maxOutputTokens ?? 6000 }),
+      complete: async request => provider.complete(governWorldBuildRequest({
+        request: {
+          role: 'WorldMapper', system: request.system, user: request.user,
+          maxOutputTokens: request.maxOutputTokens ?? 6_000, jsonMode: true,
+        },
+        requestKind: 'world_mapping',
+        logicalRequestId: request.logicalRequestId ?? `world-mapping:${runId}:${worldId}`,
+        governance,
+      })),
     },
     sha256Hex: nativeSha256.sha256Hex,
     worldId,
+    runId,
     sourceSha256: world?.sourceSha256 ?? parsed.sourceSha256Hex,
-    mappingVersion: `mapper-1#${profile.model}`,
+    mappingVersion: `mapper-1#${profile.model}#${frozen.reasoningTier}`,
     createdAt: new Date().toISOString(),
     sourceRanges,
     sourceCodePointCount: result.parsed.codePointCount,

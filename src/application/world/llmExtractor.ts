@@ -7,11 +7,17 @@ import type {
   RuleMappingProposal,
 } from '../../domain/world/types';
 import type { StoredChunk } from '../../application/ports/worldStore';
-import { LlmRequestFailure, type LlmRequest, type LlmResponse } from '../../application/llm/types';
+import { LlmRequestFailure, normalizeReasoningTier, type LlmRequest, type LlmResponse, type ReasoningTier } from '../../application/llm/types';
 import { codePointLength } from '../../domain/world/textOffsets';
+import { parseStructuredOutput } from '../../application/llm/structuredOutput';
+import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../../application/worldBuild/llmRequest';
 
 export const LLM_EXTRACTOR_VERSION = 'llm-extractor-1';
 export const DEFAULT_LLM_EXTRACTOR_MAX_OUTPUT_TOKENS = 8000;
+
+export function worldBuildExtractorVersion(tier: ReasoningTier): string {
+  return `${LLM_EXTRACTOR_VERSION}#${tier}`;
+}
 
 const EXTRACTOR_SYSTEM = [
   'You are ShineWord Extractor. You read one chunk of a Chinese novel and output exactly one JSON object, no prose.',
@@ -51,13 +57,7 @@ function asString(value: unknown): string | null {
 }
 
 export function parseExtractorJson(text: string): RawExtraction {
-  const trimmed = text.trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error('Extractor output does not contain a JSON object.');
-  }
-  return JSON.parse(trimmed.slice(start, end + 1)) as RawExtraction;
+  return parseStructuredOutput<RawExtraction>(text, { label: 'Extractor output' }).value;
 }
 
 /**
@@ -66,15 +66,27 @@ export function parseExtractorJson(text: string): RawExtraction {
  * still passes evidence validation against the immutable source.
  */
 export class LlmChunkExtractor implements ChunkExtractor {
-  readonly version = LLM_EXTRACTOR_VERSION;
+  readonly version: string;
 
   constructor(
     private readonly complete: LlmCompleteFn,
     private readonly maxOutputTokens = DEFAULT_LLM_EXTRACTOR_MAX_OUTPUT_TOKENS,
-  ) {}
+    private readonly governance?: WorldBuildRequestGovernance,
+  ) {
+    this.version = governance
+      ? worldBuildExtractorVersion(normalizeReasoningTier(governance.profile.reasoningTier ?? governance.profile.reasoningEffort))
+      : LLM_EXTRACTOR_VERSION;
+  }
 
-  async extract({ chunk, chunkText }: { chunk: StoredChunk; chunkText: string; worldId: string }): Promise<ExtractionResult> {
-    const response = await this.complete({
+  async extract({ chunk, chunkText, unitId, route, reserveMultiplier }: {
+    chunk: StoredChunk;
+    chunkText: string;
+    worldId: string;
+    unitId?: string;
+    route?: string;
+    reserveMultiplier?: number;
+  }): Promise<ExtractionResult> {
+    const baseRequest: LlmRequest = {
       role: 'Extractor',
       system: EXTRACTOR_SYSTEM,
       user: JSON.stringify({
@@ -84,7 +96,17 @@ export class LlmChunkExtractor implements ChunkExtractor {
       }),
       maxOutputTokens: this.maxOutputTokens,
       jsonMode: true,
-    });
+    };
+    const request = this.governance
+      ? governWorldBuildRequest({
+        request: baseRequest,
+        requestKind: 'world_extract',
+        logicalRequestId: `world-extract:${this.governance.runId}:${unitId ?? chunk.chunkId}:${route ?? 'all'}`,
+        governance: this.governance,
+        reserveMultiplier,
+      })
+      : baseRequest;
+    const response = await this.complete(request);
 
     let raw: RawExtraction;
     try {

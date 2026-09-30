@@ -5,25 +5,31 @@ const assert = require('node:assert/strict');
 const { modelBudgetFromProfile } = require('../dist/application/worldBuild/profileModelBudget');
 
 function profile(contextWindow, maxOutputTokens) {
-  return { capabilities: { contextWindow, maxOutputTokens } };
+  return { model: 'generic-test', reasoningTier: 'low', capabilities: { contextWindow, maxOutputTokens } };
 }
 
 test('opening/full-build planner budget follows profile capabilities and extractor output cap', () => {
   assert.deepEqual(modelBudgetFromProfile(profile(32_000, 4_096)), {
     contextWindowTokens: 32_000,
-    maxContentOutputTokens: 4_096,
-    reasoningReserveTokens: 0,
-    reasoningEffort: 'off',
+    maxContentOutputTokens: 2_000,
+    reasoningReserveTokens: 2_096,
+    reasoningEffort: 'low',
+    reasoningTier: 'low',
+    reasoningDialect: 'generic',
+    reasoningPolicyVersion: 'reasoning-policy-1',
     supportsPromptCache: false,
     reserveTokens: 2_000,
   });
-  // The legacy 8k hard clamp is removed (1M plan §5): a profile that
-  // declares a 16k output ceiling now keeps its full content budget.
+  // The user-visible low tier now reserves its world-extract share inside the
+  // declared output ceiling before allocating business output.
   assert.deepEqual(modelBudgetFromProfile(profile(128_000, 16_000)), {
     contextWindowTokens: 128_000,
-    maxContentOutputTokens: 16_000,
-    reasoningReserveTokens: 0,
-    reasoningEffort: 'off',
+    maxContentOutputTokens: 11_904,
+    reasoningReserveTokens: 4_096,
+    reasoningEffort: 'low',
+    reasoningTier: 'low',
+    reasoningDialect: 'generic',
+    reasoningPolicyVersion: 'reasoning-policy-1',
     supportsPromptCache: false,
     reserveTokens: 2_000,
   });
@@ -33,5 +39,5 @@ test('opening/full-build planner budget follows profile capabilities and extract
 test('profile budget rejects invalid limits before planning or making requests', () => {
   assert.throws(() => modelBudgetFromProfile(profile(0, 4096)), /contextWindow/);
   assert.throws(() => modelBudgetFromProfile(profile(32_000, 0)), /maxOutputTokens/);
-  assert.throws(() => modelBudgetFromProfile(profile(4_000, 8_000)), /leaves no room/);
+  assert.throws(() => modelBudgetFromProfile(profile(4_000, 8_000)), /cannot reserve|leaves no room/);
 });

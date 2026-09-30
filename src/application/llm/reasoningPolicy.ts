@@ -58,6 +58,8 @@ export interface ResolveReasoningPolicyInput {
   minimumBusinessOutputTokens?: number;
   historicalStats?: ReasoningUsageStats | null;
   reserveMultiplier?: number;
+  /** Frozen per-run reserve carried by FrozenRunConfig. */
+  reserveTokensOverride?: number;
 }
 
 /** Frozen product decision fields passed into the budget kernel. */
@@ -68,6 +70,8 @@ export interface ReasoningPolicySelection {
   historicalStats?: ReasoningUsageStats | null;
   /** Bounded retry boost after a classified reasoning_only completion. */
   reserveMultiplier?: number;
+  /** Frozen per-run request-kind reserve. */
+  reserveTokensOverride?: number;
 }
 
 export interface ResolvedReasoningPolicy {
@@ -124,6 +128,14 @@ export const REASONING_RESERVE_POLICY: Record<LlmRequestKind, TierReserves> = {
   world_adjudication: {
     target: { low: 2_048, high: 8_192, max: 24_576 },
     minimum: { low: 1_024, high: 4_096, max: 12_288 },
+  },
+  timeline: {
+    target: { low: 2_048, high: 8_192, max: 24_576 },
+    minimum: { low: 1_024, high: 4_096, max: 12_288 },
+  },
+  registry: {
+    target: { low: 4_096, high: 12_288, max: 32_768 },
+    minimum: { low: 2_048, high: 6_144, max: 16_384 },
   },
   summarizer: {
     target: { low: 1_024, high: 4_096, max: 12_288 },
@@ -199,7 +211,11 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
   if (!Number.isFinite(multiplier) || multiplier < 1 || multiplier > 2) {
     throw new ReasoningCapabilityInsufficientError('Reasoning reserve retry multiplier must be between 1 and 2.');
   }
-  const targetReserve = Math.ceil(calibratedReserve * multiplier);
+  if (input.reserveTokensOverride !== undefined
+    && (!Number.isInteger(input.reserveTokensOverride) || input.reserveTokensOverride < minimumReserve)) {
+    throw new ReasoningCapabilityInsufficientError('Frozen reasoning reserve is below the selected tier minimum.');
+  }
+  const targetReserve = Math.ceil((input.reserveTokensOverride ?? calibratedReserve) * multiplier);
   const wireCeiling = Math.min(
     input.modelMaxOutputTokens,
     input.providerWireMaxOutputTokens ?? input.modelMaxOutputTokens,
@@ -227,7 +243,7 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
     reserveTokens,
     providerParams,
     reasoningBudget: 'inside_completion',
-    reserveSource: calibrated ? 'usage_calibrated' : 'cold_start',
+    reserveSource: calibrated && input.reserveTokensOverride === undefined ? 'usage_calibrated' : 'cold_start',
     reserveClamped: reserveTokens < targetReserve,
     p95ReasoningTokens,
     policyVersion: REASONING_POLICY_VERSION,

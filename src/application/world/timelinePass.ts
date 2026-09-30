@@ -11,10 +11,11 @@
  * pass is the upgrade.
  */
 import type { LlmRequest, LlmResponse } from '../llm/types';
-import { parseStrictJsonObject } from '../llm/json';
+import { parseStructuredOutput } from '../llm/structuredOutput';
 import type { WorldStore } from '../ports/worldStore';
 import { eventIdFor } from './extraction';
 import type { ReasoningEffort } from '../worldBuild/groupPlanner';
+import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../worldBuild/llmRequest';
 
 export const TIMELINE_PASS_VERSION = 'timeline-pass-1';
 export const TIMELINE_MAX_OUTPUT_TOKENS = 8_192;
@@ -59,17 +60,21 @@ export interface TimelinePassInput {
   contentHash: string;
   maxOutputTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  governance?: WorldBuildRequestGovernance;
 }
 
 export async function runTimelinePass(input: TimelinePassInput): Promise<TimelinePassResult> {
   const jobId = timelineJobId(input.worldId);
+  const checkpointVersion = input.governance
+    ? `${TIMELINE_PASS_VERSION}#${input.governance.profile.reasoningTier ?? 'low'}`
+    : TIMELINE_PASS_VERSION;
   const proposals = await input.worldStore.listEventProposals(input.worldId);
   if (proposals.length === 0) {
     return { updated: 0, skipped: true, reused: false };
   }
   const existing = await input.worldStore.getJob(input.worldId, jobId);
   if (existing?.status === 'done' && existing.contentHash === input.contentHash
-    && existing.extractorVersion === TIMELINE_PASS_VERSION) {
+    && existing.extractorVersion === checkpointVersion) {
     return { updated: 0, skipped: false, reused: true };
   }
 
@@ -82,15 +87,24 @@ export async function runTimelinePass(input: TimelinePassInput): Promise<Timelin
       chapter: proposal.narrativeChapterId,
     })),
   };
-  const response = await input.complete({
+  const baseRequest: LlmRequest = {
     role: 'WorldMapper',
     system: TIMELINE_SYSTEM,
     user: JSON.stringify(payload),
     maxOutputTokens: input.maxOutputTokens ?? TIMELINE_MAX_OUTPUT_TOKENS,
     jsonMode: true,
     reasoningEffort: input.reasoningEffort ?? TIMELINE_REASONING_EFFORT,
-  });
-  const raw = parseStrictJsonObject<RawTimeline>(response.text, 'Chronicler output');
+  };
+  const request = input.governance
+    ? governWorldBuildRequest({
+      request: baseRequest,
+      requestKind: 'timeline',
+      logicalRequestId: `world-timeline:${input.governance.runId}:${input.worldId}:${input.contentHash}`,
+      governance: input.governance,
+    })
+    : baseRequest;
+  const response = await input.complete(request);
+  const raw = parseStructuredOutput<RawTimeline>(response.text, { label: 'Chronicler output' }).value;
 
   const knownKeys = new Set(proposals.map(proposal => proposal.eventId));
   const proposedOrder = new Map<string, number>();
@@ -146,7 +160,7 @@ export async function runTimelinePass(input: TimelinePassInput): Promise<Timelin
     status: 'done',
     attempts: (existing?.attempts ?? 0) + 1,
     contentHash: input.contentHash,
-    extractorVersion: TIMELINE_PASS_VERSION,
+    extractorVersion: checkpointVersion,
     modelFingerprint: input.modelFingerprint,
     usageJson: response.usage ? JSON.stringify(response.usage) : null,
     resultJson: JSON.stringify({ events: proposals.length, ordered: proposedOrder.size }),

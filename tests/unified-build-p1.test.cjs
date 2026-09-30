@@ -215,7 +215,7 @@ test('U01 frozen run config: sanitize, freeze, revive, identity, no secrets', ()
   assert.equal(frozen.endpoint.includes('secret'), false);
   assert.equal(frozen.keyRef, 'llm.default');
   assert.equal(frozen.bodyTargetRatio, 0.30);
-  assert.equal(frozen.configVersion, 'run-config-1');
+  assert.equal(frozen.configVersion, 'run-config-2');
 
   const json = JSON.stringify(frozen);
   assert.equal(json.includes('sk-hush'), false, 'frozen config never carries the key');

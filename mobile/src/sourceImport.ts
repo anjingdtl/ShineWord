@@ -11,12 +11,16 @@ import { importTxtSourceStreaming, DEFAULT_READ_WINDOW_BYTES } from '../../src/a
 import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore';
 import { createExtractionRun, executeRun, type UnitExtractor } from '../../src/application/worldBuild/coordinator';
-import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
+import { LlmChunkExtractor, worldBuildExtractorVersion } from '../../src/application/world/llmExtractor';
 import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
 import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
 import { runTimelinePass } from '../../src/application/world/timelinePass';
 import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
+import { LedgeredProvider } from '../../src/application/llm/requestLedger';
+import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
+import type { LlmRequest, LlmResponse } from '../../src/application/llm/types';
+import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../../src/application/worldBuild/llmRequest';
 import type { ApiProfile } from '../../src/application/llm/types';
 import { KeychainSecretStore } from './secureKeyStore';
 import { FetchHttpTransport } from './fetchTransport';
@@ -51,6 +55,26 @@ import { GlobalRateScheduler } from '../../src/application/worldBuild/rateSchedu
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { activatePendingStages } from '../../src/application/worldPackage/stageActivation';
 import { startBuildService, requestRunControl } from './buildServiceBridge';
+
+function governMappingRequest(
+  request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string },
+  complete: (request: LlmRequest) => Promise<LlmResponse>,
+  governance: WorldBuildRequestGovernance,
+): Promise<LlmResponse> {
+  const baseRequest: LlmRequest = {
+    role: 'WorldMapper',
+    system: request.system,
+    user: request.user,
+    maxOutputTokens: request.maxOutputTokens ?? 6_000,
+    jsonMode: true,
+  };
+  return complete(governWorldBuildRequest({
+    request: baseRequest,
+    requestKind: 'world_mapping',
+    logicalRequestId: request.logicalRequestId ?? `world-mapping:${governance.runId}:${governance.worldId}`,
+    governance,
+  }));
+}
 
 /** Unified-build import summary (P3): stage plan + first queued runs. */
 export interface UnifiedImportSummary {
@@ -256,10 +280,10 @@ async function importNovelInternal(
     }
     const { plan } = await ensureStagePlan(deps, {
       worldId, sourceId, strategy: unifiedStrategy,
-      configFingerprint: `${config.model}#${config.reasoningEffort}#${config.contentOutputTokens}`,
+      configFingerprint: `${config.model}#${config.reasoningTier}#${config.contentOutputTokens}`,
     });
     const template: StageRunTemplate = {
-      extractorVersion: new LlmChunkExtractor(() => Promise.resolve({ text: '' })).version,
+      extractorVersion: worldBuildExtractorVersion(budget.reasoningTier ?? 'low'),
       modelFingerprint: `${profile.endpoint}#${profile.model}`,
       mode: 'group',
       budget,
@@ -290,15 +314,9 @@ async function importNovelInternal(
   // World + run: continue the existing world for this source if there is one.
   const worldId = `world-${sourceId}`;
   const runId = `run-${sourceId}-${Date.now().toString(36)}`;
-  const extractor = new LlmChunkExtractor(request => {
-    const provider = new OpenAICompatibleProvider(
-      profile,
-      new KeychainSecretStore(),
-      new FetchHttpTransport(),
-      300_000,
-    );
-    return provider.complete(request);
-  });
+  const runBudget = modelBudgetFromProfile(profile);
+  const frozenConfig = freezeRunConfig(profile, runBudget);
+  const extractorVersion = worldBuildExtractorVersion(runBudget.reasoningTier ?? 'low');
   await createExtractionRun(
     { sourceStore, runStore, worldStore: runtime.worldStore, sha256Hex: async input => nativeSha256.sha256Hex(input) },
     {
@@ -307,13 +325,14 @@ async function importNovelInternal(
       sourceId,
       modelFingerprint: `${profile.endpoint}#${profile.model}`,
       title: manifest.title ?? fileName,
-      extractorVersion: extractor.version,
+      extractorVersion,
       // Resident mode (1M plan §4): whole-book prefix with per-unit scope
       // instructions when the book fits 85% of the window and the model
       // supports prefix caching; otherwise the planner degrades to the
       // windowed group mode and records why on the run.
       mode: 'resident',
-      budget: modelBudgetFromProfile(profile),
+      budget: runBudget,
+      config: frozenConfig,
     },
   );
   return {
@@ -446,7 +465,8 @@ async function stageRunTemplateFromWorld(worldId: string): Promise<StageRunTempl
       contextWindowTokens: config.contextWindowTokens,
       maxContentOutputTokens: config.contentOutputTokens,
       reasoningReserveTokens: config.reasoningReserveTokens,
-      reasoningEffort: config.reasoningEffort,
+      reasoningEffort: config.reasoningTier,
+      reasoningTier: config.reasoningTier,
       supportsPromptCache: config.supportsPromptCache,
       reserveTokens: 2_000,
     },
@@ -805,38 +825,51 @@ async function recordOpeningJob(input: {
 
 /** Adapter from the chunk extractor to the run coordinator's unit contract. */
 /** Single-chunk fallback extractor (used when a split reduces to one chunk). */
-export function coordinatorExtractor(profile: ApiProfile): UnitExtractor {
-  const provider = new OpenAICompatibleProvider(
-    profile,
-    new KeychainSecretStore(),
-    new FetchHttpTransport(),
-    300_000,
+export function coordinatorExtractor(
+  profile: ApiProfile,
+  governance?: WorldBuildRequestGovernance,
+  complete?: (request: LlmRequest) => Promise<import('../../src/application/llm/types').LlmResponse>,
+): UnitExtractor {
+  const provider = complete ? null : new OpenAICompatibleProvider(
+    profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000,
   );
-  const inner = new LlmChunkExtractor(request => provider.complete(request));
+  const maxBusinessOutputTokens = governance?.profile.contentOutputTokens
+    ?? modelBudgetFromProfile(profile).maxContentOutputTokens;
+  const inner = new LlmChunkExtractor(
+    request => complete ? complete(request) : provider!.complete(request),
+    maxBusinessOutputTokens,
+    governance,
+  );
   return {
     version: inner.version,
     extract: async input => inner.extract({
       chunk: { ...input.chunk, worldId: input.worldId, extractionStatus: 'pending' },
       chunkText: input.chunkText,
       worldId: input.worldId,
+      unitId: input.unitId,
+      route: input.route,
+      reserveMultiplier: input.reserveMultiplier,
     }),
   };
 }
 
 /** C3 group extractor over the same provider; output cap comes from the
  *  profile-derived budget (content + reasoning reserve), never a hard 8k. */
-export function coordinatorGroupExtractor(profile: ApiProfile): LlmGroupExtractor {
-  const provider = new OpenAICompatibleProvider(
-    profile,
-    new KeychainSecretStore(),
-    new FetchHttpTransport(),
-    300_000,
+export function coordinatorGroupExtractor(
+  profile: ApiProfile,
+  governance?: WorldBuildRequestGovernance,
+  complete?: (request: LlmRequest) => Promise<import('../../src/application/llm/types').LlmResponse>,
+): LlmGroupExtractor {
+  const provider = complete ? null : new OpenAICompatibleProvider(
+    profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000,
   );
-  const budget = modelBudgetFromProfile(profile);
+  const maxBusinessOutputTokens = governance?.profile.contentOutputTokens
+    ?? modelBudgetFromProfile(profile).maxContentOutputTokens;
   return new LlmGroupExtractor(
-    request => provider.complete(request),
-    budget.maxContentOutputTokens + budget.reasoningReserveTokens,
-    budget.reasoningEffort,
+    request => complete ? complete(request) : provider!.complete(request),
+    maxBusinessOutputTokens,
+    governance?.profile.reasoningTier ?? profile.reasoningTier ?? profile.reasoningEffort ?? 'low',
+    governance,
   );
 }
 
@@ -911,7 +944,8 @@ export async function startFullWorldRefinement(
   if (resumable) return { runId: resumable.runId, resumed: true };
 
   const runId = `run-full-${worldId}-${Date.now().toString(36)}`;
-  const extractor = coordinatorExtractor(profile);
+  const runBudget = modelBudgetFromProfile(profile);
+  const extractorVersion = worldBuildExtractorVersion(runBudget.reasoningTier ?? 'low');
   await createExtractionRun(
     { sourceStore, runStore, worldStore: runtime.worldStore, sha256Hex: async input => nativeSha256.sha256Hex(input) },
     {
@@ -920,9 +954,10 @@ export async function startFullWorldRefinement(
       sourceId: source.sourceId,
       modelFingerprint,
       title: world.title,
-      extractorVersion: extractor.version,
+      extractorVersion,
       mode: 'resident',
-      budget: modelBudgetFromProfile(profile),
+      budget: runBudget,
+      config: freezeRunConfig(profile, runBudget),
     },
   );
   return { runId, resumed: false };
@@ -991,7 +1026,25 @@ export async function runExtraction(
   });
   const signal = { aborted: false };
   activeRuns.set(runId, signal);
-  const runBudget = modelBudgetFromProfile(effectiveProfile);
+  const runBudget = runConfig ? {
+    contextWindowTokens: runConfig.contextWindowTokens,
+    maxContentOutputTokens: runConfig.contentOutputTokens,
+    reasoningReserveTokens: runConfig.reasoningReserveTokens,
+    reasoningEffort: runConfig.reasoningTier,
+    reasoningTier: runConfig.reasoningTier,
+    reasoningDialect: runConfig.reasoningDialect,
+    reasoningPolicyVersion: runConfig.reasoningReservePolicy.policyVersion,
+    supportsPromptCache: runConfig.supportsPromptCache,
+    reserveTokens: 2_000,
+  } : modelBudgetFromProfile(effectiveProfile);
+  const modelProfileFingerprint = llmModelProfileFingerprint(effectiveProfile);
+  const requestGovernance: WorldBuildRequestGovernance = {
+    profile: effectiveProfile,
+    runId,
+    worldId: run.worldId,
+    modelProfileFingerprint,
+    frozenReserveTokensByRequestKind: runConfig?.reasoningReservePolicy.reserves,
+  };
   // Global RPM/TPM scheduler (P1 §5): every billable request of this run -
   // extraction, registry, timeline, mapping - shares one budget.
   const scheduler = new GlobalRateScheduler({
@@ -1000,7 +1053,11 @@ export async function runExtraction(
     maxConcurrent: Math.max(1, Math.min(4, effectiveProfile.concurrency ?? 3)),
   });
   const makeProvider = () => new RateScheduledProvider(
-    new OpenAICompatibleProvider(effectiveProfile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000),
+    new LedgeredProvider(
+      new OpenAICompatibleProvider(effectiveProfile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000),
+      runtime.llmLedger,
+      { modelProfileFingerprint },
+    ),
     scheduler,
   );
   try {
@@ -1009,8 +1066,8 @@ export async function runExtraction(
       sourceStore,
       runStore,
       worldStore: runtime.worldStore,
-      extractor: coordinatorExtractor(effectiveProfile),
-      groupExtractor: coordinatorGroupExtractor(effectiveProfile),
+      extractor: coordinatorExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),
+      groupExtractor: coordinatorGroupExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       owner: 'ui',
       signal,
@@ -1027,6 +1084,7 @@ export async function runExtraction(
           modelFingerprint,
           contentHash,
           createdAt: new Date().toISOString(),
+          governance: requestGovernance,
         });
         return registrySummaryFor(registry.entities);
       },
@@ -1039,6 +1097,7 @@ export async function runExtraction(
           modelFingerprint: `${effectiveProfile.endpoint}#${effectiveProfile.model}`,
           contentHash,
           createdAt: new Date().toISOString(),
+          governance: requestGovernance,
         });
       },
       onUnitDone: info => {
@@ -1104,16 +1163,13 @@ export async function runExtraction(
           const built2 = await buildPackageFromCanon({
             worldStore: runtime.worldStore,
             provider: {
-              complete: async request => provider.complete({
-                ...request,
-                role: 'WorldMapper',
-                maxOutputTokens: request.maxOutputTokens ?? 6000,
-              }),
+              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
             },
             sha256Hex: nativeSha256.sha256Hex,
             worldId: run.worldId,
+            runId: run.runId,
             sourceSha256: world.sourceSha256,
-            mappingVersion: `mapper-1#${effectiveProfile.model}`,
+            mappingVersion: `mapper-1#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
             createdAt: new Date().toISOString(),
             stageScope: {
               ranges: [{ startCodePoint: 0, endCodePoint: coveredEnd, contentSha256: coveredHash }],
@@ -1165,16 +1221,15 @@ export async function runExtraction(
           worldStore: runtime.worldStore,
           resident: residentMapping,
           provider: {
-            complete: async request => provider.complete({
-              ...request,
-              role: 'WorldMapper',
-              maxOutputTokens: request.maxOutputTokens ?? 6000,
-            }),
+            complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
           },
           sha256Hex: nativeSha256.sha256Hex,
           worldId: run.worldId,
+          runId: run.runId,
           sourceSha256: world.sourceSha256,
-          mappingVersion: residentMapping ? `mapper-2#${effectiveProfile.model}` : `mapper-1#${effectiveProfile.model}`,
+          mappingVersion: residentMapping
+            ? `mapper-2#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`
+            : `mapper-1#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
           createdAt: new Date().toISOString(),
           sourceRanges,
           sourceCodePointCount: sourceManifest.codePointCount,

@@ -14,8 +14,6 @@ const {
 } = require('../dist/application/worldBuild/groupPlanner');
 const {
   modelBudgetFromProfile,
-  GLM_REASONING_RESERVE_TOKENS,
-  UNCONTROLLABLE_REASONING_HEADROOM_TOKENS,
 } = require('../dist/application/worldBuild/profileModelBudget');
 
 /** 1M-class budget per plan §3.1 (DeepSeek V4.1 Flash extraction profile). */
@@ -67,7 +65,7 @@ test('T1 packer v2: 944 chunks x 1200 cp under a 1M budget are grouped by OUTPUT
 
   // GLM-style 16k content + 2048 reasoning reserve keeps the same grouping:
   // the reserve shrinks the input budget only, which is irrelevant at 1M.
-  const glmBudget = { ...BUDGET_1M, reasoningReserveTokens: GLM_REASONING_RESERVE_TOKENS, reasoningEffort: 'low' };
+  const glmBudget = { ...BUDGET_1M, reasoningReserveTokens: 4_096, reasoningEffort: 'low' };
   const glmGroups = planExtractGroups(chunks, glmBudget);
   assert.equal(glmGroups.length, 68);
 });
@@ -116,36 +114,42 @@ test('split sizing halves by default and only adds parts when the calibrated est
   assert.equal(splitPartCount(6, 800, 1_000), 6);
 });
 
-test('profile budget carries reasoning reserve fields and the uncontrollable-thinking headroom', () => {
+test('profile budget carries request-kind reasoning reserves and business output separately', () => {
   const glm = modelBudgetFromProfile({
     capabilities: {
       supportsJson: true, supportsStreaming: false, reportsUsage: true,
       contextWindow: 1_048_576, maxOutputTokens: 131_072, supportsPromptCache: true,
     },
     contentOutputTokens: 16_384,
-    reasoningReserveTokens: GLM_REASONING_RESERVE_TOKENS,
+    reasoningReserveTokens: 2_048,
     reasoningEffort: 'low',
   });
   assert.equal(glm.maxContentOutputTokens, 16_384);
-  assert.equal(glm.reasoningReserveTokens, 2_048);
+  assert.equal(glm.reasoningReserveTokens, 4_096);
   assert.equal(glm.reasoningEffort, 'low');
+  assert.equal(glm.reasoningTier, 'low');
   assert.equal(glm.supportsPromptCache, true);
-  // GLM max_tokens = content + reserve, and stays >= 8k below the ceiling.
+  // The planner's initial estimate is business output; the kernel adds reserve
+  // once to produce the exact provider wire ceiling.
   const requestMaxTokens = glm.maxContentOutputTokens + glm.reasoningReserveTokens;
-  assert.equal(requestMaxTokens, 18_432);
-  assert.ok(131_072 - requestMaxTokens >= UNCONTROLLABLE_REASONING_HEADROOM_TOKENS);
+  assert.equal(requestMaxTokens, 20_480);
+  assert.ok(131_072 - requestMaxTokens > 0);
 
-  // A small ceiling with uncontrollable thinking must refuse, not truncate.
-  assert.throws(() => modelBudgetFromProfile({
+  // A small but sufficient ceiling keeps the low tier and shrinks business
+  // output to preserve the minimum reasoning reserve.
+  const small = modelBudgetFromProfile({
     capabilities: {
       supportsJson: true, supportsStreaming: false, reportsUsage: true,
       contextWindow: 32_000, maxOutputTokens: 8_192,
     },
     reasoningReserveTokens: 2_048,
     reasoningEffort: 'low',
-  }), /content output room/);
+  });
+  assert.equal(small.reasoningTier, 'low');
+  assert.equal(small.reasoningReserveTokens, 4_096);
+  assert.equal(small.maxContentOutputTokens, 4_096);
 
-  // Non-thinking models need no headroom against the ceiling.
+  // Legacy off migrates to low; automatic World Build never closes thinking.
   const deepseek = modelBudgetFromProfile({
     capabilities: {
       supportsJson: true, supportsStreaming: false, reportsUsage: true,
@@ -154,5 +158,6 @@ test('profile budget carries reasoning reserve fields and the uncontrollable-thi
     reasoningEffort: 'off',
   });
   assert.equal(deepseek.maxContentOutputTokens, 16_384);
-  assert.equal(deepseek.reasoningReserveTokens, 0);
+  assert.equal(deepseek.reasoningReserveTokens, 4_096);
+  assert.equal(deepseek.reasoningTier, 'low');
 });

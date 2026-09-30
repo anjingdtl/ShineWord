@@ -12,7 +12,7 @@
  * is a list of consecutive chunk ranges plus a coverage ledger.
  */
 import type { SourceChapter, SourceChunk } from '../../domain/world/types';
-import type { LegacyReasoningEffort } from '../llm/types';
+import type { LegacyReasoningEffort, ReasoningDialect, ReasoningTier } from '../llm/types';
 
 /** @deprecated Compatibility alias for old frozen world-build records. */
 export type ReasoningEffort = LegacyReasoningEffort;
@@ -25,7 +25,11 @@ export interface ModelBudget {
   /** Chain-of-thought reserve on top of the content budget (GLM low = 2,048). */
   reasoningReserveTokens: number;
   /** @deprecated Legacy run compatibility; new runs use the shared tier policy. */
-  reasoningEffort: ReasoningEffort;
+  reasoningEffort: ReasoningEffort | ReasoningTier;
+  /** Frozen product tier used for every request in the run. */
+  reasoningTier?: ReasoningTier;
+  reasoningDialect?: ReasoningDialect;
+  reasoningPolicyVersion?: string;
   /** Probe-determined prefix-cache support (resident-mode gate). */
   supportsPromptCache: boolean;
   /** Safety margin for schema, formatting drift. */
@@ -36,7 +40,8 @@ export const DEFAULT_MODEL_BUDGET: ModelBudget = {
   contextWindowTokens: 128_000,
   maxContentOutputTokens: 16_384,
   reasoningReserveTokens: 0,
-  reasoningEffort: 'off',
+  reasoningEffort: 'low',
+  reasoningTier: 'low',
   supportsPromptCache: false,
   reserveTokens: 2_000,
 };

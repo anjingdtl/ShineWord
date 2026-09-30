@@ -9,9 +9,34 @@
  * the SecretStore (Keychain on device) at execution time.
  */
 import type { ApiProfile } from '../llm/types';
-import type { ModelBudget, ReasoningEffort } from './groupPlanner';
+import { normalizeReasoningTier, type ReasoningDialect, type ReasoningTier } from '../llm/types';
+import { reasoningDialectForModel, REASONING_POLICY_VERSION, resolveReasoningPolicy } from '../llm/reasoningPolicy';
+import type { LlmRequestKind } from '../llm/types';
+import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestDemands';
+import type { ModelBudget } from './groupPlanner';
 
-export const RUN_CONFIG_VERSION = 'run-config-1';
+export const RUN_CONFIG_VERSION = 'run-config-2';
+
+export interface FrozenReasoningReservePolicy {
+  policyVersion: string;
+  scope: 'per_request_kind';
+  reserves: Partial<Record<LlmRequestKind, number>>;
+}
+
+const WORLD_BUILD_REQUEST_KINDS: readonly LlmRequestKind[] = [
+  'world_extract', 'world_mapping', 'world_adjudication', 'timeline', 'registry',
+];
+
+function normalizeFrozenReserves(value: unknown): Partial<Record<LlmRequestKind, number>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const reserves: Partial<Record<LlmRequestKind, number>> = {};
+  for (const kind of WORLD_BUILD_REQUEST_KINDS) {
+    const reserve = raw[kind];
+    if (typeof reserve === 'number' && Number.isInteger(reserve) && reserve > 0) reserves[kind] = reserve;
+  }
+  return reserves;
+}
 
 export interface FrozenRunConfig {
   configVersion: typeof RUN_CONFIG_VERSION;
@@ -20,7 +45,9 @@ export interface FrozenRunConfig {
   model: string;
   /** SecretStore key holding the API key; the key itself never lives here. */
   keyRef: string;
-  reasoningEffort: ReasoningEffort;
+  reasoningTier: ReasoningTier;
+  reasoningDialect: ReasoningDialect;
+  reasoningReservePolicy: FrozenReasoningReservePolicy;
   /** Content output budget per request (excl. reasoning). */
   contentOutputTokens: number;
   /** Chain-of-thought reserve on top of the content budget. */
@@ -69,12 +96,32 @@ export function freezeRunConfig(
   if (typeof maxOutputTokens !== 'number' || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 1) {
     throw new Error('World Build requires a declared positive model maxOutputTokens capability.');
   }
+  const reasoningTier = budget.reasoningTier ?? normalizeReasoningTier(profile.reasoningTier ?? profile.reasoningEffort);
+  const reasoningDialect = budget.reasoningDialect ?? profile.reasoningDialect ?? reasoningDialectForModel(profile.model);
+  const reserves = Object.fromEntries(WORLD_BUILD_REQUEST_KINDS.map(requestKind => {
+    const resolved = resolveReasoningPolicy({
+      providerDialect: reasoningDialect,
+      model: profile.model,
+      tier: reasoningTier,
+      requestKind,
+      modelMaxOutputTokens: maxOutputTokens,
+      contextWindowTokens: budget.contextWindowTokens,
+      minimumBusinessOutputTokens: DEFAULT_OUTPUT_DEMANDS[requestKind].minimum,
+    });
+    return [requestKind, resolved.reserveTokens];
+  })) as Partial<Record<LlmRequestKind, number>>;
   return {
     configVersion: RUN_CONFIG_VERSION,
     endpoint: sanitizeEndpoint(profile.endpoint),
     model: profile.model,
     keyRef: profile.keyRef,
-    reasoningEffort: budget.reasoningEffort,
+    reasoningTier,
+    reasoningDialect,
+    reasoningReservePolicy: {
+      policyVersion: budget.reasoningPolicyVersion ?? REASONING_POLICY_VERSION,
+      scope: 'per_request_kind',
+      reserves,
+    },
     contentOutputTokens: budget.maxContentOutputTokens,
     reasoningReserveTokens: budget.reasoningReserveTokens,
     contextWindowTokens: budget.contextWindowTokens,
@@ -97,7 +144,10 @@ export function frozenConfigIdentity(config: FrozenRunConfig): string {
     config.configVersion,
     config.endpoint,
     config.model,
-    config.reasoningEffort,
+    config.reasoningTier,
+    config.reasoningDialect,
+    config.reasoningReservePolicy.policyVersion,
+    JSON.stringify(config.reasoningReservePolicy.reserves),
     String(config.contentOutputTokens),
     String(config.reasoningReserveTokens),
     String(config.contextWindowTokens),
@@ -114,8 +164,13 @@ export function frozenConfigIdentity(config: FrozenRunConfig): string {
 export function reviveRunConfig(json: string | null): FrozenRunConfig | null {
   if (!json) return null;
   try {
-    const raw = JSON.parse(json) as Partial<FrozenRunConfig>;
-    if (raw.configVersion !== RUN_CONFIG_VERSION) return null;
+    const raw = JSON.parse(json) as Omit<Partial<FrozenRunConfig>, 'configVersion' | 'reasoningTier'> & {
+      configVersion?: string;
+      reasoningTier?: unknown;
+      reasoningEffort?: unknown;
+    };
+    const legacyV1 = raw.configVersion === 'run-config-1';
+    if (!legacyV1 && raw.configVersion !== RUN_CONFIG_VERSION) return null;
     if (typeof raw.endpoint !== 'string' || typeof raw.model !== 'string' || typeof raw.keyRef !== 'string') return null;
     if (typeof raw.contentOutputTokens !== 'number' || typeof raw.contextWindowTokens !== 'number') return null;
     return {
@@ -123,7 +178,16 @@ export function reviveRunConfig(json: string | null): FrozenRunConfig | null {
       endpoint: raw.endpoint,
       model: raw.model,
       keyRef: raw.keyRef,
-      reasoningEffort: (raw.reasoningEffort ?? 'off') as ReasoningEffort,
+      reasoningTier: normalizeReasoningTier(raw.reasoningTier ?? raw.reasoningEffort),
+      reasoningDialect: raw.reasoningDialect === 'glm' || raw.reasoningDialect === 'deepseek'
+        || raw.reasoningDialect === 'unsupported' ? raw.reasoningDialect : 'generic',
+      reasoningReservePolicy: {
+        policyVersion: typeof raw.reasoningReservePolicy?.policyVersion === 'string'
+          ? raw.reasoningReservePolicy.policyVersion
+          : REASONING_POLICY_VERSION,
+        scope: 'per_request_kind',
+        reserves: normalizeFrozenReserves(raw.reasoningReservePolicy?.reserves),
+      },
       contentOutputTokens: raw.contentOutputTokens,
       reasoningReserveTokens: raw.reasoningReserveTokens ?? 0,
       contextWindowTokens: raw.contextWindowTokens,
@@ -162,7 +226,8 @@ export function providerProfileFromFrozen(config: FrozenRunConfig): ApiProfile {
       maxOutputTokens: config.maxOutputTokens,
       supportsPromptCache: config.supportsPromptCache,
     },
-    reasoningEffort: config.reasoningEffort,
+    reasoningTier: config.reasoningTier,
+    reasoningDialect: config.reasoningDialect,
     contentOutputTokens: config.contentOutputTokens,
     reasoningReserveTokens: config.reasoningReserveTokens > 0 ? config.reasoningReserveTokens : undefined,
     concurrency: config.concurrency,

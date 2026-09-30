@@ -14,10 +14,11 @@ import type {
   RuleMappingProposal,
 } from '../../domain/world/types';
 import { codePointLength } from '../../domain/world/textOffsets';
-import { LlmRequestFailure, type LlmPhysicalRequestMetric, type LlmRequest } from '../../application/llm/types';
+import { LlmRequestFailure, normalizeReasoningTier, type LlmPhysicalRequestMetric, type LlmRequest, type ReasoningTier } from '../../application/llm/types';
 import type { ReasoningEffort } from '../worldBuild/groupPlanner';
 import type { LlmCompleteFn } from './llmExtractor';
 import { parseExtractorJson } from './llmExtractor';
+import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../worldBuild/llmRequest';
 
 export const LLM_GROUP_EXTRACTOR_VERSION = 'llm-group-extractor-1';
 /**
@@ -97,6 +98,8 @@ export interface GroupExtractInput {
   maxOutputTokens?: number;
   /** Per-call reasoning effort override. */
   reasoningEffort?: ReasoningEffort;
+  /** Same-tier reserve increase for one bounded reasoning-only retry. */
+  reserveMultiplier?: number;
   /** Route focus (dual-route runs); omit for full-scope extraction. */
   route?: ExtractRoute;
 }
@@ -118,6 +121,7 @@ export interface ResidentExtractInput {
   maxOutputTokens?: number;
   /** Per-call reasoning effort override. */
   reasoningEffort?: ReasoningEffort;
+  reserveMultiplier?: number;
   /** Route focus (dual-route runs); omit for full-scope extraction. */
   route?: ExtractRoute;
 }
@@ -168,20 +172,30 @@ export class LlmGroupExtractor {
   constructor(
     private readonly complete: LlmCompleteFn,
     private readonly maxOutputTokens = DEFAULT_GROUP_CONTENT_OUTPUT_TOKENS,
-    private readonly reasoningEffort: ReasoningEffort = 'off',
+    private readonly reasoningEffort: ReasoningEffort | ReasoningTier = 'low',
+    private readonly governance?: WorldBuildRequestGovernance,
   ) {}
 
   async extract(input: GroupExtractInput): Promise<GroupExtractionResult> {
     const body = this.buildSegmentBody(input.segments);
     const system = input.route ? `${GROUP_SYSTEM}\n${ROUTE_FOCUS[input.route]}` : GROUP_SYSTEM;
-    const request: LlmRequest = {
+    const baseRequest: LlmRequest = {
       role: 'Extractor',
       system,
       user: body,
       maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
-      reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,
+      reasoningTier: normalizeReasoningTier(input.reasoningEffort ?? this.reasoningEffort),
       jsonMode: true,
     };
+    const request = this.governance
+      ? governWorldBuildRequest({
+        request: baseRequest,
+        requestKind: 'world_extract',
+        logicalRequestId: `world-extract:${this.governance.runId}:${input.unitId}:${input.route ?? 'all'}`,
+        governance: this.governance,
+        reserveMultiplier: input.reserveMultiplier,
+      })
+      : baseRequest;
     const response = await this.complete(request);
     return this.parseResponse(response, input.segments);
   }
@@ -207,15 +221,24 @@ export class LlmGroupExtractor {
     if (input.registrySummary) {
       instruction.push(`实体 key 优先使用注册表中已有的 key：${input.registrySummary}`);
     }
-    const request: LlmRequest = {
+    const baseRequest: LlmRequest = {
       role: 'Extractor',
       system,
       user: body,
       maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
-      reasoningEffort: input.reasoningEffort ?? this.reasoningEffort,
+      reasoningTier: normalizeReasoningTier(input.reasoningEffort ?? this.reasoningEffort),
       jsonMode: true,
       followUpUserMessages: [instruction.join('\n')],
     };
+    const request = this.governance
+      ? governWorldBuildRequest({
+        request: baseRequest,
+        requestKind: 'world_extract',
+        logicalRequestId: `world-extract:${this.governance.runId}:${input.unitId}:${input.route ?? 'all'}`,
+        governance: this.governance,
+        reserveMultiplier: input.reserveMultiplier,
+      })
+      : baseRequest;
     const response = await this.complete(request);
     return this.parseResponse(response, input.segments, input.scope);
   }
