@@ -22,6 +22,24 @@ function profile(endpoint = 'https://example.test/v1') {
   };
 }
 
+test('provider failure text redacts the actual key even when it has no sk- prefix', async () => {
+  const secrets = new MemorySecretStore();
+  const key = 'example.memory.only.credential.123456789';
+  await secrets.set('shineword.llm.p1', key);
+  for (const transport of [
+    { async post() { throw new Error(`network error: ${key}`); } },
+    { async post() { return { status: 401, body: JSON.stringify({ error: { message: `invalid credential ${key}` } }) }; } },
+  ]) {
+    await assert.rejects(new OpenAICompatibleProvider(profile(), secrets, transport)
+      .complete({ role: 'Summarizer', system: 's', user: 'u', maxOutputTokens: 32 }), error => {
+      assert.equal(error.message.includes(key), false);
+      assert.equal(JSON.stringify(error.requestMetrics).includes(key), false);
+      assert.ok(error.message.includes('[redacted]'));
+      return true;
+    });
+  }
+});
+
 test('OpenAI-compatible provider keeps API key out of profile and normalizes usage', async () => {
   const secrets = new MemorySecretStore();
   await secrets.set('shineword.llm.p1', 'secret-value');

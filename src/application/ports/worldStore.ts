@@ -144,6 +144,15 @@ export interface StoredRuleMapping {
   status: 'active' | 'retired';
 }
 
+/** Canon records needed by opening projections, without the full source text. */
+export interface WorldCanonSnapshot {
+  chapters: readonly StoredChapter[];
+  entities: readonly StoredEntity[];
+  facts: readonly StoredFact[];
+  events: readonly StoredEvent[];
+  ruleMappings: readonly StoredRuleMapping[];
+}
+
 export interface WorldJobRecord {
   worldId: string;
   jobId: string;

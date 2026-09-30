@@ -26,6 +26,8 @@ const EXTRACTOR_SYSTEM = [
   '"events":[{"key":string,"title":string,"summary":string,"order":number|null,"dependsOn":string[]}],',
   '"ruleMappings":[{"target":string,"kind":"attribute|skill|power_tier|resource","mapping":object,"evidenceQuotes":string[]}]}',
   'Rules:',
+  '- Analyze every supported category in this chunk: people, identities, relationships, states, locations, factions, items, abilities, world rules and events. A small chunk or rapid opening must NOT reduce these categories.',
+  '- Every named character and location needs its own supported fact with a verbatim quote; do not list entities without evidence. Record current_location/home_location when explicitly supported, and retain source-supported character skill/attribute mappings.',
   '- subject/predicate targets must be entity keys you listed.',
   '- quote MUST be a verbatim contiguous substring of the chunk text supporting the fact.',
   '- status "explicit" only for directly stated facts; "inference" for safe conclusions; "speculation" for guesses.',

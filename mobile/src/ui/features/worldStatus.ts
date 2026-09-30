@@ -17,6 +17,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function worldStatusLine(world: WorldLibraryEntry): string {
+  if (world.packageRevision >= 1 && world.openingReady === false) return `开局资料待补齐 · r${world.packageRevision}`;
   if (world.packageRevision >= 1) return `已发布 · r${world.packageRevision}`;
   return STATUS_LABEL[world.buildStatus] ?? world.buildStatus;
 }

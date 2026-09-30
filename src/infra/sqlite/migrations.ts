@@ -75,6 +75,12 @@ export async function applySqliteMigrations(
         for (const statement of splitSqlStatements(migration.sql)) {
           await tx.execute(statement);
         }
+        if (disableForeignKeys) {
+          const violations = await tx.queryAll('PRAGMA foreign_key_check');
+          if (violations.length > 0) {
+            throw new Error(`Migration ${migration.version} would violate foreign key integrity.`);
+          }
+        }
         await tx.execute(
           'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',
           [migration.version, migration.name, appliedAt()],

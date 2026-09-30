@@ -20,12 +20,6 @@ export function projectLegacyAnchorlessOpeningFacts(
     return [...facts];
   }
 
-  const factIds = new Set([
-    'fact-' + worldId + '-opening-location',
-    'fact-' + worldId + '-opening-setting',
-    'fact-' + worldId + '-opening-situation',
-    'fact-' + worldId + '-opening-goal',
-  ]);
   const predicates = new Set([
     'opening_location',
     'opening_setting',
@@ -35,7 +29,12 @@ export function projectLegacyAnchorlessOpeningFacts(
   const ranges = scope.sourceRanges;
 
   return facts.map(fact => {
-    if (!factIds.has(fact.factId) || !predicates.has(fact.predicate)
+    // Portable imports retain fact/entity identities so package references
+    // stay immutable. Recognize the same exact legacy pair after world-id
+    // rebinding, without projecting other facts with a future reveal time.
+    const sourceWorldId = /^ent-(.+)-opening-location$/.exec(fact.subjectEntityId)?.[1];
+    const expectedId = sourceWorldId ? `fact-${sourceWorldId}-${fact.predicate.replace('_', '-')}` : null;
+    if (fact.worldId !== worldId || fact.factId !== expectedId || !predicates.has(fact.predicate)
       || fact.scope !== 'opening' || fact.status === 'speculation' || fact.status === 'conflict'
       || fact.validFrom !== null || fact.validTo !== null || fact.revealAt !== '1') {
       return fact;

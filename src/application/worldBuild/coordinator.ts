@@ -21,6 +21,7 @@ import type { WorldStore, WorldRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
+import { OutcomeUnknownReplayError } from '../llm/requestLedger';
 import { BudgetInfeasibleError } from '../llm/requestPlan';
 import {
   DEFAULT_MODEL_BUDGET,
@@ -653,8 +654,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
    * stopped_user records an explicit "stop building" that still never drops
    * completed units.
    */
-  const interruptedResultAfterRequest = async (): Promise<ExecuteRunResult> => {
-    await deps.runStore.setRunStatus(runId, deps.signal?.stopRequested ? 'stopped_user' : 'paused_user', now());
+  const interruptedResultAfterRequest = async (control?: 'paused' | 'stopped'): Promise<ExecuteRunResult> => {
+    const stopped = control === 'stopped' || deps.signal?.stopRequested;
+    await deps.runStore.requestRunControl(runId, 'resume', now());
+    await deps.runStore.setRunStatus(runId, stopped ? 'stopped_user' : 'paused_user', now());
     const fresh = await deps.runStore.getRun(runId);
     return {
       runId,
@@ -890,7 +893,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           }
           extraction = await deps.extractor.extract({ ...extractInput, reserveMultiplier: 1.5 });
         }
-        if (deps.signal?.aborted) return 'paused';
+        // A user pause/stop waits for this paid request's fenced commit. Dropping
+        // a successful response here would bill the same unit again on resume.
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         const committed = await commitExtractionForChunks(
           deps, run, [chunk], extraction, evidenceSource,
@@ -944,7 +948,6 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
         }
-        if (deps.signal?.aborted) return 'paused';
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
         recordCalibrationSample(group, pendingChunks.length);
@@ -983,7 +986,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (deps.signal?.aborted) return 'paused';
       const message = error instanceof Error ? error.message : String(error);
       const classification = classifyExtractionError(message, error);
-      const persistedMessage = error instanceof LlmRequestFailure
+      const requiresReview = classification === 'config' || classification === 'outcome_unknown';
+      const persistedMessage = classification === 'outcome_unknown'
+        ? '上次模型请求的扣费结果未知。请先在请求账本确认，避免重复计费。'
+        : error instanceof LlmRequestFailure
         ? safeProviderFailureText(error, classification)
         : message.slice(0, 500);
       if ((classification === 'truncation' || classification === 'budget_infeasible') && ranges.length > 1) {
@@ -1038,17 +1044,17 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       // claimUnit increments the persisted attempt after `unit` was read;
       // account for that in the first backoff too, or a failed first request
       // is immediately sent a second physical time before the loop yields.
-      const backoffMs = classification === 'config' ? 0 : 5_000 * Math.min(unit.attempt + 1, 6);
+      const backoffMs = requiresReview ? 0 : 5_000 * Math.min(unit.attempt + 1, 6);
       await deps.runStore.completeUnit({
         unitId: unit.unitId,
         fencingToken,
-        status: classification === 'config' ? 'needs_review' : 'failed_retryable',
+        status: requiresReview ? 'needs_review' : 'failed_retryable',
         errorCode: classification,
         errorMessage: persistedMessage,
-        retryAt: classification === 'config' ? null : new Date(Date.parse(now()) + backoffMs).toISOString(),
+        retryAt: requiresReview ? null : new Date(Date.parse(now()) + backoffMs).toISOString(),
         now: now(),
       });
-      if (classification === 'config') {
+      if (requiresReview) {
         await deps.runStore.setRunStatus(runId, 'needs_review', now(), classification, persistedMessage);
         stopRequested = true;
         return 'stopped';
@@ -1065,6 +1071,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
    * in another process (headless service). Checked between units; an
    * in-flight request still finishes (its result is fenced on commit).
    *
+   * Workers only observe intent here. The joined pool honors it after every
+   * in-flight response commits, so idle workers cannot pause a live sibling
+   * or latch an intent the user subsequently revokes.
    * 'cancel' honors as stopped_user (P0-4 stop semantics): the run keeps
    * every completed unit, keeps queued/failed units for a later resume and
    * stays visible in the task list - it is a RECOVERABLE stop, not a delete.
@@ -1073,15 +1082,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     const fresh = await deps.runStore.getRun(runId);
     if (!fresh) return 'none';
     if (fresh.cancelRequested) {
-      // 'resume' clears BOTH control flags: a stale stop/pause request must
-      // never immediately re-stop a run the user just resumed.
-      await deps.runStore.requestRunControl(runId, 'resume', now());
-      await deps.runStore.setRunStatus(runId, 'stopped_user', now());
       return 'stopped';
     }
     if (fresh.pauseRequested) {
-      await deps.runStore.requestRunControl(runId, 'resume', now()); // clear flag
-      await deps.runStore.setRunStatus(runId, 'paused_user', now());
       return 'paused';
     }
     return 'none';
@@ -1094,8 +1097,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (deps.signal?.aborted) return 'paused';
       const control = await checkControlFlags();
       if (control === 'paused' || control === 'stopped') {
-        stopRequested = true;
-        return 'stopped';
+        return control;
       }
       const executable = await deps.runStore.listExecutableUnits(runId, now());
       if (executable.length === 0) return 'done';
@@ -1129,10 +1131,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     await Promise.all(workers);
 
     if (deps.signal?.aborted) return await interruptedResultAfterRequest();
+    const control = await checkControlFlags();
+    if (control !== 'none') return await interruptedResultAfterRequest(control);
 
-    // An honored pause/stop/needs-review already wrote its final status via
-    // checkControlFlags or processUnit; never overwrite it with a synthetic
-    // verdict (and never keep pretending 'running').
+    // A configuration failure already wrote needs_review in processUnit.
     if (stopRequested) {
       // A sibling worker's in-flight extractor may have re-set a control
       // flag AFTER the honoring worker cleared it (every worker races its
@@ -1168,6 +1170,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           // Non-fatal: the local resolver covers everything below.
         }
       }
+      if (deps.signal?.aborted) return await interruptedResultAfterRequest();
+      const finalControl = await checkControlFlags();
+      if (finalControl !== 'none') return await interruptedResultAfterRequest(finalControl);
       // Final event resolution replays from the persisted proposals (C1).
       await resolveEventProposals(deps, run.worldId);
       if (deps.onFinalize) {
@@ -1223,7 +1228,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   }
 }
 
-type ErrorClass = 'network' | 'rate_limit' | 'config' | 'truncation' | 'budget_infeasible' | 'unknown';
+type ErrorClass = 'network' | 'rate_limit' | 'config' | 'outcome_unknown' | 'truncation' | 'budget_infeasible' | 'unknown';
 
 /** World-side done check (C1 guards) for one chunk. */
 async function isChunkDone(
@@ -1369,6 +1374,14 @@ async function commitResolvedChunk(
 
 function classifyExtractionError(message: string, error?: unknown): ErrorClass {
   if (error instanceof BudgetInfeasibleError) return 'budget_infeasible';
+  if (error instanceof OutcomeUnknownReplayError) return 'outcome_unknown';
+  if (error instanceof LlmRequestFailure) {
+    const metric = error.requestMetrics[error.requestMetrics.length - 1];
+    if (metric?.httpStatus === 401 || metric?.httpStatus === 403) return 'config';
+    if (metric?.httpStatus === 429) return 'rate_limit';
+    if ((metric?.httpStatus ?? 0) >= 500 && (metric?.httpStatus ?? 0) <= 599) return 'network';
+    if (metric?.errorCategory === 'timeout' || metric?.errorCategory === 'network') return 'network';
+  }
   const lower = message.toLowerCase();
   if (lower.includes('429') || lower.includes('rate limit') || lower.includes('rate_limit')) return 'rate_limit';
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key') || lower.includes('invalid api')) return 'config';

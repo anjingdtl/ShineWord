@@ -12,8 +12,8 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { buildProvider, createSession } from '../../runtime';
 import { getWorldEntry, getWorldPreparationStatus, type WorldLibraryEntry, type WorldPreparationView } from '../../worldImport';
-import { getBuildRunProgress, runExtraction, startFullWorldRefinement, getStagePlanView, switchToFullBuild, type UnifiedImportSummary } from '../../sourceImport';
-import { startBuildService } from '../../buildServiceBridge';
+import { getBuildRunProgress, startFullWorldRefinement, getStagePlanView, switchToFullBuild, type UnifiedImportSummary } from '../../sourceImport';
+import { startOrResumeBuild } from '../../buildWatchdog';
 import { Header } from '../components/Header';
 import { Button } from '../components/Button';
 import { ScreenShell } from '../components/ScreenShell';
@@ -114,7 +114,7 @@ function WorldDetailContent(): React.JSX.Element {
           await refreshWorld();
           return;
         }
-        if (['failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'paused_user', 'paused_system'].includes(progress.status)) {
+        if (['failed_retryable', 'needs_review', 'failed_terminal', 'canceled', 'paused_user', 'stopped_user', 'paused_system'].includes(progress.status)) {
           setRefinementBusy(false);
           setRefinementMessage(progress.status === 'needs_review'
             ? '全量精编遇到需要人工审查的内容；原开局包仍可继续使用。'
@@ -179,20 +179,22 @@ function WorldDetailContent(): React.JSX.Element {
     try {
       const started = await startFullWorldRefinement(worldId, profile);
       setRefinementRunId(started.runId);
-      const serviceStarted = await startBuildService(started.runId);
-      if (serviceStarted) {
+      const outcome = await startOrResumeBuild(started.runId, profile, {
+        resume: started.resumed,
+        onProgress: progress => {
+          if (progress.message) setRefinementMessage(progress.message);
+        },
+      });
+      if (outcome === 'service' || outcome === 'active') {
         setRefinementMessage(started.resumed
           ? '正在恢复已保存的全文整理任务…'
           : '全量精编已在后台启动；本页会显示实际任务进度。');
         return;
       }
-      setRefinementMessage('后台服务不可用，正在前台处理；请保持应用运行。');
-      const result = await runExtraction(started.runId, profile, progress => {
-        if (progress.message) setRefinementMessage(progress.message);
-      });
+      const result = await getBuildRunProgress(started.runId);
       await refreshWorld();
       setRefinementBusy(false);
-      setRefinementMessage(result.completed
+      setRefinementMessage(result?.status === 'completed'
         ? '全文抽取与三宝书发布完成。'
         : '全量精编暂未完成；已保存进度，可稍后重试。');
     } catch (e) {

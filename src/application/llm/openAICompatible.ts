@@ -153,6 +153,13 @@ function transportErrorCategory(error: unknown): 'timeout' | 'network' {
   return /abort|timeout|timed out/i.test(descriptor) ? 'timeout' : 'network';
 }
 
+/** Provider/transport errors can echo credentials with arbitrary key formats. */
+function sanitizedFailureMessage(message: string, apiKey: string): string {
+  return message.split(apiKey).join('[redacted]')
+    .replace(/Bearer\s+[^\s,;"']+/gi, 'Bearer [redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]');
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   constructor(
     private readonly profile: ApiProfile,
@@ -251,7 +258,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
             requestMetrics,
           );
         }
-        throw new LlmRequestFailure(error instanceof Error ? error.message : 'LLM transport failed.', requestMetrics);
+        throw new LlmRequestFailure(sanitizedFailureMessage(
+          error instanceof Error ? error.message : 'LLM transport failed.', apiKey,
+        ), requestMetrics);
       }
 
       let parsed: OpenAIResponseShape;
@@ -283,7 +292,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
             requestMetrics,
           );
         }
-        throw new LlmRequestFailure(parsed.error?.message || `LLM provider HTTP ${response.status}.`, requestMetrics);
+        throw new LlmRequestFailure(sanitizedFailureMessage(
+          parsed.error?.message || `LLM provider HTTP ${response.status}.`, apiKey,
+        ), requestMetrics);
       }
 
       const choice = parsed.choices?.[0];

@@ -424,5 +424,34 @@ test('anchor-less world setup still exposes the compiled opening location and lo
   assert.equal(db.prepare("SELECT reveal_at FROM canon_facts WHERE world_id = ? AND fact_id = ?").get(
     'w-anchorless', 'fact-w-anchorless-opening-location',
   ).reveal_at, '1', 'campaign recovery must preserve the original fact row');
+
+  // A v3 archive rebinds only the owning world id. Legacy opening identities
+  // and immutable reveal times must remain playable after that handoff too.
+  const { exportPortableCanon } = require('../dist/application/export/portableCanon');
+  const { projectLegacyAnchorlessOpeningFacts } = require('../dist/application/worldPackage/openingCompatibility');
+  const sourcePackage = await worldStore.getWorldPackage('w-anchorless', published.manifest.revision);
+  const locationFact = (await worldStore.listFacts('w-anchorless')).find(f => f.predicate === 'opening_location');
+  await worldStore.saveFact({ ...locationFact, factId: 'unrelated-future-fact', predicate: 'opening_goal' }, 'now');
+  const canon = await exportPortableCanon(worldStore, sourcePackage.manifest, sourcePackage.entries, sha.sha256Hex);
+  const archive = await encodeWorldPackageArchive({ title: '旧开局完整资料', ...sourcePackage, canon }, sha.sha256Hex);
+  await importPortableWorldPackage({ worldStore, archive, sha256Hex: sha.sha256Hex,
+    newWorldId: 'portable-anchorless', createdAt: 'later' });
+  const copySetup = await session.getWorldSetup('portable-anchorless');
+  assert.ok(copySetup.locations.includes('opening-location'));
+  const copyPackage = await worldStore.getWorldPackage('portable-anchorless', published.manifest.revision);
+  const copyFacts = await worldStore.listFacts('portable-anchorless');
+  const projected = projectLegacyAnchorlessOpeningFacts('portable-anchorless', copyPackage.manifest, copyFacts, true);
+  assert.equal(projected.find(f => f.factId === 'unrelated-future-fact').revealAt, '1');
+  const copyCampaign = await createCampaign({
+    db: adapter, worldStore, campaignId: 'camp-portable-opening', title: '导入旧开局',
+    worldId: 'portable-anchorless', packageRevision: published.manifest.revision,
+    anchor: { worldTimeOrder: 0, locationId: 'opening-location' },
+    protagonist: { actorId: 'actor-copy', kind: 'original', name: '旅人',
+      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 },
+      initialSkills: ['skill-observation'] }, goal: '观察巷口', createdAt: 'later',
+  });
+  assert.equal(copyCampaign.snapshot.actors['actor-copy'].locationId, 'opening-location');
+  assert.equal(copyFacts.find(f => f.factId === 'fact-w-anchorless-opening-location').revealAt, '1');
+  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
   db.close();
 });

@@ -28,16 +28,9 @@ import { getDatabaseRuntime } from './database';
 import { nativeSha256 } from './nativeCrypto';
 import { stageUri, stagedTextSource, deleteStaged } from './textSource';
 import type { SourceManifest } from '../../src/application/ports/sourceStore';
-import type { WorldRecord, WorldJobRecord } from '../../src/application/ports/worldStore';
+import type { WorldRecord } from '../../src/application/ports/worldStore';
 import { bytesSha } from './worldImport';
 import type { WorldBuildProgress } from './worldImport';
-import {
-  compileProgressiveOpeningPackage,
-  extractOpeningDossier,
-  openingSourceBudgetForProfile,
-  OPENING_DOSSIER_VERSION,
-  OpeningPreparationError,
-} from '../../src/application/worldPackage/progressiveOpening';
 import { buildPackageFromCanon } from '../../src/application/worldPackage/buildPackageFromCanon';
 import { sourceRangesCoverWholeText, summarizeWorldPreparation } from '../../src/application/worldPackage/preparationStatus';
 import { buildWholeSourceRanges } from '../../src/application/worldPackage/sourceScope';
@@ -54,7 +47,7 @@ import { freezeRunConfig, reviveRunConfig, providerProfileFromFrozen } from '../
 import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { activatePendingStages } from '../../src/application/worldPackage/stageActivation';
-import { startBuildService, requestRunControl } from './buildServiceBridge';
+import { requestRunControl } from './buildServiceBridge';
 
 function governMappingRequest(
   request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string },
@@ -101,21 +94,6 @@ export interface StreamedImportSummary {
   reusedSource: boolean;
 }
 
-export interface ProgressiveOpeningSummary {
-  sourceId: string;
-  worldId: string;
-  packageRevision: number;
-  byteLength: number;
-  codePointCount: number;
-  chapterCount: number;
-  chunkCount: number;
-  reusedSource: boolean;
-  alreadyPlayable: boolean;
-  physicalRequests: number;
-  totalMs: number;
-  extractionMs: number;
-}
-
 function makeSourceId(rawSha256: string): string {
   return `src-${rawSha256.slice(0, 16)}-${Date.now().toString(36)}`;
 }
@@ -130,9 +108,9 @@ async function importNovelInternal(
   fileName: string,
   profile: ApiProfile,
   onProgress: (progress: WorldBuildProgress) => void,
-  mode: 'full' | 'opening' | 'unified',
+  mode: 'full' | 'unified',
   unifiedStrategy: 'full' | 'progressive' = 'progressive',
-): Promise<StreamedImportSummary | ProgressiveOpeningSummary | UnifiedImportSummary> {
+): Promise<StreamedImportSummary | UnifiedImportSummary> {
   const importStartedAt = Date.now();
   onProgress({ phase: 'importing', message: '正在读取并解析小说…' });
   const runtime = await getDatabaseRuntime();
@@ -230,18 +208,6 @@ async function importNovelInternal(
     phase: 'importing',
     message: `原文解析完成：${parsedCounts?.chapters ?? 0} 章 · ${parsedCounts?.chunks ?? 0} 块`,
   });
-
-  if (mode === 'opening') {
-    return prepareProgressiveOpening({
-      sourceId,
-      sourceManifest: manifest,
-      reusedSource,
-      fileName,
-      profile,
-      onProgress,
-      totalStartedAt: importStartedAt,
-    });
-  }
 
   if (mode === 'unified') {
     // Unified build (P3): persistent 30/30/40 stage plan; progressive queues
@@ -392,14 +358,14 @@ export async function importNovelStreaming(
   return await importNovelInternal(uri, fileName, profile, onProgress, 'full') as StreamedImportSummary;
 }
 
-/** Default import path: build and publish a bounded playable opening only. */
+/** Compatibility entry: rapid opening changes scheduling, never analysis coverage. */
 export async function importNovelForOpeningStreaming(
   uri: string,
   fileName: string,
   profile: ApiProfile,
   onProgress: (progress: WorldBuildProgress) => void,
-): Promise<ProgressiveOpeningSummary> {
-  return await importNovelInternal(uri, fileName, profile, onProgress, 'opening') as ProgressiveOpeningSummary;
+): Promise<UnifiedImportSummary> {
+  return importNovelUnified(uri, fileName, profile, 'progressive', onProgress);
 }
 
 /**
@@ -463,7 +429,8 @@ export async function checkStageTriggers(input: {
   });
   for (const outcome of outcomes) {
     if (!outcome.deduped && outcome.runId) {
-      await startBuildService(outcome.runId);
+      const { startOrResumeBuild } = await import('./buildWatchdog');
+      void startOrResumeBuild(outcome.runId, null).catch(() => undefined);
     }
   }
   return outcomes;
@@ -592,7 +559,8 @@ export async function switchToFullBuild(worldId: string): Promise<string[]> {
     queued.push(runId);
   }
   for (const runId of queued) {
-    await startBuildService(runId);
+    const { startOrResumeBuild } = await import('./buildWatchdog');
+    void startOrResumeBuild(runId, null).catch(() => undefined);
   }
   return queued;
 }
@@ -619,252 +587,6 @@ export async function getStagePlanView(worldId: string): Promise<{
       };
     }),
   };
-}
-
-async function prepareProgressiveOpening(input: {
-  sourceId: string;
-  sourceManifest: SourceManifest;
-  reusedSource: boolean;
-  fileName: string;
-  profile: ApiProfile;
-  onProgress: (progress: WorldBuildProgress) => void;
-  totalStartedAt: number;
-}): Promise<ProgressiveOpeningSummary> {
-  const runtime = await getDatabaseRuntime();
-  const sourceStore = new SqliteSourceStore(runtime.db);
-  const worldStore = runtime.worldStore;
-  const worldId = `world-${input.sourceId}`;
-  const createdAt = new Date().toISOString();
-  const chapters = await sourceStore.getChapters(input.sourceId);
-  const chunks = await sourceStore.getChunks(input.sourceId);
-  let world = await worldStore.getWorld(worldId);
-  if (!world) {
-    world = {
-      worldId,
-      title: input.sourceManifest.title ?? input.fileName.replace(/\.txt$/i, '') ?? '未命名小说',
-      sourceSha256: input.sourceManifest.rawSha256Hex,
-      sourceBytes: input.sourceManifest.byteLength,
-      normalizeVersion: input.sourceManifest.normalizeVersion,
-      chapterSplitVersion: input.sourceManifest.chapterSplitVersion,
-      buildStatus: 'extracting',
-      createdAt,
-      updatedAt: createdAt,
-    } satisfies WorldRecord;
-    await worldStore.createWorld(world);
-  }
-  await worldStore.saveImportedSource(worldId, {
-    encoding: input.sourceManifest.encoding,
-    sourceSha256Hex: input.sourceManifest.rawSha256Hex,
-    sourceByteLength: input.sourceManifest.byteLength,
-    normalizeVersion: input.sourceManifest.normalizeVersion,
-    chapterSplitVersion: input.sourceManifest.chapterSplitVersion,
-    splitStrategy: input.sourceManifest.splitStrategy,
-    text: '',
-    codePointCount: input.sourceManifest.codePointCount,
-    chapters,
-    chunks,
-  }, createdAt);
-
-  // A completed world already has an immutable playable revision; importing
-  // the same bytes must not replace it or spend another model request.
-  const publishedRevision = await worldStore.getPublishedPackageRevision(worldId);
-  if (publishedRevision !== null) {
-    await worldStore.setWorldStatus(worldId, 'ready', createdAt);
-    return {
-      sourceId: input.sourceId,
-      worldId,
-      packageRevision: publishedRevision,
-      byteLength: input.sourceManifest.byteLength,
-      codePointCount: input.sourceManifest.codePointCount,
-      chapterCount: chapters.length,
-      chunkCount: chunks.length,
-      reusedSource: input.reusedSource,
-      alreadyPlayable: true,
-      physicalRequests: 0,
-      totalMs: Date.now() - input.totalStartedAt,
-      extractionMs: 0,
-    };
-  }
-
-  const sourceExcerptCodePoints = Math.min(
-    input.sourceManifest.codePointCount,
-    8_000,
-  );
-  const sourceExcerptCandidate = await sourceStore.readRange(input.sourceId, 0, sourceExcerptCodePoints);
-  let requestBudget: ReturnType<typeof openingSourceBudgetForProfile>;
-  try {
-    requestBudget = openingSourceBudgetForProfile(input.profile, input.sourceManifest.codePointCount);
-  } catch (error) {
-    const category = error instanceof OpeningPreparationError ? error.errorCode : 'profile_budget';
-    await recordOpeningJob({
-      worldStore,
-      worldId,
-      sourceExcerpt: sourceExcerptCandidate,
-      model: input.profile.model,
-      status: 'failed',
-      requestMetrics: [],
-      usage: null,
-      errorCode: category,
-      resultJson: { schema: OPENING_DOSSIER_VERSION, sourceCodePoints: sourceExcerptCodePoints, physicalRequests: 0 },
-      createdAt: new Date().toISOString(),
-    }).catch(() => undefined);
-    await worldStore.setWorldStatus(worldId, 'failed', new Date().toISOString()).catch(() => undefined);
-    if (error instanceof OpeningPreparationError) throw error;
-    throw new OpeningPreparationError('profile_budget');
-  }
-  const sourceEndCodePoint = requestBudget.sourceCodePoints;
-  if (sourceEndCodePoint <= 0) throw new Error('小说没有可用于开局的文本。');
-  const sourceExcerpt = Array.from(sourceExcerptCandidate).slice(0, sourceEndCodePoint).join('');
-  if (!sourceExcerpt.trim()) throw new Error('小说开头没有可用于开局的文本。');
-  const localChapters = await worldStore.getChapters(worldId);
-  const extractionStartedAt = Date.now();
-  const requestMetrics: import('../../src/application/llm/types').LlmPhysicalRequestMetric[] = [];
-  let physicalRequests = 0;
-  let usage: import('../../src/application/llm/types').LlmUsage | null = null;
-  let dossierResult: Awaited<ReturnType<typeof extractOpeningDossier>> | null = null;
-  const provider = new LedgeredProvider(
-    new OpenAICompatibleProvider(
-      input.profile,
-      new KeychainSecretStore(),
-      new FetchHttpTransport(),
-      180_000,
-      { maxPhysicalRequests: 1 },
-    ),
-    runtime.llmLedger,
-    { modelProfileFingerprint: llmModelProfileFingerprint(input.profile) },
-  );
-  try {
-    input.onProgress({
-      phase: 'extracting',
-      message: `整理开局资料：只向模型提交小说开头 ${sourceEndCodePoint.toLocaleString()} 个码点…`,
-    });
-    dossierResult = await extractOpeningDossier({
-      provider,
-      sourceExcerpt,
-      budget: requestBudget,
-      ledger: {
-        logicalRequestId: `world-opening-dossier:${worldId}:${input.sourceManifest.rawSha256Hex}`,
-        worldId,
-      },
-    });
-    requestMetrics.push(...dossierResult.requestMetrics);
-    physicalRequests = dossierResult.physicalRequests;
-    usage = dossierResult.usage;
-    const extractionMs = Date.now() - extractionStartedAt;
-    input.onProgress({ phase: 'extracting', message: '原文引文校验通过，正在本地编译并校验开局范围包…' });
-    const compileStartedAt = Date.now();
-    const packageResult = await compileProgressiveOpeningPackage({
-      worldStore,
-      sha256Hex: async value => nativeSha256.sha256Hex(value),
-      worldId,
-      sourceSha256: input.sourceManifest.rawSha256Hex,
-      sourceExcerpt,
-      sourceEndCodePoint,
-      chapters: localChapters,
-      dossier: dossierResult.dossier,
-      requestMetrics,
-      usage,
-      extractionMs,
-      createdAt: new Date().toISOString(),
-    });
-    const compileAndPublishMs = Date.now() - compileStartedAt;
-    await recordOpeningJob({
-      worldStore,
-      worldId,
-      sourceExcerpt,
-      model: input.profile.model,
-      status: 'done',
-      requestMetrics,
-      usage,
-      resultJson: {
-        schema: OPENING_DOSSIER_VERSION,
-        packageRevision: packageResult.manifest.revision,
-        packageHash: packageResult.manifest.contentHash,
-        sourceCodePoints: sourceEndCodePoint,
-        physicalRequests,
-        repairUsed: dossierResult.repairUsed,
-        extractionMs,
-        compileAndPublishMs,
-        totalMs: Date.now() - input.totalStartedAt,
-      },
-      createdAt: new Date().toISOString(),
-    });
-    await worldStore.setWorldStatus(worldId, 'ready', new Date().toISOString());
-    input.onProgress({ phase: 'done', message: '开局范围包已发布，可创建角色并开始第一回合。' });
-    return {
-      sourceId: input.sourceId,
-      worldId,
-      packageRevision: packageResult.manifest.revision,
-      byteLength: input.sourceManifest.byteLength,
-      codePointCount: input.sourceManifest.codePointCount,
-      chapterCount: chapters.length,
-      chunkCount: chunks.length,
-      reusedSource: input.reusedSource,
-      alreadyPlayable: false,
-      physicalRequests,
-      totalMs: Date.now() - input.totalStartedAt,
-      extractionMs,
-    };
-  } catch (error) {
-    const safeMetrics = requestMetrics.length > 0
-      ? requestMetrics
-      : error instanceof OpeningPreparationError ? [...error.requestMetrics] : [];
-    const category = error instanceof OpeningPreparationError ? error.errorCode : 'preparation_failed';
-    await recordOpeningJob({
-      worldStore,
-      worldId,
-      sourceExcerpt,
-      model: input.profile.model,
-      status: 'failed',
-      requestMetrics: safeMetrics,
-      usage,
-      errorCode: category,
-      resultJson: {
-        schema: OPENING_DOSSIER_VERSION,
-        sourceCodePoints: sourceEndCodePoint,
-        physicalRequests: safeMetrics.length,
-        elapsedMs: Date.now() - extractionStartedAt,
-      },
-      createdAt: new Date().toISOString(),
-    }).catch(() => undefined);
-    await worldStore.setWorldStatus(worldId, 'failed', new Date().toISOString()).catch(() => undefined);
-    if (error instanceof OpeningPreparationError) throw error;
-    throw new OpeningPreparationError('provider_failure', safeMetrics);
-  }
-}
-
-async function recordOpeningJob(input: {
-  worldStore: import('../../src/infra/sqlite/sqliteWorldStore').SqliteWorldStore;
-  worldId: string;
-  sourceExcerpt: string;
-  model: string;
-  status: 'done' | 'failed';
-  requestMetrics: readonly import('../../src/application/llm/types').LlmPhysicalRequestMetric[];
-  usage: import('../../src/application/llm/types').LlmUsage | null;
-  errorCode?: string;
-  resultJson: Record<string, unknown>;
-  createdAt: string;
-}): Promise<void> {
-  const contentHash = await nativeSha256.sha256Hex(input.sourceExcerpt);
-  const jobId = `job-progressive-opening-${input.worldId}`;
-  const existing = await input.worldStore.getJob(input.worldId, jobId);
-  const job: WorldJobRecord = {
-    worldId: input.worldId,
-    jobId,
-    kind: 'rule_mapping',
-    targetId: 'progressive-opening-dossier',
-    status: input.status,
-    attempts: (existing?.attempts ?? 0) + input.requestMetrics.length,
-    contentHash,
-    extractorVersion: OPENING_DOSSIER_VERSION,
-    modelFingerprint: input.model,
-    usageJson: JSON.stringify({ usage: input.usage, requestMetrics: input.requestMetrics }),
-    resultJson: JSON.stringify(input.resultJson),
-    error: input.errorCode ?? null,
-    createdAt: existing?.createdAt ?? input.createdAt,
-    updatedAt: input.createdAt,
-  };
-  await input.worldStore.upsertJob(job, input.createdAt);
 }
 
 /** Adapter from the chunk extractor to the run coordinator's unit contract. */
@@ -925,13 +647,57 @@ export function coordinatorGroupExtractor(
  * (recoverable stop, never a delete of completed units).
  */
 const activeRuns = new Map<string, { aborted: boolean; stopRequested?: boolean }>();
+const controlWrites = new Map<string, Promise<void>>();
+
+/** Preserve tap order even when a native pause write is still in flight. */
+function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Promise<void> {
+  const previous = controlWrites.get(runId) ?? Promise.resolve();
+  const write = previous.catch(() => undefined).then(async () => {
+    const handled = await requestRunControl(runId, kind);
+    if (!handled) {
+      const runtime = await getDatabaseRuntime();
+      await new SqliteBuildRunStore(runtime.db).requestRunControl(runId, kind, new Date().toISOString());
+    }
+    if (kind === 'resume') {
+      const runtime = await getDatabaseRuntime();
+      const now = new Date().toISOString();
+      await runtime.db.execute(
+        `UPDATE world_build_runs SET status = CASE
+            WHEN lease_owner IS NOT NULL AND lease_expires_at > ? THEN 'running' ELSE 'queued' END,
+            updated_at = ?
+          WHERE run_id = ? AND status IN ('paused_user', 'stopped_user')
+            AND pause_requested = 0 AND cancel_requested = 0`,
+        [now, now, runId],
+      );
+    }
+    if (kind !== 'resume' && !activeRuns.has(runId)) {
+      // Queued/backoff runs have no executor to honor the flag. Complete the
+      // control atomically only if no other process has a live lease.
+      const runtime = await getDatabaseRuntime();
+      const now = new Date().toISOString();
+      const flag = kind === 'cancel' ? 'cancel_requested' : 'pause_requested';
+      await runtime.db.execute(
+        `UPDATE world_build_runs SET status = ?, pause_requested = 0, cancel_requested = 0, updated_at = ?
+          WHERE run_id = ? AND ${flag} = 1
+            AND status NOT IN ('completed', 'failed_terminal', 'canceled')
+            AND (lease_owner IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+        [kind === 'cancel' ? 'stopped_user' : 'paused_user', now, runId, now],
+      );
+    }
+  });
+  controlWrites.set(runId, write);
+  void write.finally(() => {
+    if (controlWrites.get(runId) === write) controlWrites.delete(runId);
+  }).catch(() => undefined);
+  return write;
+}
 
 export function pauseRun(runId: string): boolean {
   const signal = activeRuns.get(runId);
   if (signal) signal.aborted = true;
   // Cross-process (P4): a headless-executed run reads the persisted flag
   // between units; a same-process run also gets the immediate signal above.
-  void requestRunControl(runId, 'pause').catch(() => undefined);
+  void writeRunControl(runId, 'pause').catch(() => undefined);
   return true;
 }
 
@@ -947,7 +713,18 @@ export async function cancelRun(runId: string): Promise<void> {
     signal.aborted = true;
     signal.stopRequested = true;
   }
-  await requestRunControl(runId, 'cancel').catch(() => undefined);
+  await writeRunControl(runId, 'cancel');
+}
+
+/** Revokes both local interrupt signals and the persisted control flags. */
+export async function resumeRun(runId: string): Promise<{ activeInProcess: boolean }> {
+  const signal = activeRuns.get(runId);
+  if (signal) {
+    signal.aborted = false;
+    signal.stopRequested = false;
+  }
+  await writeRunControl(runId, 'resume');
+  return { activeInProcess: activeRuns.has(runId) };
 }
 
 export function isRunActive(runId: string): boolean {
@@ -993,7 +770,10 @@ export async function startFullWorldRefinement(
     throw new Error('已有全文任务正使用另一模型配置；请先从书库任务卡完成或暂停该任务。');
   }
   if (active) return { runId: active.runId, resumed: true };
-  const resumable = relatedRuns.find(run => run.status === 'failed_retryable'
+  const blocked = relatedRuns.find(run => run.status === 'needs_review'
+    && run.modelFingerprint === modelFingerprint);
+  if (blocked) throw new Error('已有构建需要人工审查；请先处理该任务，避免重复请求。');
+  const resumable = relatedRuns.find(run => ['failed_retryable', 'paused_user', 'stopped_user'].includes(run.status)
     && run.modelFingerprint === modelFingerprint);
   if (resumable) return { runId: resumable.runId, resumed: true };
 
@@ -1042,16 +822,45 @@ export async function getBuildRunProgress(runId: string): Promise<{
 }
 
 /** Drives an existing run to completion (used by the UI now, C5 runner later). */
-export async function runExtraction(
+type ExtractionResult = { completed: boolean; unitsDone: number; unitsTotal: number; unitsFailed: number };
+const extractions = new Map<string, Promise<ExtractionResult>>();
+
+/** Same-process starters join the active executor without replacing its signal. */
+export function runExtraction(
   runId: string,
   profile: ApiProfile | null,
   onProgress: (progress: WorldBuildProgress & { chunksDone?: number; chunksTotal?: number }) => void,
-): Promise<{ completed: boolean; unitsDone: number; unitsTotal: number; unitsFailed: number }> {
+): Promise<ExtractionResult> {
+  const existing = extractions.get(runId);
+  if (existing) return existing;
+  const signal = { aborted: false, stopRequested: false };
+  activeRuns.set(runId, signal);
+  const extraction = runExtractionInternal(runId, profile, onProgress, signal).finally(() => {
+    activeRuns.delete(runId);
+    extractions.delete(runId);
+  });
+  extractions.set(runId, extraction);
+  return extraction;
+}
+
+async function runExtractionInternal(
+  runId: string,
+  profile: ApiProfile | null,
+  onProgress: (progress: WorldBuildProgress & { chunksDone?: number; chunksTotal?: number }) => void,
+  signal: { aborted: boolean; stopRequested: boolean },
+): Promise<ExtractionResult> {
   const runtime = await getDatabaseRuntime();
   const runStore = new SqliteBuildRunStore(runtime.db);
   const sourceStore = new SqliteSourceStore(runtime.db);
   const run = await runStore.getRun(runId);
   if (!run) throw new Error(`Unknown run ${runId}.`);
+
+  // A late service callback never requeues a user-held or terminal run.
+  if (run.pauseRequested || run.cancelRequested
+    || ['paused_user', 'stopped_user', 'canceled', 'completed', 'failed_terminal', 'needs_review'].includes(run.status)) {
+    return { completed: run.status === 'completed', unitsDone: run.unitsDone,
+      unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed };
+  }
 
   // Frozen run config (P1): a run executes with the endpoint/model/budgets it
   // was created with; later profile edits never mutate it. Legacy runs keep
@@ -1078,8 +887,6 @@ export async function runExtraction(
     chunksTotal: run.unitsTotal,
     message: `抽取中 ${run.unitsDone}/${run.unitsTotal} 组`,
   });
-  const signal = { aborted: false };
-  activeRuns.set(runId, signal);
   const runBudget = runConfig ? {
     contextWindowTokens: runConfig.contextWindowTokens,
     maxContentOutputTokens: runConfig.contentOutputTokens,
@@ -1114,7 +921,6 @@ export async function runExtraction(
     ),
     scheduler,
   );
-  try {
   const result = await executeRun(
     {
       sourceStore,
@@ -1123,7 +929,7 @@ export async function runExtraction(
       extractor: coordinatorExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),
       groupExtractor: coordinatorGroupExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),
       sha256Hex: async input => nativeSha256.sha256Hex(input),
-      owner: 'ui',
+      owner: `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
       signal,
       concurrency: effectiveProfile.concurrency ?? 3,
       tpmTokensPerMinute: effectiveProfile.tpm,
@@ -1215,6 +1021,7 @@ export async function runExtraction(
           const coveredHash = await nativeSha256.sha256Hex(coveredText);
           const coversWholeText = coveredEnd >= sourceManifest.codePointCount;
           const built2 = await buildPackageFromCanon({
+            requirePlayableOpening: true,
             worldStore: runtime.worldStore,
             provider: {
               complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
@@ -1272,6 +1079,7 @@ export async function runExtraction(
 
         const residentMapping = run.planVersion === 'plan-resident-1';
         await buildPackageFromCanon({
+          requirePlayableOpening: true,
           worldStore: runtime.worldStore,
           resident: residentMapping,
           provider: {
@@ -1311,7 +1119,4 @@ export async function runExtraction(
     message: result.completed ? '抽取完成' : '抽取未全部完成，可重试续建',
   });
   return result;
-  } finally {
-    activeRuns.delete(runId);
-  }
 }

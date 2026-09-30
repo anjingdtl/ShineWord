@@ -338,7 +338,7 @@ test('G0 lease heartbeat keeps ownership during a slow provider call', async () 
   }
 });
 
-test('G0 canceled late extraction is discarded and its unit can be resumed', async () => {
+test('G0 user pause commits successful in-flight extraction and resumes only unfinished units', async () => {
   const db = setupDb();
   try {
     const { store: sourceStore, result: imported } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-g0-cancel');
@@ -356,10 +356,12 @@ test('G0 canceled late extraction is discarded and its unit can be resumed', asy
     );
     const base = fakeGroupExtractorFromFixture();
     let signalStarted;
+    let requests = 0;
     const started = new Promise(resolve => { signalStarted = resolve; });
     const gate = {
       version: base.version,
       async extract(input) {
+        requests += 1;
         signalStarted();
         await new Promise(resolve => setTimeout(resolve, 100));
         return base.extract(input);
@@ -375,19 +377,21 @@ test('G0 canceled late extraction is discarded and its unit can be resumed', asy
     const paused = await execution;
     assert.equal(paused.completed, false);
     assert.equal((await runStore.getRun('run-g0-cancel')).status, 'paused_user');
-    assert.equal((await worldStore.listFacts('w-g0-cancel')).length, 0,
-      'late model response must not mutate world facts');
-    for (const chunk of imported.chunks) {
-      assert.equal(await worldStore.getJob('w-g0-cancel', `job-extract-${chunk.chunkId}`), null,
-        'late model response must not mark any source chunk done');
-    }
+    const beforeResume = await runStore.listUnits('run-g0-cancel');
+    const completed = beforeResume.filter(unit => unit.status === 'completed');
+    assert.ok(completed.length > 0, 'paid responses commit under the still-valid fencing token');
+    assert.ok((await worldStore.listFacts('w-g0-cancel')).length > 0);
 
     const resumed = await executeRun({
       sourceStore, runStore, worldStore, extractor: fixture,
-      groupExtractor: base, sha256Hex: sha.sha256Hex, owner: 'resume-owner',
+      groupExtractor: { ...base, async extract(input) { requests += 1; return base.extract(input); } },
+      sha256Hex: sha.sha256Hex, owner: 'resume-owner',
     }, 'run-g0-cancel');
     assert.equal(resumed.completed, true);
     assert.ok((await worldStore.listFacts('w-g0-cancel')).length > 0);
+    const finalUnits = await runStore.listUnits('run-g0-cancel');
+    assert.equal(requests, finalUnits.length, 'one paid request per unit across pause/resume');
+    for (const unit of completed) assert.equal(finalUnits.find(next => next.unitId === unit.unitId).attempt, unit.attempt);
   } finally {
     db.close();
   }

@@ -7,14 +7,16 @@ import { computePackageContentHash, validatePackage } from '../worldPackage/vali
 import { isBranchContentManifestStructure, isProgressiveDeltaPackageStructure,
   verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
 import { insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
+import { validatePortableCanon, type PortableCanon } from './portableCanon';
 
 const ARCHIVE_SCHEMA = 'shineword-world-archive-1';
 const CONTENT_ARCHIVE_SCHEMA = 'shineword-world-archive-2';
+const CANON_ARCHIVE_SCHEMA = 'shineword-world-archive-3';
 const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 15 * 1024 * 1024;
 
 export interface PortableWorldPackage {
-  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA;
+  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA | typeof CANON_ARCHIVE_SCHEMA;
   title: string;
   manifest: WorldPackageManifest;
   entries: ContentEntry[];
@@ -25,6 +27,8 @@ export interface PortableWorldPackage {
    * in the portable envelope so old packages remain verifiable after export.
    */
   contentHashBasisRevision?: number;
+  /** Evidence, entities and timeline required to open and play an imported world. */
+  canon?: PortableCanon;
   /** Optional branch-bound delta bundle. Base-package import alone cannot
    * activate it; use importProgressiveBranchContentArchive for a matching branch. */
   branchContent?: {
@@ -53,9 +57,10 @@ export async function encodeWorldPackageArchive(
     throw new Error('World package content hash does not match its manifest.');
   }
   if (input.branchContent) await validateBranchContent(input.branchContent, input.manifest, sha256Hex);
+  if (input.canon) await validatePortableCanon(input.canon, input.manifest, input.entries, sha256Hex);
   const payload = utf8Encode(JSON.stringify({
     ...input,
-    schemaVersion: input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
+    schemaVersion: input.canon ? CANON_ARCHIVE_SCHEMA : input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
     contentHashBasisRevision,
   }));
   if (payload.length > MAX_PACKAGE_JSON_BYTES) throw new Error('World package payload exceeds the portable archive limit.');
@@ -116,7 +121,8 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive payload must be a JSON object.');
   }
   const bundle = parsed as Partial<PortableWorldPackage>;
-  if (bundle.schemaVersion !== ARCHIVE_SCHEMA && bundle.schemaVersion !== CONTENT_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
+  if (bundle.schemaVersion !== ARCHIVE_SCHEMA && bundle.schemaVersion !== CONTENT_ARCHIVE_SCHEMA
+    && bundle.schemaVersion !== CANON_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
   if (typeof bundle.title !== 'string' || !bundle.title.trim() || bundle.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
@@ -124,7 +130,13 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive is missing its manifest, entries or book sections.');
   }
   validatePortableInput({ title: bundle.title, manifest: bundle.manifest, entries: bundle.entries, sections: bundle.sections });
-  if (bundle.schemaVersion === CONTENT_ARCHIVE_SCHEMA) {
+  if (bundle.schemaVersion === CANON_ARCHIVE_SCHEMA) {
+    if (!bundle.canon) throw new Error('World archive v3 is missing its canon records.');
+    await validatePortableCanon(bundle.canon, bundle.manifest, bundle.entries, sha256Hex);
+    if (bundle.branchContent) await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
+  } else if (bundle.canon) {
+    throw new Error('Canon records require world archive v3.');
+  } else if (bundle.schemaVersion === CONTENT_ARCHIVE_SCHEMA) {
     if (!bundle.branchContent) throw new Error('World archive v2 is missing its branch content bundle.');
     await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
   } else if (bundle.branchContent) {
@@ -152,6 +164,7 @@ export async function decodeWorldPackageArchive(
     entries: bundle.entries,
     sections: bundle.sections,
     contentHashBasisRevision: verifiedBasis,
+    ...(bundle.canon ? { canon: bundle.canon } : {}),
     ...(bundle.branchContent ? { branchContent: bundle.branchContent } : {}),
   };
 }
@@ -195,12 +208,14 @@ export async function importPortableWorldPackage(input: {
     manifest,
     entries,
     sections: bundle.sections,
+    canon: bundle.canon,
     validationJson: JSON.stringify({
       errors: report.errors,
       warnings: report.warnings,
       entryCount: report.entryCount,
       countsByKind: report.countsByKind,
       sourceIncluded: false,
+      canonIncluded: bundle.canon !== undefined,
       importedFromWorldId: bundle.manifest.worldId,
       importedFromRevision: bundle.manifest.revision,
       importedFromContentHash: bundle.manifest.contentHash,

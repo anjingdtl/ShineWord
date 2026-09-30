@@ -399,8 +399,8 @@ test('ledger migrations 22/23 preserve old rows and add tier-scoped usage policy
      VALUES ('old#a1', 'old', 'planner', 'profile-a', 1, 'succeeded', 1)`,
   );
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(21));
-  // v24 (stopped_user status rebuild) rides along; it preserves all rows too.
-  assert.deepEqual(applied, [22, 23, 24]);
+  // Later build migrations ride along without changing historical ledger rows.
+  assert.deepEqual(applied, BUILTIN_MIGRATIONS.slice(21).map(migration => migration.version));
 
   const store = new SqliteLlmLedgerStore(adapter);
   const old = await store.listAttempts('old');

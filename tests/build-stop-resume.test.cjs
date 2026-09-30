@@ -336,6 +336,8 @@ test('in-process stop signal persists stopped_user; pause signal persists paused
       }, runId);
       assert.equal(outcome.completed, false);
       assert.equal((await runStore.getRun(runId)).status, expected);
+      assert.ok((await runStore.getRun(runId)).unitsDone > 0,
+        'a successful in-flight group is committed before honoring the interrupt');
     }
   } finally {
     db.close();

@@ -244,6 +244,7 @@ import type { EncounterView } from '../../src/application/campaign/encounterServ
 import { validatePackage } from '../../src/application/worldPackage/validate';
 import { publishWorldPackage } from '../../src/application/worldPackage/publish';
 import { encodeWorldPackageArchive, importPortableWorldPackage, importProgressiveBranchContentArchive } from '../../src/application/export/worldPackageArchive';
+import { exportPortableCanon } from '../../src/application/export/portableCanon';
 import { ensureBaseBranchContentManifest } from '../../src/application/worldPackage/branchContentStore';
 
 export { SAVE_SCHEMA_VERSION };
@@ -385,7 +386,8 @@ export async function exportPortableWorldPackage(worldId: string): Promise<{
   if (revision === null) throw new Error('This world has no published package to export.');
   const pkg = await worldStore.getWorldPackage(worldId, revision);
   if (!pkg) throw new Error(`Published package r${revision} is missing.`);
-  const bytes = await encodeWorldPackageArchive({ title: world.title, ...pkg }, nativeSha256.sha256Hex);
+  const canon = await exportPortableCanon(worldStore, pkg.manifest, pkg.entries, nativeSha256.sha256Hex);
+  const bytes = await encodeWorldPackageArchive({ title: world.title, ...pkg, canon }, nativeSha256.sha256Hex);
   return { bytes, title: world.title, revision };
 }
 
@@ -644,6 +646,7 @@ export async function exportProgressiveBranchWorldArchive(campaignId: string, br
   const bytes = await encodeWorldPackageArchive({
     title: world.title,
     ...pkg,
+    canon: await exportPortableCanon(runtime.worldStore, pkg.manifest, pkg.entries, nativeSha256.sha256Hex),
     branchContent: { manifest, deltas },
   }, nativeSha256.sha256Hex);
   return { bytes, title: world.title, revision: summary.packageRevision,
