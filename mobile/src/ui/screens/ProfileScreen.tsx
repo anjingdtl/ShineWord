@@ -3,8 +3,8 @@
  *
  * P3.4: every control is a phase-3 component (the local `legacyInput` frame is
  * gone), the sections are layered (皮肤 / 模型与密钥 / 关于) and the product
- * brand is Shine-TRPG. Persistence is untouched: the same `saveApiProfile`
- * call and the same Keychain-only secret path as P2.
+ * brand is Shine-TRPG. Profile persistence keeps its v1 key with an in-place
+ * schema normalization; the API key still uses the Keychain-only path.
  *
  * The first-run screen shares the same form and shows the brand lockup instead
  * of a header, as required by plan §9.2.
