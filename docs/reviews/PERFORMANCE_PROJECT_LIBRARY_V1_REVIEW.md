@@ -145,8 +145,8 @@
 | `npm run verify:version` | PASS，0.4.1 / 40100 保持 |
 | `git diff --check` | PASS |
 | 本环境 Debug APK | NOT TESTED：未配置 Android SDK，构建命令在环境预检阶段退出 |
-| GitHub Core Verify | PENDING：创建 PR 后等待 |
-| GitHub Android Verify | PENDING：创建 PR 后等待，含 Android debug APK 编译 |
+| GitHub Core Verify | **PASS**：[run 36772033269](https://github.com/anjingdtl/ShineWord/actions/runs/36772033269)，CI 同样 577 / 577，0 skip |
+| GitHub Android Verify | **PASS**：[run 36772033217](https://github.com/anjingdtl/ShineWord/actions/runs/36772033217)，Mobile typecheck / `assembleDebug` 成功 |
 
 测试位置：`analysis-planner-v2`（Gate conflict 输入与实际 facts）、`phase2-package-build`
 （zero-call / 无发布 / Canon 保留 / conflict 解决后恢复）、`project-projection`
@@ -168,4 +168,7 @@ Opening 提前发布 / timer 与请求生命周期）、`project-library-ui`（�
 | H planner-v2 是否回退 | 否；planner / coordinator 未修改，既有 ratio / 密度 / shrink / frozen run / TTFP 回归全通过 |
 | I 密钥 / 真实小说 / 本地测试路径泄露 | 未引入；仅使用确定性测试夹具，本轮未调用真实 API |
 
-Self Review 无剩余 P0/P1。PR 保持未合并；CI 结果确认后更新本节。
+Self Review 无剩余 P0/P1。
+
+PR：[ShineWord #9](https://github.com/anjingdtl/ShineWord/pull/9)，保持开放、未合并。
+上述 CI 验证的代码提交为 `1cdd0340163c7afd1b398136c121d4ad457f9213`；本节的最终报告提交只更新文档，代码树保持一致，最终 HEAD 的 CI 结果另在 PR Checks 核对。
