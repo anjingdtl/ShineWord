@@ -986,6 +986,13 @@ CREATE INDEX IF NOT EXISTS idx_episodic_turn_index_branch
   ON episodic_turn_index(branch_id, state_version);
 `;
 
+/** Adds the tier dimension needed to calibrate known reasoning-token samples. */
+export const REASONING_USAGE_LEDGER_SCHEMA_SQL = `
+ALTER TABLE llm_request_attempts ADD COLUMN reasoning_tier TEXT;
+CREATE INDEX IF NOT EXISTS idx_llm_request_attempts_reasoning_usage
+  ON llm_request_attempts(model_profile_fingerprint, reasoning_tier, request_kind, started_at);
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -1008,4 +1015,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 19, name: 'llm_request_ledger', sql: LLM_REQUEST_LEDGER_SCHEMA_SQL },
   { version: 20, name: 'story_memory_v2', sql: STORY_MEMORY_V2_SCHEMA_SQL },
   { version: 21, name: 'episodic_recall_v2', sql: EPISODIC_RECALL_SCHEMA_SQL },
+  { version: 22, name: 'reasoning_usage_tier', sql: REASONING_USAGE_LEDGER_SCHEMA_SQL },
 ];

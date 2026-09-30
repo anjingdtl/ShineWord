@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
   REASONING_CALIBRATION_MIN_SAMPLES,
   REASONING_RESERVE_POLICY,
+  REASONING_USAGE_ROLLING_WINDOW,
+  reasoningUsageStatsFromSamples,
   providerReasoningParamsForTier,
   reasoningDialectForModel,
   resolveReasoningPolicy,
@@ -85,6 +87,18 @@ test('reasoning usage calibration waits for enough known samples and uses P95 wi
   assert.equal(calibrated.reserveSource, 'usage_calibrated');
   assert.equal(calibrated.reserveTokens, 15_000);
   assert.equal(calibrated.p95ReasoningTokens, 12_000);
+});
+
+test('reasoning usage stats retain known percentiles and exclude unknown values', () => {
+  assert.equal(REASONING_USAGE_ROLLING_WINDOW, 32);
+  assert.deepEqual(reasoningUsageStatsFromSamples([500, 900, 1_200, 1_600, 2_100, null, undefined, NaN]), {
+    sampleCount: 5,
+    p50: 1_200,
+    p90: 2_100,
+    p95: 2_100,
+    max: 2_100,
+  });
+  assert.equal(reasoningUsageStatsFromSamples([null, undefined]), null);
 });
 
 test('model dialect detection is request policy routing, and unsupported is explicit', () => {

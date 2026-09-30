@@ -7,7 +7,8 @@
 
 import type { ContextDemand, ElasticAllocationResult } from '../context/contextTypes';
 import type { RequestEnvelope } from '../context/modelEnvelope';
-import type { LlmRequestKind } from './types';
+import type { LlmRequestKind, ReasoningDialect, ReasoningTier } from './types';
+import type { ReasoningPolicySelection, ResolvedReasoningPolicy } from './reasoningPolicy';
 
 export type { LlmRequestKind } from './types';
 
@@ -44,6 +45,7 @@ export interface OutputDemand {
 export type BudgetInfeasibleCode =
   | 'context_window_unknown'
   | 'output_demand_infeasible'
+  | 'reasoning_policy_mismatch'
   | 'envelope_infeasible'
   | 'mandatory_input_infeasible'
   | 'mandatory_exceeds_hard';
@@ -60,6 +62,14 @@ export class BudgetInfeasibleError extends Error {
 
 export interface RequestBudgetTrace {
   requestKind: LlmRequestKind;
+  reasoning?: {
+    tier: ReasoningTier;
+    effectiveTier: ReasoningTier;
+    reserveTokens: number;
+    policyVersion: string;
+    reserveSource: 'cold_start' | 'usage_calibrated';
+    reserveClamped: boolean;
+  };
   capabilitySources: {
     contextWindow: CapabilitySource;
     maxOutput: CapabilitySource;
@@ -82,7 +92,12 @@ export interface FrozenLlmRequestPlan {
   /** Protocol/contract tokens reserved before elastic allocation. */
   mandatoryInputTokens: number;
   allocatedInputTokens: number;
+  /** Business/content completion demand, excluding reasoning. */
   requestedOutputTokens: number;
+  /** Exact `max_tokens` ceiling to send to the provider. */
+  wireOutputTokens: number;
+  /** Frozen policy selected for this request, absent for legacy callers. */
+  reasoningPolicy?: ResolvedReasoningPolicy;
 
   trace: RequestBudgetTrace;
 }
@@ -121,6 +136,8 @@ export interface LlmRequestPlanningInput {
   providerWireMaxOutputTokens?: number;
   /** Provider adapter declaration (plan §8); default 'separate'. */
   reasoningBudget?: 'inside_completion' | 'separate';
+  /** Product policy selection; when present it owns tier, reserve and dialect. */
+  reasoningPolicy?: ReasoningPolicySelection;
   /** Overrides the capability-derived reasoning reserve. */
   reasoningReserveTokens?: number;
   /** Overrides the derived safety margin (tests / explicit policy). */

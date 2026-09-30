@@ -117,6 +117,75 @@ test('different windows produce clearly different plans', () => {
   assert.notEqual(a.context.estimatedTokens, b.context.estimatedTokens);
 });
 
+test('frozen context records tier/reserve and distinguishes Low from Max plans', () => {
+  const common = {
+    requestKind: 'planner',
+    branchId: 'b1',
+    stateVersion: 17,
+    candidates: heavyCandidates('雨夜 潜行 藏书阁'),
+    capabilities: capabilitiesFor(128_000, 131_072),
+    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+    estimatedMandatoryInputTokens: 320,
+  };
+  const low = planTurnContext({
+    ...common,
+    reasoningPolicy: { tier: 'low', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  const max = planTurnContext({
+    ...common,
+    reasoningPolicy: { tier: 'max', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  assert.equal(low.context.reasoning.tier, 'low');
+  assert.equal(max.context.reasoning.tier, 'max');
+  assert.equal(low.context.reasoning.reserveTokens, 2_048);
+  assert.equal(max.context.reasoning.reserveTokens, 24_576);
+  assert.equal(low.context.reasoning.policyVersion, max.context.reasoning.policyVersion);
+  assert.notEqual(low.context.contextId, max.context.contextId);
+  assert.notEqual(low.context.budgetPlanFingerprint, max.context.budgetPlanFingerprint);
+  assert.ok(low.envelope.hard > max.envelope.hard);
+  assert.equal(max.wireOutputTokens, max.requestedOutputTokens + max.context.reasoning.reserveTokens);
+});
+
+test('Max reserve shrinks optional context while preserving the mandatory protocol floor', () => {
+  const candidate = {
+    id: 'large-optional-evidence',
+    board: 'sourceEvidence',
+    requirement: 'optional',
+    priority: 10,
+    relevance: 0.5,
+    estimatedTokens: 80_000,
+    minTokens: 0,
+    targetTokens: 80_000,
+    clipMode: 'text',
+    heading: '原著证据',
+    text: '雨夜门前的证据。'.repeat(8_000),
+    provenance: { sourceType: 'fixture', sourceId: 'pressure' },
+  };
+  const common = {
+    requestKind: 'planner',
+    branchId: 'b1',
+    stateVersion: 18,
+    candidates: [candidate],
+    capabilities: capabilitiesFor(32_000, 131_072),
+    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+    estimatedMandatoryInputTokens: 500,
+  };
+  const low = planTurnContext({
+    ...common,
+    reasoningPolicy: { tier: 'low', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  const max = planTurnContext({
+    ...common,
+    reasoningPolicy: { tier: 'max', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  const lowAllocated = low.context.included.find(item => item.id === candidate.id)?.allocatedTokens ?? 0;
+  const maxAllocated = max.context.included.find(item => item.id === candidate.id)?.allocatedTokens ?? 0;
+  assert.ok(lowAllocated > maxAllocated, `Low allocated ${lowAllocated}, Max allocated ${maxAllocated}`);
+  assert.ok(max.context.estimatedTokens >= 0);
+  assert.equal(max.context.includedCandidateIds.includes(candidate.id), maxAllocated > 0);
+  assert.ok(max.envelope.hard >= common.estimatedMandatoryInputTokens);
+});
+
 test('planner and narrator contexts differ (narrator never sees worldKnowledge)', () => {
   const planner = planFor(128_000, 'planner');
   const narratorCandidates = heavyCandidates('雨夜 潜行')
@@ -160,6 +229,27 @@ test('unknown capabilities fall back to the legacy path, explicitly flagged', ()
   assert.equal(result.envelope, null);
   // Nothing is dropped on the legacy path - same shape as the old builder.
   assert.equal(result.context.droppedCandidateIds.length, 0);
+});
+
+test('unknown context fallback freezes tier but keeps reserve explicitly unknown', () => {
+  const unknown = resolveModelCapabilities({ reasoningMode: 'unknown' });
+  const result = planTurnContext({
+    requestKind: 'planner',
+    branchId: 'b1',
+    stateVersion: 2,
+    candidates: heavyCandidates('x'),
+    capabilities: unknown,
+    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+    estimatedMandatoryInputTokens: 320,
+    reasoningPolicy: { tier: 'max', providerDialect: 'generic', model: 'custom-unknown' },
+  });
+  assert.equal(result.context.legacyFallback, true);
+  assert.deepEqual(result.context.reasoning, {
+    tier: 'max',
+    effectiveTier: 'max',
+    reserveTokens: null,
+    policyVersion: 'reasoning-policy-1',
+  });
 });
 
 test('renderer emits readable sections in board order', () => {

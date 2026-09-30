@@ -108,6 +108,7 @@ export interface LlmRequest {
   ledger?: {
     logicalRequestId: string;
     requestKind: string;
+    reasoningTier?: ReasoningTier;
     campaignId?: string;
     branchId?: string;
     worldId?: string;

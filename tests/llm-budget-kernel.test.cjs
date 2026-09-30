@@ -8,6 +8,7 @@ const { planLlmRequest, DEFAULT_OUTPUT_DEMANDS } = require('../dist/application/
 const { resolveModelCapabilities, deriveMaxOutputTokens } = require('../dist/application/llm/capabilityResolver');
 const { BudgetInfeasibleError, stableFingerprint } = require('../dist/application/llm/requestPlan');
 const { probeCapabilities } = require('../dist/application/llm/capabilities');
+const { ReasoningCapabilityInsufficientError } = require('../dist/application/llm/reasoningPolicy');
 
 const PLANNER_DEMAND = DEFAULT_OUTPUT_DEMANDS.planner;
 
@@ -229,6 +230,88 @@ test('B10: provider wire ceiling caps the grant and blocks infeasible minimums',
     () => planLlmRequest({ ...common, providerWireMaxOutputTokens: 2_500 }),
     error => error instanceof BudgetInfeasibleError && error.code === 'output_demand_infeasible',
   );
+});
+
+// ------------------------------------------------------- B10.1 tier envelope
+for (const window of WINDOWS) {
+  test(`reasoning tiers: ${window} context window couples reserve and hard input`, () => {
+    const caps = glmLikeCapabilities(window, 131_072);
+    const plans = ['low', 'high', 'max'].map(tier => planLlmRequest({
+      capabilities: caps,
+      requestKind: 'planner',
+      estimatedMandatoryInputTokens: 500,
+      businessOutputDemand: PLANNER_DEMAND,
+      reasoningPolicy: { tier, providerDialect: 'glm', model: 'glm-5.3-flash' },
+    }));
+
+    const reserves = plans.map(plan => plan.envelope.reasoningReserveTokens);
+    const hardInputs = plans.map(plan => plan.envelope.hardInputLimit);
+    assert.ok(reserves[0] < reserves[1] && reserves[1] < reserves[2], 'cold-start reserves preserve tier order');
+    assert.ok(hardInputs[0] > hardInputs[1] && hardInputs[1] > hardInputs[2], 'higher reserve reduces hard input');
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      assert.equal(plan.wireOutputTokens,
+        plan.requestedOutputTokens + plan.envelope.reasoningReserveTokens,
+        'wire output is business output plus reserve exactly once');
+      assert.equal(plan.envelope.wireOutputTokens, plan.wireOutputTokens);
+      assert.equal(plan.envelope.hardInputLimit,
+        window - plan.wireOutputTokens - plan.envelope.safetyMarginTokens,
+        'hard input subtracts the wire output once');
+      assert.ok(plan.envelope.hardInputLimit >= 0, 'hard input cannot be negative');
+      assert.ok(plan.wireOutputTokens <= caps.maxOutputTokens, 'wire output stays under model output capability');
+      assert.equal(plan.reasoningPolicy.tier, ['low', 'high', 'max'][index]);
+      assert.equal(plan.reasoningPolicy.providerParams.reasoning_effort, ['low', 'high', 'max'][index]);
+    }
+    assert.equal(new Set(plans.map(plan => plan.contextPlanId)).size, 3, 'tier is part of the frozen budget id');
+  });
+}
+
+test('reasoning reserve clamps to a small model output ceiling and preserves the tier floor', () => {
+  const caps = glmLikeCapabilities(32_000, 16_000);
+  const plan = planLlmRequest({
+    capabilities: caps,
+    requestKind: 'planner',
+    estimatedMandatoryInputTokens: 500,
+    businessOutputDemand: PLANNER_DEMAND,
+    reasoningPolicy: { tier: 'max', providerDialect: 'glm', model: 'glm-small' },
+  });
+  assert.equal(plan.reasoningPolicy.reserveClamped, true);
+  assert.equal(plan.reasoningPolicy.effectiveTier, 'max');
+  assert.ok(plan.envelope.reasoningReserveTokens < caps.maxOutputTokens);
+  assert.ok(plan.envelope.wireOutputTokens <= caps.maxOutputTokens);
+  assert.ok(plan.envelope.hardInputLimit > 0);
+
+  const tooSmall = glmLikeCapabilities(32_000, 10_000);
+  assert.throws(
+    () => planLlmRequest({
+      capabilities: tooSmall,
+      requestKind: 'planner',
+      estimatedMandatoryInputTokens: 500,
+      businessOutputDemand: PLANNER_DEMAND,
+      reasoningPolicy: { tier: 'max', providerDialect: 'glm', model: 'glm-too-small' },
+    }),
+    error => error instanceof ReasoningCapabilityInsufficientError
+      && error.code === 'reasoning_capability_insufficient',
+  );
+});
+
+test('Max world extraction reserve clamps against the 32K window plus safety margin', () => {
+  const contextWindow = 32_000;
+  const caps = glmLikeCapabilities(contextWindow, 131_072);
+  const plan = planLlmRequest({
+    capabilities: caps,
+    requestKind: 'world_extract',
+    estimatedMandatoryInputTokens: 200,
+    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.world_extract,
+    reasoningPolicy: { tier: 'max', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  assert.equal(plan.reasoningPolicy.reserveClamped, true);
+  assert.equal(plan.envelope.hardInputLimit,
+    contextWindow - plan.wireOutputTokens - plan.envelope.safetyMarginTokens);
+  assert.ok(plan.envelope.hardInputLimit >= 0);
+  assert.ok(plan.wireOutputTokens <= contextWindow - plan.envelope.safetyMarginTokens);
+  assert.equal(plan.wireOutputTokens,
+    plan.requestedOutputTokens + plan.envelope.reasoningReserveTokens);
 });
 
 // -------------------------------------------------------------- B11 tiny task

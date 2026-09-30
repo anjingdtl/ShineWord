@@ -8,11 +8,12 @@
  */
 
 import { allocateElasticContext } from '../context/elasticAllocator';
-import { computeRequestEnvelope } from '../context/modelEnvelope';
+import { computeRequestEnvelope, deriveSafetyMargin } from '../context/modelEnvelope';
 import type { ContextDemand } from '../context/contextTypes';
 import { deriveMaxOutputTokens } from './capabilityResolver';
 import type { FrozenLlmRequestPlan, LlmRequestPlanningInput, RequestBudgetTrace } from './requestPlan';
 import { BudgetInfeasibleError, stableFingerprint } from './requestPlan';
+import { resolveReasoningPolicy } from './reasoningPolicy';
 
 export { DEFAULT_OUTPUT_DEMANDS } from './requestDemands';
 
@@ -60,16 +61,57 @@ export function planLlmRequest(input: LlmRequestPlanningInput): FrozenLlmRequest
     trace.derivedMaxOutputTokens = modelMax;
     record('derive_max_output', { derived: modelMax, source: 'derived' });
   }
-  const wireCeiling = input.providerWireMaxOutputTokens ?? modelMax;
-  const outputCeiling = Math.min(modelMax, wireCeiling);
-  record('output_ceiling', { modelMax, wireCeiling, outputCeiling });
+  const providerWireCeiling = input.providerWireMaxOutputTokens ?? modelMax;
+  const safetyMargin = Math.floor(input.safetyMarginTokens ?? deriveSafetyMargin(C));
+  const mandatoryFloor = Math.max(0, Math.floor(input.estimatedMandatoryInputTokens));
+  const contextOutputCeiling = Math.max(0, C - safetyMargin - mandatoryFloor);
+  const wireCeiling = Math.min(modelMax, providerWireCeiling, contextOutputCeiling);
+  const outputCeiling = wireCeiling;
+  record('output_ceiling', { modelMax, providerWireCeiling, contextOutputCeiling, mandatoryFloor, wireCeiling });
 
-  // 3. Reasoning reserve + provider dialect.
-  const reasoningBudget = input.reasoningBudget ?? 'separate';
+  // 3. Resolve the selected product tier once. The same frozen decision is
+  //    used to reserve the output envelope and later sent to the provider.
+  const reasoningPolicy = input.reasoningPolicy
+    ? resolveReasoningPolicy({
+        ...input.reasoningPolicy,
+        requestKind: input.requestKind,
+        modelMaxOutputTokens: modelMax,
+        contextWindowTokens: C,
+        providerWireMaxOutputTokens: wireCeiling,
+        minimumBusinessOutputTokens: input.businessOutputDemand.minimum,
+      })
+    : undefined;
+  const reasoningBudget = reasoningPolicy?.reasoningBudget ?? input.reasoningBudget ?? 'separate';
+  if (reasoningPolicy && input.reasoningBudget && input.reasoningBudget !== reasoningPolicy.reasoningBudget) {
+    throw new BudgetInfeasibleError(
+      `Reasoning policy requires ${reasoningPolicy.reasoningBudget}, but the request declared ${input.reasoningBudget}.`,
+      'reasoning_policy_mismatch',
+    );
+  }
   const reasoningReserve = Math.max(0, Math.floor(
-    input.reasoningReserveTokens ?? DEFAULT_REASONING_RESERVE[input.capabilities.reasoningMode],
+    reasoningPolicy?.reserveTokens
+      ?? input.reasoningReserveTokens
+      ?? DEFAULT_REASONING_RESERVE[input.capabilities.reasoningMode],
   ));
-  record('reasoning_reserve', { reasoningBudget, reasoningReserve });
+  record('reasoning_reserve', {
+    reasoningBudget,
+    reasoningReserve,
+    tier: reasoningPolicy?.tier ?? null,
+    effectiveTier: reasoningPolicy?.effectiveTier ?? null,
+    policyVersion: reasoningPolicy?.policyVersion ?? null,
+    reserveSource: reasoningPolicy?.reserveSource ?? null,
+    reserveClamped: reasoningPolicy?.reserveClamped ?? false,
+  });
+  if (reasoningPolicy) {
+    trace.reasoning = {
+      tier: reasoningPolicy.tier,
+      effectiveTier: reasoningPolicy.effectiveTier,
+      reserveTokens: reasoningPolicy.reserveTokens,
+      policyVersion: reasoningPolicy.policyVersion,
+      reserveSource: reasoningPolicy.reserveSource,
+      reserveClamped: reasoningPolicy.reserveClamped,
+    };
+  }
 
   // 4. Output grant: prefer the business maximum, degrade to target, then to
   //    the wire-inclusive minimum. Inside-completion reasoning shares the
@@ -159,6 +201,14 @@ export function planLlmRequest(input: LlmRequestPlanningInput): FrozenLlmRequest
     requestKind: input.requestKind,
     capabilitiesFingerprint,
     mandatoryTokens,
+    reasoning: reasoningPolicy ? {
+      tier: reasoningPolicy.tier,
+      effectiveTier: reasoningPolicy.effectiveTier,
+      reserveTokens: reasoningPolicy.reserveTokens,
+      policyVersion: reasoningPolicy.policyVersion,
+    } : undefined,
+    businessOutputTokens: requested,
+    wireOutputTokens: envelope.wireOutputTokens,
     allocations: allocation?.allocations.map(entry => [entry.id, entry.allocated]) ?? [],
   });
 
@@ -171,6 +221,8 @@ export function planLlmRequest(input: LlmRequestPlanningInput): FrozenLlmRequest
     mandatoryInputTokens: mandatoryTokens,
     allocatedInputTokens: mandatoryTokens + (allocation?.totalAllocated ?? 0),
     requestedOutputTokens: requested,
+    wireOutputTokens: envelope.wireOutputTokens,
+    reasoningPolicy,
     trace,
   };
 }

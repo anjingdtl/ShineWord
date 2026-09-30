@@ -10,6 +10,8 @@
  * request: the server may have completed and billed it.
  */
 
+import type { ReasoningTier } from '../llm/types';
+
 export type LlmAttemptStatus =
   | 'prepared'
   | 'sent'
@@ -45,6 +47,7 @@ export interface LlmRequestAttemptRecord {
   worldId: string | null;
   stateVersion: number | null;
   modelProfileFingerprint: string;
+  reasoningTier: ReasoningTier | null;
   attemptNo: number;
   status: LlmAttemptStatus;
   failureClass: string | null;
@@ -68,6 +71,7 @@ export interface NewLlmRequestAttempt {
   worldId?: string | null;
   stateVersion?: number | null;
   modelProfileFingerprint: string;
+  reasoningTier?: ReasoningTier | null;
 }
 
 export interface LlmAttemptPatch {
@@ -89,6 +93,13 @@ export interface LlmRequestLedgerStore {
   beginAttempt(input: NewLlmRequestAttempt, startedAt: number): Promise<LlmRequestAttemptRecord>;
   updateAttempt(attemptId: string, patch: LlmAttemptPatch): Promise<void>;
   listAttempts(logicalRequestId: string): Promise<LlmRequestAttemptRecord[]>;
+  /** Known samples only; unknown provider usage is not represented as zero. */
+  listRecentReasoningTokens(input: {
+    modelProfileFingerprint: string;
+    reasoningTier: ReasoningTier;
+    requestKind: string;
+    limit: number;
+  }): Promise<number[]>;
   /** Attempt ids still in prepared/sent (interrupted dispatch candidates). */
   listInterruptedAttemptIds(): Promise<string[]>;
 }

@@ -18,6 +18,7 @@ import {
   type OutputDemand,
 } from '../llm/requestPlan';
 import { planLlmRequest } from '../llm/requestBudgetKernel';
+import { REASONING_POLICY_VERSION } from '../llm/reasoningPolicy';
 
 export interface TurnContextPlanInput {
   requestKind: 'planner' | 'narrator';
@@ -30,6 +31,7 @@ export interface TurnContextPlanInput {
   estimatedMandatoryInputTokens: number;
   reasoningBudget?: LlmRequestPlanningInput['reasoningBudget'];
   reasoningReserveTokens?: number;
+  reasoningPolicy?: LlmRequestPlanningInput['reasoningPolicy'];
   providerWireMaxOutputTokens?: number;
 }
 
@@ -37,6 +39,8 @@ export interface TurnContextPlanResult {
   context: FrozenTurnContext;
   /** Output tokens the provider request should carry. */
   requestedOutputTokens: number;
+  /** Wire budget includes the frozen reasoning reserve when supported. */
+  wireOutputTokens: number;
   envelope: {
     hard: number;
     soft: number;
@@ -70,6 +74,7 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
       })),
       reasoningBudget: input.reasoningBudget,
       reasoningReserveTokens: input.reasoningReserveTokens,
+      reasoningPolicy: input.reasoningPolicy,
       providerWireMaxOutputTokens: input.providerWireMaxOutputTokens,
     });
   } catch (error) {
@@ -120,6 +125,12 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
     stateVersion: input.stateVersion,
     modelProfileFingerprint: plan.capabilitiesFingerprint,
     budgetPlanFingerprint: plan.contextPlanId,
+    reasoning: plan.reasoningPolicy ? {
+      tier: plan.reasoningPolicy.tier,
+      effectiveTier: plan.reasoningPolicy.effectiveTier,
+      reserveTokens: plan.reasoningPolicy.reserveTokens,
+      policyVersion: plan.reasoningPolicy.policyVersion,
+    } : undefined,
     included,
     droppedCandidateIds: dropped,
     estimatedTokens: estimatedTotal,
@@ -127,6 +138,7 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
   return {
     context,
     requestedOutputTokens: plan.requestedOutputTokens,
+    wireOutputTokens: plan.wireOutputTokens,
     envelope: {
       hard: plan.envelope.hardInputLimit,
       soft: plan.envelope.softInputLimit,
@@ -150,6 +162,12 @@ function renderLegacy(input: TurnContextPlanInput, fallbackReason?: string): Tur
     stateVersion: input.stateVersion,
     modelProfileFingerprint: 'legacy',
     budgetPlanFingerprint: 'legacy',
+    reasoning: input.reasoningPolicy ? {
+      tier: input.reasoningPolicy.tier,
+      effectiveTier: input.reasoningPolicy.tier,
+      reserveTokens: null,
+      policyVersion: REASONING_POLICY_VERSION,
+    } : undefined,
     included,
     droppedCandidateIds: [],
     estimatedTokens: included.reduce((sum, item) => sum + estimateTokens(item.text), 0),
@@ -159,6 +177,9 @@ function renderLegacy(input: TurnContextPlanInput, fallbackReason?: string): Tur
   return {
     context,
     requestedOutputTokens: input.requestKind === 'planner'
+      ? LEGACY_PLANNER_OUTPUT_TOKENS
+      : LEGACY_NARRATOR_OUTPUT_TOKENS,
+    wireOutputTokens: input.requestKind === 'planner'
       ? LEGACY_PLANNER_OUTPUT_TOKENS
       : LEGACY_NARRATOR_OUTPUT_TOKENS,
     envelope: null,

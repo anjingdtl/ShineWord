@@ -105,6 +105,7 @@ export class LedgeredProvider implements LlmProvider {
         worldId: meta.worldId ?? null,
         stateVersion: meta.stateVersion ?? null,
         modelProfileFingerprint: this.options.modelProfileFingerprint,
+        reasoningTier: request.reasoningTier ?? meta.reasoningTier ?? null,
       },
       now(),
     );

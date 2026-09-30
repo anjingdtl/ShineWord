@@ -6,6 +6,15 @@
 
 import type { ContextCandidate } from './contextTypes';
 import { stableFingerprint } from '../llm/requestPlan';
+import type { ReasoningTier } from '../llm/types';
+
+export interface FrozenTurnReasoning {
+  tier: ReasoningTier;
+  effectiveTier: ReasoningTier;
+  /** Null only for the explicit legacy context path when window is unknown. */
+  reserveTokens: number | null;
+  policyVersion: string;
+}
 
 export interface FrozenIncludedCandidate {
   id: string;
@@ -23,6 +32,7 @@ export interface FrozenTurnContext {
   stateVersion: number;
   modelProfileFingerprint: string;
   budgetPlanFingerprint: string;
+  reasoning?: FrozenTurnReasoning;
   includedCandidateIds: string[];
   droppedCandidateIds: string[];
   included: FrozenIncludedCandidate[];
@@ -39,6 +49,7 @@ export function freezeTurnContext(input: {
   stateVersion: number;
   modelProfileFingerprint: string;
   budgetPlanFingerprint: string;
+  reasoning?: FrozenTurnReasoning;
   included: FrozenIncludedCandidate[];
   droppedCandidateIds: string[];
   estimatedTokens: number;
@@ -53,6 +64,7 @@ export function freezeTurnContext(input: {
       version: input.stateVersion,
       profile: input.modelProfileFingerprint,
       budget: input.budgetPlanFingerprint,
+      reasoning: input.reasoning,
       included: included.map(item => [item.id, item.allocatedTokens, item.clipped]),
     })}`,
     requestKind: input.requestKind,
@@ -60,6 +72,7 @@ export function freezeTurnContext(input: {
     stateVersion: input.stateVersion,
     modelProfileFingerprint: input.modelProfileFingerprint,
     budgetPlanFingerprint: input.budgetPlanFingerprint,
+    reasoning: input.reasoning,
     includedCandidateIds: included.map(item => item.id),
     droppedCandidateIds: [...input.droppedCandidateIds],
     included,

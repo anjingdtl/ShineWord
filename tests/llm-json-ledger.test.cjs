@@ -215,7 +215,9 @@ test('ledger: prepared -> sent -> succeeded persists usage', async () => {
     store,
     { modelProfileFingerprint: 'fp-1' },
   );
-  const response = await provider.complete({ role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100, ledger: LEDGER_META });
+  const response = await provider.complete({
+    role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100, reasoningTier: 'max', ledger: LEDGER_META,
+  });
   assert.equal(response.text, '{"ok":true}');
   const attempts = await store.listAttempts(LEDGER_META.logicalRequestId);
   assert.equal(attempts.length, 1);
@@ -226,6 +228,7 @@ test('ledger: prepared -> sent -> succeeded persists usage', async () => {
   assert.equal(attempts[0].inputTokens, 100);
   assert.equal(attempts[0].outputTokens, 50);
   assert.equal(attempts[0].reasoningTokens, 8);
+  assert.equal(attempts[0].reasoningTier, 'max');
   assert.equal(attempts[0].cachedInputTokens, 20);
   assert.equal(attempts[0].branchId, 'branch-1');
   assert.equal(attempts[0].stateVersion, 7);
@@ -347,4 +350,40 @@ test('ledger: migration 19 creates llm_request_attempts table', async () => {
     "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_request_attempts'",
   );
   assert.equal(row.length, 1);
+});
+
+test('ledger migration 22 preserves legacy rows and adds tier-scoped recent usage samples', async () => {
+  const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
+  await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(0, 21));
+  await adapter.execute(
+    `INSERT INTO llm_request_attempts
+       (attempt_id, logical_request_id, request_kind, model_profile_fingerprint, attempt_no, status, started_at)
+     VALUES ('old#a1', 'old', 'planner', 'profile-a', 1, 'succeeded', 1)`,
+  );
+  const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(21));
+  assert.deepEqual(applied, [22]);
+
+  const store = new SqliteLlmLedgerStore(adapter);
+  const old = await store.listAttempts('old');
+  assert.equal(old[0].reasoningTier, null, 'historical records remain unknown, not low');
+  assert.equal(old[0].reasoningTokens, null, 'missing provider usage remains unknown');
+
+  for (const [index, tier, value] of [
+    [0, 'high', 500], [1, 'high', 900], [2, 'high', null], [3, 'low', 2_100],
+  ]) {
+    const attempt = await store.beginAttempt({
+      logicalRequestId: `sample-${index}`,
+      requestKind: 'planner',
+      modelProfileFingerprint: 'profile-a',
+      reasoningTier: tier,
+    }, index + 10);
+    await store.updateAttempt(attempt.attemptId, {
+      status: 'succeeded',
+      reasoningTokens: value,
+      finishedAt: index + 10,
+    });
+  }
+  assert.deepEqual(await store.listRecentReasoningTokens({
+    modelProfileFingerprint: 'profile-a', reasoningTier: 'high', requestKind: 'planner', limit: 32,
+  }), [900, 500], 'unknown usage is omitted and another tier is excluded');
 });

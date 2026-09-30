@@ -18,6 +18,28 @@ export interface ReasoningUsageStats {
   max?: number;
 }
 
+/** Builds reusable percentiles from a rolling ledger sample. Missing or
+ * malformed provider values are excluded rather than coerced to zero. */
+export function reasoningUsageStatsFromSamples(
+  samples: readonly (number | null | undefined)[],
+): ReasoningUsageStats | null {
+  const sorted = samples
+    .filter((sample): sample is number => typeof sample === 'number' && Number.isInteger(sample) && sample >= 0)
+    .sort((left, right) => left - right);
+  if (sorted.length === 0) return null;
+  const nearestRank = (percentile: number): number => sorted[
+    Math.max(0, Math.ceil(percentile * sorted.length) - 1)
+  ]!;
+  const maximum = sorted[sorted.length - 1]!;
+  return {
+    sampleCount: sorted.length,
+    p50: nearestRank(0.50),
+    p90: nearestRank(0.90),
+    p95: nearestRank(0.95),
+    max: maximum,
+  };
+}
+
 export interface ProviderReasoningParams {
   reasoning_effort?: ReasoningTier;
   thinking?: { type?: 'enabled'; clear_thinking?: false };
@@ -37,11 +59,22 @@ export interface ResolveReasoningPolicyInput {
   historicalStats?: ReasoningUsageStats | null;
 }
 
+/** Frozen product decision fields passed into the budget kernel. */
+export interface ReasoningPolicySelection {
+  tier: ReasoningTier;
+  providerDialect: ReasoningDialect;
+  model: string;
+  historicalStats?: ReasoningUsageStats | null;
+}
+
 export interface ResolvedReasoningPolicy {
   tier: ReasoningTier;
   effectiveTier: ReasoningTier;
   reserveTokens: number;
   providerParams: ProviderReasoningParams;
+  /** Current supported OpenAI-compatible adapters bill thinking inside the
+   * completion/output ceiling. */
+  reasoningBudget: 'inside_completion';
   reserveSource: ReasoningReserveSource;
   reserveClamped: boolean;
   p95ReasoningTokens?: number;
@@ -183,6 +216,7 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
     effectiveTier: input.tier,
     reserveTokens,
     providerParams,
+    reasoningBudget: 'inside_completion',
     reserveSource: calibrated ? 'usage_calibrated' : 'cold_start',
     reserveClamped: reserveTokens < targetReserve,
     p95ReasoningTokens,
