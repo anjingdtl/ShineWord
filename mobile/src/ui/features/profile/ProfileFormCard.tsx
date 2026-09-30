@@ -16,9 +16,8 @@ import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import { MODEL_PRESETS, presetById } from '../../../profileStore';
 import type { ProfileFormState } from './useProfileForm';
-import { REASONING_RESERVE_POLICY } from '../../../../../src/application/llm/reasoningPolicy';
-import { DEFAULT_OUTPUT_DEMANDS } from '../../../../../src/application/llm/requestDemands';
-import { deriveSafetyMargin } from '../../../../../src/application/context/modelEnvelope';
+import { reasoningDialectForModel } from '../../../../../src/application/llm/reasoningPolicy';
+import { previewLlmRequestBudget } from '../../../../../src/application/llm/requestBudgetPreview';
 
 function parsePreviewInteger(value: string): number | undefined {
   const parsed = Number(value);
@@ -38,24 +37,20 @@ export function ProfileFormCard(props: {
   const { form } = props;
   const [advancedSettingsVisible, setAdvancedSettingsVisible] = useState(false);
   const preset = presetById(form.presetId ?? undefined);
-  const reserveTarget = REASONING_RESERVE_POLICY.planner.target[form.reasoningTier];
-  const reserveMinimum = REASONING_RESERVE_POLICY.planner.minimum[form.reasoningTier];
-  const contextWindow = parsePreviewInteger(form.contextWindowTokens);
-  const maxOutput = parsePreviewInteger(form.maxOutputTokens);
-  const businessDemand = DEFAULT_OUTPUT_DEMANDS.planner;
-  const reserveForPreview = maxOutput === undefined
-    ? reserveTarget
-    : Math.min(reserveTarget, Math.max(0, maxOutput - businessDemand.minimum));
-  const outputForPreview = maxOutput === undefined
-    ? businessDemand.target
-    : Math.min(businessDemand.target, Math.max(0, maxOutput - reserveForPreview));
-  const estimateInputLimit = contextWindow === undefined || maxOutput === undefined
-    || maxOutput - businessDemand.minimum < reserveMinimum
-    ? undefined
-    : contextWindow - outputForPreview - reserveForPreview
-      - deriveSafetyMargin(contextWindow);
-  const capabilityTooSmall = maxOutput !== undefined
-    && maxOutput - businessDemand.minimum < reserveMinimum;
+  const preview = previewLlmRequestBudget({
+    contextWindowTokens: preset
+      ? preset.profile.capabilities.contextWindow
+      : parsePreviewInteger(form.contextWindowTokens),
+    maxOutputTokens: preset
+      ? preset.profile.capabilities.maxOutputTokens
+      : parsePreviewInteger(form.maxOutputTokens),
+    model: form.model,
+    providerDialect: form.reasoningParameterSupport === 'unsupported'
+      ? 'unsupported'
+      : preset?.profile.reasoningDialect ?? reasoningDialectForModel(form.model),
+    reasoningTier: form.reasoningTier,
+    requestKind: 'planner',
+  });
   return (
     <Card>
       <SectionHeader
@@ -124,7 +119,7 @@ export function ProfileFormCard(props: {
             思考越充分，复杂判断通常越稳定，也会消耗更多输出预算并减少本轮可用上下文。
           </Text>
           <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.primary }]}>
-            {`预计思考预留：${formatTokens(reserveTarget)}（Planner 估算）`}
+            {`预计思考预留：${preview.available ? formatTokens(preview.reasoningReserveTokens) : '无法计算精确预算'}（Planner 估算）`}
           </Text>
         </View>
         <Pressable
@@ -190,17 +185,23 @@ export function ProfileFormCard(props: {
                 选择“不支持”时，请求会在发送前失败，避免端点静默忽略思考档位。
               </Text>
             </View>
-            {capabilityTooSmall ? (
-              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.bad }]}>
-                当前最大输出不足以同时保留所选思考档位和最低正文预算。
-              </Text>
-            ) : contextWindow !== undefined && maxOutput !== undefined && estimateInputLimit !== undefined ? (
+            {preview.available ? (
               <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.primary }]}>
-                {`预算预览：上下文 ${formatTokens(contextWindow)} · 正文约 ${formatTokens(outputForPreview)} · 思考预留 ${formatTokens(reserveForPreview)} · 安全余量 ${formatTokens(deriveSafetyMargin(contextWindow))} · 估算输入上限 ${formatTokens(Math.max(0, estimateInputLimit))}`}
+                {`预算预览：上下文 ${formatTokens(preview.contextWindowTokens)} · 正文约 ${formatTokens(preview.businessOutputTokens)} · 思考预留 ${formatTokens(preview.reasoningReserveTokens)} · 安全余量 ${formatTokens(preview.safetyMarginTokens)} · 估算输入上限 ${formatTokens(preview.hardInputLimit)}（设置页估算，未计入实际回合的必需协议输入）`}
+              </Text>
+            ) : preview.errorCode === 'reasoning_capability_insufficient'
+              || preview.errorCode === 'output_demand_infeasible'
+              || preview.errorCode === 'envelope_infeasible' ? (
+              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.bad }]}>
+                当前模型上下文或最大输出不足以支持所选思考档位及最低正文预算。
+              </Text>
+            ) : preview.errorCode === 'reasoning_dialect_unsupported' ? (
+              <Text style={[typeStyle(theme, theme.type.caption), { color: theme.semanticText.bad }]}>
+                当前端点不支持思考档位参数，无法保证所选思考强度。
               </Text>
             ) : (
               <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
-                上下文或最大输出未知时，无法预览精确弹性预算；需要精确预算的任务将提示补充能力信息。
+                上下文或最大输出未知时，无法计算精确预算；需要精确预算的任务将提示补充能力信息。
               </Text>
             )}
           </View>

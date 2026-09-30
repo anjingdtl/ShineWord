@@ -9,6 +9,8 @@
 
 > 当前版本：**V0.4.1** · versionCode 40100。本版本完成 LLM 思考档位、Provider 参数、Reasoning Reserve、正文输出预算、弹性上下文、Story Memory 与 World Build 请求账本的治理闭环。Low / High / Max 由用户选择，新设置作用于后续请求；运行中的 World Build 使用冻结配置。真实 GLM 三档映射与 3 回合档位切换已在主机端验证。DeepSeek 与 Android 设备真实 LLM 未进行实测；分层验收与其余设备/Release 证据见[Reasoning & LLM Governance Closeout 最终报告](docs/reviews/reasoning-closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
+DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页 Planner 预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。此轮 Hotfix 的自动化验收与限制见 [HOTFIX_FINAL.md](docs/reviews/reasoning-closeout/HOTFIX_FINAL.md)；DeepSeek 真实 API 未测试。
+
 ## 核心特性
 
 - **确定性骰点**：Shine-TRPG Ruleset V0.1——六属性、d4～d12 技能骰、1～4 颗骰取最高、四档结果等级。骰点由本地引擎用 Android SecureRandom 拒绝采样完成，先持久化 RollRecord 再调用叙事模型；Narrator 失败或重启后复用同一骰点，永不重掷。

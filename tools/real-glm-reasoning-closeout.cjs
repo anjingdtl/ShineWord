@@ -67,24 +67,26 @@ class NodeSqliteAdapter {
   }
 }
 
-const report = {
-  credentialFile: null,
-  shortNovel: null,
-  longNovel: null,
-  directPlanner: [],
-  storyTurns: [],
-  storyMemory: null,
-  longNovelBudgetPressure: null,
-  logicalRequests: [],
-  ledger: null,
-};
+function createReport() {
+  return {
+    credential: { loaded: false },
+    shortNovel: null,
+    longNovel: null,
+    directPlanner: [],
+    storyTurns: [],
+    storyMemory: null,
+    longNovelBudgetPressure: null,
+    logicalRequests: [],
+    ledger: null,
+  };
+}
+const report = createReport();
 const physicalCaptures = [];
 let physicalCount = 0;
 let activeStage = 'initialization';
 
-function readCredentials() {
-  const bytes = fs.readFileSync(KEY_FILE);
-  const raw = bytes.toString('utf8');
+function readCredentials(keyFile = KEY_FILE, evidence = report) {
+  const raw = fs.readFileSync(keyFile, 'utf8');
   const values = {};
   for (const line of raw.split(/\r?\n/)) {
     const match = line.match(/^([^：:]+)[：:]\s*(.+)$/);
@@ -94,11 +96,7 @@ function readCredentials() {
   const endpoint = values['端点'] ?? values.endpoint;
   const model = values['模型'] ?? values.model;
   if (!key || !endpoint || !model) throw new SafeFailure('credential_fields_missing');
-  report.credentialFile = {
-    file: path.basename(KEY_FILE),
-    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-    bytes: bytes.length,
-  };
+  evidence.credential = { loaded: true };
   return { key, endpoint, model };
 }
 
@@ -544,11 +542,11 @@ async function runLongNovelPressure() {
   };
 }
 
-async function writeReport() {
-  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
-  report.physicalRequestCount = physicalCount;
-  report.physicalRequestLimit = MAX_PHYSICAL_REQUESTS;
-  fs.writeFileSync(OUTPUT_PATH, JSON.stringify(report, null, 2));
+async function writeReport(outputPath = OUTPUT_PATH, evidence = report) {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  evidence.physicalRequestCount = physicalCount;
+  evidence.physicalRequestLimit = MAX_PHYSICAL_REQUESTS;
+  fs.writeFileSync(outputPath, JSON.stringify(evidence, null, 2));
 }
 
 async function main() {
@@ -624,15 +622,20 @@ async function main() {
   if (Object.values(report.acceptance).some(value => value !== true)) process.exitCode = 1;
 }
 
-main().catch(async error => {
-  const code = error?.safeCode ?? error?.errorCode
-    ?? (typeof error?.code === 'string' ? error.code : 'unexpected_failure');
-  report.failure = {
-    stage: activeStage,
-    code: /^[A-Za-z0-9_:]+$/.test(code) ? code : 'unexpected_failure',
-    errorType: typeof error?.name === 'string' ? error.name : 'unknown',
-  };
-  try { await writeReport(); } catch { /* report failure contains no source or credential */ }
-  console.error(`R6 GLM verification stopped: stage=${activeStage} code=${report.failure.code}`);
-  process.exitCode = 1;
-});
+// Importing the fixture seams never loads local credentials or runs live gates.
+module.exports = { createReport, readCredentials, writeReport };
+
+if (require.main === module) {
+  main().catch(async error => {
+    const code = error?.safeCode ?? error?.errorCode
+      ?? (typeof error?.code === 'string' ? error.code : 'unexpected_failure');
+    report.failure = {
+      stage: activeStage,
+      code: /^[A-Za-z0-9_:]+$/.test(code) ? code : 'unexpected_failure',
+      errorType: typeof error?.name === 'string' ? error.name : 'unknown',
+    };
+    try { await writeReport(); } catch { /* report failure contains no source or credential */ }
+    console.error(`R6 GLM verification stopped: stage=${activeStage} code=${report.failure.code}`);
+    process.exitCode = 1;
+  });
+}

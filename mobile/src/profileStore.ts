@@ -5,11 +5,8 @@ import { normalizeStoredApiProfile } from '../../src/application/llm/profileMigr
 const PROFILE_KEY = 'shineword.api.profile.v1';
 
 /**
- * 1M-class model presets (resident-build plan §3/§1): DeepSeek V4.1 Flash
- * and GLM-5.3-Flash. Both start at the user's lowest selectable reasoning tier;
- * the unified policy chooses per-request reserve values.
- * TPM 3M). Context window 1,048,576; content output 16,384/request.
- * Probes may still override cache/ceiling findings at runtime.
+ * 1M-class presets start at the lowest product reasoning tier. The unified
+ * policy and request budget kernel choose per-request reserve/output grants.
  */
 export interface ModelPreset {
   id: string;
@@ -22,19 +19,22 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
   {
     id: 'deepseek-v4.1-flash',
     label: 'DeepSeek V4.1 Flash（1M）',
-    model: 'DeepSeek-V4.1-Flash',
+    // Official display name != wire ID. Verified 2026-09-30:
+    // https://api-docs.deepseek.com/api/list-models/
+    // https://api-docs.deepseek.com/api/create-chat-completion/
+    model: 'deepseek-flash',
     profile: {
       capabilities: {
         supportsJson: true,
         supportsStreaming: false,
         reportsUsage: true,
         contextWindow: 1_048_576,
-        // Conservative gateway ceiling; the official API allows 393,216.
-        maxOutputTokens: 131_072,
+        maxOutputTokens: 393_216,
         supportsPromptCache: true,
       },
       contentOutputTokens: 16_384,
       reasoningTier: 'low',
+      reasoningDialect: 'deepseek',
       concurrency: 3,
     },
   },

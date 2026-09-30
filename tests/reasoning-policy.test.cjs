@@ -103,6 +103,7 @@ test('reasoning usage stats retain known percentiles and exclude unknown values'
 });
 
 test('model dialect detection is request policy routing, and unsupported is explicit', () => {
+  assert.equal(reasoningDialectForModel('deepseek-flash'), 'deepseek');
   assert.equal(reasoningDialectForModel('DeepSeek-V4.1-Flash'), 'deepseek');
   assert.equal(reasoningDialectForModel('glm-5.3-flash'), 'glm');
   assert.equal(reasoningDialectForModel('custom-endpoint-model'), 'generic');
