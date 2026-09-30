@@ -20,11 +20,15 @@ export function classifyLlmFailure(error: unknown): LlmFailureClass {
   if (error instanceof LlmRequestFailure) {
     const metrics = error.requestMetrics;
     const last = metrics[metrics.length - 1];
+    // Empty reasoning completions are represented as a dedicated outcome,
+    // not a transport/HTTP error category.
+    if (last?.completionState === 'reasoning_only' || last?.outcome === 'reasoning_only') {
+      return 'reasoning_only';
+    }
     if (last?.errorCategory === 'timeout') return 'timeout_unknown';
     if (last?.errorCategory === 'network') return 'network_connect';
     if (last?.errorCategory === 'invalid_response') {
       if (last.completionState === 'content_filter') return 'content_filter';
-      if (last.completionState === 'reasoning_only') return 'reasoning_only';
       if (last.completionState === 'length') return 'length';
       if (last.completionState === 'empty') return 'empty';
       if (last.completionState === 'no_choices') return 'no_choices';
@@ -52,6 +56,28 @@ function lastHttpStatus(error: unknown): number | null {
     return last?.httpStatus ?? null;
   }
   return null;
+}
+
+function failedUsagePatch(error: unknown): Pick<
+  LlmAttemptPatch,
+  'inputTokens' | 'outputTokens' | 'reasoningTokens' | 'cachedInputTokens' | 'estimatedUsage'
+> {
+  if (!(error instanceof LlmRequestFailure) || error.requestMetrics.length === 0) {
+    return { inputTokens: null, outputTokens: null, reasoningTokens: null, cachedInputTokens: null, estimatedUsage: 1 };
+  }
+  const metrics = error.requestMetrics;
+  const totalIfComplete = (key: 'inputTokens' | 'outputTokens' | 'reasoningTokens' | 'cachedInputTokens'): number | null => {
+    if (metrics.some(metric => typeof metric.usage?.[key] !== 'number'
+      || !Number.isFinite(metric.usage[key]) || metric.usage[key]! < 0)) return null;
+    return metrics.reduce((sum, metric) => sum + metric.usage![key]!, 0);
+  };
+  return {
+    inputTokens: totalIfComplete('inputTokens'),
+    outputTokens: totalIfComplete('outputTokens'),
+    reasoningTokens: totalIfComplete('reasoningTokens'),
+    cachedInputTokens: totalIfComplete('cachedInputTokens'),
+    estimatedUsage: metrics.every(metric => metric.usage && !metric.usage.estimated) ? 0 : 1,
+  };
 }
 
 export class OutcomeUnknownReplayError extends Error {
@@ -105,7 +131,10 @@ export class LedgeredProvider implements LlmProvider {
         worldId: meta.worldId ?? null,
         stateVersion: meta.stateVersion ?? null,
         modelProfileFingerprint: this.options.modelProfileFingerprint,
-        reasoningTier: request.reasoningTier ?? meta.reasoningTier ?? null,
+        reasoningTier: request.reasoningTier ?? null,
+        reasoningReserveTokens: request.reasoningReserveTokens ?? null,
+        reasoningPolicyVersion: request.reasoningPolicyVersion ?? null,
+        wireOutputTokens: request.maxOutputTokens,
       },
       now(),
     );
@@ -133,6 +162,7 @@ export class LedgeredProvider implements LlmProvider {
         failureClass: classifyLlmFailure(error),
         errorCode: error instanceof Error ? error.name : 'unknown',
         httpStatus: lastHttpStatus(error),
+        ...failedUsagePatch(error),
         finishedAt: now(),
       });
       throw error;

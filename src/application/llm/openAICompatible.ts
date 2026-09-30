@@ -176,7 +176,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
     let lastEmptyReason: EmptyCompletionReason | undefined;
     let lastFinishReason: string | null = null;
     const requestMetrics: LlmPhysicalRequestMetric[] = [];
-    const maxPhysicalRequests = this.options.maxPhysicalRequests ?? REASONING_ONLY_RETRIES + 1;
+    const maxPhysicalRequests = request.maxPhysicalRequests
+      ?? this.options.maxPhysicalRequests
+      ?? REASONING_ONLY_RETRIES + 1;
     if (!Number.isInteger(maxPhysicalRequests) || maxPhysicalRequests < 1
       || maxPhysicalRequests > REASONING_ONLY_RETRIES + 1) {
       throw new Error(`maxPhysicalRequests must be an integer from 1 to ${REASONING_ONLY_RETRIES + 1}.`);

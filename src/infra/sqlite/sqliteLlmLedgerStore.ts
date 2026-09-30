@@ -1,6 +1,6 @@
 /**
  * SQLite-backed durable physical-request ledger (infrastructure plan §52).
- * Migration 19 creates the ledger; migration 22 adds reasoning-tier samples.
+ * Migration 19 creates the ledger; 22/23 add frozen reasoning metadata.
  */
 
 import type {
@@ -22,6 +22,9 @@ interface AttemptRow extends SqliteRow {
   state_version: number | null;
   model_profile_fingerprint: string;
   reasoning_tier: string | null;
+  reasoning_reserve_tokens: number | null;
+  reasoning_policy_version: string | null;
+  wire_output_tokens: number | null;
   attempt_no: number;
   status: string;
   failure_class: string | null;
@@ -50,6 +53,9 @@ function toRecord(row: AttemptRow): LlmRequestAttemptRecord {
     reasoningTier: row.reasoning_tier === 'low' || row.reasoning_tier === 'high' || row.reasoning_tier === 'max'
       ? row.reasoning_tier
       : null,
+    reasoningReserveTokens: row.reasoning_reserve_tokens,
+    reasoningPolicyVersion: row.reasoning_policy_version,
+    wireOutputTokens: row.wire_output_tokens,
     attemptNo: row.attempt_no,
     status: row.status as LlmAttemptStatus,
     failureClass: row.failure_class,
@@ -67,7 +73,8 @@ function toRecord(row: AttemptRow): LlmRequestAttemptRecord {
 }
 
 const COLUMN_LIST = `attempt_id, logical_request_id, request_kind, campaign_id, branch_id, world_id,
-  state_version, model_profile_fingerprint, reasoning_tier, attempt_no, status, failure_class, error_code, http_status,
+  state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
+  reasoning_policy_version, wire_output_tokens, attempt_no, status, failure_class, error_code, http_status,
   provider_request_id, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
   estimated_usage, started_at, finished_at`;
 
@@ -87,8 +94,9 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
     await this.db.execute(
       `INSERT INTO llm_request_attempts
         (attempt_id, logical_request_id, request_kind, campaign_id, branch_id, world_id,
-         state_version, model_profile_fingerprint, reasoning_tier, attempt_no, status, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
+         state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
+         reasoning_policy_version, wire_output_tokens, attempt_no, status, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
       [
         attemptId,
         input.logicalRequestId,
@@ -99,6 +107,9 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
         input.stateVersion ?? null,
         input.modelProfileFingerprint,
         input.reasoningTier ?? null,
+        input.reasoningReserveTokens ?? null,
+        input.reasoningPolicyVersion ?? null,
+        input.wireOutputTokens ?? null,
         attemptNo,
         startedAt,
       ],
@@ -158,7 +169,7 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
     const rows = await this.db.queryAll<{ reasoning_tokens: number }>(
       `SELECT reasoning_tokens FROM llm_request_attempts
         WHERE model_profile_fingerprint = ? AND reasoning_tier = ? AND request_kind = ?
-          AND status = 'succeeded' AND reasoning_tokens IS NOT NULL
+          AND status IN ('succeeded', 'failed') AND reasoning_tokens IS NOT NULL
         ORDER BY started_at DESC, attempt_no DESC LIMIT ?`,
       [input.modelProfileFingerprint, input.reasoningTier, input.requestKind, input.limit],
     );

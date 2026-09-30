@@ -81,7 +81,10 @@ export interface LlmRequest {
   role: LlmRole;
   system: string;
   user: string;
+  /** Exact provider wire max_tokens ceiling (business output + reasoning reserve). */
   maxOutputTokens: number;
+  /** Optional per-call cap for physical transport attempts; app-level recovery may own the next bounded attempt. */
+  maxPhysicalRequests?: number;
   jsonMode?: boolean;
   /** Provider-specific request tuning. (thinkingDisabled is OBSOLETE and
    *  ignored: policy 2026-09-30 forbids disabling model thinking.) */
@@ -90,6 +93,9 @@ export interface LlmRequest {
   };
   /** Explicit product tier selected when this request's policy was frozen. */
   reasoningTier?: ReasoningTier;
+  /** Reserve and policy identity paired with the selected tier. */
+  reasoningReserveTokens?: number | null;
+  reasoningPolicyVersion?: string;
   /** Request kind for the shared reasoning and budget policy. */
   requestKind?: LlmRequestKind;
   /** @deprecated Historical payload compatibility; new callers use reasoningTier. */
@@ -108,7 +114,6 @@ export interface LlmRequest {
   ledger?: {
     logicalRequestId: string;
     requestKind: string;
-    reasoningTier?: ReasoningTier;
     campaignId?: string;
     branchId?: string;
     worldId?: string;

@@ -48,6 +48,9 @@ export interface LlmRequestAttemptRecord {
   stateVersion: number | null;
   modelProfileFingerprint: string;
   reasoningTier: ReasoningTier | null;
+  reasoningReserveTokens: number | null;
+  reasoningPolicyVersion: string | null;
+  wireOutputTokens: number | null;
   attemptNo: number;
   status: LlmAttemptStatus;
   failureClass: string | null;
@@ -72,6 +75,9 @@ export interface NewLlmRequestAttempt {
   stateVersion?: number | null;
   modelProfileFingerprint: string;
   reasoningTier?: ReasoningTier | null;
+  reasoningReserveTokens?: number | null;
+  reasoningPolicyVersion?: string | null;
+  wireOutputTokens?: number | null;
 }
 
 export interface LlmAttemptPatch {
@@ -93,7 +99,7 @@ export interface LlmRequestLedgerStore {
   beginAttempt(input: NewLlmRequestAttempt, startedAt: number): Promise<LlmRequestAttemptRecord>;
   updateAttempt(attemptId: string, patch: LlmAttemptPatch): Promise<void>;
   listAttempts(logicalRequestId: string): Promise<LlmRequestAttemptRecord[]>;
-  /** Known samples only; unknown provider usage is not represented as zero. */
+  /** Known succeeded or failed physical usage only; unknown is never represented as zero. */
   listRecentReasoningTokens(input: {
     modelProfileFingerprint: string;
     reasoningTier: ReasoningTier;

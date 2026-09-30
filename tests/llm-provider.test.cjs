@@ -141,6 +141,29 @@ test('provider emits one physical attempt when configured with a one-request cap
   assert.equal(observed[0].outcome, 'reasoning_only');
 });
 
+test('provider honors per-request physical cap and keeps the selected tier', async () => {
+  const secrets = new MemorySecretStore();
+  await secrets.set('shineword.llm.p1', 'k');
+  const requests = [];
+  const provider = new OpenAICompatibleProvider(profile(), secrets, {
+    async post(input) {
+      requests.push(input);
+      return { status: 200, body: JSON.stringify({
+        choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'private' } }],
+        usage: { completion_tokens: 100, completion_tokens_details: { reasoning_tokens: 100 } },
+      }) };
+    },
+  }, 1000, { maxPhysicalRequests: 3 });
+  await assert.rejects(provider.complete({
+    role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100,
+    maxPhysicalRequests: 1, reasoningTier: 'max', reasoningReserveTokens: 50,
+  }), /只输出了思维链/);
+  assert.equal(requests.length, 1, 'the application owns the one permitted follow-up attempt');
+  const body = JSON.parse(requests[0].body);
+  assert.equal(body.max_tokens, 100);
+  assert.equal(body.reasoning_effort, 'max');
+});
+
 test('turn request budget hard-stops the fifth physical request', () => {
   const budget = new TurnRequestBudget(4);
   budget.consume('Planner');

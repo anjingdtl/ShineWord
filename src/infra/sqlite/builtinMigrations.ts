@@ -993,6 +993,12 @@ CREATE INDEX IF NOT EXISTS idx_llm_request_attempts_reasoning_usage
   ON llm_request_attempts(model_profile_fingerprint, reasoning_tier, request_kind, started_at);
 `;
 
+export const FROZEN_REASONING_LEDGER_SCHEMA_SQL = `
+ALTER TABLE llm_request_attempts ADD COLUMN reasoning_reserve_tokens INTEGER;
+ALTER TABLE llm_request_attempts ADD COLUMN reasoning_policy_version TEXT;
+ALTER TABLE llm_request_attempts ADD COLUMN wire_output_tokens INTEGER;
+`;
+
 export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 1, name: 'core', sql: CORE_SCHEMA_SQL },
   { version: 2, name: 'narratives', sql: NARRATIVES_SCHEMA_SQL },
@@ -1016,4 +1022,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 20, name: 'story_memory_v2', sql: STORY_MEMORY_V2_SCHEMA_SQL },
   { version: 21, name: 'episodic_recall_v2', sql: EPISODIC_RECALL_SCHEMA_SQL },
   { version: 22, name: 'reasoning_usage_tier', sql: REASONING_USAGE_LEDGER_SCHEMA_SQL },
+  { version: 23, name: 'frozen_reasoning_ledger', sql: FROZEN_REASONING_LEDGER_SCHEMA_SQL },
 ];

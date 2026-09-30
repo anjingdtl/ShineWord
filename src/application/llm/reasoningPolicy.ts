@@ -57,6 +57,7 @@ export interface ResolveReasoningPolicyInput {
   providerWireMaxOutputTokens?: number;
   minimumBusinessOutputTokens?: number;
   historicalStats?: ReasoningUsageStats | null;
+  reserveMultiplier?: number;
 }
 
 /** Frozen product decision fields passed into the budget kernel. */
@@ -65,6 +66,8 @@ export interface ReasoningPolicySelection {
   providerDialect: ReasoningDialect;
   model: string;
   historicalStats?: ReasoningUsageStats | null;
+  /** Bounded retry boost after a classified reasoning_only completion. */
+  reserveMultiplier?: number;
 }
 
 export interface ResolvedReasoningPolicy {
@@ -82,6 +85,8 @@ export interface ResolvedReasoningPolicy {
 }
 
 export const REASONING_POLICY_VERSION = 'reasoning-policy-1';
+export const REASONING_ONLY_RESERVE_MULTIPLIER = 1.5;
+export const REASONING_ONLY_RECOVERY_ATTEMPTS = 1;
 export const REASONING_CALIBRATION_MIN_SAMPLES = 8;
 export const REASONING_USAGE_ROLLING_WINDOW = 32;
 
@@ -187,9 +192,14 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
   const p95ReasoningTokens = typeof stats?.p95 === 'number' && Number.isFinite(stats.p95) && stats.p95 >= 0
     ? Math.ceil(stats.p95)
     : undefined;
-  const targetReserve = calibrated
+  const calibratedReserve = calibrated
     ? Math.max(coldStartReserve, Math.ceil((stats!.p95 as number) * 1.25))
     : coldStartReserve;
+  const multiplier = input.reserveMultiplier ?? 1;
+  if (!Number.isFinite(multiplier) || multiplier < 1 || multiplier > 2) {
+    throw new ReasoningCapabilityInsufficientError('Reasoning reserve retry multiplier must be between 1 and 2.');
+  }
+  const targetReserve = Math.ceil(calibratedReserve * multiplier);
   const wireCeiling = Math.min(
     input.modelMaxOutputTokens,
     input.providerWireMaxOutputTokens ?? input.modelMaxOutputTokens,

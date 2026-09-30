@@ -216,7 +216,8 @@ test('ledger: prepared -> sent -> succeeded persists usage', async () => {
     { modelProfileFingerprint: 'fp-1' },
   );
   const response = await provider.complete({
-    role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100, reasoningTier: 'max', ledger: LEDGER_META,
+    role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100,
+    reasoningTier: 'low', reasoningReserveTokens: 16, reasoningPolicyVersion: 'reasoning-policy-1', ledger: LEDGER_META,
   });
   assert.equal(response.text, '{"ok":true}');
   const attempts = await store.listAttempts(LEDGER_META.logicalRequestId);
@@ -228,7 +229,10 @@ test('ledger: prepared -> sent -> succeeded persists usage', async () => {
   assert.equal(attempts[0].inputTokens, 100);
   assert.equal(attempts[0].outputTokens, 50);
   assert.equal(attempts[0].reasoningTokens, 8);
-  assert.equal(attempts[0].reasoningTier, 'max');
+  assert.equal(attempts[0].reasoningTier, 'low');
+  assert.equal(attempts[0].reasoningReserveTokens, 16);
+  assert.equal(attempts[0].reasoningPolicyVersion, 'reasoning-policy-1');
+  assert.equal(attempts[0].wireOutputTokens, 100);
   assert.equal(attempts[0].cachedInputTokens, 20);
   assert.equal(attempts[0].branchId, 'branch-1');
   assert.equal(attempts[0].stateVersion, 7);
@@ -250,6 +254,40 @@ test('ledger: sent -> failure records class and http status', async () => {
   assert.equal(attempts[0].status, 'failed');
   assert.equal(attempts[0].failureClass, 'http_server');
   assert.equal(attempts[0].httpStatus, 500);
+});
+
+test('ledger: reasoning_only failure retains known token usage for calibration', async () => {
+  const store = await ledgerStore();
+  const failure = new LlmRequestFailure('reasoning-only', [
+    {
+      attempt: 1, durationMs: 10, httpStatus: 200, outcome: 'reasoning_only', completionState: 'reasoning_only',
+      usage: { inputTokens: 100, outputTokens: 120, reasoningTokens: 110, cachedInputTokens: 20, estimated: false },
+    },
+    {
+      attempt: 2, durationMs: 12, httpStatus: 200, outcome: 'reasoning_only', completionState: 'reasoning_only',
+      usage: { inputTokens: 120, outputTokens: 150, reasoningTokens: 140, cachedInputTokens: 25, estimated: false },
+    },
+  ]);
+  const provider = new LedgeredProvider(
+    fakeProvider(async () => { throw failure; }),
+    store,
+    { modelProfileFingerprint: 'fp-1' },
+  );
+  await assert.rejects(provider.complete({
+    role: 'Planner', system: 's', user: 'u', maxOutputTokens: 8_000,
+    reasoningTier: 'high', reasoningReserveTokens: 8_192,
+    reasoningPolicyVersion: 'reasoning-policy-1', ledger: LEDGER_META,
+  }));
+  const attempts = await store.listAttempts(LEDGER_META.logicalRequestId);
+  assert.equal(attempts[0].failureClass, 'reasoning_only');
+  assert.equal(attempts[0].inputTokens, 220);
+  assert.equal(attempts[0].outputTokens, 270);
+  assert.equal(attempts[0].reasoningTokens, 250);
+  assert.equal(attempts[0].cachedInputTokens, 45);
+  assert.equal(attempts[0].estimatedUsage, 0);
+  assert.deepEqual(await store.listRecentReasoningTokens({
+    modelProfileFingerprint: 'fp-1', reasoningTier: 'high', requestKind: LEDGER_META.requestKind, limit: 32,
+  }), [250], 'failed but known reasoning usage remains a valid calibration sample');
 });
 
 test('ledger: retries increment attempt_no under one logical request', async () => {
@@ -352,7 +390,7 @@ test('ledger: migration 19 creates llm_request_attempts table', async () => {
   assert.equal(row.length, 1);
 });
 
-test('ledger migration 22 preserves legacy rows and adds tier-scoped recent usage samples', async () => {
+test('ledger migrations 22/23 preserve old rows and add tier-scoped usage policy metadata', async () => {
   const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
   await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(0, 21));
   await adapter.execute(
@@ -361,11 +399,14 @@ test('ledger migration 22 preserves legacy rows and adds tier-scoped recent usag
      VALUES ('old#a1', 'old', 'planner', 'profile-a', 1, 'succeeded', 1)`,
   );
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(21));
-  assert.deepEqual(applied, [22]);
+  assert.deepEqual(applied, [22, 23]);
 
   const store = new SqliteLlmLedgerStore(adapter);
   const old = await store.listAttempts('old');
   assert.equal(old[0].reasoningTier, null, 'historical records remain unknown, not low');
+  assert.equal(old[0].reasoningReserveTokens, null);
+  assert.equal(old[0].reasoningPolicyVersion, null);
+  assert.equal(old[0].wireOutputTokens, null);
   assert.equal(old[0].reasoningTokens, null, 'missing provider usage remains unknown');
 
   for (const [index, tier, value] of [

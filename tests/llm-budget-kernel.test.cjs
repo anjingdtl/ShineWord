@@ -295,6 +295,42 @@ test('reasoning reserve clamps to a small model output ceiling and preserves the
   );
 });
 
+test('reasoning_only retry boosts reserve without changing tier and replans optional context', () => {
+  const caps = glmLikeCapabilities(32_000, 30_000);
+  const candidates = sixBoardDemands(1);
+  const base = planLlmRequest({
+    capabilities: caps,
+    requestKind: 'planner',
+    estimatedMandatoryInputTokens: 500,
+    businessOutputDemand: PLANNER_DEMAND,
+    contextDemands: candidates,
+    reasoningPolicy: { tier: 'high', providerDialect: 'glm', model: 'glm-5.3-flash' },
+  });
+  const retry = planLlmRequest({
+    capabilities: caps,
+    requestKind: 'planner',
+    estimatedMandatoryInputTokens: 500,
+    businessOutputDemand: PLANNER_DEMAND,
+    contextDemands: candidates,
+    reasoningPolicy: {
+      tier: 'high', providerDialect: 'glm', model: 'glm-5.3-flash', reserveMultiplier: 1.5,
+    },
+  });
+  assert.equal(retry.reasoningPolicy.tier, base.reasoningPolicy.tier);
+  assert.equal(retry.reasoningPolicy.providerParams.reasoning_effort, 'high');
+  assert.ok(retry.reasoningPolicy.reserveTokens > base.reasoningPolicy.reserveTokens);
+  assert.ok(retry.wireOutputTokens > base.wireOutputTokens);
+  assert.ok(retry.envelope.hardInputLimit < base.envelope.hardInputLimit);
+  assert.notEqual(retry.contextPlanId, base.contextPlanId);
+  const baseOptional = base.allocation.allocations
+    .filter(entry => candidates.find(candidate => candidate.id === entry.id)?.requirement === 'optional')
+    .reduce((sum, entry) => sum + entry.allocated, 0);
+  const retryOptional = retry.allocation.allocations
+    .filter(entry => candidates.find(candidate => candidate.id === entry.id)?.requirement === 'optional')
+    .reduce((sum, entry) => sum + entry.allocated, 0);
+  assert.ok(retryOptional <= baseOptional, 'the boosted reserve can shed optional context first');
+});
+
 test('Max world extraction reserve clamps against the 32K window plus safety margin', () => {
   const contextWindow = 32_000;
   const caps = glmLikeCapabilities(contextWindow, 131_072);
