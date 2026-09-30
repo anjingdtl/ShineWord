@@ -13,6 +13,7 @@ const {
   ReasoningDialectUnsupportedError,
 } = require('../dist/application/llm/reasoningPolicy');
 const { normalizeReasoningTier } = require('../dist/application/llm/types');
+const { llmModelProfileFingerprint } = require('../dist/application/llm/profileFingerprint');
 
 const kinds = Object.keys(REASONING_RESERVE_POLICY);
 const tiers = ['low', 'high', 'max'];
@@ -106,4 +107,21 @@ test('model dialect detection is request policy routing, and unsupported is expl
   assert.equal(reasoningDialectForModel('glm-5.3-flash'), 'glm');
   assert.equal(reasoningDialectForModel('custom-endpoint-model'), 'generic');
   assert.throws(() => providerReasoningParamsForTier('unsupported', 'max'), ReasoningDialectUnsupportedError);
+});
+
+test('usage profile fingerprint distinguishes endpoint/model capabilities without storing endpoint text', () => {
+  const profile = {
+    id: 'glm-main', endpoint: 'https://api.example/v1', model: 'glm-5.3-flash',
+    capabilities: { contextWindow: 1_048_576, maxOutputTokens: 131_072 },
+    reasoningDialect: 'glm', reasoningTier: 'low',
+  };
+  const fingerprint = llmModelProfileFingerprint(profile);
+  assert.equal(fingerprint.includes(profile.endpoint), false);
+  assert.notEqual(fingerprint, llmModelProfileFingerprint({ ...profile, endpoint: 'https://other.example/v1' }));
+  assert.notEqual(fingerprint, llmModelProfileFingerprint({ ...profile, model: 'other-model' }));
+  assert.notEqual(fingerprint, llmModelProfileFingerprint({
+    ...profile, capabilities: { ...profile.capabilities, contextWindow: 128_000 },
+  }));
+  assert.equal(fingerprint, llmModelProfileFingerprint({ ...profile, reasoningTier: 'max' }),
+    'tier stays a separate ledger dimension');
 });

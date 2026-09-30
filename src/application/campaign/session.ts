@@ -2,8 +2,8 @@ import { RejectionSamplingRandomSource } from '../../domain/rules/random';
 import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
 import type { LlmProvider } from '../llm/types';
-import { stableFingerprint } from '../llm/requestPlan';
 import { LedgeredProvider } from '../llm/requestLedger';
+import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
 import type { LlmRequestLedgerStore } from '../ports/llmLedger';
 import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
 import type { SqliteEpisodicStore } from '../memory/episodicStore';
@@ -170,11 +170,7 @@ export class CampaignSession {
     this.encounters = new EncounterService(deps);
     this.provider = deps.llmLedger
       ? new LedgeredProvider(provider, deps.llmLedger, {
-        modelProfileFingerprint: stableFingerprint({
-          model: profile.model,
-          contextWindow: profile.capabilities.contextWindow ?? null,
-          maxOutputTokens: profile.capabilities.maxOutputTokens,
-        }),
+        modelProfileFingerprint: llmModelProfileFingerprint(profile),
       })
       : provider;
   }

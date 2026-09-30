@@ -27,14 +27,14 @@ Reserves clamp to the available model, provider, context, and mandatory-input ca
 
 ## Usage calibration foundation
 
-- Ledger migration 22 adds a nullable `reasoning_tier` column and an index over profile fingerprint, tier, request kind, and time. Existing rows remain NULL for tier and are not reclassified.
+- Ledger migration 22 adds a nullable `reasoning_tier` column and an index over profile fingerprint, tier, request kind, and time. The profile fingerprint distinguishes endpoint, model, dialect, and declared capability values while persisting only hashed endpoint identity. Existing rows remain NULL for tier and are not reclassified.
 - `LedgeredProvider` persists the frozen request tier and the provider-reported `reasoningTokens`. Missing usage remains SQL NULL.
 - `listRecentReasoningTokens()` reads only successful, known samples for the exact profile/tier/request-kind tuple. `reasoningUsageStatsFromSamples()` builds P50/P90/P95/max over those samples; the policy accepts P95 and waits for at least eight samples before applying `max(coldStartMinimum, ceil(P95 × 1.25))`.
 - Runtime retrieval and injection of historical samples is left for a later calibration integration. The cold-start policy remains the active path until a caller supplies these statistics.
 
 ## Verification
 
-- `npm run verify:core`: PASS, 427 tests.
+- `npm run verify:core`: PASS, 428 tests.
 - `npm run typecheck --prefix mobile`: PASS.
 - Five-window planner matrix: PASS at 32K, 64K, 128K, 200K, and 1M. Reserves increase Low < High < Max; hard input decreases in the reverse order; wire ceiling and single-count invariants hold.
 - Small output capability clamp / capability-insufficient cases: PASS.
