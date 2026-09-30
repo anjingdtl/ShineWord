@@ -41,6 +41,67 @@ function memoryStorage(initial = {}) {
   };
 }
 
+test('DeepSeek preset maps the official display name to the documented wire ID and capabilities', () => {
+  const { presetById } = loadProfileStore(memoryStorage());
+  const preset = presetById('deepseek-v4.1-flash');
+  assert.equal(preset.label, 'DeepSeek V4.1 Flash（1M）');
+  assert.equal(preset.model, 'deepseek-flash');
+  assert.equal(preset.profile.capabilities.contextWindow, 1_048_576);
+  assert.equal(preset.profile.capabilities.maxOutputTokens, 393_216);
+  assert.equal(preset.profile.reasoningTier, 'low');
+  assert.equal(preset.profile.reasoningDialect, 'deepseek');
+});
+
+for (const tier of ['low', 'high', 'max']) {
+  test(`DeepSeek preset sends ${tier} with thinking enabled and the exact kernel wire budget (unit transport)`, async () => {
+    const { presetById, saveApiProfile } = loadProfileStore(memoryStorage());
+    const preset = presetById('deepseek-v4.1-flash');
+    const profile = await saveApiProfile({
+      endpoint: 'https://example.invalid/v1', model: preset.model,
+      presetId: preset.id, reasoningTier: tier,
+    });
+    assert.equal(profile.name, preset.label);
+    assert.equal(profile.reasoningTier, tier);
+    assert.equal(profile.reasoningDialect, 'deepseek');
+    const { resolveModelCapabilities } = require('../dist/application/llm/capabilityResolver');
+    const { planLlmRequest, DEFAULT_OUTPUT_DEMANDS } = require('../dist/application/llm/requestBudgetKernel');
+    const { OpenAICompatibleProvider } = require('../dist/application/llm/openAICompatible');
+    const { MemorySecretStore } = require('../dist/application/llm/memorySecretStore');
+    const plan = planLlmRequest({
+      capabilities: resolveModelCapabilities({
+        declared: {
+          contextWindowTokens: profile.capabilities.contextWindow,
+          maxOutputTokens: profile.capabilities.maxOutputTokens,
+        }, reasoningMode: 'always_on',
+      }),
+      requestKind: 'planner', estimatedMandatoryInputTokens: 0,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+      reasoningPolicy: { tier, providerDialect: profile.reasoningDialect, model: profile.model },
+    });
+    const secrets = new MemorySecretStore();
+    await secrets.set(profile.keyRef, 'unit-test-key');
+    const bodies = [];
+    const provider = new OpenAICompatibleProvider(profile, secrets, {
+      async post(request) {
+        bodies.push(JSON.parse(request.body));
+        return { status: 200, body: JSON.stringify({ choices: [{ message: { content: 'ok' } }] }) };
+      },
+    });
+    await provider.complete({
+      role: 'Planner', system: 'unit fixture', user: 'unit fixture',
+      maxOutputTokens: plan.wireOutputTokens, maxPhysicalRequests: 1,
+      reasoningTier: plan.reasoningPolicy.tier,
+    });
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].model, 'deepseek-flash');
+    assert.deepEqual(bodies[0].thinking, { type: 'enabled' });
+    assert.equal(bodies[0].reasoning_effort, tier);
+    assert.equal(plan.reasoningPolicy.effectiveTier, tier);
+    assert.equal(bodies[0].max_tokens, plan.wireOutputTokens);
+    assert.equal(Object.hasOwn(bodies[0].thinking, 'budget_tokens'), false);
+  });
+}
+
 test('new custom profiles require an explicit tier and keep unknown capabilities absent', async () => {
   const storage = memoryStorage();
   const { saveApiProfile } = loadProfileStore(storage);
