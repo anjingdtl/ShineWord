@@ -19,7 +19,21 @@ npm ci --prefix mobile --no-audit --no-fund
 npm run apk:debug
 ```
 
-The debug APK is written to `dist/apk/debug/ShineWord-V0.2.0-p2.8-debug.apk`.
+The debug APK is written to `dist/apk/debug/ShineWord-V0.4.1-debug.apk`.
+`apk:debug` embeds the Hermes JavaScript bundle and disables Metro access for
+that build, so the installed APK runs independently of a development server.
+`npm run android --prefix mobile` retains the usual Metro development workflow.
+
+On Windows, if Gradle fails before compilation with `Unable to establish
+loopback connection` / `UnixDomainSockets.connect0: Invalid argument`, choose a
+short existing temporary directory for the JDK Unix-domain socket path in the
+current shell, then rerun the build:
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\Temp\shineword-qa | Out-Null
+$env:JAVA_TOOL_OPTIONS = '-Djdk.net.unixdomain.tmpdir=C:\Temp\shineword-qa'
+npm run apk:debug
+```
 
 ## Signed release APK
 
@@ -38,4 +52,4 @@ Run the PowerShell helper to load User-scope variables into the current process 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\mobile\scripts\build-release-apk.ps1
 ```
 
-The signed release APK is written to `dist/apk/release/ShineWord-V0.2.0-p2.8-release.apk`. Both output paths are ignored by Git.
+The signed release APK is written to `dist/apk/release/ShineWord-V0.4.1-release.apk`. Both output paths are ignored by Git.

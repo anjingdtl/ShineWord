@@ -17,6 +17,7 @@ class MainApplication : Application(), ReactApplication {
     getDefaultReactHost(
       context = applicationContext,
       packageList = packages,
+      useDevSupport = BuildConfig.DEBUG && !BuildConfig.STANDALONE_DEBUG,
     )
   }
 

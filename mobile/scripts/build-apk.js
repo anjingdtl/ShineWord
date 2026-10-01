@@ -69,13 +69,15 @@ if (!fs.existsSync(gradleScript) || !fs.existsSync(wrapperJar)) {
 }
 
 const gradleTask = variant === 'debug' ? 'assembleDebug' : 'assembleRelease';
+const gradleArgs = [gradleTask, '--stacktrace',
+  ...(variant === 'debug' ? ['-PshinewordStandaloneDebug=true'] : [])];
 const build = process.platform === 'win32'
-  ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', gradleScript, gradleTask, '--stacktrace'], {
+  ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', gradleScript, ...gradleArgs], {
     cwd: androidDir,
     stdio: 'inherit',
     shell: false,
   })
-  : spawnSync('bash', [gradleScript, gradleTask, '--stacktrace'], {
+  : spawnSync('bash', [gradleScript, ...gradleArgs], {
     cwd: androidDir,
     stdio: 'inherit',
     shell: false,
@@ -124,6 +126,12 @@ if (!packageInfo
   || packageInfo[3] !== appVersion[1]) {
   console.error('APK package/version metadata does not match mobile/android/app/build.gradle.');
   process.exit(1);
+}
+
+const contents = runAndroidTool('aapt', ['list', sourceApk]);
+if (contents.status !== 0 || !/^assets\/index\.android\.bundle\r?$/m.test(contents.stdout)) {
+  console.error('APK is missing its bundled JavaScript; it cannot run without Metro.');
+  process.exit(contents.status || 1);
 }
 
 if (variant === 'release') {
