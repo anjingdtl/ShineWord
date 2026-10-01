@@ -122,7 +122,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
       <PlayHeader
         title={view?.title ?? '故事'}
         clockSeconds={view?.clockSeconds ?? null}
-        onBack={() => navigation.navigate('Tabs', { screen: 'Campaigns' })}
+        onBack={() => navigation.popTo('Tabs', { screen: 'Campaigns' })}
         onMenu={() => setMenuOpen(true)}
         busy={busy}
       />
@@ -221,7 +221,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         }}
         onExit={() => {
           setMenuOpen(false);
-          navigation.navigate('Tabs', { screen: 'Campaigns' });
+          navigation.popTo('Tabs', { screen: 'Campaigns' });
         }}
       />
     </ScreenShell>

@@ -10,7 +10,7 @@
 | M3 | 通过（已修复） | 原创两步开局、原著四步开局、首回合生成、重启继续通过；修复游玩页返回入口 |
 | M4 | 通过（已修复） | 同一分支 10 次真实行动；三档、4 次本地掷骰、五个面板与 v8 记忆保存；修复时间与阅读跟随 |
 | M5 | 通过（已修复） | 存档与世界包往返、校验失败、分支休息、断网重试、后台、两处强停恢复通过；修复恢复死路、导入标题和菜单回执 |
-| M6 | 待执行 | |
+| M6 | 通过（已修复，性能有环境限制） | 五轮导航、三次冷启动、ZIP 新项目开局、日志和数据库审计通过；修复导航栈重复保留页面；最终 APK 与安装包哈希一致 |
 
 完整范围与通过条件见 [TEST_PLAN.md](TEST_PLAN.md)。
 
@@ -82,3 +82,28 @@
 - 世界包 r1 导出 ZIP 202,954 bytes，包含 `package.json`；经 UI 导入为独立可游玩项目，没有额外模型调用。导出存档、世界包未包含真实凭据。
 - 80 项针对性回归、588/588 核心回归、移动类型和版本门禁通过；独立 APK 构建、保留数据更新、migration 25→26 和上述恢复复测通过。
 - 证据：`m5-exported.xml`、`m5-corrupt-rejected.xml`、`m5-save-imported.xml`、`m5-offline-error.xml`、`m5-background-result.xml`、`m5-kill-blocked.xml`、`m5-recovery-fixed.xml`、`m5-recovered-turn14.xml`、`m5-planner-draft-recovery.xml`、`m5-planner-recovered15.xml`、`m5-export-receipt-fixed.xml`、`m5-import-title-fixed.xml`、`m5-world-import-final.xml`；截图：[M5_RECOVERY.png](M5_RECOVERY.png)、[M5_RESUMED_ROLL.png](M5_RESUMED_ROLL.png)、[M5_IMPORTED_SAVE.png](M5_IMPORTED_SAVE.png)。
+
+## M6 稳定性、性能与最终产物
+
+- 聚焦循环：战役列表 → 导入 v10 的游玩页 → 游戏菜单 → 关闭 → 返回战役 → 书库 → 我的 → 战役，不发模型请求。旧代码两轮 PSS 从 164,006 增至 196,029 / 229,852 KiB，第三轮部分操作后 240,022 KiB。核对已安装的 React Navigation 7 路由代码，`navigate('Tabs')` 追加页面，旧 Play/Tabs 被留在栈里。
+- 修复游玩页返回和菜单退出为 `popTo('Tabs', ...)`，同时修正开局补齐资料后返回书库的同类调用。后者的错误资料补齐分支未在本轮重新触发；受影响页面均通过移动类型检查。
+- 修复后的相同五轮循环全部通过，PSS 依次 156,443 / 157,583 / 166,575 / 177,193 / 175,590 KiB；随后同页采样回落至 155,348 KiB。初始 112,333 KiB 是尚未打开游玩与个人页的冷态；五轮采样证明这次页面栈累积已消除，不能证明所有长期内存泄漏均不存在。原始数值见 [PERFORMANCE.json](PERFORMANCE.json)。
+- 聚焦五轮 gfxinfo：1,160 帧，170 卡顿帧（14.66%），p50 / p90 / p95 / p99 = 18 / 48 / 93 / 200ms。环境为 Android 17 API 37.1 x86_64、1080×2400、软件 GPU、debug；不视作真机 release 流畅度达标。旧采样期间有本机构建和 UI dump 超时，不做修复前后帧率因果比较。
+- 菜单「退出到战役列表」可返回正确列表；系统返回依次回到书库、Launcher，没有重新打开旧游玩页。三次强停后的独立启动均为 COLD，Activity `TotalTime` 1,655 / 1,506 / 1,457ms，每次另通过 UI 树确认书库可用，无 Metro、无 adb reverse。
+- 最终 APK 保留数据更新后，已导入的 v10 战役重复打开成功；ZIP 新项目以 Portable 开局并完成真实观察首回合，Planner/Narrator 成功，v1 与夜间时钟一致。系统离开应用后再次打开该战役仍保留故事，没有再次发模型请求。原 TXT 项目仍共存，未把本轮扩大为全新设备隔离迁移证明。截图：[M6_PORTABLE_PLAY.png](M6_PORTABLE_PLAY.png)。
+- 终验日志中 crash buffer、ReactNativeJS/AndroidRuntime 错误与 ANR/crash event 为空；进程退出记录只有测试强停、安装更新等已知原因。早期 02:55 的 crash 属于并发 UI dump 的 `uiautomator` 工具进程，不是 APP；驱动也出现过读 UI 树超时，未当作 APP 崩溃，复测恢复后正常。
+- 数据库 `integrity_check = ok`，`foreign_key_check` 空；无未提交回合、无 prepared/sent 请求。总计 16 个新真实游玩回合（原创 10、原著 1、恢复分支 4、ZIP 项目 1）和 2 次机械休息。44 次账本尝试：41 成功、1 次主动断网失败、2 次主动强停的未知结果已明确确认恢复，未知计费用量记录仍保留。
+- 最终核心回归 588/588、移动类型和版本门禁通过。最终构建日志 `build-m6-navigation.log`：BUILD SUCCESSFUL；包 `com.shineword.app`，V0.4.1 / 40100，minSdk 24 / targetSdk 36，arm64-v8a + x86_64，APK v2 签名有效（1 signer），含 4,754,060 bytes 的离线 JS bundle。
+- APK：`dist/apk/debug/ShineWord-V0.4.1-debug.apk`，107,037,263 bytes（约 102.08 MiB）。SHA-256 `2510cb932ec3db506e2ebe0c43d19b851677c0badc3f651fa6ebd98e3970eb34`，与模拟器安装的 `base.apk` 一致。
+- 证据：`m6-navigation{,-fixed}.log`、`m6-navigation*-mem-*.txt`、`m6-gfx-fixed-final.txt`、`m6-cold-{1,2,3}.txt`、`m6-cold-*-ui.xml`、`m6-menu-exit-ready.xml`、`m6-system-back-{library,launcher}.xml`、`m6-portable-first-turn.xml`、`m6-final-restored-game.xml`、`m6-final-{crash,js-native,events,exit-info}.txt`、`final-apk-{metadata.json,signature.txt}`、`final-installed-apk-hash.txt`。
+
+## 验收结论与边界
+
+在本次完整列明的主路径中，没有遗留阻断缺陷；debug APK 已真正安装、离线启动并使用指定 GLM 和完整原著完成穿越游玩。构建、设置、导入、审查、开局、连续行动、存档、断网/强停恢复与页面稳定性均有设备证据及对应修复。
+
+- 循序精编仅发布第一阶段 r1（前 106 章），全文已导入；后两阶段尚未触发，不宣称全书可游玩内容已验证。
+- 当前世界没有可用遭遇、可招募同伴与相关物品/任务；实际战斗、招募、转移物品、训练等未做本次模拟器实游，核心自动回归的通过不能替代这些设备场景。
+- 模型请求有明显档位耗时差异，世界构建单次最长约 109 秒；有一次恢复叙事混入 `Walls`，抽取也存在人物名称归一化重复。这些属于生成质量限制，未自动删除故事文字或合并可能不同的人物。
+- 本轮是单个软件模拟器、debug 包和有限时长验收；真机帧率、长时间运行、跨 Android 版本与全新设备迁移仍需另测。
+
+按模块提交：M0 `2d5e108`；M1 `34870ff`；M2 `f44da62`；M3 `cde715f`；M4 `5eb638e`；M5 `3d26c0d`；M6 为本报告所在的 `fix(navigation): release play screens when returning to tabs` 提交。分支：`codex/emulator-qa-20261001`。

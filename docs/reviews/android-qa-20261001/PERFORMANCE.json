@@ -1,0 +1,107 @@
+{
+  "environment": {
+    "serial": "emulator-5556",
+    "avd": "ShineWord_P2_Clean (read-only)",
+    "android": "17 / API 37.1",
+    "abi": "x86_64",
+    "renderer": "software / Skia OpenGL",
+    "build": "standalone debug V0.4.1",
+    "resolution": "1080x2400"
+  },
+  "flow": "Campaign list -> imported v10 play -> menu -> close -> campaign list -> library -> profile -> campaign list; repeated five times without model requests",
+  "beforeFix": {
+    "initial": {
+      "totalPssKiB": 164006,
+      "nativeHeapPssKiB": 61752,
+      "javaHeapPssKiB": 20792
+    },
+    "cycles": [
+      {
+        "totalPssKiB": 196029,
+        "nativeHeapPssKiB": 83836,
+        "javaHeapPssKiB": 26468
+      },
+      {
+        "totalPssKiB": 229852,
+        "nativeHeapPssKiB": 112276,
+        "javaHeapPssKiB": 40312
+      }
+    ],
+    "afterPartialThird": {
+      "totalPssKiB": 240022,
+      "nativeHeapPssKiB": 126432,
+      "javaHeapPssKiB": 32696
+    },
+    "note": "Navigation v7 navigate appended Tabs, retaining prior Play/Tabs. Third cycle UI dump driver timed out; app crash/ANR absent. APK compilation overlapped part of this capture; frame comparison is excluded."
+  },
+  "afterFix": {
+    "initial": {
+      "totalPssKiB": 112333,
+      "nativeHeapPssKiB": 29492,
+      "javaHeapPssKiB": 15236
+    },
+    "cycles": [
+      {
+        "totalPssKiB": 156443,
+        "nativeHeapPssKiB": 53516,
+        "javaHeapPssKiB": 21160
+      },
+      {
+        "totalPssKiB": 157583,
+        "nativeHeapPssKiB": 59612,
+        "javaHeapPssKiB": 24336
+      },
+      {
+        "totalPssKiB": 166575,
+        "nativeHeapPssKiB": 70740,
+        "javaHeapPssKiB": 24988
+      },
+      {
+        "totalPssKiB": 177193,
+        "nativeHeapPssKiB": 72772,
+        "javaHeapPssKiB": 24912
+      },
+      {
+        "totalPssKiB": 175590,
+        "nativeHeapPssKiB": 71648,
+        "javaHeapPssKiB": 25008
+      }
+    ],
+    "after": {
+      "totalPssKiB": 155348,
+      "nativeHeapPssKiB": 64740,
+      "javaHeapPssKiB": 17784
+    },
+    "frames": 1160,
+    "jankyFrames": 170,
+    "jankyPercent": 14.66,
+    "percentileMs": {
+      "50": 18,
+      "90": 48,
+      "95": 93,
+      "99": 200
+    }
+  },
+  "coldStarts": [
+    {
+      "launchState": "COLD",
+      "totalTimeMs": 1655,
+      "waitTimeMs": 1706
+    },
+    {
+      "launchState": "COLD",
+      "totalTimeMs": 1506,
+      "waitTimeMs": 1512
+    },
+    {
+      "launchState": "COLD",
+      "totalTimeMs": 1457,
+      "waitTimeMs": 1466
+    }
+  ],
+  "limitations": [
+    "Short-run PSS snapshots do not prove absence of every leak.",
+    "Software-emulator debug frame timings are not physical-device release performance.",
+    "The cold-start metric is Activity launch TotalTime; usable library was separately verified by UI tree."
+  ]
+}

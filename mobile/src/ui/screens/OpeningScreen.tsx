@@ -191,7 +191,7 @@ export function OpeningScreen(): React.JSX.Element {
           .catch(e => setError(e instanceof Error ? e.message : String(e)));
       }
       // The library owns controls/progress until complete analysis publishes.
-      navigation.navigate('Tabs', { screen: 'Library' });
+      navigation.popTo('Tabs', { screen: 'Library' });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
