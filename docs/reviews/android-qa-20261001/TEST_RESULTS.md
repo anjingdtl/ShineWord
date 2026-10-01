@@ -8,7 +8,7 @@
 | M1 | 通过（已修复） | 设备 GLM 低/高/最高三档真实连接成功；配置、Keychain 密钥重启复用成功；修复无密钥保存失败却发布配置 |
 | M2 | 通过（已修复） | 完整小说导入、第一阶段发布、暂停/重启续建和同文件去重通过；修复冲突审查与续建死路 |
 | M3 | 通过（已修复） | 原创两步开局、原著四步开局、首回合生成、重启继续通过；修复游玩页返回入口 |
-| M4 | 待执行 | |
+| M4 | 通过（已修复） | 同一分支 10 次真实行动；三档、4 次本地掷骰、五个面板与 v8 记忆保存；修复时间与阅读跟随 |
 | M5 | 待执行 | |
 | M6 | 待执行 | |
 
@@ -55,3 +55,15 @@
 - 缺陷：从项目开局后「‹ 战役」实际返回项目页。修复为显式返回战役列表，设备复测入口与标签一致；移动类型检查和独立 APK 构建通过。
 - 连续游玩模块继续核查已发现的夜间时钟与清晨叙事不一致；不将 M3 首回合证明扩大为全部叙事质量保证。
 - 证据：`m3-quick-identity.xml`、`m3-quick-confirm.xml`、`m3-advanced-world.xml`、`m3-advanced-companions.xml`、`m3-advanced-confirm.xml`、`m3-canon-first-turn.xml`、`m3-restart-campaigns.xml`、`m3-original-reentered.xml`、`m3-back-fixed.xml`；截图：[M3_FIRST_TURN.png](M3_FIRST_TURN.png)、[M3_CANON_START.png](M3_CANON_START.png)。
+
+## M4 连续行动、三档与面板
+
+- 原创战役同一分支完成 10 次真实行动：观察、查脚印、交谈、请求许可、查走廊、听门内动静、叩门、核对痕迹、运动跨沟、告退。首回合使用中文预设选项，其余自由输入使用英文，模型主要以中文叙事。10 条 turn 与 narrative 全部 Committed，版本到 v10。
+- 本地掷骰：交涉 `[6]` / DC4 成功、交涉 `[4]` / DC4 成功、运动 `3d6 [1,5,3]` 取高 5 / DC4 成功、告退交涉 `[2]` / DC3 失败。模型叙事未改变持久化的本地结果。
+- 实际档位：Low 8 回合，High 1，Max 1。High Planner/Narrator 26,336 / 42,307ms；Max 15,270 / 42,016ms；Low 平均 4,890 / 9,468ms。UI 等待期间禁用行动，仍可打开信息；测试脚本的 45 秒轮询到期不等于应用超时，账本显示请求继续并成功。
+- 角色、队伍、任务、物品、知识五面板可打开；独自行动与无可见任务/物品/知识时展示空态。当前包没有可招募同伴/图鉴遭遇，本轮未验证实际招募、物品转移或战斗。
+- v8 触发真实 `memory_checkpoint`，一次修复请求后 `story_memory_states` 为 clean / through v8；两请求均成功，分别 26,101 / 25,372ms。
+- 时间缺陷：时辰刻数从偶数小时计算，与 23:00 起点错位；模型上下文没有当前时刻，首次叙事写成清晨。修复刻数偏移，将当前时刻放入必需上下文，并向 Narrator 提供本回合起止时间，明确时间不能被旧叙事覆盖。真实续写已转为夜间，并从子时五刻推进到丑时二刻。
+- 阅读缺陷：键盘缩小视窗和新增内容被误判为读旧故事，最新故事偶尔藏在下面。修复为记录用户滚动意图，在原生尺寸测量稳定后跟随末尾。设备验证：第 7/10 回合自动显示新故事；主动上滑阅读 5/6 回合时，第 8 回合提交保持原位置，手动下滑可看新故事。
+- 核心回归 584/584、移动类型检查、独立 APK 构建通过；时间边界与 Planner/Narrator 必需上下文新增回归通过。
+- 证据：`m4-turn02.xml`、`m4-turn03-watch.xml`、`m4-turn05-complete.xml`、`m4-turn06-complete.xml`、`m4-reading-old.xml`、`m4-turn08-reader-position.xml`、`m4-turn09-visible.xml`、`m4-turn10.xml`、`m4-panel-{party,quests,items,knowledge}.xml`；截图：[M4_LATEST_TURN.png](M4_LATEST_TURN.png)、[M4_TURN10.png](M4_TURN10.png)。

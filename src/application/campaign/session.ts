@@ -35,6 +35,7 @@ import type { ApiProfile } from '../llm/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { RandomSource } from '../../domain/rules/random';
 import type { GameStateSnapshot } from '../../domain/state/types';
+import { describeWorldClock } from '../../domain/state/worldClock';
 import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
 import type { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
@@ -1263,6 +1264,7 @@ export class CampaignSession {
     facts: Awaited<ReturnType<SqliteWorldStore['listFacts']>> = [],
   ): string[] {
     const parts: string[] = [];
+    parts.push(`【当前时刻】${describeWorldClock(state.clockSeconds ?? state.clockMinutes * 60)}。世界时钟由本地规则推进，不得自行跳到另一时段。`);
     for (const entry of entries) {
       if (!isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)) continue;
       if (entry.kind === 'lore' && entry.visibility === 'public') {

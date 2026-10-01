@@ -76,6 +76,7 @@ const LABEL_BOARDS: ReadonlyArray<{ prefix: string; board: ContextBoard; heading
   { prefix: '【当前位置可调查的隐藏线索引用】', board: 'worldKnowledge', heading: '可调查线索' },
   { prefix: '【可见人物】', board: 'worldKnowledge', heading: '相关人物' },
   { prefix: '【角色】', board: 'currentState', heading: '队伍' },
+  { prefix: '【当前时刻】', board: 'currentState', heading: '当前时刻' },
   { prefix: '【主目标】', board: 'currentState', heading: '当前目标' },
   { prefix: '【相关长期记忆】', board: 'storyMemory', heading: '长期故事状态' },
   { prefix: '【角色已知线索】', board: 'worldKnowledge', heading: '已知线索' },

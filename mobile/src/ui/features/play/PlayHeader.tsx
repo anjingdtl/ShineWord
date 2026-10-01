@@ -25,7 +25,7 @@ export function formatWorldClock(themeId: ThemeId, clockSeconds: number): string
     case 'ink': {
       // 时辰 = two-hour periods starting at 23:00; 刻 = 15 minutes (8 per 时辰).
       const period = Math.floor(((hours + 1) % 24) / 2);
-      const ke = Math.floor(((hours % 2) * 60 + minutes) / 15);
+      const ke = Math.floor((((hours + 1) % 2) * 60 + minutes) / 15);
       return `${SHICHEN[period]}时${KE_NUMERALS[ke]}刻`;
     }
     case 'fantasy':

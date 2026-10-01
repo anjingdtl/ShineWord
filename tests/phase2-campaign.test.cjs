@@ -657,8 +657,12 @@ test('M5: playTurn routes planner/narrator through kernel budgets and separate c
   // Separate frozen contexts: the narrator payload carries its own
   // worldContext, never the full planner context.
   const narratorPayload = JSON.parse(narratorRequest.user);
+  assert.equal(narratorPayload.worldClock.start, '第1日 00:00');
+  assert.match(narratorPayload.worldClock.end, /^第1日 \d{2}:\d{2}$/);
+  assert.match(narratorRequest.system, /worldClock is authoritative/);
   assert.ok(typeof narratorPayload.worldContext === 'string');
   const plannerPayload = JSON.parse(plannerRequest.user);
+  assert.match(plannerPayload.worldContext, /当前时刻.*第1日 00:00/);
   assert.ok(plannerPayload.worldContext.length > 0);
   assert.ok(narratorPayload.worldContext.length < plannerPayload.worldContext.length,
     'narrator context is deliberately smaller');

@@ -26,6 +26,7 @@ import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
 import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '../../domain/content/types';
 import { compileProposal, type CompiledAction } from './v2Compile';
 import { contentDependencyBinding } from '../worldPackage/contentManifest';
+import { describeWorldClock } from '../../domain/state/worldClock';
 
 export interface NarrativeCandidate {
   turnId: string;
@@ -129,6 +130,7 @@ function narratorSystem(): string {
     'You are ShineWord Narrator.',
     'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string}.',
     'Do not change the supplied outcome grade and do not add rewards or state changes outside the frozen contract.',
+    'The supplied worldClock is authoritative. Keep lighting and time of day within this turn interval; it overrides inconsistent time descriptions in earlier story text. Do not invent a time skip.',
   ].join(' ');
 }
 
@@ -195,6 +197,8 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   }
 
   let resumed = false;
+  const state = await input.store.getState(input.branchId);
+  if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
   const staged = await input.journal.getStagedTurn(input.branchId, input.turnId);
   let compiled: CompiledAction;
   let contractHash: string;
@@ -210,8 +214,6 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     contractHash = staged.actionContractHash;
     compiled = { contract, storedSkillKey: contract.skillId ?? null };
   } else {
-    const state = await input.store.getState(input.branchId);
-    if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
     const stateContentDependency = state.contentManifest
       ? contentDependencyBinding(state.contentManifest)
       : undefined;
@@ -349,6 +351,10 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         playerIntent: input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
+        worldClock: {
+          start: describeWorldClock(state.clockSeconds ?? state.clockMinutes * 60),
+          end: describeWorldClock((state.clockSeconds ?? state.clockMinutes * 60) + contract.timeCostMinutes * 60),
+        },
         worldContext,
         roll: rollRecord
           ? {

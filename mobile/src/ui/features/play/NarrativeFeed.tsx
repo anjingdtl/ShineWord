@@ -7,7 +7,7 @@
  *   · a busy submit never clears the list (the controller keeps history);
  *   · `resumed` turns carry a light marker inside their card.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { FlatList, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { EmptyState } from '../../components/EmptyState';
 import { typeStyle } from '../../components/typography';
@@ -27,20 +27,32 @@ export function NarrativeFeed(props: {
 }): React.JSX.Element {
   const { theme } = useTheme();
   const listRef = useRef<FlatList<TurnView>>(null);
-  const [nearBottom, setNearBottom] = useState(true);
+  const nearBottom = useRef(true);
+  const readerScrolling = useRef(false);
+  const followTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distance = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    setNearBottom(distance <= NEAR_BOTTOM);
+    if (readerScrolling.current) nearBottom.current = distance <= NEAR_BOTTOM;
   }, []);
 
-  useEffect(() => {
-    if (props.turns.length === 0 || !nearBottom) return;
-    // Defer one frame so the new row is measured before scrolling.
-    const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 0);
-    return () => clearTimeout(timer);
-  }, [props.turns.length, nearBottom]);
+  const followLatest = useCallback(() => {
+    // Content-size/layout callbacks run after native measurement. Keyboard
+    // resizing and newly inserted rows do not change the reader's intent.
+    if (followTimer.current) clearTimeout(followTimer.current);
+    followTimer.current = setTimeout(() => {
+      if (nearBottom.current && !readerScrolling.current) listRef.current?.scrollToEnd({ animated: false });
+    }, 100);
+  }, []);
+
+  useEffect(() => { followLatest(); }, [props.turns.length, followLatest]);
+  useEffect(() => () => { if (followTimer.current) clearTimeout(followTimer.current); }, []);
+
+  const endReaderScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScroll(event);
+    readerScrolling.current = false;
+  }, [onScroll]);
 
   return (
     <View style={styles.list}>
@@ -53,6 +65,12 @@ export function NarrativeFeed(props: {
         data={props.turns}
         keyExtractor={item => item.turnId}
         onScroll={onScroll}
+        onScrollBeginDrag={() => { readerScrolling.current = true; }}
+        onScrollEndDrag={endReaderScroll}
+        onMomentumScrollBegin={() => { readerScrolling.current = true; }}
+        onMomentumScrollEnd={endReaderScroll}
+        onContentSizeChange={followLatest}
+        onLayout={followLatest}
         scrollEventThrottle={64}
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
         ListEmptyComponent={
