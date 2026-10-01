@@ -37,6 +37,17 @@ import {
   planChapterBatches,
   type ExtractionRoute,
 } from './chapterBatchPlanner';
+import {
+  capSourceRatioByDensity,
+  densitySplitPartCount,
+  nextSourceRatioDown,
+  nextSourceRatioUp,
+  planAnalysisBatches,
+  PLAN_VERSION_ANALYSIS,
+  SOURCE_RATIO_PROBE_START,
+  TokenDensityCalibrator,
+  DEFAULT_EXTRACTION_DENSITY,
+} from './analysisBatchPlanner';
 import { revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 import { deriveSafetyMargin } from '../context/modelEnvelope';
@@ -47,6 +58,8 @@ export const PLAN_VERSION_GROUP = 'plan-group-1';
 export const PLAN_VERSION_RESIDENT = 'plan-resident-1';
 /** Chapter-aligned windowed planning (unified build P1 §2). */
 export const PLAN_VERSION_CHAPTER = 'plan-chapter-1';
+/** Chapter-first, token-budget analysis batches (planner-v2). */
+export { PLAN_VERSION_ANALYSIS };
 
 /** Resident viability (1M plan §4.1): book + overhead <= 85% of the window. */
 export const RESIDENT_WINDOW_RATIO = 0.85;
@@ -124,6 +137,15 @@ export interface CoordinatorDeps {
    */
   onTimeline?: (input: { worldId: string; contentHash: string }) => Promise<void>;
   onUnitDone?: (info: { unitsDone: number; unitsTotal: number }) => void;
+  /**
+   * TTFP hook (planner-v2 progressive runs): called after each completed
+   * extract unit of a stage-scoped run. The implementation evaluates the
+   * deterministic playability gate over persisted canon and, when it first
+   * passes, publishes the Opening Package - the user may start playing while
+   * the remaining batches keep building in the background. Failures are
+   * non-fatal: the run's regular finalize still publishes at the end.
+   */
+  onBatchCommitted?: (info: { run: BuildRunRecord; unitsDone: number; unitsTotal: number }) => Promise<void>;
   /** Optional final publication runs under the same renewable build lease. */
   onFinalize?: (input: {
     run: BuildRunRecord;
@@ -162,6 +184,8 @@ export interface CreateRunInput {
   routes?: 'single' | 'dual';
   /** Initial body target ratio override (default from frozen config / 0.30). */
   bodyTargetRatio?: number;
+  /** Planner-v2 probe start override (default SOURCE_RATIO_PROBE_START). */
+  initialSourceRatio?: number;
 }
 
 export interface ResidentViability {
@@ -323,20 +347,29 @@ export async function createExtractionRun(
   const createdAt = now();
 
   const routes = input.routes ?? 'single';
-  const planState: RunPlanState = {
-    bodyTargetRatio: input.bodyTargetRatio ?? input.config?.bodyTargetRatio ?? 0.30,
-    replanCount: 0,
-  };
+  const planState: RunPlanState = mode === 'group'
+    ? {
+      bodyTargetRatio: 0.30,
+      plannerVersion: PLAN_VERSION_ANALYSIS,
+      sourceRatio: input.initialSourceRatio ?? SOURCE_RATIO_PROBE_START,
+      density: DEFAULT_EXTRACTION_DENSITY,
+      replanCount: 0,
+    }
+    : {
+      bodyTargetRatio: input.bodyTargetRatio ?? input.config?.bodyTargetRatio ?? 0.30,
+      replanCount: 0,
+    };
 
   const units: BuildUnitRecord[] = [];
   if (mode === 'group' || mode === 'resident') {
     if (mode === 'group') {
-      // Unified P1 §2: chapter-aligned batches driven by the full request
-      // budget (initial body target = 30% of the window, output-bounded).
-      // Storage chunk counts no longer cap the batch.
+      // Planner-v2 (plan-analysis-1): chapter-first AnalysisSlices packed by
+      // pure token budgets (window share + hard input room + output density).
+      // Storage chunk counts no longer bound the batch in ANY way.
       const chapters = await deps.sourceStore.getChapters(input.sourceId);
-      const batches = planChapterBatches(chapters, plannedChunks, input.budget ?? DEFAULT_MODEL_BUDGET, {
-        bodyTargetRatio: planState.bodyTargetRatio,
+      const batches = planAnalysisBatches(chapters, plannedChunks, input.budget ?? DEFAULT_MODEL_BUDGET, {
+        sourceRatio: planState.sourceRatio,
+        density: planState.density,
         routes,
       });
       for (const batch of batches) {
@@ -440,7 +473,7 @@ export async function createExtractionRun(
     pipelineVersion: PIPELINE_VERSION,
     planVersion: mode === 'resident'
       ? PLAN_VERSION_RESIDENT
-      : mode === 'group' ? PLAN_VERSION_CHAPTER : PLAN_VERSION_CHUNK,
+      : mode === 'group' ? PLAN_VERSION_ANALYSIS : PLAN_VERSION_CHUNK,
     modelFingerprint: input.modelFingerprint,
     phase: 'extracting',
     status: 'queued',
@@ -558,9 +591,20 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
 
   const resident = run.planVersion === PLAN_VERSION_RESIDENT;
   const chapterPlanned = run.planVersion === PLAN_VERSION_CHAPTER;
+  const analysisPlanned = run.planVersion === PLAN_VERSION_ANALYSIS;
   const planState = revivePlanState(run.planStateJson, {
     bodyTargetRatio: deps.budget ? 0.30 : 0.30,
   });
+  if (analysisPlanned) {
+    // v2 policy fields are written at run creation; guard against a legacy or
+    // hand-edited planStateJson so the arithmetic below never sees undefined.
+    if (typeof planState.sourceRatio !== 'number') planState.sourceRatio = SOURCE_RATIO_PROBE_START;
+    if (typeof planState.density !== 'number') planState.density = DEFAULT_EXTRACTION_DENSITY;
+  }
+  // Narrowed accessors: closures below read these mutable policy fields, and
+  // TS cannot keep property narrowing across closure boundaries.
+  const getSourceRatio = (): number => (analysisPlanned ? planState.sourceRatio ?? SOURCE_RATIO_PROBE_START : 0.30);
+  const getDensity = (): number => (analysisPlanned ? planState.density ?? DEFAULT_EXTRACTION_DENSITY : DEFAULT_EXTRACTION_DENSITY);
 
   // Resident context is built ONCE per execution: the whole-book prefix is
   // byte-stable for every unit (same reads, same assembly - 1M plan §4.2).
@@ -675,9 +719,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   // output calibration, and one reasoning-reserve bump per unit (§3.3).
   const claimedByWorkers = new Set<string>();
   const calibrator = new OutputPerChunkCalibrator();
+  const densityCalibrator = new TokenDensityCalibrator(planState.density);
   const reasoningBumpRetried = new Set<string>();
   let completedGroups = run.unitsDone;
   let unitsDoneLocal = run.unitsDone;
+  let truncationsSinceCheckpoint = 0;
 
   let claimChain: Promise<unknown> = Promise.resolve();
   const claimNextUnit = async (candidates: readonly BuildUnitRecord[]): Promise<BuildUnitRecord | null> => {
@@ -704,13 +750,19 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   const contentBudgetForSplits = (): number =>
     deps.budget?.maxContentOutputTokens ?? DEFAULT_MODEL_BUDGET.maxContentOutputTokens;
 
-  const recordCalibrationSample = (group: GroupExtractionResult, chunkCount: number): void => {
+  const recordCalibrationSample = (group: GroupExtractionResult, chunkCount: number, inputTokens: number): void => {
     const metrics = group.requestMetrics ?? [];
     const last = metrics[metrics.length - 1];
     const outputTokens = last?.usage?.outputTokens;
     if (typeof outputTokens !== 'number' || typeof last?.usage?.reasoningTokens !== 'number' || chunkCount < 1) return;
     const reasoningTokens = last.usage.reasoningTokens;
     calibrator.record(Math.max(0, outputTokens - reasoningTokens), chunkCount);
+    if (analysisPlanned && inputTokens > 0) {
+      // Density model (§7): content output per source input token - measured
+      // against the same body estimate the planner uses (conservative 1
+      // token/code point), so prediction and calibration stay comparable.
+      densityCalibrator.record(inputTokens, Math.max(0, outputTokens - reasoningTokens));
+    }
   };
 
   const usageSummaryFor = (group: GroupExtractionResult): string => {
@@ -747,17 +799,19 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   };
 
   /**
-   * Calibrated replanning (unified P1 §8): re-plan every still-QUEUED unit of
-   * a chapter-planned run under a new body-target ratio and/or calibrated
-   * per-chunk output estimate. Completed/running/retrying/blocked units keep
-   * their identity; the replacement is a single fenced transaction and the
-   * coverage ledger of the queued range is preserved exactly.
+   * Calibrated replanning (unified P1 §8 + planner-v2 §7/§8): re-plan every
+   * still-QUEUED unit under a new source ratio and/or calibrated extraction
+   * density. Completed/running/retrying/blocked units keep their identity;
+   * the replacement is a single fenced transaction and the coverage ledger of
+   * the queued range is preserved exactly.
    */
   const replanQueuedUnits = async (next: {
     bodyTargetRatio?: number;
     estOutputPerChunk?: number;
+    sourceRatio?: number;
+    density?: number;
   }): Promise<boolean> => {
-    if (!chapterPlanned || !deps.budget) return false;
+    if ((!chapterPlanned && !analysisPlanned) || !deps.budget) return false;
     const unitsAll = await deps.runStore.listUnits(runId);
     const queued = unitsAll.filter(u => u.status === 'queued');
     if (queued.length === 0) return false;
@@ -770,16 +824,21 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     const idSet = new Set(queuedChunkIds);
     const chunksToPlan = bookChunks.filter(chunk => idSet.has(chunk.chunkId));
     if (chunksToPlan.length === 0) return false;
-    const nextRatio = next.bodyTargetRatio ?? planState.bodyTargetRatio;
     const generation = planState.replanCount + 1;
     const routes: 'single' | 'dual' = queued.some(u => parseUnitRanges(u.sourceRangesJson).route !== null)
       ? 'dual'
       : 'single';
-    const batches = planChapterBatches(chapters, chunksToPlan, deps.budget, {
-      bodyTargetRatio: nextRatio,
-      estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
-      routes,
-    });
+    const batches = analysisPlanned
+      ? planAnalysisBatches(chapters, chunksToPlan, deps.budget, {
+        sourceRatio: next.sourceRatio ?? getSourceRatio(),
+        density: next.density ?? getDensity(),
+        routes,
+      })
+      : planChapterBatches(chapters, chunksToPlan, deps.budget, {
+        bodyTargetRatio: next.bodyTargetRatio ?? planState.bodyTargetRatio,
+        estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
+        routes,
+      });
     const minOrd = Math.min(...queued.map(u => u.ord));
     const createdAtReplan = now();
     const replacementUnits = [];
@@ -813,18 +872,31 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         updatedAt: createdAtReplan,
       });
     }
-    const nextState: RunPlanState = {
-      bodyTargetRatio: nextRatio,
-      estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
-      replanCount: generation,
-    };
+    const nextState: RunPlanState = analysisPlanned
+      ? {
+        bodyTargetRatio: planState.bodyTargetRatio,
+        plannerVersion: PLAN_VERSION_ANALYSIS,
+        sourceRatio: next.sourceRatio ?? getSourceRatio(),
+        density: next.density ?? getDensity(),
+        replanCount: generation,
+      }
+      : {
+        bodyTargetRatio: next.bodyTargetRatio ?? planState.bodyTargetRatio,
+        estOutputPerChunk: next.estOutputPerChunk ?? planState.estOutputPerChunk,
+        replanCount: generation,
+      };
     const replaced = await deps.runStore.replaceUnclaimedUnits({
       runId, fencingToken, units: replacementUnits,
       planStateJson: JSON.stringify(nextState), now: createdAtReplan,
     });
     if (replaced) {
-      planState.bodyTargetRatio = nextState.bodyTargetRatio;
-      planState.estOutputPerChunk = nextState.estOutputPerChunk;
+      if (analysisPlanned) {
+        planState.sourceRatio = nextState.sourceRatio!;
+        planState.density = nextState.density!;
+      } else {
+        planState.bodyTargetRatio = nextState.bodyTargetRatio;
+        planState.estOutputPerChunk = nextState.estOutputPerChunk;
+      }
       planState.replanCount = nextState.replanCount;
     }
     return replaced;
@@ -931,15 +1003,45 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         } else {
           const titleByChapter = new Map(chapters.map(chapter => [chapter.chapterId, chapter.title]));
           const segments: GroupSegmentInput[] = [];
-          for (const chunk of pendingChunks) {
-            const text = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
-            segments.push({
-              chunkId: chunk.chunkId,
-              chapterId: chunk.chapterId,
-              chapterTitle: titleByChapter.get(chunk.chapterId) ?? chunk.chapterId,
-              startCp: chunk.startOffset,
-              text,
-            });
+          if (analysisPlanned) {
+            // Planner-v2 wire protocol: ONE segment per contiguous same-chapter
+            // run of the unit's chunks (an AnalysisSlice). The model reads
+            // whole chapters; evidence maps back to member storage chunks.
+            let index = 0;
+            while (index < pendingChunks.length) {
+              const runStart = index;
+              const chapterId = pendingChunks[index]!.chapterId;
+              while (index < pendingChunks.length && pendingChunks[index]!.chapterId === chapterId) {
+                index += 1;
+              }
+              const members = pendingChunks.slice(runStart, index);
+              const first = members[0]!;
+              const last = members[members.length - 1]!;
+              const text = await deps.sourceStore.readRange(run.sourceId, first.startOffset, last.endOffset);
+              segments.push({
+                chunkId: first.chunkId,
+                chapterId,
+                chapterTitle: titleByChapter.get(chapterId) ?? chapterId,
+                startCp: first.startOffset,
+                text,
+                memberChunks: members.map(chunk => ({
+                  chunkId: chunk.chunkId,
+                  startCp: chunk.startOffset,
+                  endCp: chunk.endOffset,
+                })),
+              });
+            }
+          } else {
+            for (const chunk of pendingChunks) {
+              const text = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
+              segments.push({
+                chunkId: chunk.chunkId,
+                chapterId: chunk.chapterId,
+                chapterTitle: titleByChapter.get(chunk.chapterId) ?? chunk.chapterId,
+                startCp: chunk.startOffset,
+                text,
+              });
+            }
           }
           const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extract({
@@ -950,9 +1052,34 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         }
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
-        recordCalibrationSample(group, pendingChunks.length);
+        const unitInputTokens = pendingChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0);
+        recordCalibrationSample(group, pendingChunks.length, unitInputTokens);
         completedGroups += 1;
-        if (calibrator.due(completedGroups)) {
+        if (analysisPlanned) {
+          // Planner-v2 checkpoints (§6/§8): calibrate the extraction density
+          // after batches 1/2/3 then every 3; on a clean window GROW the source
+          // ratio (capped by what the calibrated density can still answer).
+          if (densityCalibrator.due(completedGroups)) {
+            const before = densityCalibrator.currentDensity;
+            const after = densityCalibrator.recalibrate();
+            const densityChanged = Math.abs(after - before) / Math.max(1e-9, before) > 0.25;
+            const currentRatio = getSourceRatio();
+            const growCandidate = Math.min(
+              nextSourceRatioUp(currentRatio),
+              capSourceRatioByDensity(deps.budget ?? DEFAULT_MODEL_BUDGET, after),
+            );
+            const ratioChanged = growCandidate > currentRatio + 1e-9 && truncationsSinceCheckpoint === 0;
+            if (densityChanged || ratioChanged) {
+              try {
+                await replanQueuedUnits({
+                  ...(densityChanged ? { density: after } : {}),
+                  ...(ratioChanged ? { sourceRatio: growCandidate } : {}),
+                });
+                if (ratioChanged) truncationsSinceCheckpoint = 0;
+              } catch { /* replanning is an optimization - never fatal */ }
+            }
+          }
+        } else if (calibrator.due(completedGroups)) {
           const before = calibrator.currentEstimate;
           const after = calibrator.recalibrate();
           // Material change (unified P1 §8): replan the unclaimed tail with the
@@ -974,6 +1101,14 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         if (!ok) { lostLease = true; return 'lost_lease'; }
         unitsDoneLocal += 1;
         deps.onUnitDone?.({ unitsDone: unitsDoneLocal, unitsTotal: run.unitsTotal });
+        if (deps.onBatchCommitted && analysisPlanned && run.scopeJson) {
+          // TTFP: after every completed batch of a stage-scoped planner-v2
+          // run, offer the deterministic playability gate + Opening Package
+          // publish. Non-fatal by contract.
+          try {
+            await deps.onBatchCommitted({ run, unitsDone: unitsDoneLocal, unitsTotal: run.unitsTotal });
+          } catch { /* the run finalize still publishes at the end */ }
+        }
       }
     } catch (error) {
       if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
@@ -996,8 +1131,14 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         // Transactional split (plan §7.2, generalized by §5 calibration): the
         // oversized group is replaced by calibrated, output-budget-fitting
         // child units; the parent is canceled and never counts.
-        const parts = splitPartCount(ranges.length, calibrator.currentEstimate, contentBudgetForSplits());
-        const childDefs = splitRangesEvenly(ranges, parts);
+        const failedInputTokens = ranges.reduce((sum, range) => {
+          const chunk = chunksByRange.get(range.chunkId);
+          return sum + (chunk ? Math.ceil(chunk.charCount) : 0);
+        }, 0);
+        const parts = analysisPlanned
+          ? densitySplitPartCount(failedInputTokens, densityCalibrator.currentDensity, contentBudgetForSplits())
+          : splitPartCount(ranges.length, calibrator.currentEstimate, contentBudgetForSplits());
+        const childDefs = splitRangesEvenly(ranges, Math.max(2, parts));
         const children = [];
         for (let index = 0; index < childDefs.length; index += 1) {
           const part = childDefs[index]!;
@@ -1026,12 +1167,24 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           unitId: unit.unitId, fencingToken, children, now: now(),
         });
         if (!replaced) { lostLease = true; return 'lost_lease'; }
-        // Ladder shrink (unified P1 §7): a truncation proves the initial body
-        // target was too ambitious for this content - shrink 30%->20%->12% for
-        // every unit nobody has claimed yet. The split children above already
-        // cover this unit; the replan covers the TAIL (completion, not just
-        // the first half at the old size).
-        if (chapterPlanned) {
+        // Ladder shrink (unified P1 §7 + planner-v2 §6): a truncation proves
+        // the current source ratio / density prediction was too ambitious for
+        // this content - shrink the ratio for every unit nobody has claimed
+        // yet. The split children above already cover this unit; the replan
+        // covers the TAIL (completion, not just the first half at the old size).
+        if (analysisPlanned) {
+          truncationsSinceCheckpoint += 1;
+          const currentRatio = getSourceRatio();
+          const shrunk = nextSourceRatioDown(currentRatio);
+          if (shrunk < currentRatio - 1e-9) {
+            try {
+              await replanQueuedUnits({
+                sourceRatio: shrunk,
+                density: Math.max(densityCalibrator.currentDensity, DEFAULT_EXTRACTION_DENSITY * 2),
+              });
+            } catch { /* replanning is an optimization - never fatal */ }
+          }
+        } else if (chapterPlanned) {
           const shrunk = nextBodyTargetRatio(planState.bodyTargetRatio);
           if (shrunk < planState.bodyTargetRatio) {
             try {

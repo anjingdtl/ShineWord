@@ -1065,9 +1065,9 @@ async function compileCanonScenes(
 // ---------------------------------------------------------------------------
 
 /**
- * Builds and publishes a world package revision from canon facts. Never
- * throws for LLM problems (parse failures degrade to local design_fill);
- * only unresolved canon conflicts or unrecoverable validation failures throw.
+ * Builds and publishes a world package revision from canon facts. Known
+ * conflicts refuse mapping before any provider request; mapping or validation
+ * failures refuse publication and leave extracted canon available for retry.
  */
 export async function buildPackageFromCanon(input: BuildPackageInput): Promise<BuildPackageResult> {
   const { worldStore, worldId } = input;
@@ -1096,6 +1096,22 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     worldStore.listEvents(worldId),
     worldStore.listEntities(worldId),
   ]);
+  // World-wide deterministic preflight, BEFORE scene validation or any paid
+  // mapping. A stage prefix must not waive conflicts elsewhere in this world.
+  const conflictFacts = allFacts.filter(fact => fact.status === 'conflict');
+  if (conflictFacts.length > 0) {
+    await worldStore.saveReviewIssue({
+      worldId,
+      issueId: 'canon-conflict',
+      kind: 'canon_conflict',
+      severity: 'blocking',
+      detailJson: JSON.stringify({ factIds: conflictFacts.map(fact => fact.factId), count: conflictFacts.length }),
+      createdAt: input.createdAt,
+    });
+    throw new Error('Canon blocking conflict：存在冲突事实，未请求模型映射、未发布世界包。已抽取资料保留，请在审查中解决冲突后重试。');
+  }
+  // Only retire this world-wide blocker once the actual condition is gone.
+  await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
   // Stage scoping (unified P3): a stage package maps only facts whose
   // evidence lies inside the built prefix. Facts without recorded spans are
   // world-level synthetics (e.g. opening facts) and stay in scope.
@@ -1114,33 +1130,9 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     throw new Error('原著抽取缺少当前开局可用的地点证据，未发布世界包。请补齐地点分析后继续构建。');
   }
   const mappableFacts = scopedFacts.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
-  const conflictFacts = scopedFacts.filter(fact => fact.status === 'conflict');
   const knownFactIds = new Set([...allFacts, ...scopedFacts].map(fact => fact.factId));
 
   let reviewIssueCount = 0;
-
-  // d. Conflict detection: conflicting canon facts block publication until a
-  // human resolves the review queue.
-  if (conflictFacts.length > 0) {
-    await worldStore.saveReviewIssue({
-      worldId,
-      issueId: 'canon-conflict',
-      kind: 'canon_conflict',
-      severity: 'blocking',
-      detailJson: JSON.stringify({
-        factIds: conflictFacts.map(fact => fact.factId),
-        count: conflictFacts.length,
-      }),
-      createdAt: input.createdAt,
-    });
-    reviewIssueCount += 1;
-  } else {
-    // This attempt found no conflicting facts, so the notice recorded by an
-    // earlier one describes a condition that no longer holds. Leaving it open
-    // would block publication forever with a message the user cannot act on.
-    // (reviewIssueCount only counts issues this build *records*.)
-    await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
-  }
 
   // A world with NOTHING mappable and no conflicts has no novel content at
   // all - publishing a generic design_fill package for it would masquerade as

@@ -48,6 +48,11 @@ import { GlobalRateScheduler } from '../../src/application/worldBuild/rateSchedu
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { activatePendingStages } from '../../src/application/worldPackage/stageActivation';
 import { requestRunControl } from './buildServiceBridge';
+import {
+  evaluatePlayabilityGate,
+  loadPlayabilitySnapshot,
+} from '../../src/application/worldPackage/playabilityGate';
+import { hasPlayableOpening } from '../../src/application/worldPackage/openingRecovery';
 
 function governMappingRequest(
   request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string },
@@ -825,6 +830,14 @@ export async function getBuildRunProgress(runId: string): Promise<{
 type ExtractionResult = { completed: boolean; unitsDone: number; unitsTotal: number; unitsFailed: number };
 const extractions = new Map<string, Promise<ExtractionResult>>();
 
+/**
+ * TTFP serialization: at most one Opening-Package gate evaluation in flight
+ * per world per process. Workers of one run may finish batches concurrently;
+ * the chain collapses their evaluations, and the published-revision re-check
+ * inside makes the publish itself exactly-once.
+ */
+const openingPublishChains = new Map<string, Promise<void>>();
+
 /** Same-process starters join the active executor without replacing its signal. */
 export function runExtraction(
   runId: string,
@@ -967,6 +980,74 @@ async function runExtractionInternal(
           chunksTotal: info.unitsTotal,
           message: `抽取中 ${info.unitsDone}/${info.unitsTotal} 组`,
         });
+      },
+      onBatchCommitted: async ({ run }) => {
+        // TTFP (task §11): after every completed batch of a stage-scoped
+        // planner-v2 run, evaluate the deterministic playability gate over
+        // persisted canon; on the first pass publish the Opening Package over
+        // the contiguous extracted prefix. Serialized per world; exactly-once
+        // via the published-revision re-check. The ONLY paid step is the
+        // regular mapping pass itself - never a "can we open?" request.
+        const worldId = run.worldId;
+        const previous = openingPublishChains.get(worldId) ?? Promise.resolve();
+        const next = previous.then(async () => {
+          const worldStore = runtime.worldStore;
+          const latest = await worldStore.getPublishedPackageRevision(worldId);
+          if (latest !== null) return;
+          const blocking = await runtime.db.queryOne<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM review_issues WHERE world_id = ? AND status = 'open' AND severity = 'blocking'",
+            [worldId],
+          );
+          const [entities, facts, events, proposals] = await Promise.all([
+            worldStore.listEntities(worldId),
+            worldStore.listFacts(worldId),
+            worldStore.listEvents(worldId),
+            worldStore.listEventProposals(worldId),
+          ]);
+          const verdict = evaluatePlayabilityGate({
+            entities,
+            facts,
+            eventCount: events.filter(event => event.status === 'canon').length + proposals.length,
+            openBlockingReviewIssues: blocking?.count ?? 0,
+            conflictFactCount: facts.filter(fact => fact.status === 'conflict').length,
+          });
+          if (!verdict.playable) return;
+          const chunks = (await worldStore.getChunks(worldId))
+            .slice().sort((a, b) => a.startOffset - b.startOffset);
+          let prefixEnd = 0;
+          for (const chunk of chunks) {
+            if (chunk.extractionStatus !== 'extracted' || chunk.startOffset !== prefixEnd) break;
+            prefixEnd = chunk.endOffset;
+          }
+          if (prefixEnd <= 0) return;
+          const manifest = await sourceStore.getManifest(run.sourceId);
+          if (!manifest || manifest.status !== 'active') return;
+          const coveredText = await sourceStore.readRange(run.sourceId, 0, prefixEnd);
+          const coveredHash = await nativeSha256.sha256Hex(coveredText);
+          const provider = makeProvider();
+          await buildPackageFromCanon({
+            requirePlayableOpening: true,
+            worldStore,
+            provider: {
+              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
+            },
+            sha256Hex: nativeSha256.sha256Hex,
+            worldId,
+            runId: run.runId,
+            sourceSha256: manifest.rawSha256Hex,
+            mappingVersion: `mapper-1#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
+            createdAt: new Date().toISOString(),
+            stageScope: {
+              ranges: [{ startCodePoint: 0, endCodePoint: prefixEnd, contentSha256: coveredHash }],
+              coversWholeText: prefixEnd >= manifest.codePointCount,
+            },
+            sourceCodePointCount: manifest.codePointCount,
+            signal,
+          });
+        }).catch(() => undefined);
+        openingPublishChains.set(worldId, next);
+        await next;
+        if (openingPublishChains.get(worldId) === next) openingPublishChains.delete(worldId);
       },
       onFinalize: async ({ run, setPhase }) => {
         const sourceManifest = await sourceStore.getManifest(run.sourceId);

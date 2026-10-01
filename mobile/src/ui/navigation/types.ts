@@ -13,6 +13,13 @@ import type { ThemeId } from '../theme/tokens';
 export type RootStackParamList = {
   /** Bottom-tab shell: 书库 / 战役 / 我的. */
   Tabs: NavigatorScreenParams<RootTabParamList> | undefined;
+  /** One project's workspace: build tasks + links to the world panels. */
+  ProjectHub: {
+    worldId: string;
+    title: string;
+    campaignId?: string;
+    branchId?: string;
+  };
   /** Per-world detail with sub-tabs (资料 / 三宝书 / 审查 / 世界包). */
   WorldDetail: {
     worldId: string;

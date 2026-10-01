@@ -65,12 +65,25 @@ const RESIDENT_SYSTEM = [
   '- Never invent facts, never mix segments, never output offsets, never extract outside the requested range.',
 ].join('\n');
 
+export interface GroupSegmentMemberChunk {
+  chunkId: string;
+  startCp: number;
+  endCp: number;
+}
+
 export interface GroupSegmentInput {
   chunkId: string;
   chapterId: string;
   chapterTitle: string;
   startCp: number;
   text: string;
+  /**
+   * Planner-v2 (plan-analysis-1): a segment may be one whole-chapter
+   * AnalysisSlice spanning several storage chunks. When present, quote
+   * attribution maps the absolute offset back into the member chunk;
+   * otherwise the segment IS one storage chunk (legacy protocol).
+   */
+  memberChunks?: readonly GroupSegmentMemberChunk[];
 }
 
 /**
@@ -313,6 +326,13 @@ export class LlmGroupExtractor {
       }
       const absStart = segment.startCp + codePointLength(segment.text.slice(0, rel));
       const absEnd = absStart + codePointLength(quote);
+      // Planner-v2 slices span several storage chunks; attribute the evidence
+      // to the member chunk containing the quote's absolute start.
+      const ownerChunk = segment.memberChunks
+        ? segment.memberChunks.find(member => absStart >= member.startCp && absStart < member.endCp)
+          ?? segment.memberChunks[segment.memberChunks.length - 1]
+        : undefined;
+      const attributedChunkId = ownerChunk ? ownerChunk.chunkId : segment.chunkId;
       const rawValue = candidate.value && typeof candidate.value === 'object' && !Array.isArray(candidate.value)
         ? candidate.value as Record<string, unknown>
         : {};
@@ -334,7 +354,7 @@ export class LlmGroupExtractor {
           endOffset: absEnd,
           quote,
         },
-        chunkId: segment.chunkId,
+        chunkId: attributedChunkId,
       });
     }
 
@@ -356,7 +376,10 @@ export class LlmGroupExtractor {
         dependsOnEventKeys: Array.isArray(candidate.dependsOn)
           ? candidate.dependsOn.filter((dep): dep is string => typeof dep === 'string')
           : [],
-        chunkId: segment.chunkId,
+        // Events carry no verbatim quote; a v2 slice attributes them to its
+        // first member chunk (commitGroupResult re-routes orphans to the
+        // fallback chunk, so nothing is lost either way).
+        chunkId: segment.memberChunks?.[0]?.chunkId ?? segment.chunkId,
       });
     }
 

@@ -249,9 +249,14 @@ test('T4 two workers extract each unit exactly once and commit each chunk once',
     assert.equal(done.completed, true);
     assert.equal(done.unitsDone, done.unitsTotal);
 
-    // Exactly one physical extraction per planned unit despite 2 workers.
+    // Exactly one physical extraction per SURVIVING planned unit despite 2
+    // workers. Planner-v2 may replace still-queued units at calibration
+    // checkpoints (probe growth); replaced/canceled units never executed.
     const units = await runStore.listUnits('run-t4');
-    assert.equal(groupExtractor.calls, units.filter(u => u.parentUnitId === null).length);
+    assert.equal(
+      groupExtractor.calls,
+      units.filter(u => u.parentUnitId === null && u.status === 'completed').length,
+    );
 
     // Every chunk committed exactly once: one done job, attempts === 1.
     for (const chunk of imported.chunks) {
@@ -345,7 +350,7 @@ test('T7 resident degrades to windowed without prompt-cache support and records 
         budget: { ...RESIDENT_BUDGET, supportsPromptCache: false },
       },
     );
-    assert.equal(run.planVersion, 'plan-chapter-1', 'degraded to the windowed chapter plan');
+    assert.equal(run.planVersion, 'plan-analysis-1', 'degraded to the windowed planner-v2 plan');
     assert.equal(run.lastErrorCode, RESIDENT_DEGRADED_NO_CACHE);
     assert.match(run.lastErrorMessage ?? '', /前缀缓存/);
 

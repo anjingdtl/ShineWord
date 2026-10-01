@@ -1,43 +1,39 @@
 /**
- * 书库 Tab — world management: import a novel, build the three books, import a
- * portable world package (plan §7).
+ * 书库 Tab — the PROJECT LIST (task §16-§22).
  *
- * P3.2 keeps the P2 data flow unchanged (same bridge calls, same
- * refresh-on-focus behaviour) and moves every piece of presentation into
- * `features/library`; the screen only assembles data and routes. No
- * `legacyStyles` import remains.
+ * The top level manages projects only: search, compact project cards, import.
+ * Everything build-related (task cards, three books, review, packages, perf
+ * stats) lives inside the Project Hub; nothing global is piled onto this page
+ * anymore. After an import the user lands straight in the new project's hub.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
-  buildProvider,
-  createSession,
   importPortableWorldPackageFile,
-  type CampaignListItem,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { importNovelUnified, pauseRun, cancelRun } from '../../sourceImport';
+import { importNovelUnified } from '../../sourceImport';
+import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
+import { refreshProjectBuildStatusFast, filterProjects, type ProjectStatusProjection } from '../../projectLibrary';
+import { createLibraryRefreshController, refreshLibraryFull } from '../../projectLibraryRefresh';
+import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
+import { listOpenBuildTasks } from '../../buildTasks';
 import versionJson from '../../version.json';
-import type { BuildMode } from '../features/library/ImportNovelCard';
-import { isTaskListDynamic, listOpenBuildTasks, type BuildTaskView } from '../../buildTasks';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
-import {
-  listWorlds,
-  type WorldBuildProgress,
-  type WorldLibraryEntry,
-} from '../../worldImport';
 import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
 import { Header } from '../components/Header';
 import { ScreenShell } from '../components/ScreenShell';
-import { SectionHeader } from '../components/SectionHeader';
 import { StatusBanner } from '../components/StatusBanner';
+import { TextField } from '../components/TextField';
 import { typeStyle } from '../components/typography';
-import { BuildStatusCard } from '../features/library/BuildStatusCard';
-import { BuildTaskCard } from '../features/library/BuildTaskCard';
-import { ImportNovelCard } from '../features/library/ImportNovelCard';
-import { WorldList } from '../features/library/WorldList';
+import { ProjectCard } from '../features/library/ProjectCard';
+import {
+  DeleteProjectDialog,
+  type DeleteProjectPhase,
+} from '../features/library/DeleteProjectDialog';
 import { useTheme } from '../theme/ThemeContext';
 import { useAppSession } from '../state/AppSessionContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -46,180 +42,99 @@ export function LibraryScreen(): React.JSX.Element {
   const { theme } = useTheme();
   const { profile, error, setError } = useAppSession();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [worlds, setWorlds] = useState<WorldLibraryEntry[]>([]);
-  const [campaigns, setCampaigns] = useState<CampaignListItem[]>([]);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [progress, setProgress] = useState<WorldBuildProgress | null>(null);
+  const [projects, setProjects] = useState<ProjectStatusProjection[]>([]);
+  const [query, setQuery] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [buildMode, setBuildMode] = useState<BuildMode>('progressive');
-  const [tasks, setTasks] = useState<BuildTaskView[]>([]);
-  const [taskBusy, setTaskBusy] = useState(false);
-  const focusedRef = useRef(true);
-  const previousTasksRef = useRef<BuildTaskView[]>([]);
+  // Import-in-flight transient status (parse progress); kept minimal because
+  // the DB-backed task card inside the project owns the build phase.
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectStatusProjection | null>(null);
+  const [deletePhase, setDeletePhase] = useState<DeleteProjectPhase>('confirm');
+  const [deleteBuilding, setDeleteBuilding] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [menuTarget, setMenuTarget] = useState<ProjectStatusProjection | null>(null);
+  const projectsRef = useRef(projects);
+  const refreshController = useMemo(() => createLibraryRefreshController({
+    full: () => profile ? refreshLibraryFull(profile) : Promise.resolve([]),
+    fast: refreshProjectBuildStatusFast,
+    getProjects: () => projectsRef.current,
+    apply: next => { projectsRef.current = next; setProjects(next); },
+    onError: e => setError(e instanceof Error ? e.message : String(e)),
+  }), [profile, setError]);
+  const refresh = refreshController.refreshFull;
 
-  const refresh = useCallback(async () => {
-    if (!profile) return;
-    try {
-      setTasks(await listOpenBuildTasks().catch(() => []));
-      setWorlds(await listWorlds());
-      // The campaign list is still loaded here because a world card links to
-      // its books with the branch that filters discovered entries.
-      const session = await createSession(profile, await buildProvider(profile));
-      const campaignList = await session.listCampaigns();
-      const withBranches: CampaignListItem[] = [];
-      for (const campaign of campaignList) {
-        const branches = await session.listBranches(campaign.campaignId);
-        for (const branch of branches) {
-          withBranches.push({ ...campaign, branchId: branch.branchId });
-        }
-      }
-      setCampaigns(withBranches);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+  useFocusEffect(useCallback(() => {
+    void refreshController.focus();
+    (async () => {
+      try { await recoverBuildTasks(await listOpenBuildTasks(), profile); }
+      catch { /* the hub offers manual resume */ }
+    })();
+    return () => refreshController.blur();
+  }, [refreshController, profile]));
+
+  const visible = useMemo(() => filterProjects(projects, query), [projects, query]);
+
+  const openProject = useCallback((project: ProjectStatusProjection) => {
+    navigation.navigate('ProjectHub', {
+      worldId: project.worldId,
+      title: project.title,
+      campaignId: project.campaign?.campaignId,
+      branchId: project.campaign?.branchId,
+    });
+  }, [navigation]);
+
+  const primaryAction = useCallback((project: ProjectStatusProjection) => {
+    if (project.campaign) {
+      navigation.navigate('Play', {
+        campaignId: project.campaign.campaignId,
+        branchId: project.campaign.branchId,
+      });
+      return;
     }
-  }, [profile, setError]);
+    navigation.navigate('Opening', { worldId: project.worldId, title: project.title });
+  }, [navigation]);
 
-  /** Light-weight task-only refresh; local SQLite only, no provider calls. */
-  const refreshTasks = useCallback(async () => {
-    try {
-      setTasks(await listOpenBuildTasks());
-    } catch {
-      // polling is best-effort; the next focus refresh recovers
-    }
-  }, []);
-
-  // Finished runs disappear from the open-task query. Refresh the published
-  // world at that boundary so its opening button works without leaving the
-  // library, including when the headless service finishes after startup.
-  useEffect(() => {
-    const currentIds = new Set(tasks.map(task => task.runId));
-    const finished = previousTasksRef.current.some(task => !currentIds.has(task.runId));
-    previousTasksRef.current = tasks;
-    if (finished) void refresh();
-  }, [tasks, refresh]);
-
-  // Task-list auto refresh (real-device P0-2/§4): while any task is dynamic
-  // (running / control requested / waiting / retryable) the open tasks are
-  // re-queried every ~1.5s so pause/stop/progress surface without a manual
-  // pull. Stops on blur and when every task goes static.
-  useEffect(() => {
-    if (!focusedRef.current || !isTaskListDynamic(tasks)) return;
-    const timer = setInterval(() => {
-      if (!focusedRef.current) return;
-      void refreshTasks();
-    }, 1_500);
-    return () => clearInterval(timer);
-  }, [tasks, refreshTasks]);
-
-  // Re-query whenever the tab regains focus. A build can fail after the world
-  // row was already created, so the list must not depend on a full app restart
-  // to show the world (and its review queue) the user was just told about.
-  useFocusEffect(
-    useCallback(() => {
-      focusedRef.current = true;
-      refresh();
-      // App-open recovery (P4): runs interrupted by system recycling (not
-      // user force-stop, which cannot run code until the user reopens) resume
-      // through the same service entry. User-paused/needs-review runs wait
-      // for an explicit tap.
-      (async () => {
-        try {
-          const open = await listOpenBuildTasks();
-          await recoverBuildTasks(open, profile);
-        } catch {
-          // recovery is best-effort; the task card still offers manual resume
-        }
-      })();
-      return () => {
-        focusedRef.current = false;
-      };
-    }, [refresh, profile]),
-  );
-
-  /** Existing campaign for a world; a branch is always playable. */
-  const campaignFor = useCallback(
-    (worldId: string): { campaignId: string; branchId: string } | null => {
-      const found = campaigns.find(campaign => campaign.worldId === worldId);
-      if (!found?.branchId) return null;
-      return { campaignId: found.campaignId, branchId: found.branchId };
-    },
-    [campaigns],
-  );
-
-  async function resumeTask(runId: string) {
-    if (taskBusy || !profile) return;
-    setTaskBusy(true);
-    try {
-      // An explicit resume clears any stale pause/stop request BEFORE waking
-      // an executor, so the coordinator never re-interrupts immediately.
-      // C5 + real-device P0-2: prefer the dataSync foreground service, then
-      // VERIFY it actually started (execution evidence in SQLite). Fall back
-      // to inline execution when it did not; the run lease guarantees a
-      // single executor either way.
-      // Inline fallback can outlive this tap by minutes. Keep task controls
-      // available while its persisted progress is polled by the card list.
-      void startOrResumeBuild(runId, profile, { resume: true })
-        .then(refresh)
-        .catch(e => setError(e instanceof Error ? e.message : String(e)));
-      await refreshTasks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setTaskBusy(false);
-    }
-  }
-
-  async function importAndBuild() {
+  async function importNovel() {
     if (busy || !profile) return;
     setBusy(true);
     setError(null);
     setNotice(null);
-    setPreview(null);
+    setImportMessage(null);
     try {
-      // Unified build (P3): staged streaming import + persistent 30/30/40
-      // stage plan. Progressive queues only S1 (later stages wait for
-      // narrative triggers); full queues every stage. Both run through the
-      // same dataSync foreground service entry.
       const picked = await pickTextRef();
       if (!picked) return;
       const imported = await importNovelUnified(
         picked.uri,
         picked.name,
         profile,
-        buildMode,
+        'progressive',
         p => {
-          setProgress(p);
-          if (p.phase === 'importing') setPreview(p.message ?? null);
+          if (p.phase === 'importing') setImportMessage(p.message ?? null);
         },
       );
-      // Real-device P0-2: a successful startForegroundService call proves
-      // nothing - verify execution evidence and fall back inline if the
-      // headless runner never wakes up.
       void (async () => {
         for (const runId of imported.runIds) {
           await startOrResumeBuild(runId, profile);
         }
         await refresh();
       })().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      const stageText = imported.stages.map(stage => `S${stage.index + 1}≈${Math.round(stage.ratio * 100)}%`).join(' / ');
-      setNotice(`已导入 ${imported.chapterCount} 章、${imported.chunkCount} 块；阶段计划 ${stageText}。${
-        imported.strategy === 'progressive'
-          ? '循序构建：首个阶段（约前 30%）构建发布后即可开局；后续阶段由剧情推进触发。'
-          : '完整构建：全书构建完成并发布后开局。'
-      }构建进度以任务卡和世界状态为准。`);
-      // From here the DB-backed task card owns live build progress. The
-      // parser's last 0/N callback is not a snapshot of the running service.
-      setProgress(null);
-      setPreview(null);
+      setNotice(`已创建项目「${imported.worldId}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);
+      setImportMessage(null);
       await refresh();
+      // Task §21: land in the fresh project's hub; its build progress lives
+      // there, not in the global list.
+      navigation.navigate('ProjectHub', {
+        worldId: imported.worldId,
+        title: picked.name.replace(/\.txt$/i, ''),
+      });
     } catch (e) {
       const detail = e instanceof Error
         ? `${e.message}\n${e.stack ?? ''}`
         : typeof e === 'object' && e !== null
           ? JSON.stringify(e)
           : String(e);
-      setProgress({ phase: 'failed', message: detail.slice(0, 500) });
+      setImportMessage(null);
       setError(detail.slice(0, 300));
     } finally {
       setBusy(false);
@@ -235,12 +150,50 @@ export function LibraryScreen(): React.JSX.Element {
       const picked = await pickNovelFile();
       if (!picked) return;
       const imported = await importPortableWorldPackageFile(picked.bytes);
-      setNotice(`已导入世界包「${imported.title}」r${imported.revision}。包内不含小说原文，已校验并创建独立世界。`);
+      setNotice(`已导入世界包「${imported.title}」r${imported.revision}。包内不含小说原文，已校验并创建独立项目。`);
       await refresh();
+      navigation.navigate('ProjectHub', { worldId: imported.worldId, title: imported.title });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function requestDelete(project: ProjectStatusProjection) {
+    setDeleteTarget(project);
+    setDeletePhase('confirm');
+    setDeleteError(null);
+    try {
+      const active = await findActiveProjectRuns(project.worldId);
+      setDeleteBuilding(active.length > 0);
+    } catch {
+      setDeleteBuilding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    setDeletePhase(deleteBuilding ? 'stopping' : 'deleting');
+    try {
+      if (deleteBuilding) {
+        await stopAndDeleteProject(deleteTarget.worldId);
+      } else {
+        await deleteProjectNow(deleteTarget.worldId);
+      }
+      setDeleteTarget(null);
+      setDeleteBuilding(false);
+      await refresh();
+    } catch (e) {
+      setDeletePhase('error');
+      setDeleteError(e instanceof Error ? e.message : String(e));
+      // Re-check whether the build is still active so a retry offers the
+      // right mode.
+      try {
+        const active = await findActiveProjectRuns(deleteTarget.worldId);
+        setDeleteBuilding(active.length > 0);
+      } catch { /* keep the current mode */ }
     }
   }
 
@@ -250,92 +203,49 @@ export function LibraryScreen(): React.JSX.Element {
         title="书库"
         subtitle="把小说变成可以进入的世界"
         actions={
-          <Button
-            label="导入世界包"
-            variant="chip"
-            onPress={importWorldPackage}
-            disabled={busy}
-          />
+          <View style={{ flexDirection: 'row', gap: theme.space.sm }}>
+            <Button label="＋ 导入小说" variant="chip" onPress={importNovel} disabled={busy} />
+            <Button label="导入世界包" variant="chip" onPress={importWorldPackage} disabled={busy} />
+          </View>
         }
       />
-      <ScrollView style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
-        {tasks.length > 0 ? (
-          tasks.map(task => (
-            <BuildTaskCard
-              key={task.runId}
-              task={task}
-              busy={taskBusy}
-              onResume={runId => resumeTask(runId)}
-              onPause={runId => {
-                pauseRun(runId);
-                // Immediate feedback: the poll lands within ~1.5s, an eager
-                // task query makes "暂停请求中" appear right away.
-                void refreshTasks();
-              }}
-              onCancel={runId => {
-                void cancelRun(runId).then(refreshTasks);
-              }}
-            />
-          ))
+      <ScrollView refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} />} style={styles.scroll} contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
+        {projects.length > 0 ? (
+          <TextField
+            value={query}
+            onChangeText={setQuery}
+            placeholder="搜索项目"
+            tone="base"
+            accessibilityLabel="搜索项目"
+          />
         ) : null}
-        <ImportNovelCard
-          busy={busy}
-          mode={buildMode}
-          onModeChange={setBuildMode}
-          onImportNovel={importAndBuild}
-          onImportPackage={importWorldPackage}
-        />
 
         {notice ? <StatusBanner tone="success" message={notice} /> : null}
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
+        {importMessage ? <StatusBanner tone="info" message={importMessage} /> : null}
 
-        {progress ? (
-          <BuildStatusCard progress={progress} summary={null} preview={preview} />
+        {projects.length === 0 && !busy ? (
+          <EmptyState
+            title="还没有项目"
+            description="导入一本小说开始创建互动世界"
+            action={<Button label="导入小说" variant="primary" onPress={importNovel} disabled={busy} />}
+          />
+        ) : (
+          visible.map(project => (
+            <ProjectCard
+              key={project.worldId}
+              project={project}
+              onOpenProject={() => openProject(project)}
+              onPrimary={() => primaryAction(project)}
+              onMenu={() => setMenuTarget(project)}
+            />
+          ))
+        )}
+        {projects.length > 0 && visible.length === 0 ? (
+          <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted, textAlign: 'center' }]}>
+            没有匹配的项目
+          </Text>
         ) : null}
-
-        <View>
-          <SectionHeader
-            title="我的世界"
-            tone="base"
-            subtitle={worlds.length > 0 ? `已导入 ${worlds.length} 部` : undefined}
-          />
-          <WorldList
-            worlds={worlds}
-            busy={busy}
-            campaignFor={campaignFor}
-            onOpenDetail={world => {
-              const campaign = campaignFor(world.worldId);
-              navigation.navigate('WorldDetail', {
-                worldId: world.worldId,
-                title: world.title,
-                campaignId: campaign?.campaignId,
-                branchId: campaign?.branchId,
-              });
-            }}
-            onPrimary={world => {
-              const campaign = campaignFor(world.worldId);
-              if (campaign) {
-                navigation.navigate('Play', { campaignId: campaign.campaignId, branchId: campaign.branchId });
-                return;
-              }
-              navigation.navigate('Opening', { worldId: world.worldId, title: world.title });
-            }}
-            onOpenReview={world => {
-              const campaign = campaignFor(world.worldId);
-              navigation.navigate('WorldDetail', {
-                worldId: world.worldId,
-                title: world.title,
-                campaignId: campaign?.campaignId,
-                branchId: campaign?.branchId,
-                initialTab: 'review',
-              });
-            }}
-          />
-        </View>
-
-        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
-          三宝书与审核队列在世界详情内；战役、分支与存档在「战役」页。
-        </Text>
 
         <View style={styles.credit}>
           <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted, textAlign: 'center' }]}>
@@ -346,6 +256,30 @@ export function LibraryScreen(): React.JSX.Element {
           </Text>
         </View>
       </ScrollView>
+
+      <ProjectActionsMenu
+        visible={menuTarget !== null}
+        title={menuTarget?.title ?? ''}
+        onCancel={() => setMenuTarget(null)}
+        onDelete={() => {
+          const target = menuTarget;
+          setMenuTarget(null);
+          if (target) void requestDelete(target);
+        }}
+      />
+      <DeleteProjectDialog
+        visible={deleteTarget !== null}
+        title={deleteTarget?.title ?? ''}
+        building={deleteBuilding}
+        phase={deletePhase}
+        errorMessage={deleteError}
+        onCancel={() => {
+          if (deletePhase === 'stopping' || deletePhase === 'deleting') return;
+          setDeleteTarget(null);
+          setDeleteError(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </ScreenShell>
   );
 }

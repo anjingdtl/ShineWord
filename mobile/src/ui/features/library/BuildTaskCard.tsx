@@ -76,7 +76,7 @@ export function BuildTaskCard(props: {
         ratio={ratio}
         label="进度"
         valueText={`${task.unitsDone}/${task.unitsTotal}`}
-        accessibilityLabel={`构建进度 ${task.unitsDone} of ${task.unitsTotal} 组`}
+        accessibilityLabel={`构建进度 ${task.unitsDone} of ${task.unitsTotal} 批`}
       />
       <Text style={[styles.line, { color: theme.text.secondary }]} numberOfLines={2}>
         {taskProgressLine(task)}
@@ -134,9 +134,9 @@ export function BuildTaskCard(props: {
           <Text style={[styles.detailText, { color: theme.text.secondary }]}>
             {[
               `runId: ${task.runId}`,
-              `状态: ${taskStatusLabel(task)} · 完成 ${task.unitsDone}/${task.unitsTotal} 组`,
+              `状态: ${taskStatusLabel(task)} · 完成 ${task.unitsDone}/${task.unitsTotal} 批`,
               `处理中 ${task.unitsRunning} · 待重试 ${task.unitsRetryable} · 排队 ${task.unitsQueued}`,
-              `累计失败尝试 ${task.unitsFailed} 次（历史计数，非当前待重试组数）`,
+              `累计失败尝试 ${task.unitsFailed} 次（历史计数，非当前待重试批数）`,
               task.lastErrorCode ? `最近错误: ${task.lastErrorCode} ${task.lastErrorMessage ?? ''}`.slice(0, 160) : null,
               `最近活动: ${formatActivityClock(task.lastActivityAt) || task.lastActivityAt}`,
             ].filter(Boolean).join('\n')}

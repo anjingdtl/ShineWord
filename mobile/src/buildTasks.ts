@@ -75,6 +75,15 @@ interface TaskRow extends SqliteRow {
 
 /** Runs that are not finished - what the task card list shows. */
 export async function listOpenBuildTasks(): Promise<BuildTaskView[]> {
+  return queryOpenBuildTasks(undefined);
+}
+
+/** Open tasks of ONE project only (project hub / project cards). */
+export async function listOpenBuildTasksForWorld(worldId: string): Promise<BuildTaskView[]> {
+  return queryOpenBuildTasks(worldId);
+}
+
+async function queryOpenBuildTasks(worldId?: string): Promise<BuildTaskView[]> {
   const runtime = await getDatabaseRuntime();
   const rows = await runtime.db.queryAll<TaskRow>(
     `SELECT r.run_id, r.world_id, r.phase, r.status, r.units_done, r.units_total,
@@ -99,7 +108,9 @@ export async function listOpenBuildTasks(): Promise<BuildTaskView[]> {
          FROM world_build_units GROUP BY run_id
        ) agg ON agg.run_id = r.run_id
       WHERE r.status NOT IN ('completed', 'failed_terminal', 'canceled')
+        ${worldId ? 'AND r.world_id = ?' : ''}
       ORDER BY r.updated_at DESC`,
+    worldId ? [worldId] : [],
   );
   const now = Date.now();
   return rows.map(row => {
@@ -197,14 +208,16 @@ export function taskStatusLabel(task: BuildTaskView): string {
   return RUN_STATUS_LABEL[task.status] ?? task.status;
 }
 
-/** Real measured progress line - counts only, no synthetic percentage. */
+/** Real measured progress line - counts only, no synthetic percentage.
+ * Units ARE LLM batches for planner-v2 runs; the wording says 批 so users
+ * stop reading storage-chunk counts as request counts (task §14). */
 export function taskProgressLine(task: BuildTaskView): string {
   if (task.status === 'completed') return '已完成';
   const label = PHASE_LABEL[task.phase] ?? task.phase;
   if (task.unitsTotal > 0) {
-    const parts: string[] = [`${label} ${task.unitsDone}/${task.unitsTotal} 组`];
+    const parts: string[] = [`${label} ${task.unitsDone}/${task.unitsTotal} 批`];
     const live: string[] = [];
-    if (task.unitsRunning > 0) live.push(`正在处理 ${task.unitsRunning}`);
+    if (task.unitsRunning > 0) live.push(`正在分析第 ${task.unitsDone + 1} 批`);
     if (task.unitsQueued > 0) live.push(`排队 ${task.unitsQueued}`);
     if (task.unitsRetryable > 0) live.push(`待重试 ${task.unitsRetryable}`);
     if (live.length > 0) parts.push(live.join(' · '));
@@ -246,4 +259,146 @@ export function isTaskListDynamic(tasks: readonly BuildTaskView[]): boolean {
     || task.status === 'failed_retryable'
     || task.pauseRequested
     || task.cancelRequested);
+}
+
+// ---------------------------------------------------------------------------
+// Advanced build diagnostics (task §15) - high-level detail only, never the
+// primary card surface. Aggregated from persisted unit usage ledgers.
+// ---------------------------------------------------------------------------
+
+export interface BuildTaskPerfStats {
+  runId: string;
+  /** Distinct chapters covered by the run's planned ranges. */
+  chapterCount: number;
+  /** Storage chunks covered (advanced detail; differs from batch count). */
+  chunkCount: number;
+  /** LLM batches planned (== unitsTotal). */
+  batchCount: number;
+  /** Chapter range of the batch currently running or next queued. */
+  currentBatchChapterRange: string | null;
+  /** Measured LLM usage summed over completed units (null = none yet). */
+  usage: {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    cachedInputTokens: number;
+    avgResponseMs: number;
+  } | null;
+  /** Frozen concurrency of the run, when the config is readable. */
+  concurrency: number | null;
+}
+
+interface UsageMetric {
+  durationMs?: number;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    cachedInputTokens?: number;
+  };
+}
+
+export async function listBuildTaskPerfStats(runId: string): Promise<BuildTaskPerfStats | null> {
+  const runtime = await getDatabaseRuntime();
+  const run = await runtime.db.queryOne<SqliteRow & {
+    world_id: string;
+    units_total: number;
+    config_json: string | null;
+  }>(
+    'SELECT world_id, units_total, config_json FROM world_build_runs WHERE run_id = ?',
+    [runId],
+  );
+  if (!run) return null;
+  const units = await runtime.db.queryAll<SqliteRow & {
+    status: string;
+    source_ranges_json: string;
+    usage_json: string | null;
+  }>(
+    'SELECT status, source_ranges_json, usage_json FROM world_build_units WHERE run_id = ? ORDER BY ord',
+    [runId],
+  );
+  const chapterIds = new Set<string>();
+  let currentBatchChapterRange: string | null = null;
+  const titleRows = await runtime.db.queryAll<SqliteRow & { chapter_id: string; title: string | null }>(
+    'SELECT chapter_id, title FROM source_chapters WHERE world_id = ?', [run.world_id],
+  );
+  const titleByChapter = new Map(titleRows.map(row => [row.chapter_id as string, row.title ?? '']));
+  const chapterOrder: string[] = [];
+  for (const unit of units) {
+    let ranges: Array<{ chapterId?: string }> = [];
+    try {
+      const parsed = JSON.parse(unit.source_ranges_json) as {
+        ranges?: Array<{ chapterId?: string }>;
+      } | Array<{ chapterId?: string }>;
+      ranges = Array.isArray(parsed) ? parsed : (parsed.ranges ?? []);
+    } catch {
+      ranges = [];
+    }
+    const unitChapters: string[] = [];
+    for (const range of ranges) {
+      const chapterId = typeof range.chapterId === 'string' ? range.chapterId : '';
+      if (!chapterId) continue;
+      if (!chapterIds.has(chapterId)) {
+        chapterIds.add(chapterId);
+        chapterOrder.push(chapterId);
+      }
+      if (!unitChapters.includes(chapterId)) unitChapters.push(chapterId);
+    }
+    if (!currentBatchChapterRange
+      && (unit.status === 'running' || unit.status === 'queued')
+      && unitChapters.length > 0) {
+      const first = titleByChapter.get(unitChapters[0] ?? '') ?? unitChapters[0];
+      const last = titleByChapter.get(unitChapters[unitChapters.length - 1] ?? '') ?? unitChapters[unitChapters.length - 1];
+      currentBatchChapterRange = unitChapters.length === 1 ? first : `${first} ~ ${last}`;
+    }
+  }
+  let usage: BuildTaskPerfStats['usage'] = null;
+  let chunkCount = 0;
+  const requests: Array<UsageMetric | undefined> = [];
+  for (const unit of units) {
+    if (!unit.usage_json) continue;
+    try {
+      const parsed = JSON.parse(unit.usage_json) as { requestMetrics?: UsageMetric[] };
+      for (const metric of parsed.requestMetrics ?? []) requests.push(metric);
+    } catch { /* malformed ledger rows are skipped, never fatal */ }
+  }
+  for (const unit of units) {
+    try {
+      const parsed = JSON.parse(unit.source_ranges_json) as {
+        ranges?: Array<{ chunkId: string }>;
+      } | Array<{ chunkId: string }>;
+      const ranges = Array.isArray(parsed) ? parsed : (parsed.ranges ?? []);
+      chunkCount += ranges.length;
+    } catch { /* ignore */ }
+  }
+  const completed = requests.filter(Boolean) as UsageMetric[];
+  if (completed.length > 0) {
+    const sum = (pick: (usage: NonNullable<UsageMetric['usage']>) => number): number =>
+      completed.reduce((total, metric) => total + (metric.usage ? pick(metric.usage) : 0), 0);
+    usage = {
+      requests: completed.length,
+      inputTokens: sum(u => u.inputTokens ?? 0),
+      outputTokens: sum(u => u.outputTokens ?? 0),
+      reasoningTokens: sum(u => u.reasoningTokens ?? 0),
+      cachedInputTokens: sum(u => u.cachedInputTokens ?? 0),
+      avgResponseMs: Math.round(completed.reduce((total, metric) => total + (metric.durationMs ?? 0), 0) / completed.length),
+    };
+  }
+  let concurrency: number | null = null;
+  if (run.config_json) {
+    try {
+      const config = JSON.parse(run.config_json) as { concurrency?: number };
+      concurrency = typeof config.concurrency === 'number' ? config.concurrency : null;
+    } catch { concurrency = null; }
+  }
+  return {
+    runId,
+    chapterCount: chapterIds.size,
+    chunkCount,
+    batchCount: run.units_total,
+    currentBatchChapterRange,
+    usage,
+    concurrency,
+  };
 }
