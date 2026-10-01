@@ -398,6 +398,32 @@ test('full-package finalization holds and renews the extraction lease until publ
   }
 });
 
+test('canon review failure retains finished extraction and exposes an actionable status', async () => {
+  const db = setupDb();
+  try {
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'novel-small.txt'));
+    const { store: sourceStore } = await prepareActiveSqliteSource(db, bytes, 'src-review');
+    const adapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(adapter);
+    const worldStore = new SqliteWorldStore(adapter);
+    const extractor = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun({ sourceStore, runStore, worldStore }, {
+      runId: 'run-review', worldId: 'world-review', sourceId: 'src-review',
+      modelFingerprint: 'ep#model', title: 't', extractorVersion: extractor.version,
+    });
+    const result = await executeRun({
+      sourceStore, runStore, worldStore, extractor, sha256Hex: sha.sha256Hex,
+      onFinalize: async () => { throw new Error('Canon blocking conflict'); },
+    }, 'run-review');
+    assert.equal(result.completed, false);
+    const run = await runStore.getRun('run-review');
+    assert.equal(run.status, 'needs_review');
+    assert.equal(run.lastErrorCode, 'canon_conflict');
+    assert.match(run.lastErrorMessage, /审查/);
+    assert.equal(run.unitsDone, run.unitsTotal, 'review failure does not discard paid extraction');
+  } finally { db.close(); }
+});
+
 test('a canceled late finalization response pauses before package completion', async () => {
   const db = setupDb();
   try {

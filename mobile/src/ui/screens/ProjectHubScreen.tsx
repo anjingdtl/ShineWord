@@ -217,7 +217,7 @@ export function ProjectHubScreen(): React.JSX.Element {
           ))}
           {tasks.length === 0 ? (
             <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>
-              {playable ? '本书构建已完成。' : '还没有进行中的构建任务；重新导入同一文件可继续构建。'}
+              {playable ? '当前阶段已可游玩，后续资料会随探索逐步补齐。' : '还没有进行中的构建任务；重新导入同一文件可继续构建。'}
             </Text>
           ) : null}
           {perf ? (

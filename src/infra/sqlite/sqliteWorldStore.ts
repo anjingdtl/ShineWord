@@ -1435,9 +1435,56 @@ export class SqliteWorldStore implements WorldStore {
   }
 
   async resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived'): Promise<void> {
+    if (issueId === 'canon-conflict') {
+      const pending = await this.db.queryOne<SqliteRow>(
+        "SELECT COUNT(*) AS count FROM canon_facts WHERE world_id = ? AND status = 'conflict'", [worldId],
+      );
+      if (Number(pending?.count ?? 0) > 0) {
+        throw new Error('请先逐条核对冲突事实及原文证据，不能只关闭审查提示。');
+      }
+    }
     await this.db.execute(
       'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
       [resolution, new Date().toISOString(), worldId, issueId],
     );
+  }
+
+  /** A deliberate reviewer decision; preserves both source rows and an audit. */
+  async resolveCanonFactConflict(
+    worldId: string, factId: string, resolution: 'complementary' | 'unverified',
+  ): Promise<void> {
+    if (resolution !== 'complementary' && resolution !== 'unverified') {
+      throw new Error('未知事实审查决定。');
+    }
+    const resolvedAt = new Date().toISOString();
+    await this.db.transaction(async tx => {
+      const fact = await tx.queryOne<SqliteRow>(
+        'SELECT status FROM canon_facts WHERE world_id = ? AND fact_id = ?', [worldId, factId],
+      );
+      if (!fact || fact.status !== 'conflict') throw new Error('这条事实已处理或不属于当前世界，请刷新审查。');
+      if (resolution === 'complementary') {
+        const evidence = await tx.queryOne<SqliteRow>(
+          'SELECT 1 AS found FROM fact_sources WHERE world_id = ? AND fact_id = ? LIMIT 1', [worldId, factId],
+        );
+        if (!evidence) throw new Error('缺少原文证据，不能将这条资料确认成事实。');
+      }
+      await tx.execute(
+        'UPDATE canon_facts SET status = ? WHERE world_id = ? AND fact_id = ?',
+        [resolution === 'complementary' ? 'explicit' : 'speculation', worldId, factId],
+      );
+      await tx.execute(
+        `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at, resolved_at)
+         VALUES (?, ?, 'canon_resolution', 'minor', ?, 'resolved', ?, ?)`,
+        [worldId, `canon-resolution-${factId}`, JSON.stringify({ factId, resolution }), resolvedAt, resolvedAt],
+      );
+      const remaining = await tx.queryAll<SqliteRow>(
+        "SELECT fact_id FROM canon_facts WHERE world_id = ? AND status = 'conflict'", [worldId],
+      );
+      await tx.execute(
+        'UPDATE review_issues SET status = ?, detail_json = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
+        [remaining.length ? 'open' : 'resolved', JSON.stringify({ factIds: remaining.map(row => row.fact_id), count: remaining.length }),
+          remaining.length ? null : resolvedAt, worldId, 'canon-conflict'],
+      );
+    });
   }
 }

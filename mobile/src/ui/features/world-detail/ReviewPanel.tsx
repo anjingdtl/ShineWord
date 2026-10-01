@@ -12,8 +12,9 @@ import { EmptyState } from '../../components/EmptyState';
 import { SectionHeader } from '../../components/SectionHeader';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useTheme } from '../../theme/ThemeContext';
-import { listReviewIssues, resolveReviewIssue, type ReviewIssueView } from '../../../runtime';
+import { listReviewIssues, resolveReviewIssue, resolveCanonFactConflict, type ReviewIssueView } from '../../../runtime';
 import { ReviewIssueCard } from './ReviewIssueCard';
+import { CanonConflictCard } from './CanonConflictCard';
 
 export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
   const { theme } = useTheme();
@@ -51,6 +52,20 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
     }
   }
 
+  async function resolveFact(factId: string, resolution: 'complementary' | 'unverified') {
+    if (busy) return;
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      await resolveCanonFactConflict(props.worldId, factId, resolution);
+      setNotice('已保存事实审查决定与原文证据；全部处理后返回项目继续构建。');
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  }
+
   return (
     <View style={{ gap: theme.space.md }}>
       <SectionHeader
@@ -66,7 +81,14 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
           description="映射过程中记录的冲突会出现在这里；解决或豁免后才能发布新版本。"
         />
       ) : (
-        issues.map(issue => (
+        issues.map(issue => issue.kind === 'canon_conflict' && issue.conflicts?.length ? (
+          <View key={issue.issueId} style={{ gap: theme.space.md }}>
+            {issue.conflicts.map(conflict => (
+              <CanonConflictCard key={conflict.factId} conflict={conflict} busy={busy}
+                onResolve={resolution => void resolveFact(conflict.factId, resolution)} />
+            ))}
+          </View>
+        ) : (
           <ReviewIssueCard
             key={issue.issueId}
             issue={issue}

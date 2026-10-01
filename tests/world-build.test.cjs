@@ -349,6 +349,22 @@ test('conflicting explicit facts are stored as conflict, never silently overwrit
     const facts = await store.listFacts('w');
     assert.equal(facts.filter(fact => fact.status === 'conflict').length, 1);
     assert.equal(facts.find(fact => fact.factId === 'f1').value.location, '北方');
+
+    await store.saveFact({ ...base, factId: 'f4', value: { location: '东部' }, status: 'explicit' }, createdAt);
+    await store.saveReviewIssue({ worldId: 'w', issueId: 'canon-conflict', kind: 'canon_conflict',
+      severity: 'blocking', detailJson: '{}', createdAt });
+    await assert.rejects(() => store.resolveReviewIssue('w', 'canon-conflict', 'resolved'), /逐条核对/);
+    await assert.rejects(() => store.resolveCanonFactConflict('other-world', 'f3', 'complementary'), /不属于当前世界/);
+    await store.resolveCanonFactConflict('w', 'f3', 'complementary');
+    const reviewed = (await store.listFacts('w')).find(fact => fact.factId === 'f3');
+    assert.equal(reviewed.status, 'explicit');
+    assert.deepEqual(reviewed.sources, facts.find(fact => fact.factId === 'f3').sources, 'source evidence is preserved');
+    const pending = (await store.listReviewIssues('w', 'open')).find(issue => issue.issueId === 'canon-conflict');
+    assert.deepEqual(JSON.parse(pending.detailJson).factIds, ['f4']);
+    await assert.rejects(() => store.resolveCanonFactConflict('w', 'f3', 'complementary'), /已处理/);
+    await store.resolveCanonFactConflict('w', 'f4', 'unverified');
+    assert.equal((await store.listReviewIssues('w', 'open')).length, 0);
+    assert.equal((await store.listReviewIssues('w', 'all')).filter(issue => issue.kind === 'canon_resolution').length, 2);
   } finally {
     db.close();
   }

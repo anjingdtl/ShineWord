@@ -285,24 +285,47 @@ export async function importCampaignSave(json: string): Promise<{ campaignId: st
   return { campaignId, branchId };
 }
 
+export interface CanonConflictView {
+  factId: string;
+  subjectName: string;
+  predicate: string;
+  value: Record<string, unknown>;
+  quotes: string[];
+  existing: Array<{ value: Record<string, unknown>; quotes: string[] }>;
+}
+
 export interface ReviewIssueView {
   issueId: string;
   kind: string;
   severity: string;
   status: string;
   detailJson: string;
+  conflicts?: CanonConflictView[];
 }
 
 export async function listReviewIssues(worldId: string): Promise<ReviewIssueView[]> {
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
   const issues = await worldStore.listReviewIssues(worldId, 'open');
+  const [facts, entities] = issues.some(issue => issue.kind === 'canon_conflict')
+    ? await Promise.all([worldStore.listFacts(worldId), worldStore.listEntities(worldId)])
+    : [[], []];
   return issues.map(issue => ({
     issueId: issue.issueId,
     kind: issue.kind,
     severity: issue.severity,
     status: issue.status,
     detailJson: issue.detailJson,
+    ...(issue.kind === 'canon_conflict' ? { conflicts: facts.filter(fact => fact.status === 'conflict').map(fact => ({
+      factId: fact.factId,
+      subjectName: entities.find(entity => entity.entityId === fact.subjectEntityId)?.name ?? '原著人物',
+      predicate: fact.predicate,
+      value: fact.value,
+      quotes: fact.sources.map(source => source.quote),
+      existing: facts.filter(other => other.subjectEntityId === fact.subjectEntityId
+        && other.predicate === fact.predicate && other.status === 'explicit')
+        .map(other => ({ value: other.value, quotes: other.sources.map(source => source.quote) })),
+    })) } : {}),
   }));
 }
 
@@ -310,6 +333,13 @@ export async function resolveReviewIssue(worldId: string, issueId: string, resol
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
   await worldStore.resolveReviewIssue(worldId, issueId, resolution);
+}
+
+export async function resolveCanonFactConflict(
+  worldId: string, factId: string, resolution: 'complementary' | 'unverified',
+): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  await runtime.worldStore.resolveCanonFactConflict(worldId, factId, resolution);
 }
 
 export async function loadWorldPackageDraft(worldId: string): Promise<{

@@ -670,7 +670,14 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
         `UPDATE world_build_runs SET status = CASE
             WHEN lease_owner IS NOT NULL AND lease_expires_at > ? THEN 'running' ELSE 'queued' END,
             updated_at = ?
-          WHERE run_id = ? AND status IN ('paused_user', 'stopped_user')
+          WHERE run_id = ? AND (status IN ('paused_user', 'stopped_user')
+            OR (status = 'needs_review' AND last_error_code = 'canon_conflict'
+              AND NOT EXISTS (SELECT 1 FROM canon_facts f
+                WHERE f.world_id = world_build_runs.world_id AND f.status = 'conflict')
+              AND NOT EXISTS (SELECT 1 FROM review_issues i
+                WHERE i.world_id = world_build_runs.world_id AND i.status = 'open' AND i.severity = 'blocking')
+              AND NOT EXISTS (SELECT 1 FROM world_build_units u
+                WHERE u.run_id = world_build_runs.run_id AND u.status <> 'completed')))
             AND pause_requested = 0 AND cancel_requested = 0`,
         [now, now, runId],
       );

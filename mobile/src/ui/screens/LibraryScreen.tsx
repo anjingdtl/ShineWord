@@ -119,7 +119,7 @@ export function LibraryScreen(): React.JSX.Element {
         }
         await refresh();
       })().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      setNotice(`已创建项目「${imported.worldId}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);
+      setNotice(`已创建项目「${picked.name.replace(/\.txt$/i, '')}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);
       setImportMessage(null);
       await refresh();
       // Task §21: land in the fresh project's hub; its build progress lives

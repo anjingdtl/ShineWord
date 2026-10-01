@@ -1337,17 +1337,25 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         } catch (error) {
           if (deps.signal?.aborted) return await interruptedResultAfterRequest();
           const reason = error instanceof Error ? error.message : String(error);
-          const errorCode = reason.includes('连续覆盖全文')
+          const canonConflict = reason.includes('Canon blocking conflict');
+          const missingOpeningLocation = reason.includes('当前开局可用的地点证据');
+          const errorCode = canonConflict ? 'canon_conflict'
+            : missingOpeningLocation ? 'opening_location_missing'
+            : reason.includes('连续覆盖全文')
             ? 'source_coverage_incomplete'
             : reason.includes('原文源')
               ? 'source_missing'
               : 'package_finalize_failed';
           await deps.runStore.setRunStatus(
             runId,
-            'failed_retryable',
+            canonConflict || missingOpeningLocation ? 'needs_review' : 'failed_retryable',
             now(),
             errorCode,
-            'Full-source finalization failed; the existing published package remains available.',
+            canonConflict
+              ? '发现需核对的原著事实；请进入「审查」逐条处理，已完成抽取会保留。'
+              : missingOpeningLocation
+                ? '缺少开局地点的原文证据，请补齐地点资料后继续构建。'
+                : '世界资料发布未完成，已抽取内容已保存；请查看审查问题后继续构建。',
           );
           return {
             runId, completed: false, unitsDone: fresh.unitsDone,

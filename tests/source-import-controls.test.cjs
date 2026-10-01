@@ -149,6 +149,27 @@ test('sourceImport: stopping an idle queued run persists stopped_user without st
   } finally { h.release.resolve(); h.db.close(); }
 });
 
+test('sourceImport: reviewed finalization resumes completed units without bypassing unresolved or billing review', { timeout: 5_000 }, async () => {
+  const h = await setup();
+  try {
+    h.release.resolve();
+    await h.sourceImport.runExtraction(h.id, PROFILE, () => {});
+    const requests = h.requests();
+    h.db.prepare("UPDATE world_build_runs SET status = 'needs_review', last_error_code = 'canon_conflict' WHERE run_id = ?").run(h.id);
+    const worldId = (await h.runStore.getRun(h.id)).worldId;
+    await h.runtime.worldStore.saveReviewIssue({ worldId, issueId: 'canon-conflict', kind: 'canon_conflict',
+      severity: 'blocking', detailJson: '{}', createdAt: new Date().toISOString() });
+    assert.equal(await h.watchdog.startOrResumeBuild(h.id, PROFILE, { resume: true }), 'inactive');
+    await h.runtime.worldStore.resolveReviewIssue(worldId, 'canon-conflict', 'resolved');
+    await h.watchdog.startOrResumeBuild(h.id, PROFILE, { resume: true });
+    assert.equal((await h.runStore.getRun(h.id)).status, 'completed');
+    assert.equal(h.requests(), requests, 'finalization reuses completed extraction');
+    h.db.prepare("UPDATE world_build_runs SET status = 'needs_review', last_error_code = 'outcome_unknown' WHERE run_id = ?").run(h.id);
+    assert.equal(await h.watchdog.startOrResumeBuild(h.id, PROFILE, { resume: true }), 'inactive');
+    assert.equal(h.requests(), requests, 'ordinary resume never authorizes uncertain billing replay');
+  } finally { h.release.resolve(); h.db.close(); }
+});
+
 test('sourceImport: stopping a run leased by another process only requests a boundary stop', { timeout: 5_000 }, async () => {
   const h = await setup();
   try {

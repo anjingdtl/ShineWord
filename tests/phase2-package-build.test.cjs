@@ -394,7 +394,12 @@ test('closeout: actual conflict then resolution retires the blocker and allows m
   const provider = fakeProvider(VALID_PROPOSAL);
   await assert.rejects(() => build(worldStore, provider), /blocking conflict/);
   assert.equal(provider.calls.length, 0);
-  db.prepare("UPDATE canon_facts SET status = 'explicit' WHERE world_id = ? AND status = 'conflict'").run('w-build');
+  await assert.rejects(() => worldStore.resolveReviewIssue('w-build', 'canon-conflict', 'waived'), /逐条核对/);
+  await assert.rejects(() => worldStore.resolveCanonFactConflict('w-build', 'home-2', 'complementary'), /缺少原文证据/);
+  await worldStore.resolveCanonFactConflict('w-build', 'home-2', 'unverified');
+  assert.equal((await worldStore.listFacts('w-build')).find(f => f.factId === 'home-2').status, 'speculation');
+  const audit = (await worldStore.listReviewIssues('w-build', 'all')).find(i => i.kind === 'canon_resolution');
+  assert.equal(JSON.parse(audit.detailJson).resolution, 'unverified');
   const { result } = await build(worldStore, provider);
   assert.equal(provider.calls.length, 1);
   assert.equal(result.manifest.status, 'published');
