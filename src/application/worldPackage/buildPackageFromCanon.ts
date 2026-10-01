@@ -2,7 +2,7 @@ import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { StoredEntity, StoredEvent, StoredFact, StoredRuleMapping } from '../../application/ports/worldStore';
 import { SHINEWORD_RULESET_VERSION } from '../../domain/rules/ruleset';
 import { ruleMappingIdFor } from '../world/extraction';
-import { parseStructuredOutput } from '../llm/structuredOutput';
+import { parseStructuredOutput, StructuredParseError } from '../llm/structuredOutput';
 import type {
   BookSection,
   ContentEntry,
@@ -37,6 +37,8 @@ export interface MappingCompleteRequest {
   jsonMode?: boolean;
   /** Stable logical request identity for ledger attempt numbering. */
   logicalRequestId?: string;
+  /** Same-tier reasoning headroom for a bounded recovery request. */
+  reserveMultiplier?: number;
 }
 
 export interface MappingProvider {
@@ -784,12 +786,13 @@ async function requestMappingProposals(
   // WorldMapper V2 (1M plan P4): a resident run maps with WHOLE-BOOK vision -
   // one batch with every fact (the 800-fact truncation lifts), full entity
   // and event context, rule-mapping proposals included.
-  const batches: Array<readonly StoredFact[]> = [];
+  const batches: Array<{ facts: readonly StoredFact[]; key: string; recovery: boolean }> = [];
   if (input.resident) {
-    batches.push(facts);
+    batches.push({ facts, key: 'b0001', recovery: false });
   } else {
     for (let offset = 0; offset < facts.length; offset += MAX_PROMPT_FACTS) {
-      batches.push(facts.slice(offset, offset + MAX_PROMPT_FACTS));
+      batches.push({ facts: facts.slice(offset, offset + MAX_PROMPT_FACTS),
+        key: `b${String(batches.length + 1).padStart(4, '0')}`, recovery: false });
     }
   }
 
@@ -803,6 +806,8 @@ async function requestMappingProposals(
   let mappedFactCount = 0;
   let skippedBatches = 0;
   let ruleMappingCount = 0;
+  let consecutiveRecoveryFailures = 0;
+  let completedBatches = 0;
   // Closeout C3: entries are keyed for MERGE, not first-wins — a later batch
   // extending an existing entryId unions its fact provenance; incompatible
   // definitions surface as review rejections instead of silent drops.
@@ -843,7 +848,8 @@ async function requestMappingProposals(
 
   for (let index = 0; index < batches.length; index += 1) {
     if (input.signal?.aborted) throw new Error('World package mapping canceled.');
-    const batch = batches[index]!;
+    const work = batches[index]!;
+    const batch = work.facts;
     input.onProgress?.({
       phase: 'mapping',
       message: input.resident
@@ -853,20 +859,11 @@ async function requestMappingProposals(
 
     // Closeout C3: resume - a batch already completed for the same fact set
     // and mapping version is skipped instead of re-paying the request.
-    const batchHash = await input.sha256Hex(batch.map(fact => fact.factId).join("|"))
-    const batchJobId = `job-map-${input.worldId}-b${String(index + 1).padStart(4, '0')}`;
-    const doneJob = await input.worldStore.getJob(input.worldId, batchJobId);
-    if (doneJob?.status === 'done' && doneJob.contentHash === batchHash
-      && doneJob.extractorVersion === `mapper-${input.mappingVersion}`) {
-      skippedBatches += 1;
-      mappedFactCount += batch.length;
-      usagePerBatch.push(doneJob?.usageJson ? JSON.parse(doneJob.usageJson) : null);
-      continue;
-    }
+    const batchJobId = `job-map-${input.worldId}${input.runId ? `-${input.runId}` : ''}-${work.key}`;
 
     let relatedEntities: readonly StoredEntity[];
     let relatedEvents: readonly StoredEvent[];
-    if (input.resident) {
+    if (input.resident && !work.key.includes('-')) {
       // Whole-book vision: no trimming (1M plan P4).
       relatedEntities = entities;
       relatedEvents = events;
@@ -889,20 +886,82 @@ async function requestMappingProposals(
         .slice(0, 300);
     }
 
-    const response = await input.provider.complete({
-      role: CANON_MAPPER_ROLE,
-      system: MAPPER_SYSTEM,
-      user: buildMapperUserPrompt(batch, relatedEntities, relatedEvents),
-      maxOutputTokens: input.resident ? RESIDENT_MAPPING_MAX_OUTPUT_TOKENS : MAPPING_MAX_OUTPUT_TOKENS,
-      jsonMode: true,
-      logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${batchJobId}`,
-    });
-    if (input.signal?.aborted) throw new Error('World package mapping canceled.');
-    const raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
-    const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
-    if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
-      throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
+    const user = buildMapperUserPrompt(batch, relatedEntities, relatedEvents);
+    // Hash the actual mapping input: a corrected fact with the same factId
+    // must not reuse an obsolete proposal.
+    const batchHash = await input.sha256Hex(`${MAPPER_SYSTEM}\n${user}`);
+    const doneJob = await input.worldStore.getJob(input.worldId, batchJobId);
+    const reusable = doneJob?.contentHash === batchHash
+      && doneJob.extractorVersion === `mapper-${input.mappingVersion}`;
+    const checkpoint = reusable && doneJob?.resultJson
+      ? JSON.parse(doneJob.resultJson) as { proposal?: Record<string, unknown>; split?: boolean }
+      : null;
+    const splitBatch = async (persist = true): Promise<void> => {
+      const midpoint = Math.ceil(batch.length / 2);
+      if (persist) await input.worldStore.upsertJob({
+        worldId: input.worldId, jobId: batchJobId, kind: 'rule_mapping', targetId: null,
+        status: 'pending', attempts: (doneJob?.attempts ?? 0) + 1,
+        contentHash: batchHash, extractorVersion: `mapper-${input.mappingVersion}`,
+        modelFingerprint: null, usageJson: null, resultJson: JSON.stringify({ split: true }),
+        error: null, createdAt: doneJob?.createdAt ?? input.createdAt, updatedAt: input.createdAt,
+      }, input.createdAt);
+      batches.splice(index + 1, 0,
+        { facts: batch.slice(0, midpoint), key: `${work.key}-l`, recovery: false },
+        { facts: batch.slice(midpoint), key: `${work.key}-r`, recovery: false });
+      input.onProgress?.({ phase: 'mapping', message: `映射输出超限，已自动拆小批次；已映射 ${mappedFactCount}/${facts.length} 条事实，正在继续` });
+    };
+    if (checkpoint?.split && batch.length > 1) {
+      await splitBatch(false);
+      continue;
     }
+    let response: Awaited<ReturnType<MappingProvider['complete']>>;
+    let raw: Record<string, unknown>;
+    try {
+      const cachedUsage = doneJob?.usageJson ? JSON.parse(doneJob.usageJson) : null;
+      if (doneJob?.status === 'done' && checkpoint?.proposal) {
+        // Replay the actual proposal through cleaning/merging. A done flag
+        // without a payload (legacy checkpoints) cannot reconstruct books.
+        raw = checkpoint.proposal;
+        response = { text: JSON.stringify(raw), usage: cachedUsage?.usage,
+          requestMetrics: cachedUsage?.requestMetrics };
+        skippedBatches += 1;
+      } else {
+        response = await input.provider.complete({
+          role: CANON_MAPPER_ROLE,
+          system: MAPPER_SYSTEM,
+          user,
+          maxOutputTokens: (input.resident ? RESIDENT_MAPPING_MAX_OUTPUT_TOKENS : MAPPING_MAX_OUTPUT_TOKENS)
+            * (work.recovery ? 2 : 1),
+          ...(work.recovery ? { reserveMultiplier: 1.5 } : {}),
+          jsonMode: true,
+          logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${batchJobId}`,
+        });
+        if (input.signal?.aborted) throw new Error('World package mapping canceled.');
+        raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
+      }
+      const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
+      if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
+        throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
+      }
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      const truncated = (error instanceof StructuredParseError && error.code === 'json_truncated')
+        || /truncat|finish_reason.{0,3}(length|max_tokens)|只输出了思维链|未产生正文/i.test(reason);
+      const inputTooLarge = /Mandatory protocol input|context length exceeded|prompt too long|input too long|request too large|payload too large|上下文.{0,8}(超|过长)/i.test(reason);
+      if ((!truncated && !inputTooLarge) || ++consecutiveRecoveryFailures > 12) throw error;
+      if (truncated && !work.recovery) {
+        work.recovery = true;
+        input.onProgress?.({ phase: 'mapping', message: '映射输出不足，正在提高正文与思考预算自动重试；已完成抽取保留' });
+        index -= 1;
+        continue;
+      }
+      if (batch.length <= 1) throw error;
+      await splitBatch();
+      continue;
+    }
+    consecutiveRecoveryFailures = 0;
+    completedBatches += 1;
     usagePerBatch.push(response.usage ?? null);
 
     const ctx: CleanContext = { knownFactIds, rejected: [] };
@@ -952,7 +1011,7 @@ async function requestMappingProposals(
 
     // Persist the batch checkpoint AFTER its results are merged in memory;
     // a crash before this write re-runs exactly this batch, nothing else.
-    await input.worldStore.upsertJob({
+    if (!(doneJob?.status === 'done' && checkpoint?.proposal)) await input.worldStore.upsertJob({
       worldId: input.worldId,
       jobId: batchJobId,
       kind: 'rule_mapping',
@@ -966,7 +1025,7 @@ async function requestMappingProposals(
         usage: response.usage ?? null,
         requestMetrics: response.requestMetrics ?? [],
       }),
-      resultJson: JSON.stringify({ facts: batch.length }),
+      resultJson: JSON.stringify({ facts: batch.length, proposal: raw }),
       error: null,
       createdAt: doneJob?.createdAt ?? input.createdAt,
       updatedAt: input.createdAt,
@@ -982,7 +1041,7 @@ async function requestMappingProposals(
     items,
     rejected: allRejected,
     mappedFactCount,
-    batches: batches.length,
+    batches: completedBatches,
     usagePerBatch,
     skippedBatches,
     ruleMappingCount,
@@ -1089,6 +1148,8 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     throw new Error('无法证明已抽取的来源范围连续覆盖全文，因此不会发布全量精编包。');
   }
   if (input.signal?.aborted) throw new Error('World package mapping canceled.');
+
+  await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed']);
 
   progress('load', '读取小说事实、事件与实体');
   const [allFacts, events, entities] = await Promise.all([
@@ -1213,17 +1274,8 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     // entities and events are already persisted, so re-entering the build
     // resumes from them; a generic default package must never masquerade as
     // this novel's complete three books (P2 acceptance G04).
-    await worldStore.saveReviewIssue({
-      worldId,
-      issueId: 'mapping-failed',
-      kind: 'mapping_failed',
-      severity: 'blocking',
-      detailJson: JSON.stringify({
-        reason: error instanceof Error ? error.message : String(error),
-        note: '映射失败：未生成任何世界包。已完成的抽取成果已保存，重新进入构建可续建。',
-      }),
-      createdAt: input.createdAt,
-    });
+    // An incomplete mapping cannot publish. Technical recovery belongs to
+    // the background executor, never to the human content-review queue.
     throw new Error(
       `小说→三宝书映射失败，未发布任何版本：${error instanceof Error ? error.message : String(error)}。` +
         '抽取成果已保存，重新构建将从已完成的进度续建。',
@@ -1338,6 +1390,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       novelEntries: entries.filter(entry => entry.provenance.kind !== 'design_fill').length,
       designFillEntries: entries.filter(entry => entry.provenance.kind === 'design_fill').length,
     },
+    onValidated: () => progress('validated', '审查与结构校验通过，正在写入世界包'),
   });
   progress('published', '全量精编三宝书已通过发布校验');
   return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };

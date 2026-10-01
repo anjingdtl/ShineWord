@@ -302,7 +302,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
     )
     val text = when {
       paused -> "已请求暂停，等待当前请求完成…"
-      total > 0 -> "抽取 $done/$total 组"
+      total > 0 -> "构建 $done/$total 步（含映射、审查与发布）"
       else -> "正在构建世界"
     }
     val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -311,7 +311,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
       .setContentText(text)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
-      .setProgress(0, 0, total <= 0)
+      .setProgress(total, done.coerceIn(0, total.coerceAtLeast(0)), total <= 0)
       .setContentIntent(contentIntent)
       .setCategory(NotificationCompat.CATEGORY_PROGRESS)
     if (runId.isNotEmpty()) {

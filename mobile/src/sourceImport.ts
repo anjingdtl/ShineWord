@@ -54,9 +54,10 @@ import {
   loadPlayabilitySnapshot,
 } from '../../src/application/worldPackage/playabilityGate';
 import { hasPlayableOpening } from '../../src/application/worldPackage/openingRecovery';
+import { executeWithAutomaticMappingRecovery } from '../../src/application/worldBuild/automaticMappingRecovery';
 
 function governMappingRequest(
-  request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string },
+  request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string; reserveMultiplier?: number },
   complete: (request: LlmRequest) => Promise<LlmResponse>,
   governance: WorldBuildRequestGovernance,
 ): Promise<LlmResponse> {
@@ -72,6 +73,7 @@ function governMappingRequest(
     requestKind: 'world_mapping',
     logicalRequestId: request.logicalRequestId ?? `world-mapping:${governance.runId}:${governance.worldId}`,
     governance,
+    reserveMultiplier: request.reserveMultiplier,
   }));
 }
 
@@ -408,7 +410,7 @@ async function deriveStageAnchorFromCampaign(
     const anchorOrder = (() => {
       try {
         const parsed = anchorRow?.anchor_json ? JSON.parse(anchorRow.anchor_json) as { worldTimeOrder?: unknown } : null;
-        return Number.isFinite(parsed?.worldTimeOrder) ? Number(parsed.worldTimeOrder) : 0;
+        return Number.isFinite(parsed?.worldTimeOrder) ? Number(parsed?.worldTimeOrder) : 0;
       } catch {
         return 0;
       }
@@ -767,7 +769,7 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
         `UPDATE world_build_runs SET status = 'queued', updated_at = ?
            WHERE run_id = ? AND status = 'needs_review'
              AND (last_error_code IS NULL OR last_error_code IN
-               ('network', 'unknown', 'input_too_large', 'config'))
+               ('network', 'unknown', 'input_too_large', 'config', 'mapping_failed', 'package_finalize_failed'))
              AND NOT EXISTS (SELECT 1 FROM world_build_units u
                WHERE u.run_id = world_build_runs.run_id AND u.status = 'needs_review')`,
         [now, runId],
@@ -828,6 +830,23 @@ export async function resumeRun(runId: string): Promise<{ activeInProcess: boole
   }
   await writeRunControl(runId, 'resume');
   return { activeInProcess: activeRuns.has(runId) };
+}
+
+/** Explicit user opt-in: retry a stopped/failed run with the selected API.
+ * Completed extraction stays committed; a live executor's config is immutable. */
+export async function useCurrentApiForRun(runId: string, profile: ApiProfile): Promise<void> {
+  if (activeRuns.has(runId)) throw new Error('请先暂停当前构建，再切换构建所用的 API。');
+  const config = freezeRunConfig(profile, modelBudgetFromProfile(profile));
+  const runtime = await getDatabaseRuntime();
+  const now = new Date().toISOString();
+  const changed = await runtime.db.execute(
+    `UPDATE world_build_runs SET config_json = ?, model_fingerprint = ?, updated_at = ?
+      WHERE run_id = ? AND status IN ('paused_user', 'stopped_user', 'failed_retryable', 'needs_review', 'waiting_unlock')
+        AND (lease_owner IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+    [JSON.stringify(config), `${profile.endpoint}#${profile.model}`, now, runId, now],
+  );
+  if (!changed) throw new Error('构建仍在执行或已经完成，暂时不能切换 API。');
+  await runtime.db.execute('DELETE FROM world_jobs WHERE job_id = ?', [`job-map-recovery-${runId}`]);
 }
 
 export function isRunActive(runId: string): boolean {
@@ -946,7 +965,14 @@ export function runExtraction(
   if (existing) return existing;
   const signal = { aborted: false, stopRequested: false };
   activeRuns.set(runId, signal);
-  const extraction = runExtractionInternal(runId, profile, onProgress, signal).finally(() => {
+  const extraction = (async () => {
+    const runtime = await getDatabaseRuntime();
+    return executeWithAutomaticMappingRecovery({
+      runStore: new SqliteBuildRunStore(runtime.db), worldStore: runtime.worldStore, signal,
+      execute: () => runExtractionInternal(runId, profile, onProgress, signal),
+      onWaiting: message => onProgress({ phase: 'extracting', message }),
+    }, runId);
+  })().finally(() => {
     activeRuns.delete(runId);
     extractions.delete(runId);
   });
@@ -1221,7 +1247,7 @@ async function runExtractionInternal(
               onProgress({ phase: 'extracting', message: info.message ?? '正在编译阶段三宝书…' });
               if (info.phase === 'publish') {
                 phaseWrites = phaseWrites.then(() => setPhase('validating'));
-              } else if (info.phase === 'published') {
+              } else if (info.phase === 'validated' || info.phase === 'published') {
                 phaseWrites = phaseWrites.then(() => setPhase('publishing'));
               }
             },
@@ -1281,7 +1307,7 @@ async function runExtractionInternal(
               phaseWrites = phaseWrites.then(() => setPhase('mapping'));
             } else if (info.phase === 'publish') {
               phaseWrites = phaseWrites.then(() => setPhase('validating'));
-            } else if (info.phase === 'published') {
+            } else if (info.phase === 'validated' || info.phase === 'published') {
               phaseWrites = phaseWrites.then(() => setPhase('publishing'));
             }
           },

@@ -1,0 +1,10 @@
+{"kind":"extract"}
+{"kind":"mapping","mappingCount":1,"maxTokens":10096,"inputFacts":4}
+{"kind":"mapping","mappingCount":2,"maxTokens":18144,"inputFacts":4}
+{"kind":"mapping","mappingCount":3,"maxTokens":10096,"inputFacts":2}
+{"kind":"mapping","mappingCount":4,"maxTokens":18144,"inputFacts":2}
+{"kind":"mapping","mappingCount":5,"maxTokens":10096,"inputFacts":1}
+{"kind":"mapping","mappingCount":6,"maxTokens":18144,"inputFacts":1}
+{"kind":"mapping","mappingCount":7,"maxTokens":10096,"inputFacts":1}
+{"kind":"mapping","mappingCount":8,"maxTokens":10096,"inputFacts":1}
+{"kind":"mapping","mappingCount":9,"maxTokens":10096,"inputFacts":2}

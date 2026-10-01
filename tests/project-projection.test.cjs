@@ -211,6 +211,9 @@ test('PROJ-closeout unified statuses and priority include every resumable or blo
       assert.ok(library.PROJECT_STATUS_LABEL[expected]);
     }
     assert.equal(library.deriveProjectStatus({ packageRevision: 2, openingReady: true }, library.summarizeProjectBuild([run('completed')])), 'playable');
+    assert.equal(library.summarizeProjectBuild([{ ...run('failed_retryable'), lastErrorCode: 'mapping_auto_retry' }]).status, 'recovering');
+    assert.equal(library.PROJECT_STATUS_LABEL.recovering, '自动恢复中');
+    assert.equal(library.summarizeProjectBuild([{ ...run('paused_user'), lastErrorCode: 'mapping_auto_retry' }]).status, 'paused');
     for (const [lower, higher] of [['completed', 'stopped_user'], ['stopped_user', 'paused_user'],
       ['paused_user', 'waiting_network'], ['waiting_network', 'running'], ['running', 'needs_review'], ['running', 'failed_retryable']]) {
       assert.equal(library.summarizeProjectBuild([run(lower), run(higher)]).status,

@@ -24,6 +24,7 @@ import {
   listFailedUnits,
   taskActivityLine,
   taskProgressLine,
+  taskOverallProgress,
   taskStatusLabel,
 } from '../../../buildTasks';
 
@@ -32,6 +33,8 @@ export function BuildTaskCard(props: {
   onResume: (runId: string) => void;
   onPause: (runId: string) => void;
   onCancel: (runId: string) => void;
+  onReview: () => void;
+  onResumeCurrentApi: (runId: string) => void;
   busy: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
@@ -40,13 +43,15 @@ export function BuildTaskCard(props: {
     unitId: string; status: string; errorCode: string | null; errorMessage: string | null; attempt: number;
   }>>([]);
   const task = props.task;
-  const ratio = task.unitsTotal > 0 ? task.unitsDone / task.unitsTotal : 0;
-  const isRunning = task.status === 'running';
+  const progress = taskOverallProgress(task);
+  const automaticRecovery = task.status === 'failed_retryable' && task.lastErrorCode === 'mapping_auto_retry';
+  const isRunning = task.status === 'running' || automaticRecovery;
   const stopping = isRunning && task.cancelRequested;
   const pausing = isRunning && task.pauseRequested && !stopping;
   // Resume while running is allowed when the user wants to undo a just-made
   // pause request, or when no live lease protects another executor.
-  const canResume = !isRunning || pausing || task.leaseHeld === false;
+  const canResume = !automaticRecovery && !['completed', 'canceled', 'failed_terminal'].includes(task.status)
+    && (!isRunning || pausing || task.leaseHeld === false);
   const activityLine = taskActivityLine(task);
 
   useEffect(() => {
@@ -73,10 +78,10 @@ export function BuildTaskCard(props: {
         </Text>
       </View>
       <Bar
-        ratio={ratio}
-        label="进度"
-        valueText={`${task.unitsDone}/${task.unitsTotal}`}
-        accessibilityLabel={`构建进度 ${task.unitsDone} of ${task.unitsTotal} 批`}
+        ratio={progress.ratio}
+        label="整体构建"
+        valueText={progress.valueText}
+        accessibilityLabel={`整体构建完成 ${progress.done} of ${progress.total} 步；包括事实抽取、映射、审查校验和发布`}
       />
       <Text style={[styles.line, { color: theme.text.secondary }]} numberOfLines={2}>
         {taskProgressLine(task)}
@@ -96,12 +101,16 @@ export function BuildTaskCard(props: {
           {activityLine}
         </Text>
       ) : null}
-      {task.lastErrorCode ? (
+      {task.lastErrorCode && !automaticRecovery ? (
         <Text style={[styles.error, { color: theme.text.secondary }]} numberOfLines={2}>
           {`${task.lastErrorCode}: ${task.lastErrorMessage ?? ''}`.slice(0, 160)}
         </Text>
       ) : null}
       <View style={[styles.actions, { gap: theme.space.sm, marginTop: theme.space.sm }]}>
+        {task.openReviewIssues > 0 ? (
+          <Button label={`查看审查${task.openReviewIssues > 0 ? `（${task.openReviewIssues}）` : ''}`}
+            onPress={props.onReview} testID={`task-review-${task.runId}`} />
+        ) : null}
         {isRunning && !pausing && !stopping ? (
           <Button label="暂停" onPress={() => props.onPause(task.runId)} disabled={props.busy} />
         ) : null}
@@ -123,6 +132,11 @@ export function BuildTaskCard(props: {
             testID={`task-resume-${task.runId}`}
           />
         ) : null}
+        {canResume && !isRunning && !task.leaseHeld && task.lastErrorCode ? (
+          <Button label="用当前 API 继续" variant="secondary"
+            onPress={() => props.onResumeCurrentApi(task.runId)} disabled={props.busy}
+            testID={`task-api-resume-${task.runId}`} />
+        ) : null}
         <Button
           label={expanded ? '收起明细' : '查看明细'}
           variant="secondary"
@@ -134,6 +148,7 @@ export function BuildTaskCard(props: {
           <Text style={[styles.detailText, { color: theme.text.secondary }]}>
             {[
               `runId: ${task.runId}`,
+              '整体步骤 = 抽取批次 + 三宝书映射 + 审查校验 + 世界包发布；发布成功才达到 100%。',
               `状态: ${taskStatusLabel(task)} · 完成 ${task.unitsDone}/${task.unitsTotal} 批`,
               `处理中 ${task.unitsRunning} · 待重试 ${task.unitsRetryable} · 排队 ${task.unitsQueued}`,
               `累计失败尝试 ${task.unitsFailed} 次（历史计数，非当前待重试批数）`,

@@ -392,7 +392,7 @@ test('full-package finalization holds and renews the extraction lease until publ
     assert.equal(result.completed, true);
     const run = await runStore.getRun('run-finalize-lease');
     assert.equal(run.status, 'completed');
-    assert.equal(run.phase, 'merging');
+    assert.equal(run.phase, 'publishing');
   } finally {
     db.close();
   }

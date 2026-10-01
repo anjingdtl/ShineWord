@@ -58,6 +58,20 @@ export function ProfileFormCard(props: {
         subtitle="OpenAI 兼容端点；密钥只写入系统 Keychain"
       />
       <View style={{ gap: theme.space.md }}>
+        <View style={{ gap: theme.space.sm }} testID="profile-saved-list">
+          {form.savedProfiles.map(saved => (
+            <Button key={saved.id}
+              label={`${saved.id === form.activeId ? '✓ ' : ''}${saved.name} · ${saved.model}`}
+              variant="secondary"
+              disabled={form.busy || form.probeBusy}
+              onPress={() => form.selectSaved(saved.id)}
+              testID={`profile-select-${saved.id}`} />
+          ))}
+          <Button label="添加 API 配置" variant="secondary" onPress={form.addProfile}
+            disabled={form.busy || form.probeBusy} testID="profile-add" />
+        </View>
+        <TextField label="配置名称" value={form.name} onChangeText={form.setName}
+          placeholder="例如：主力模型、备用 API" testID="profile-name" />
         <View style={{ gap: theme.space.sm }} testID="profile-presets">
           {MODEL_PRESETS.map(preset => {
             const selected = form.presetId === preset.id;
@@ -207,7 +221,7 @@ export function ProfileFormCard(props: {
           </View>
         ) : null}
         <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
-          新设置用于之后启动的请求；正在运行的世界构建保持原配置。
+          切换配置会复用对应密钥。失败任务可在构建卡点“用当前 API 继续”；正在运行的构建保持原配置。
         </Text>
         <TextField
           label="API Key"

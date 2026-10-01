@@ -344,10 +344,10 @@ export async function listReviewIssues(worldId: string): Promise<ReviewIssueView
   }));
 }
 
-export async function resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived'): Promise<void> {
+export async function resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived', remember = true): Promise<void> {
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
-  await worldStore.resolveReviewIssue(worldId, issueId, resolution);
+  await worldStore.resolveReviewIssue(worldId, issueId, resolution, remember);
 }
 
 export async function resolveCanonFactConflict(

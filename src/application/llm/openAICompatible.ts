@@ -335,10 +335,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
           attempt: physicalAttempt,
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
           httpStatus: response.status,
-          outcome: 'completed',
+          outcome: finishReason === 'length' ? 'invalid_response' : 'completed',
+          ...(finishReason === 'length' ? { completionState: 'length' as const } : {}),
           timings: response.timings,
           usage: normalizedUsage,
         });
+        if (finishReason === 'length') {
+          throw new LlmRequestFailure('模型正文输出被截断（finish_reason=length），需要提高输出预算或拆小批次。', requestMetrics);
+        }
         return {
           text,
           requestId: parsed.id,

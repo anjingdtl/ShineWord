@@ -249,7 +249,7 @@ test('P2-4: LLM proposal with an invalid attribute is rejected as a major review
 // package must never masquerade as this novel's complete three books)
 // ---------------------------------------------------------------------------
 
-test('P2-4/G04: malformed LLM JSON refuses publication and records a blocking issue', async () => {
+test('P2-4/G04: malformed LLM JSON refuses publication without a human review issue', async () => {
   const { worldStore } = makeWorldStore();
   await seedWorld(worldStore);
   await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
@@ -263,8 +263,7 @@ test('P2-4/G04: malformed LLM JSON refuses publication and records a blocking is
   );
   const issues = await worldStore.listReviewIssues('w-build', 'open');
   const failed = issues.filter(issue => issue.kind === 'mapping_failed');
-  assert.equal(failed.length, 1);
-  assert.equal(failed[0].severity, 'blocking', 'the failure blocks until resolved');
+  assert.equal(failed.length, 0, 'engineering recovery is owned by the background executor');
   const packages = await worldStore.listWorldPackages('w-build');
   assert.equal(packages.length, 0, 'no revision was created');
   assert.equal(await worldStore.getPublishedPackageRevision('w-build'), null,
@@ -280,7 +279,7 @@ test('P2-4/G04: structurally wrong LLM object (no proposal arrays) also refuses'
 
   await assert.rejects(() => build(worldStore, provider), /映射失败，未发布任何版本/);
   const issues = await worldStore.listReviewIssues('w-build', 'open');
-  assert.ok(issues.some(issue => issue.kind === 'mapping_failed' && issue.severity === 'blocking'));
+  assert.equal(issues.length, 0, 'invalid model output never asks a human to waive publication');
   assert.equal((await worldStore.listWorldPackages('w-build')).length, 0);
 });
 
@@ -444,7 +443,10 @@ test('review gate: a successful retry retires the stale mapping-failed blocker a
   // Attempt 1: the model returns garbage (or the network dies).
   await assert.rejects(() => build(worldStore, fakeProvider('这不是JSON，模型跑神了')), /映射失败，未发布任何版本/);
   const afterFailure = await worldStore.listReviewIssues('w-build', 'open');
-  assert.ok(afterFailure.some(issue => issue.issueId === 'mapping-failed' && issue.severity === 'blocking'));
+  assert.equal(afterFailure.length, 0, 'technical mapping failures do not enter review');
+  // An upgraded installation may still have the notice from the old version.
+  await worldStore.saveReviewIssue({ worldId: 'w-build', issueId: 'mapping-failed', kind: 'mapping_failed',
+    severity: 'blocking', detailJson: '{"reason":"legacy failure"}', createdAt: 't' });
 
   // Attempt 2: the same retry that the UI offers ("重新构建将从已完成的进度续建").
   // The old notice describes a condition that no longer holds, so it must not
@@ -453,6 +455,73 @@ test('review gate: a successful retry retires the stale mapping-failed blocker a
   assert.equal(result.manifest.status, 'published', 'the retry publishes instead of dead-ending');
   const afterSuccess = await worldStore.listReviewIssues('w-build', 'open');
   assert.ok(!afterSuccess.some(issue => issue.issueId === 'mapping-failed'), 'stale blocker retired');
+});
+
+test('review strategies apply to identical payloads across issue ids, but changed content/severity reopens', async () => {
+  const { db, worldStore } = makeWorldStore();
+  try {
+    await seedWorld(worldStore);
+    const issue = { worldId: 'w-build', issueId: 'invalid-1', kind: 'invalid_proposal', severity: 'major',
+      detailJson: '{"id":"skill-a","reasons":["unknown enum"]}', createdAt: 't' };
+    await worldStore.saveReviewIssue(issue);
+    await worldStore.resolveReviewIssue('w-build', issue.issueId, 'waived');
+    await worldStore.saveReviewIssue({ ...issue, issueId: 'invalid-2', detailJson: '{"reasons":["unknown enum"],"id":"skill-a"}' });
+    assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 0);
+    assert.equal((await worldStore.listReviewIssues('w-build', 'all')).find(i => i.issueId === 'invalid-2').status, 'waived');
+    await worldStore.saveReviewIssue({ ...issue, issueId: 'invalid-3', severity: 'blocking' });
+    await worldStore.saveReviewIssue({ ...issue, issueId: 'invalid-4', detailJson: '{"id":"skill-b","reasons":["unknown enum"]}' });
+    assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 2);
+    await worldStore.resolveReviewIssue('w-build', 'invalid-4', 'resolved', false);
+    await worldStore.saveReviewIssue({ ...issue, issueId: 'invalid-4', detailJson: '{"id":"skill-b","reasons":["unknown enum"]}' });
+    assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 2, 'one-time resolution is not reusable');
+  } finally { db.close(); }
+});
+
+test('mapper automatically expands budget, splits truncated batches, and resumes actual proposals', async () => {
+  const { db, worldStore } = makeWorldStore();
+  try {
+    await seedWorld(worldStore);
+    await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+    for (let i = 0; i < 4; i++) await worldStore.saveFact(makeFact('w-build', `fact-${i}`, 'chen', `trait-${i}`, { note: `事实${i}` }), 't');
+    const calls = [];
+    let failedOnce = false;
+    const provider = { async complete(request) {
+      const facts = JSON.parse(request.user).facts;
+      calls.push({ ...request, ids: facts.map(f => f.factId) });
+      if (facts.length > 2) return { text: '{"skills":[' };
+      if (facts[0].factId === 'fact-2' && !failedOnce) { failedOnce = true; throw new Error('network offline'); }
+      return { text: JSON.stringify({ skills: [], lore: facts.map(f => ({ id: f.factId,
+        name: f.factId, title: f.factId, text: f.value.note, evidenceFactIds: [f.factId], provenanceKind: 'explicit', rationale: '原著证据' })) }) };
+    } };
+    await assert.rejects(() => build(worldStore, provider), /network offline/);
+    assert.equal(calls.length, 4);
+    assert.ok(calls[1].maxOutputTokens > calls[0].maxOutputTokens);
+    assert.equal(calls[1].reserveMultiplier, 1.5);
+    const priorCalls = calls.length;
+    const { result } = await build(worldStore, provider);
+    assert.equal(calls.length - priorCalls, 1, 'parent split and completed left child are restored');
+    for (let i = 0; i < 4; i++) assert.ok(result.entries.some(e => e.provenance.sourceFactIds.includes(`fact-${i}`)), `fact-${i} proposal restored`);
+    assert.equal(result.manifest.status, 'published');
+    assert.equal((await worldStore.listReviewIssues('w-build', 'open')).length, 0);
+  } finally { db.close(); }
+});
+
+test('reasoning-only mapper retry increases reserves and can finish without manual review', async () => {
+  const { db, worldStore } = makeWorldStore();
+  try {
+    await seedWorld(worldStore);
+    await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'chen', type: 'character', name: '陈青云', firstSeenChapterId: null, aliases: [] }, 't');
+    await worldStore.saveFact(makeFact('w-build', 'fact-0', 'chen', 'trait', { note: '事实' }), 't');
+    const calls = [];
+    const { result } = await build(worldStore, { async complete(request) {
+      calls.push(request);
+      if (calls.length === 1) throw new Error('模型只输出了思维链，未产生正文（finish_reason=length）。');
+      return { text: '{"skills":[]}' };
+    } });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].reserveMultiplier, 1.5);
+    assert.equal(result.manifest.status, 'published');
+  } finally { db.close(); }
 });
 
 test('review gate: a build that finds no conflicts retires a stale canon-conflict notice', async () => {

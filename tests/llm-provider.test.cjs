@@ -22,6 +22,21 @@ function profile(endpoint = 'https://example.test/v1') {
   };
 }
 
+test('nonempty content with finish_reason length is rejected with usage for controlled batch recovery', async () => {
+  const secrets = new MemorySecretStore();
+  await secrets.set('shineword.llm.p1', 'test-key');
+  const provider = new OpenAICompatibleProvider(profile(), secrets, { async post() {
+    return { status: 200, body: JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"skills":[]}' } }],
+      usage: { prompt_tokens: 80, completion_tokens: 100 } }) };
+  } });
+  await assert.rejects(provider.complete({ role: 'WorldMapper', system: 's', user: 'u', maxOutputTokens: 100 }), error => {
+    assert.match(error.message, /finish_reason=length/);
+    assert.equal(error.requestMetrics[0].completionState, 'length');
+    assert.equal(error.requestMetrics[0].usage.outputTokens, 100);
+    return true;
+  });
+});
+
 test('provider failure text redacts the actual key even when it has no sk- prefix', async () => {
   const secrets = new MemorySecretStore();
   const key = 'example.memory.only.credential.123456789';

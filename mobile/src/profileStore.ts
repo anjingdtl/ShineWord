@@ -3,6 +3,45 @@ import type { ApiProfile, ReasoningDialect, ReasoningTier, SecretStore } from '.
 import { normalizeStoredApiProfile } from '../../src/application/llm/profileMigration';
 
 const PROFILE_KEY = 'shineword.api.profile.v1';
+const PROFILES_KEY = 'shineword.api.profiles.v2';
+
+interface ApiProfileCollection {
+  activeId: string | null;
+  profiles: ApiProfile[];
+}
+
+async function loadCollection(): Promise<ApiProfileCollection> {
+  const raw = await AsyncStorage.getItem(PROFILES_KEY);
+  if (raw) {
+    const stored = JSON.parse(raw) as ApiProfileCollection;
+    return { activeId: stored.activeId, profiles: stored.profiles.map(normalizeStoredApiProfile) };
+  }
+  const legacy = await AsyncStorage.getItem(PROFILE_KEY);
+  if (!legacy) return { activeId: null, profiles: [] };
+  const profile = normalizeStoredApiProfile(JSON.parse(legacy));
+  const collection = { activeId: profile.id, profiles: [profile] };
+  await persistCollection(collection);
+  return collection;
+}
+
+async function persistCollection(collection: ApiProfileCollection): Promise<void> {
+  await AsyncStorage.setItem(PROFILES_KEY, JSON.stringify(collection));
+  // Keep the legacy active-profile mirror for older readers; v2 owns selection.
+  const active = collection.profiles.find(profile => profile.id === collection.activeId);
+  if (active) await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(active));
+}
+
+export async function listApiProfiles(): Promise<ApiProfile[]> {
+  return (await loadCollection()).profiles;
+}
+
+export async function selectApiProfile(id: string): Promise<ApiProfile> {
+  const collection = await loadCollection();
+  const profile = collection.profiles.find(item => item.id === id);
+  if (!profile) throw new Error('这条 API 配置已不存在，请刷新后重试。');
+  await persistCollection({ ...collection, activeId: id });
+  return profile;
+}
 
 /**
  * 1M-class presets start at the lowest product reasoning tier. The unified
@@ -65,15 +104,14 @@ export function presetById(presetId: string | undefined): ModelPreset | null {
 }
 
 export async function loadApiProfile(): Promise<ApiProfile | null> {
-  const raw = await AsyncStorage.getItem(PROFILE_KEY);
-  if (!raw) return null;
-  const profile = normalizeStoredApiProfile(JSON.parse(raw));
-  const normalized = JSON.stringify(profile);
-  if (raw !== normalized) await AsyncStorage.setItem(PROFILE_KEY, normalized);
-  return profile;
+  const collection = await loadCollection();
+  return collection.profiles.find(profile => profile.id === collection.activeId) ?? null;
 }
 
 export interface SaveApiProfileInput {
+  /** null explicitly creates a record, including another account at the same endpoint. */
+  id?: string | null;
+  name?: string;
   endpoint: string;
   model: string;
   reasoningTier: ReasoningTier;
@@ -84,7 +122,7 @@ export interface SaveApiProfileInput {
   reasoningDialect?: ReasoningDialect;
 }
 
-function buildApiProfile(input: SaveApiProfileInput): ApiProfile {
+function buildApiProfile(input: SaveApiProfileInput, existing?: ApiProfile, isFirst = true): ApiProfile {
   const endpoint = input.endpoint.trim();
   const model = input.model.trim();
   if (!endpoint || !model) throw new Error('Endpoint and model are required.');
@@ -107,11 +145,11 @@ function buildApiProfile(input: SaveApiProfileInput): ApiProfile {
     }
   }
   const profile: ApiProfile = {
-    id: 'default',
-    name: preset ? preset.label : 'Default',
+    id: existing?.id ?? (isFirst ? 'default' : `api-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
+    name: input.name?.trim() || (preset ? preset.label : model),
     endpoint,
     model,
-    keyRef: 'llm.default',
+    keyRef: existing?.keyRef ?? '',
     ...(preset
       ? preset.profile
       : {
@@ -126,12 +164,29 @@ function buildApiProfile(input: SaveApiProfileInput): ApiProfile {
     reasoningTier: input.reasoningTier,
     ...(input.reasoningDialect ? { reasoningDialect: input.reasoningDialect } : {}),
   };
+  profile.keyRef ||= profile.id === 'default' ? 'llm.default' : `llm.${profile.id}`;
   return profile;
 }
 
+async function prepareProfile(input: SaveApiProfileInput): Promise<{ profile: ApiProfile; collection: ApiProfileCollection }> {
+  const collection = await loadCollection();
+  const existing = input.id
+    ? collection.profiles.find(profile => profile.id === input.id)
+    : input.id === null ? undefined
+      : collection.profiles.find(profile => profile.endpoint === input.endpoint.trim() && profile.model === input.model.trim());
+  if (input.id && !existing) throw new Error('这条 API 配置已不存在，请重新添加。');
+  return { collection, profile: buildApiProfile(input, existing, collection.profiles.length === 0) };
+}
+
+async function publishProfile(profile: ApiProfile, collection: ApiProfileCollection): Promise<void> {
+  const profiles = collection.profiles.filter(item => item.id !== profile.id);
+  profiles.push(profile);
+  await persistCollection({ activeId: profile.id, profiles });
+}
+
 export async function saveApiProfile(input: SaveApiProfileInput): Promise<ApiProfile> {
-  const profile = buildApiProfile(input);
-  await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  const { profile, collection } = await prepareProfile(input);
+  await publishProfile(profile, collection);
   return profile;
 }
 
@@ -141,13 +196,13 @@ export async function saveConfiguredApiProfile(
   apiKey: string,
   secrets: SecretStore,
 ): Promise<ApiProfile> {
-  const profile = buildApiProfile(input);
+  const { profile, collection } = await prepareProfile(input);
   const trimmedKey = apiKey.trim();
   if (trimmedKey) {
     await secrets.set(profile.keyRef, trimmedKey);
   } else if (!await secrets.get(profile.keyRef)) {
     throw new Error('请输入 API Key（将只写入系统 Keychain）。');
   }
-  await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  await publishProfile(profile, collection);
   return profile;
 }

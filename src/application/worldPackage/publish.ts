@@ -31,6 +31,7 @@ export interface PublishPackageInput {
   coverage?: Record<string, unknown>;
   /** When set, publishes a versioned, content-hashed partial/full source scope. */
   buildScope?: WorldPackageBuildScope;
+  onValidated?: () => void;
 }
 
 export interface PublishPackageResult {
@@ -67,6 +68,7 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
   }
 
   if (input.buildScope) assertValidWorldPackageBuildScope(input.buildScope);
+  input.onValidated?.();
   const contentHash = await computePackageContentHash(
     input.entries, input.sections, input.sha256Hex, input.buildScope,
   );

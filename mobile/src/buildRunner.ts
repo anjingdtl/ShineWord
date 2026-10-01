@@ -25,6 +25,7 @@ import { notifyBuildProgress } from './buildServiceBridge';
 import { getDatabaseRuntime } from './database';
 import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore';
 import { reviveRunConfig } from '../../src/application/worldBuild/runConfig';
+import { taskOverallProgress } from '../../src/application/worldBuild/buildProgress';
 
 /** Statuses whose cause is already persisted by a more specific writer. */
 const ALREADY_CLASSIFIED = new Set([
@@ -115,10 +116,13 @@ export async function worldBuildRunner(data: { runId?: string }): Promise<void> 
       );
       return;
     }
-    await runExtraction(runId, profile, progress => {
-      if (progress.chunksTotal && progress.chunksDone !== undefined) {
-        notifyBuildProgress(runId, progress.chunksDone, progress.chunksTotal).catch(() => undefined);
-      }
+    await runExtraction(runId, profile, () => {
+      // Render the same persisted stage-aware work counters as the task card.
+      void runStore.getRun(runId).then(snapshot => {
+        if (!snapshot) return;
+        const progress = taskOverallProgress(snapshot);
+        return notifyBuildProgress(runId, progress.done, progress.total);
+      }).catch(() => undefined);
     });
   } catch (error) {
     if (!runtime) return;

@@ -51,6 +51,7 @@ import {
 import { revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 import { deriveSafetyMargin } from '../context/modelEnvelope';
+import { AUTOMATIC_MAPPING_RETRY, isAutomaticMappingFailure } from './automaticMappingRecovery';
 
 export const PIPELINE_VERSION = 'pipeline-unified-1';
 export const PLAN_VERSION_CHUNK = 'plan-chunk-1';
@@ -1357,8 +1358,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const reason = error instanceof Error ? error.message : String(error);
           const canonConflict = reason.includes('Canon blocking conflict');
           const missingOpeningLocation = reason.includes('当前开局可用的地点证据');
+          const mappingFailed = reason.includes('小说→三宝书映射失败');
+          const automaticRecovery = mappingFailed && isAutomaticMappingFailure(reason);
           const errorCode = canonConflict ? 'canon_conflict'
             : missingOpeningLocation ? 'opening_location_missing'
+            : mappingFailed ? (automaticRecovery ? AUTOMATIC_MAPPING_RETRY : 'mapping_configuration_required')
             : reason.includes('连续覆盖全文')
             ? 'source_coverage_incomplete'
             : reason.includes('原文源')
@@ -1373,6 +1377,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               ? '发现需核对的原著事实；请进入「审查」逐条处理，已完成抽取会保留。'
               : missingOpeningLocation
                 ? '缺少开局地点的原文证据，请补齐地点资料后继续构建。'
+                : automaticRecovery
+                  ? '映射正在后台自动恢复：自动调整输出预算、拆小批次并退避续试；已完成成果保留。'
+                : mappingFailed
+                  ? '当前 API 的配置或能力暂不可用，请核对模型配置；已完成成果保留。'
                 : '世界资料发布未完成，已抽取内容已保存；请查看审查问题后继续构建。',
           );
           return {
@@ -1383,7 +1391,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       }
       await deps.worldStore.setWorldStatus(run.worldId, 'ready', now());
       await deps.runStore.setRunStatus(runId, 'completed', now());
-      await deps.runStore.setRunPhase(runId, 'merging', now());
+      await deps.runStore.setRunPhase(runId, 'publishing', now());
       return {
         runId, completed: true, unitsDone: fresh.unitsDone,
         unitsTotal: fresh.unitsTotal, unitsFailed: fresh.unitsFailed, lostLease: false,

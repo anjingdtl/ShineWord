@@ -12,15 +12,22 @@
  * key stays in memory for the probe only), so users can verify
  * endpoint/key/model/reasoning compatibility before saving.
  */
-import { useState } from 'react';
-import { MODEL_PRESETS, saveConfiguredApiProfile } from '../../../profileStore';
-import { normalizeReasoningTier, type ReasoningTier } from '../../../../../src/application/llm/types';
+import { useEffect, useState } from 'react';
+import { listApiProfiles, MODEL_PRESETS, saveConfiguredApiProfile, selectApiProfile } from '../../../profileStore';
+import { normalizeReasoningTier, type ApiProfile, type ReasoningTier } from '../../../../../src/application/llm/types';
 import { KeychainSecretStore } from '../../../secureKeyStore';
 import { FetchHttpTransport } from '../../../fetchTransport';
 import { probeConnection, type ConnectionProbeResult } from '../../../connectionProbe';
 import { useAppSession } from '../../state/AppSessionContext';
 
 export interface ProfileFormState {
+  savedProfiles: ApiProfile[];
+  selectedId: string | null;
+  activeId: string | null;
+  name: string;
+  setName: (value: string) => void;
+  selectSaved: (id: string) => void;
+  addProfile: () => void;
   endpoint: string;
   model: string;
   apiKey: string;
@@ -49,6 +56,9 @@ export interface ProfileFormState {
 
 export function useProfileForm(): ProfileFormState {
   const { profile, setProfile } = useAppSession();
+  const [savedProfiles, setSavedProfiles] = useState<ApiProfile[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(profile?.id ?? null);
+  const [name, setName] = useState(profile?.name ?? '');
   const [endpoint, setEndpoint] = useState(profile?.endpoint ?? '');
   const [model, setModel] = useState(profile?.model ?? '');
   const [apiKey, setApiKey] = useState('');
@@ -74,6 +84,45 @@ export function useProfileForm(): ProfileFormState {
   const [notice, setNotice] = useState<string | null>(null);
   const [probeBusy, setProbeBusy] = useState(false);
   const [probeResult, setProbeResult] = useState<ConnectionProbeResult | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listApiProfiles().then(items => { if (!cancelled) setSavedProfiles(items); })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
+  }, [profile]);
+
+  function fillProfile(saved: ApiProfile | null): void {
+    setSelectedId(saved?.id ?? null);
+    setName(saved?.name ?? '');
+    setEndpoint(saved?.endpoint ?? '');
+    setModel(saved?.model ?? '');
+    setApiKey('');
+    setReasoningTier(normalizeReasoningTier(saved?.reasoningTier));
+    setContextWindowTokens(saved?.capabilities.contextWindow?.toString() ?? '');
+    setMaxOutputTokens(saved?.capabilities.maxOutputTokens?.toString() ?? '');
+    setReasoningParameterSupport(saved?.reasoningDialect === 'unsupported' ? 'unsupported' : 'automatic');
+    setPresetId(MODEL_PRESETS.find(item => item.model === saved?.model
+      && item.profile.capabilities.contextWindow === saved?.capabilities.contextWindow)?.id ?? null);
+    setProbeResult(null);
+    setError(null);
+    setNotice(null);
+  }
+
+  function selectSaved(id: string): void {
+    if (busy || probeBusy) return;
+    setBusy(true);
+    void selectApiProfile(id).then(saved => {
+      fillProfile(saved);
+      setProfile(saved);
+      setNotice(`已切换到「${saved.name}」，密钥和参数已复用。`);
+    }).catch(e => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  }
+
+  function addProfile(): void {
+    if (!busy && !probeBusy) fillProfile(null);
+  }
 
   function choosePreset(id: string): void {
     const preset = MODEL_PRESETS.find(item => item.id === id);
@@ -119,6 +168,8 @@ export function useProfileForm(): ProfileFormState {
     void (async () => {
       try {
         const saved = await saveConfiguredApiProfile({
+          id: selectedId,
+          name,
           endpoint,
           model,
           presetId: presetId ?? undefined,
@@ -128,6 +179,8 @@ export function useProfileForm(): ProfileFormState {
           reasoningDialect: reasoningParameterSupport === 'unsupported' ? 'unsupported' : undefined,
         }, apiKey, new KeychainSecretStore());
         setApiKey('');
+        setSelectedId(saved.id);
+        setName(saved.name);
         setProfile(saved);
         setNotice('已保存。密钥只存放在系统 Keychain 中。');
         onSaved();
@@ -160,7 +213,9 @@ export function useProfileForm(): ProfileFormState {
             ? 'unsupported'
             : preset?.profile.reasoningDialect,
           apiKey: apiKey.trim() || null,
-          keyRef: 'llm.default',
+          keyRef: savedProfiles.find(item => item.id === selectedId)?.keyRef
+            ?? (selectedId === profile?.id ? profile?.keyRef : undefined)
+            ?? 'llm.unsaved',
           secretStore: new KeychainSecretStore(),
           transport: new FetchHttpTransport(),
         });
@@ -183,6 +238,7 @@ export function useProfileForm(): ProfileFormState {
   }
 
   return {
+    savedProfiles, selectedId, activeId: profile?.id ?? null, name, setName, selectSaved, addProfile,
     endpoint, model, apiKey, presetId, reasoningTier, contextWindowTokens, maxOutputTokens,
     reasoningParameterSupport, busy, error, notice, probeBusy, probeResult,
     setEndpoint, setModel: updateModel, setApiKey, setReasoningTier, setContextWindowTokens,

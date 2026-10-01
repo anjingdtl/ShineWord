@@ -19,6 +19,15 @@ function makeProfile(reasoningTier) {
   };
 }
 
+test('mapping output demand reaches the wire without the old 12k clamp, and recovery grows same-tier reserves', () => {
+  const profile = makeProfile('low');
+  const request = { role: 'WorldMapper', system: 'JSON', user: 'facts', maxOutputTokens: 32_768 };
+  const plan = governWorldBuildRequest({ request, requestKind: 'world_mapping', logicalRequestId: 'map-retry', governance: governanceFor(profile), reserveMultiplier: 1.5 });
+  assert.equal(plan.reasoningTier, 'low');
+  assert.equal(plan.maxOutputTokens, 32_768 + plan.reasoningReserveTokens);
+  assert.equal(plan.reasoningReserveTokens, 6_144);
+});
+
 const governanceFor = profile => ({
   profile,
   runId: 'run-fixture',

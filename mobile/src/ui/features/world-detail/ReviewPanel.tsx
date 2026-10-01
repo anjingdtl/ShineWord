@@ -37,13 +37,14 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
     }, [refresh]),
   );
 
-  async function resolve(issueId: string, resolution: 'resolved' | 'waived') {
+  async function resolve(issueId: string, resolution: 'resolved' | 'waived', remember: boolean) {
+    if (busy) return;
     setError(null);
     setNotice(null);
     setBusy(true);
     try {
-      await resolveReviewIssue(props.worldId, issueId, resolution);
-      setNotice(`已${resolution === 'waived' ? '豁免' : '解决'} ${issueId}。重新构建/映射后将以新版本发布。`);
+      await resolveReviewIssue(props.worldId, issueId, resolution, remember);
+      setNotice(`已${resolution === 'waived' ? '豁免' : '解决'} ${issueId}。${remember ? '相同问题将自动采用本次策略。' : ''}返回项目可继续构建。`);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -93,7 +94,7 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
             key={issue.issueId}
             issue={issue}
             busy={busy}
-            onResolve={resolution => resolve(issue.issueId, resolution)}
+            onResolve={(resolution, remember) => void resolve(issue.issueId, resolution, remember)}
           />
         ))
       )}

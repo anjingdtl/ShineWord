@@ -398,6 +398,7 @@ export async function buildWorldOnDevice(
         },
         requestKind: 'world_mapping',
         logicalRequestId: request.logicalRequestId ?? `world-mapping:${runId}:${worldId}`,
+        reserveMultiplier: request.reserveMultiplier,
         governance,
       })),
     },

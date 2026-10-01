@@ -15,10 +15,11 @@ import {
   isTaskListDynamic,
   listBuildTaskPerfStats,
   listOpenBuildTasksForWorld,
+  listBuildTasksForWorld,
   type BuildTaskPerfStats,
   type BuildTaskView,
 } from '../../buildTasks';
-import { pauseRun, cancelRun } from '../../sourceImport';
+import { pauseRun, cancelRun, useCurrentApiForRun } from '../../sourceImport';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
 import { deriveProjectStatus, listProjectBuildSummaries, summarizeProjectBuild, PROJECT_STATUS_LABEL, type ProjectBuildSummary } from '../../projectLibrary';
 import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
@@ -67,7 +68,7 @@ export function ProjectHubScreen(): React.JSX.Element {
     refreshInFlight.current = true;
     try {
       const [openTasks, worldEntry, summaries] = await Promise.all([
-        listOpenBuildTasksForWorld(worldId), getWorldEntry(worldId), listProjectBuildSummaries([worldId]),
+        listBuildTasksForWorld(worldId), getWorldEntry(worldId), listProjectBuildSummaries([worldId]),
       ]);
       setBuildSummary(summaries.get(worldId)!);
       setTasks(openTasks);
@@ -96,14 +97,17 @@ export function ProjectHubScreen(): React.JSX.Element {
     return () => clearInterval(timer);
   }, [focused, tasks, refresh]);
 
-  async function resumeTask(runId: string) {
+  async function resumeTask(runId: string, currentApi = false) {
     if (taskBusy || !profile) return;
     setTaskBusy(true);
     try {
+      if (currentApi) await useCurrentApiForRun(runId, profile);
       void startOrResumeBuild(runId, profile, { resume: true })
         .then(refresh)
         .catch(e => setError(e instanceof Error ? e.message : String(e)));
       await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setTaskBusy(false);
     }
@@ -204,6 +208,8 @@ export function ProjectHubScreen(): React.JSX.Element {
               <BuildTaskCard
                 task={task}
                 busy={taskBusy}
+                onReview={() => openWorldTab('review')}
+                onResumeCurrentApi={runId => void resumeTask(runId, true)}
                 onResume={runId => void resumeTask(runId)}
                 onPause={runId => {
                   pauseRun(runId);

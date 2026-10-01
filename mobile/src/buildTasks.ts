@@ -16,6 +16,7 @@
 import { getDatabaseRuntime } from './database';
 import type { BuildRunRecord, BuildUnitRecord } from '../../src/application/ports/worldBuildStore';
 import type { SqliteRow } from '../../src/application/ports/sqlite';
+export { taskOverallProgress } from '../../src/application/worldBuild/buildProgress';
 
 export interface BuildTaskView {
   runId: string;
@@ -33,6 +34,8 @@ export interface BuildTaskView {
   /** Currently blocked-on-retry units, derived live from unit rows. */
   unitsRetryable: number;
   unitsNeedsReview: number;
+  openReviewIssues: number;
+  blockingReviewIssues: number;
   unitsFailedTerminal: number;
   /** Max attempt among units still being worked on. */
   currentAttempt: number;
@@ -71,6 +74,8 @@ interface TaskRow extends SqliteRow {
   units_failed_terminal: number | null;
   current_attempt: number | null;
   last_activity_at: string | null;
+  open_review_issues: number;
+  blocking_review_issues: number;
 }
 
 /** Runs that are not finished - what the task card list shows. */
@@ -83,7 +88,12 @@ export async function listOpenBuildTasksForWorld(worldId: string): Promise<Build
   return queryOpenBuildTasks(worldId);
 }
 
-async function queryOpenBuildTasks(worldId?: string): Promise<BuildTaskView[]> {
+/** The hub retains the latest successful task so its real 100% is visible. */
+export async function listBuildTasksForWorld(worldId: string): Promise<BuildTaskView[]> {
+  return queryOpenBuildTasks(worldId, true);
+}
+
+async function queryOpenBuildTasks(worldId?: string, includeCompleted = false): Promise<BuildTaskView[]> {
   const runtime = await getDatabaseRuntime();
   const rows = await runtime.db.queryAll<TaskRow>(
     `SELECT r.run_id, r.world_id, r.phase, r.status, r.units_done, r.units_total,
@@ -93,7 +103,9 @@ async function queryOpenBuildTasks(worldId?: string): Promise<BuildTaskView[]> {
             s.title, s.file_name,
             agg.units_running, agg.units_queued, agg.units_retryable,
             agg.units_needs_review, agg.units_failed_terminal,
-            agg.current_attempt, agg.last_activity_at
+            agg.current_attempt, agg.last_activity_at,
+            (SELECT COUNT(*) FROM review_issues i WHERE i.world_id = r.world_id AND i.status = 'open') AS open_review_issues,
+            (SELECT COUNT(*) FROM review_issues i WHERE i.world_id = r.world_id AND i.status = 'open' AND i.severity = 'blocking') AS blocking_review_issues
        FROM world_build_runs r
        LEFT JOIN imported_sources s ON s.source_id = r.source_id
        LEFT JOIN (
@@ -107,7 +119,9 @@ async function queryOpenBuildTasks(worldId?: string): Promise<BuildTaskView[]> {
            MAX(updated_at) AS last_activity_at
          FROM world_build_units GROUP BY run_id
        ) agg ON agg.run_id = r.run_id
-      WHERE r.status NOT IN ('completed', 'failed_terminal', 'canceled')
+      WHERE (r.status NOT IN ('completed', 'failed_terminal', 'canceled')
+        ${includeCompleted ? `OR r.run_id = (SELECT finished.run_id FROM world_build_runs finished
+          WHERE finished.world_id = r.world_id AND finished.status = 'completed' ORDER BY finished.updated_at DESC LIMIT 1)` : ''})
         ${worldId ? 'AND r.world_id = ?' : ''}
       ORDER BY r.updated_at DESC`,
     worldId ? [worldId] : [],
@@ -132,6 +146,8 @@ async function queryOpenBuildTasks(worldId?: string): Promise<BuildTaskView[]> {
       unitsQueued: clamp(row.units_queued ?? 0),
       unitsRetryable: clamp(row.units_retryable ?? 0),
       unitsNeedsReview: clamp(row.units_needs_review ?? 0),
+      openReviewIssues: row.open_review_issues ?? 0,
+      blockingReviewIssues: row.blocking_review_issues ?? 0,
       unitsFailedTerminal: clamp(row.units_failed_terminal ?? 0),
       currentAttempt: row.current_attempt ?? 0,
       lastActivityAt: row.last_activity_at && row.last_activity_at > row.updated_at
@@ -182,7 +198,7 @@ export const PHASE_LABEL: Record<BuildRunRecord['phase'], string> = {
   extracting: '抽取事实',
   merging: '整合归并',
   mapping: '映射三宝书',
-  validating: '发布校验',
+  validating: '审查与校验',
   publishing: '发布',
 };
 
@@ -203,8 +219,10 @@ export const RUN_STATUS_LABEL: Record<BuildRunRecord['status'], string> = {
 
 /** Task-card headline status: control flags say more than the status column. */
 export function taskStatusLabel(task: BuildTaskView): string {
-  if (task.status === 'running' && task.cancelRequested) return '停止请求中';
-  if (task.status === 'running' && task.pauseRequested) return '暂停请求中';
+  const automatic = task.status === 'failed_retryable' && task.lastErrorCode === 'mapping_auto_retry';
+  if ((task.status === 'running' || automatic) && task.cancelRequested) return '停止请求中';
+  if ((task.status === 'running' || automatic) && task.pauseRequested) return '暂停请求中';
+  if (automatic) return '自动恢复中';
   return RUN_STATUS_LABEL[task.status] ?? task.status;
 }
 
@@ -215,11 +233,13 @@ export function taskProgressLine(task: BuildTaskView): string {
   if (task.status === 'completed') return '已完成';
   const label = PHASE_LABEL[task.phase] ?? task.phase;
   if (task.unitsTotal > 0) {
-    const parts: string[] = [`${label} ${task.unitsDone}/${task.unitsTotal} 批`];
+    const parts: string[] = [`抽取 ${task.unitsDone}/${task.unitsTotal} 批`, `当前：${label}`];
     const live: string[] = [];
     if (task.unitsRunning > 0) live.push(`正在分析第 ${task.unitsDone + 1} 批`);
     if (task.unitsQueued > 0) live.push(`排队 ${task.unitsQueued}`);
     if (task.unitsRetryable > 0) live.push(`待重试 ${task.unitsRetryable}`);
+    if (task.openReviewIssues > 0) live.push(`待审查 ${task.openReviewIssues} 项`);
+    if (task.unitsNeedsReview > 0) live.push(`需处理 ${task.unitsNeedsReview} 批`);
     if (live.length > 0) parts.push(live.join(' · '));
     return parts.join(' · ');
   }
@@ -228,12 +248,17 @@ export function taskProgressLine(task: BuildTaskView): string {
 
 /** Secondary line: what the executor is doing right now (no fake ETA). */
 export function taskActivityLine(task: BuildTaskView): string | null {
+  if (task.status === 'failed_retryable' && task.lastErrorCode === 'mapping_auto_retry'
+    && !task.pauseRequested && !task.cancelRequested) return '后台正在自动调整预算、拆批与退避续试';
   if (task.status !== 'running' || task.pauseRequested || task.cancelRequested) return null;
   if (task.unitsRunning > 0) {
     const attempt = task.currentAttempt > 1 ? `（第 ${task.currentAttempt} 次尝试）` : '';
     return `正在等待模型响应${attempt}`;
   }
-  return null;
+  if (task.phase === 'mapping') return '正在等待模型映射三宝书；抽取已完成，构建仍在运行';
+  if (task.phase === 'validating') return '正在审查问题与校验世界包';
+  if (task.phase === 'publishing') return '正在保存并发布世界包';
+  return '正在整合资料与准备后续构建步骤';
 }
 
 /** 最近活动时间 as HH:MM:SS (local); empty when unparsable. */

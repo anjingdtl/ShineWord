@@ -167,6 +167,57 @@ const configuredInput = {
   presetId: 'glm-5.3-flash', reasoningTier: 'low',
 };
 
+test('multiple API records retain independent keys and survive switching/restart', async () => {
+  const storage = memoryStorage();
+  const secretValues = new Map();
+  const secrets = { async set(ref, value) { secretValues.set(ref, value); }, async get(ref) { return secretValues.get(ref); } };
+  const api = loadProfileStore(storage);
+  const primary = await api.saveConfiguredApiProfile({ ...configuredInput, name: 'Primary' }, 'primary-secret', secrets);
+  const backup = await api.saveConfiguredApiProfile({ ...configuredInput, endpoint: 'https://backup.invalid/v1', name: 'Backup' }, 'backup-secret', secrets);
+  assert.notEqual(primary.id, backup.id);
+  assert.notEqual(primary.keyRef, backup.keyRef);
+  assert.equal((await api.listApiProfiles()).length, 2);
+  await api.selectApiProfile(primary.id);
+  const restarted = loadProfileStore(storage);
+  assert.equal((await restarted.loadApiProfile()).id, primary.id);
+  assert.equal(secretValues.get(primary.keyRef), 'primary-secret');
+  assert.equal(secretValues.get(backup.keyRef), 'backup-secret');
+  const edited = await restarted.saveConfiguredApiProfile({ ...configuredInput, id: backup.id,
+    endpoint: backup.endpoint, name: 'Backup renamed', reasoningTier: 'max' }, '', secrets);
+  assert.equal(edited.keyRef, backup.keyRef);
+  assert.equal((await restarted.listApiProfiles()).length, 2);
+  assert.equal((await restarted.loadApiProfile()).id, backup.id);
+  assert.equal(JSON.stringify([...storage.data.values()]).includes('secret'), false);
+});
+
+test('adding an API without its own key cannot silently reuse another record credential', async () => {
+  const storage = memoryStorage();
+  const values = new Map();
+  const secrets = { async set(ref, value) { values.set(ref, value); }, async get(ref) { return values.get(ref); } };
+  const api = loadProfileStore(storage);
+  const primary = await api.saveConfiguredApiProfile(configuredInput, 'primary-key', secrets);
+  await assert.rejects(api.saveConfiguredApiProfile({ ...configuredInput, endpoint: 'https://backup.invalid/v1' }, '', secrets), /请输入 API Key/);
+  assert.equal((await api.listApiProfiles()).length, 1);
+  assert.equal((await api.loadApiProfile()).id, primary.id);
+});
+
+test('explicitly adding the same endpoint and model keeps separate accounts and credentials', async () => {
+  const storage = memoryStorage();
+  const values = new Map();
+  const secrets = { async set(ref, value) { values.set(ref, value); }, async get(ref) { return values.get(ref); } };
+  const api = loadProfileStore(storage);
+  const primary = await api.saveConfiguredApiProfile({ ...configuredInput, id: null, name: 'Account A' }, 'account-a', secrets);
+  await assert.rejects(api.saveConfiguredApiProfile({ ...configuredInput, id: null, name: 'Account B' }, '', secrets), /请输入 API Key/);
+  const backup = await api.saveConfiguredApiProfile({ ...configuredInput, id: null, name: 'Account B' }, 'account-b', secrets);
+  assert.notEqual(primary.id, backup.id);
+  assert.notEqual(primary.keyRef, backup.keyRef);
+  assert.equal(values.get(primary.keyRef), 'account-a');
+  assert.equal(values.get(backup.keyRef), 'account-b');
+  assert.equal((await api.listApiProfiles()).length, 2);
+  await api.selectApiProfile(primary.id);
+  assert.equal((await api.loadApiProfile()).name, 'Account A');
+});
+
 test('first-run missing key does not publish a profile that bypasses setup after restart', async () => {
   const storage = memoryStorage();
   const { saveConfiguredApiProfile, loadApiProfile } = loadProfileStore(storage);

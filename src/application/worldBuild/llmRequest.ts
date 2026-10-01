@@ -63,7 +63,7 @@ export function governWorldBuildRequest(input: GovernWorldBuildRequestInput): Ll
     businessOutputDemand: {
       minimum: demand.minimum,
       target: businessOutputTokens,
-      maximum: Math.min(demand.maximum, businessOutputTokens),
+      maximum: input.requestKind === 'world_mapping' ? businessOutputTokens : Math.min(demand.maximum, businessOutputTokens),
     },
     providerWireMaxOutputTokens: modelMaxOutputTokens!,
     reasoningPolicy: {

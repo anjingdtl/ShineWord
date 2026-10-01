@@ -1150,4 +1150,22 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
       FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
     );
   ` },
+  { version: 27, name: 'review_resolution_policies', sql: `
+    CREATE TABLE review_resolution_policies (
+      world_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      detail_json TEXT NOT NULL,
+      resolution TEXT NOT NULL CHECK(resolution IN ('resolved', 'waived')),
+      resolved_at TEXT NOT NULL,
+      PRIMARY KEY(world_id, kind, severity, detail_json),
+      FOREIGN KEY(world_id) REFERENCES worlds(world_id) ON DELETE CASCADE
+    );
+    UPDATE world_build_runs SET status = 'failed_retryable', last_error_code = 'mapping_auto_retry',
+      last_error_message = '映射正在后台自动恢复；已完成成果保留。'
+      WHERE status = 'needs_review' AND phase = 'mapping'
+        AND last_error_code IN ('mapping_failed', 'package_finalize_failed');
+    UPDATE review_issues SET status = 'resolved', resolved_at = created_at
+      WHERE kind = 'mapping_failed' AND status = 'open';
+  ` },
 ];

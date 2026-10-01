@@ -6,7 +6,7 @@
  * resolution actions are unchanged (`resolveReviewIssue`).
  */
 import React, { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Switch, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { typeStyle } from '../../components/typography';
@@ -42,10 +42,11 @@ function summarize(detailJson: string): string {
 export function ReviewIssueCard(props: {
   issue: ReviewIssueView;
   busy?: boolean;
-  onResolve: (resolution: 'resolved' | 'waived') => void;
+  onResolve: (resolution: 'resolved' | 'waived', remember: boolean) => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const [showDetail, setShowDetail] = useState(false);
+  const [remember, setRemember] = useState(true);
   const { issue } = props;
   const severity = SEVERITY_LABEL[issue.severity] ?? issue.severity;
   const glyph = SEVERITY_GLYPH[issue.severity] ?? '·';
@@ -87,14 +88,14 @@ export function ReviewIssueCard(props: {
         <Button
           label="按事实解决"
           variant="secondary"
-          onPress={() => props.onResolve('resolved')}
+          onPress={() => props.onResolve('resolved', remember)}
           disabled={props.busy === true}
           testID={`review-resolve-${issue.issueId}`}
         />
         <Button
           label="豁免并允许发布"
           variant="secondary"
-          onPress={() => props.onResolve('waived')}
+          onPress={() => props.onResolve('waived', remember)}
           disabled={props.busy === true}
           testID={`review-waive-${issue.issueId}`}
         />
@@ -103,6 +104,14 @@ export function ReviewIssueCard(props: {
           variant="chip"
           onPress={() => setShowDetail(previous => !previous)}
         />
+      </View>
+
+      <View style={[styles.row, { gap: theme.space.sm, marginTop: theme.space.sm }]}>
+        <Switch value={remember} onValueChange={setRemember} disabled={props.busy}
+          accessibilityLabel="记住处理策略，相同问题自动采用" testID={`review-remember-${issue.issueId}`} />
+        <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary, flex: 1 }]}>
+          记住处理策略，相同问题自动采用；内容变化时重新审查
+        </Text>
       </View>
 
       {showDetail ? (

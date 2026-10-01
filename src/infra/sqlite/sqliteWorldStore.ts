@@ -34,6 +34,19 @@ interface WorldRow extends SqliteRow {
   updated_at: string;
 }
 
+/** Match the same reviewed payload even when JSON object keys change order. */
+function reviewDetailKey(detailJson: string): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, normalize(item)]));
+    }
+    return value;
+  };
+  try { return JSON.stringify(normalize(JSON.parse(detailJson))); } catch { return detailJson; }
+}
+
 interface ChapterRow extends SqliteRow {
   chapter_id: string;
   chapter_index: number;
@@ -1363,23 +1376,25 @@ export class SqliteWorldStore implements WorldStore {
     detailJson: string;
     createdAt: string;
   }): Promise<void> {
-    // Recording an issue means "this condition holds NOW", so re-recording one
-    // reopens it. Without the status/resolved_at reset a single human waiver
-    // would permanently disarm the publication gate: a later build that fails
-    // the same way would silently leave the (waived) row in place, and
-    // publishWorldPackage - which blocks on OPEN blocking issues - would let a
-    // degraded package through. Kind/severity are refreshed too, so an issue
-    // that changed shape cannot keep a stale classification.
+    // Only a deliberate human decision on identical content is reusable.
+    // Programmatic retirement never creates a policy, and changed evidence
+    // or severity reopens the issue. Fact conflicts always require evidence.
+    const policy = input.kind === 'canon_conflict' ? null : await this.db.queryOne<SqliteRow>(
+      `SELECT resolution, resolved_at FROM review_resolution_policies
+       WHERE world_id = ? AND kind = ? AND severity = ? AND detail_json = ?`,
+      [input.worldId, input.kind, input.severity, reviewDetailKey(input.detailJson)],
+    );
     await this.db.execute(
-      `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at)
-       VALUES (?, ?, ?, ?, ?, 'open', ?)
+      `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(world_id, issue_id) DO UPDATE SET
          kind = excluded.kind,
          severity = excluded.severity,
          detail_json = excluded.detail_json,
-         status = 'open',
-         resolved_at = NULL`,
-      [input.worldId, input.issueId, input.kind, input.severity, input.detailJson, input.createdAt],
+         status = excluded.status,
+         resolved_at = excluded.resolved_at`,
+      [input.worldId, input.issueId, input.kind, input.severity, input.detailJson,
+        policy ? String(policy.resolution) : 'open', input.createdAt, policy ? String(policy.resolved_at) : null],
     );
   }
 
@@ -1434,7 +1449,7 @@ export class SqliteWorldStore implements WorldStore {
     }));
   }
 
-  async resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived'): Promise<void> {
+  async resolveReviewIssue(worldId: string, issueId: string, resolution: 'resolved' | 'waived', remember = true): Promise<void> {
     if (issueId === 'canon-conflict') {
       const pending = await this.db.queryOne<SqliteRow>(
         "SELECT COUNT(*) AS count FROM canon_facts WHERE world_id = ? AND status = 'conflict'", [worldId],
@@ -1443,10 +1458,24 @@ export class SqliteWorldStore implements WorldStore {
         throw new Error('请先逐条核对冲突事实及原文证据，不能只关闭审查提示。');
       }
     }
-    await this.db.execute(
-      'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
-      [resolution, new Date().toISOString(), worldId, issueId],
-    );
+    await this.db.transaction(async tx => {
+      const issue = await tx.queryOne<SqliteRow>(
+        'SELECT kind, severity, detail_json FROM review_issues WHERE world_id = ? AND issue_id = ?', [worldId, issueId],
+      );
+      const resolvedAt = new Date().toISOString();
+      if (remember && issue && issue.kind !== 'canon_conflict') {
+        await tx.execute(
+          `INSERT INTO review_resolution_policies (world_id, kind, severity, detail_json, resolution, resolved_at)
+           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(world_id, kind, severity, detail_json)
+           DO UPDATE SET resolution = excluded.resolution, resolved_at = excluded.resolved_at`,
+          [worldId, String(issue.kind), String(issue.severity), reviewDetailKey(String(issue.detail_json)), resolution, resolvedAt],
+        );
+      }
+      await tx.execute(
+        'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
+        [resolution, resolvedAt, worldId, issueId],
+      );
+    });
   }
 
   /** A deliberate reviewer decision; preserves both source rows and an audit. */

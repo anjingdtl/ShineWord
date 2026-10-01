@@ -5,7 +5,7 @@ import type { BuildTaskView } from './buildTasks';
 import type { CampaignListItem } from './runtime';
 import type { SqliteRow } from '../../src/application/ports/sqlite';
 
-export type ProjectStatus = 'building' | 'paused' | 'stopped' | 'review' | 'retry'
+export type ProjectStatus = 'building' | 'recovering' | 'paused' | 'stopped' | 'review' | 'retry'
   | 'failed' | 'waiting_network' | 'waiting_unlock' | 'playable' | 'completed' | 'preparing';
 
 export interface ProjectRunStatus {
@@ -17,6 +17,7 @@ export interface ProjectRunStatus {
   failed: number;
   dynamic: boolean;
   updatedAt: string;
+  lastErrorCode?: string | null;
 }
 
 export interface ProjectBuildSummary {
@@ -54,16 +55,21 @@ const RUN_PROJECT_STATUS: Record<BuildTaskView['status'], ProjectStatus> = {
   canceled: 'stopped', completed: 'completed',
 };
 const STATUS_PRIORITY: Record<ProjectStatus, number> = {
-  review: 70, failed: 70, retry: 70, building: 60,
+  review: 70, failed: 70, retry: 70, building: 60, recovering: 60,
   waiting_network: 50, waiting_unlock: 50, paused: 40, stopped: 30,
   completed: 20, playable: 10, preparing: 0,
 };
+
+function runProjectStatus(run: ProjectRunStatus): ProjectStatus {
+  return run.status === 'failed_retryable' && run.lastErrorCode === 'mapping_auto_retry'
+    ? 'recovering' : RUN_PROJECT_STATUS[run.status];
+}
 
 /** Canceled/superseded runs are history, not effective work or batch totals. */
 export function summarizeProjectBuild(runs: readonly ProjectRunStatus[]): ProjectBuildSummary {
   const effective = runs.filter(run => run.status !== 'canceled');
   const ordered = [...effective].sort((a, b) =>
-    STATUS_PRIORITY[RUN_PROJECT_STATUS[b.status]] - STATUS_PRIORITY[RUN_PROJECT_STATUS[a.status]]
+    STATUS_PRIORITY[runProjectStatus(b)] - STATUS_PRIORITY[runProjectStatus(a)]
     || b.updatedAt.localeCompare(a.updatedAt) || a.runId.localeCompare(b.runId));
   return {
     runsTotal: effective.length,
@@ -71,7 +77,7 @@ export function summarizeProjectBuild(runs: readonly ProjectRunStatus[]): Projec
     completedRuns: effective.filter(run => run.status === 'completed').length,
     doneBatches: effective.reduce((sum, run) => sum + run.done, 0),
     totalBatches: effective.reduce((sum, run) => sum + run.total, 0),
-    status: ordered[0] ? RUN_PROJECT_STATUS[ordered[0].status] : null,
+    status: ordered[0] ? runProjectStatus(ordered[0]) : null,
     latestUpdatedAt: effective.reduce((latest, run) => run.updatedAt > latest ? run.updatedAt : latest, ''),
     runs: ordered,
   };
@@ -89,7 +95,7 @@ export function deriveProjectStatus(
 }
 
 export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
-  building: '构建中', paused: '已暂停', stopped: '已停止 / 待继续',
+  building: '构建中', recovering: '自动恢复中', paused: '已暂停', stopped: '已停止 / 待继续',
   review: '待审核', retry: '待重试', failed: '构建失败',
   waiting_network: '等待网络', waiting_unlock: '等待解锁',
   playable: '可游玩', completed: '已完成', preparing: '构建准备中',
@@ -99,6 +105,7 @@ type BuildRow = SqliteRow & {
   world_id: string; run_id: string; status: BuildTaskView['status']; phase: BuildTaskView['phase'];
   units_done: number; units_total: number; units_failed: number; updated_at: string;
   pause_requested: number; cancel_requested: number; lease_owner: string | null; lease_expires_at: string | null;
+  last_error_code: string | null;
 };
 
 /** One scoped local query; no task enrichment, providers, source text or sessions. */
@@ -113,7 +120,7 @@ export async function listProjectBuildSummaries(worldIds: readonly string[]): Pr
     const rows = await db.queryAll<BuildRow>(
       `SELECT r.world_id, r.run_id, r.status, r.phase, r.units_done, r.units_total,
               r.units_failed, MAX(r.updated_at, COALESCE(MAX(u.updated_at), r.updated_at)) AS updated_at,
-              r.pause_requested, r.cancel_requested, r.lease_owner, r.lease_expires_at
+              r.pause_requested, r.cancel_requested, r.lease_owner, r.lease_expires_at, r.last_error_code
          FROM world_build_runs r
          LEFT JOIN world_build_units u ON u.run_id = r.run_id
         WHERE r.world_id IN (${ids.map(() => '?').join(',')}) AND r.status != 'canceled'
@@ -125,7 +132,8 @@ export async function listProjectBuildSummaries(worldIds: readonly string[]): Pr
         || liveLease;
       const runs = grouped.get(row.world_id) ?? [];
       runs.push({ runId: row.run_id, status: row.status, phase: row.phase,
-        done: row.units_done, total: row.units_total, failed: row.units_failed, dynamic, updatedAt: row.updated_at });
+        done: row.units_done, total: row.units_total, failed: row.units_failed, dynamic, updatedAt: row.updated_at,
+        lastErrorCode: row.last_error_code });
       grouped.set(row.world_id, runs);
     }
   }
