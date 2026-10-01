@@ -128,7 +128,7 @@ export function freezeRunConfig(
     maxOutputTokens,
     supportsPromptCache: budget.supportsPromptCache,
     supportsJson: profile.capabilities.supportsJson,
-    concurrency: Math.max(1, Math.min(4, profile.concurrency ?? 3)),
+    concurrency: Math.max(1, Math.min(4, profile.concurrency ?? 2)),
     tpm: profile.tpm,
     rpm: profile.rpm,
     bodyTargetRatio: options.bodyTargetRatio ?? 0.30,

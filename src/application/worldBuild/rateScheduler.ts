@@ -34,6 +34,10 @@ export interface RateSchedulerStats {
   retryAfterUntil: number | null;
   totalAcquired: number;
   totalWaitedMs: number;
+  /** Consecutive 429s observed since the last successful response. */
+  rateLimitStreak: number;
+  /** Current adaptive minimum spacing between acquire grants (ms). */
+  adaptiveSpacingMs: number;
 }
 
 interface WindowEntry {
@@ -47,6 +51,18 @@ export interface SchedulerLease {
 }
 
 const WINDOW_MS = 60_000;
+/**
+ * Adaptive rate-limit governance (2026-10-01): a 429 storm must back the
+ * WHOLE process off, not just the failing unit. Consecutive 429s grow both a
+ * penalty floor (no acquire at all) and a minimum spacing between grants
+ * (requests trickle out one by one once the floor clears); any successful
+ * response resets the streak and decays the spacing.
+ */
+const RATE_LIMIT_PENALTY_BASE_MS = 15_000;
+const RATE_LIMIT_PENALTY_MAX_MS = 180_000;
+const ADAPTIVE_SPACING_MAX_MS = 30_000;
+const ADAPTIVE_SPACING_STEP_MS = 2_000;
+const ADAPTIVE_SPACING_DECAY = 0.6;
 
 export class GlobalRateScheduler {
   private readonly rpm: number | undefined;
@@ -61,6 +77,9 @@ export class GlobalRateScheduler {
   private retryAfterUntil: number | null = null;
   private totalAcquired = 0;
   private totalWaitedMs = 0;
+  private rateLimitStreak = 0;
+  private adaptiveSpacingMs = 0;
+  private nextGrantAt: number | null = null;
 
   constructor(options: RateSchedulerOptions = {}) {
     this.rpm = options.rpm && options.rpm > 0 ? options.rpm : undefined;
@@ -81,14 +100,16 @@ export class GlobalRateScheduler {
       const now = this.now();
       this.prune(now);
       const floorOk = this.retryAfterUntil === null || now >= this.retryAfterUntil;
+      const spacingOk = this.nextGrantAt === null || now >= this.nextGrantAt;
       const rpmOk = this.rpm === undefined || this.window.length < this.rpm;
       const tpmOk = this.tpm === undefined
         || this.windowTokens() + Math.max(0, estimatedTokens) <= this.tpm;
       const concOk = this.inFlight < this.maxConcurrent;
-      if (floorOk && rpmOk && tpmOk && concOk) {
+      if (floorOk && spacingOk && rpmOk && tpmOk && concOk) {
         this.window.push({ t: now, tokens: Math.max(0, estimatedTokens) });
         this.inFlight += 1;
         this.totalAcquired += 1;
+        if (this.adaptiveSpacingMs > 0) this.nextGrantAt = now + this.adaptiveSpacingMs;
         let released = false;
         return {
           release: () => {
@@ -98,9 +119,12 @@ export class GlobalRateScheduler {
           },
         };
       }
-      const wait = Math.max(this.tickMs, this.retryAfterUntil !== null && this.retryAfterUntil > now
-        ? this.retryAfterUntil - now
-        : this.tickMs);
+      const candidates = [
+        this.retryAfterUntil !== null && this.retryAfterUntil > now ? this.retryAfterUntil - now : 0,
+        this.nextGrantAt !== null && this.nextGrantAt > now ? this.nextGrantAt - now : 0,
+        this.tickMs,
+      ];
+      const wait = Math.max(...candidates);
       this.totalWaitedMs += wait;
       await this.sleep(wait);
     }
@@ -126,6 +150,37 @@ export class GlobalRateScheduler {
     }
   }
 
+  /**
+   * Adaptive 429 governance: every observed rate limit grows a penalty floor
+   * (exponential, capped) and doubles the minimum spacing between grants, so
+   * waiting workers trickle out one at a time instead of stampeding the
+   * moment the floor clears. A provider Retry-After hint extends the floor
+   * when it asks for even longer than the streak penalty.
+   */
+  noteRateLimited(hint?: { retryAfterMs?: number | null }): void {
+    this.rateLimitStreak += 1;
+    const penaltyMs = Math.min(
+      RATE_LIMIT_PENALTY_BASE_MS * 2 ** Math.min(this.rateLimitStreak - 1, 16),
+      RATE_LIMIT_PENALTY_MAX_MS,
+    );
+    const hintedMs = typeof hint?.retryAfterMs === 'number' && hint.retryAfterMs > 0
+      ? Math.ceil(hint.retryAfterMs)
+      : 0;
+    this.noteRetryAfter(Math.max(penaltyMs, hintedMs));
+    this.adaptiveSpacingMs = Math.min(
+      this.adaptiveSpacingMs * 2 + ADAPTIVE_SPACING_STEP_MS,
+      ADAPTIVE_SPACING_MAX_MS,
+    );
+  }
+
+  /** Any successful response: reset the streak and slowly relax the spacing. */
+  noteSuccess(): void {
+    this.rateLimitStreak = 0;
+    this.adaptiveSpacingMs = this.adaptiveSpacingMs > ADAPTIVE_SPACING_STEP_MS
+      ? Math.floor(this.adaptiveSpacingMs * ADAPTIVE_SPACING_DECAY)
+      : 0;
+  }
+
   stats(): RateSchedulerStats {
     this.prune(this.now());
     return {
@@ -138,6 +193,8 @@ export class GlobalRateScheduler {
       retryAfterUntil: this.retryAfterUntil,
       totalAcquired: this.totalAcquired,
       totalWaitedMs: this.totalWaitedMs,
+      rateLimitStreak: this.rateLimitStreak,
+      adaptiveSpacingMs: this.adaptiveSpacingMs,
     };
   }
 

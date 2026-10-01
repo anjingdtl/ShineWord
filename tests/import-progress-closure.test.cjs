@@ -157,6 +157,10 @@ function loadSourceImport(adapter) {
     if (request === './worldImport') {
       return { bytesSha: { sha256BytesHex: sha.sha256BytesHex } };
     }
+    if (request === './llmScheduler') {
+      const { GlobalRateScheduler } = require('../dist/application/worldBuild/rateScheduler');
+      return { schedulerForProfile: () => new GlobalRateScheduler({ maxConcurrent: 2 }) };
+    }
     const distMatch = request.match(/^(?:\.\.\/)+src\/(.+)$/);
     if (distMatch) return require(path.join('../dist', distMatch[1]));
     return nativeRequire(request);

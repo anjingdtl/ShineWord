@@ -56,6 +56,12 @@ export interface LlmPhysicalRequestMetric {
    * and the actual rejection reason is lost for diagnosis.
    */
   providerErrorText?: string;
+  /**
+   * Provider Retry-After hint parsed from the response headers (ms), when the
+   * provider sent one with an HTTP error (typically 429). Feeds the global
+   * rate scheduler's backoff floor.
+   */
+  retryAfterMs?: number | null;
   timings?: {
     localQueueMs?: number | null;
     responseHeadersMs?: number | null;

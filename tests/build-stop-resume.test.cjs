@@ -123,6 +123,24 @@ function fixtureNames() {
   return [...names];
 }
 
+/**
+ * Shape-complete extractor mock: calibrated replans may re-plan queued units
+ * down to a SINGLE range, which the coordinator then runs through the chunk
+ * extractor path ({chunk, chunkText}) instead of the group path
+ * ({segments}). A mock that only understands one shape fails with
+ * "segments is not iterable" and masks the real state machine under test.
+ */
+function shapeCompleteExtractor(fixture, onCall) {
+  return {
+    version: fixture.version,
+    async extract(input) {
+      onCall?.(input);
+      if (input.segments) return fixtureGroupFacts(fixture, input.segments);
+      return fixture.extract(input);
+    },
+  };
+}
+
 /** Same group-shape adapter the U04 suite uses (per-chunk fixture extraction). */
 async function fixtureGroupFacts(fixture, segments) {
   const entities = new Map();
@@ -201,23 +219,19 @@ test('pause flow: requested -> honored -> resumed; completed units are never re-
 
     // Resume: only the REMAINING units run; the finished ones replay from the
     // world state (idempotent fast path) without any extractor call.
+    // Replanned replacement units count too, so the expectation is anchored
+    // to the FINAL unit total, not the pre-resume one.
     let extractCalls = 0;
-    const countingExtractor = {
-      version: fixture.version,
-      async extract({ segments }) {
-        extractCalls += 1;
-        return fixtureGroupFacts(fixture, segments);
-      },
-    };
+    const countingExtractor = shapeCompleteExtractor(fixture, () => { extractCalls += 1; });
     const resumed = await executeRun({
       sourceStore, runStore, worldStore, extractor: countingExtractor,
       groupExtractor: countingExtractor,
       sha256Hex: sha.sha256Hex, owner: 'ui', budget: BUDGET,
     }, 'run-p1');
     assert.equal(resumed.completed, true, 'resumed run finishes');
-    assert.equal(extractCalls, totalUnits - doneAfterPause,
-      'exactly the unfinished units hit the model again');
     const finalRun = await runStore.getRun('run-p1');
+    assert.equal(extractCalls, finalRun.unitsTotal - doneAfterPause,
+      'exactly the unfinished units hit the model again');
     assert.equal(finalRun.status, 'completed');
     assert.equal(finalRun.unitsDone, finalRun.unitsTotal);
   } finally {
@@ -277,24 +291,20 @@ test('stop flow: stopped_user keeps units, stays open, resumes and completes', a
     const resumable = await runStore.listResumableRuns();
     assert.ok(resumable.some(run => run.runId === 'run-s1'));
 
-    // Resume from stopped: finishes exactly the remaining units.
+    // Resume from stopped: finishes exactly the remaining units (anchored to
+    // the post-replan final total; see shapeCompleteExtractor).
     let extractCalls = 0;
-    const countingExtractor = {
-      version: fixture.version,
-      async extract({ segments }) {
-        extractCalls += 1;
-        return fixtureGroupFacts(fixture, segments);
-      },
-    };
+    const countingExtractor = shapeCompleteExtractor(fixture, () => { extractCalls += 1; });
     const resumed = await executeRun({
       sourceStore, runStore, worldStore, extractor: countingExtractor,
       groupExtractor: countingExtractor,
       sha256Hex: sha.sha256Hex, owner: 'ui', budget: BUDGET,
     }, 'run-s1');
     assert.equal(resumed.completed, true, 'stopped run resumes to completion');
-    assert.equal(extractCalls, afterStop.unitsTotal - doneAfterStop,
+    const finalStoppedRun = await runStore.getRun('run-s1');
+    assert.equal(extractCalls, finalStoppedRun.unitsTotal - doneAfterStop,
       'finished units replay from world state, never re-paid');
-    assert.equal((await runStore.getRun('run-s1')).status, 'completed');
+    assert.equal(finalStoppedRun.status, 'completed');
   } finally {
     db.close();
   }

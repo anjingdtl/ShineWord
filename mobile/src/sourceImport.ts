@@ -45,8 +45,8 @@ import {
 } from '../../src/application/worldBuild/stageOrchestrator';
 import { deriveNarrativeAnchorCp } from '../../src/application/worldBuild/stagePlan';
 import { freezeRunConfig, reviveRunConfig, providerProfileFromFrozen } from '../../src/application/worldBuild/runConfig';
-import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
+import { schedulerForProfile } from './llmScheduler';
 import { activatePendingStages } from '../../src/application/worldPackage/stageActivation';
 import { requestRunControl } from './buildServiceBridge';
 import {
@@ -751,14 +751,17 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
               AND NOT EXISTS (SELECT 1 FROM review_issues i
                 WHERE i.world_id = world_build_runs.world_id AND i.status = 'open' AND i.severity = 'blocking')
               AND NOT EXISTS (SELECT 1 FROM world_build_units u
-                WHERE u.run_id = world_build_runs.run_id AND u.status <> 'completed')))
+                WHERE u.run_id = world_build_runs.run_id
+                  AND u.status NOT IN ('completed', 'canceled'))))
             AND pause_requested = 0 AND cancel_requested = 0`,
         [now, now, runId],
       );
       // Retry-safe review recovery: units parked by transport/4xx failures go
       // back to the queue on an explicit resume. outcome_unknown stays parked
       // (request-ledger replay gate); canon conflicts keep their review gate
-      // through the run-level code filter below.
+      // through the run-level code filter below. Content-moderation rejects
+      // are deterministic for an identical body: they stay parked for human
+      // handling (or an in-run downsize split) and never re-enter the queue.
       await runtime.db.execute(
         `UPDATE world_build_units SET status = 'queued', retry_at = NULL, updated_at = ?
            WHERE run_id = ? AND status = 'needs_review'
@@ -771,7 +774,8 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
              AND (last_error_code IS NULL OR last_error_code IN
                ('network', 'unknown', 'input_too_large', 'config', 'mapping_failed', 'package_finalize_failed'))
              AND NOT EXISTS (SELECT 1 FROM world_build_units u
-               WHERE u.run_id = world_build_runs.run_id AND u.status = 'needs_review')`,
+                WHERE u.run_id = world_build_runs.run_id AND u.status = 'needs_review'
+                  AND u.error_code <> 'content_filter')`,
         [now, runId],
       );
     }
@@ -1044,12 +1048,10 @@ async function runExtractionInternal(
     frozenReserveTokensByRequestKind: runConfig?.reasoningReservePolicy.reserves,
   };
   // Global RPM/TPM scheduler (P1 §5): every billable request of this run -
-  // extraction, registry, timeline, mapping - shares one budget.
-  const scheduler = new GlobalRateScheduler({
-    rpm: effectiveProfile.rpm,
-    tpm: effectiveProfile.tpm,
-    maxConcurrent: Math.max(1, Math.min(4, effectiveProfile.concurrency ?? 3)),
-  });
+  // extraction, registry, timeline, mapping - shares one budget. The
+  // registry keeps the scheduler per endpoint+model so adaptive 429 pacing
+  // survives run boundaries and covers the play loop as well.
+  const scheduler = schedulerForProfile(effectiveProfile);
   const makeProvider = () => new RateScheduledProvider(
     new LedgeredProvider(
       new OpenAICompatibleProvider(effectiveProfile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000),
@@ -1068,7 +1070,7 @@ async function runExtractionInternal(
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       owner: `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
       signal,
-      concurrency: effectiveProfile.concurrency ?? 3,
+      concurrency: effectiveProfile.concurrency ?? 2,
       tpmTokensPerMinute: effectiveProfile.tpm,
       budget: runBudget,
       buildRegistry: async ({ segmentBody, worldId, contentHash, modelFingerprint }) => {

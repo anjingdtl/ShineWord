@@ -11,6 +11,7 @@ const { applySqliteMigrations } = require(path.join(root, 'dist/infra/sqlite/mig
 const { SqliteWorldStore } = require(path.join(root, 'dist/infra/sqlite/sqliteWorldStore'));
 const { SqliteBuildRunStore } = require(path.join(root, 'dist/infra/sqlite/sqliteBuildRunStore'));
 const { SqliteLlmLedgerStore } = require(path.join(root, 'dist/infra/sqlite/sqliteLlmLedgerStore'));
+const { GlobalRateScheduler } = require(path.join(root, 'dist/application/worldBuild/rateScheduler'));
 
 class NodeSqliteAdapter {
   constructor(db) { this.db = db; this.chain = Promise.resolve(); }
@@ -85,6 +86,10 @@ async function createMobileHarness({ bytes, coordinator, transport, secrets, ser
   const defaultTransport = { async post() { throw new Error('unexpected network request'); } };
   const mocks = {
     './database': { getDatabaseRuntime: async () => runtime },
+    './llmScheduler': {
+      // Fresh unconfigured scheduler per run, mirroring one build execution.
+      schedulerForProfile: () => new GlobalRateScheduler({ maxConcurrent: 2 }),
+    },
     './nativeCrypto': { nativeSha256: sha, nativeSha256BytesHex: sha.sha256BytesHex },
     './worldImport': { bytesSha: sha },
     './secureKeyStore': { KeychainSecretStore: class { async get(ref) { return secrets ? secrets.get(ref) : 'test-memory-only'; } } },

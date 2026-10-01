@@ -171,6 +171,23 @@ function providerErrorText(message: string | undefined, apiKey: string): string 
     .slice(0, PROVIDER_ERROR_TEXT_MAX_CHARS);
 }
 
+/**
+ * Parses a Retry-After response header (seconds or HTTP-date) into ms.
+ * Returns null when absent or unparseable; never throws.
+ */
+export function parseRetryAfterMs(
+  headers: Record<string, string> | undefined,
+  nowMs: number = Date.now(),
+): number | null {
+  const raw = headers?.['retry-after'];
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1_000;
+  const asDate = Date.parse(trimmed);
+  if (!Number.isNaN(asDate)) return Math.max(0, asDate - nowMs);
+  return null;
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   constructor(
     private readonly profile: ApiProfile,
@@ -289,6 +306,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
         throw new LlmRequestFailure(`LLM provider returned non-JSON HTTP body (status ${response.status}).`, requestMetrics);
       }
       if (response.status < 200 || response.status >= 300) {
+        const retryAfterMs = parseRetryAfterMs(response.headers);
         observe({
           attempt: physicalAttempt,
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
@@ -297,6 +315,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           errorCategory: 'provider_http',
           timings: response.timings,
           providerErrorText: providerErrorText(parsed.error?.message, apiKey),
+          retryAfterMs,
         });
         if (isUnsupportedReasoningParameter(response.status, parsed.error?.message)) {
           throw new LlmRequestFailure(

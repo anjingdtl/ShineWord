@@ -288,3 +288,68 @@ test('provider 400 error text is captured, sanitized and surfaced on the metric'
     },
   );
 });
+
+test('content-moderation 400 splits the batch in half; the clean half completes, no tail shrink', async () => {
+  const db = setupDb();
+  try {
+    const { store: sourceStore, result } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-mod');
+    const adapter = new NodeSqliteAdapter(db);
+    const runStore = new SqliteBuildRunStore(adapter);
+    const worldStore = new SqliteWorldStore(adapter);
+    const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
+    await createExtractionRun(
+      { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
+      {
+        runId: 'run-mod', worldId: 'w-mod', sourceId: 'src-mod',
+        modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version,
+        mode: 'group', budget: BUDGET,
+      },
+    );
+    const before = await runStore.listUnits('run-mod');
+    const target = before.find(unit => parseRanges(unit).length > 2) ?? before[0];
+
+    let moderationFired = false;
+    const groupExtractor = {
+      version: 'llm-group-extractor-1',
+      async extract({ segments, unitId }) {
+        // The ORIGINAL target batch trips the filter once; every split child
+        // and every other batch extracts cleanly.
+        if (!moderationFired && unitId === target.unitId) {
+          moderationFired = true;
+          const text = '系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语。';
+          throw new LlmRequestFailure(`模型服务请求失败（HTTP 400，unknown）：${text}`, [
+            { attempt: 1, durationMs: 900, httpStatus: 400, outcome: 'http_error',
+              errorCategory: 'provider_http', providerErrorText: text },
+          ]);
+        }
+        return fixtureGroupFacts(fixture, segments);
+      },
+    };
+    const done = await executeRun({
+      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor,
+      sha256Hex: sha.sha256Hex, owner: 'mod', budget: BUDGET,
+    }, 'run-mod');
+
+    assert.equal(moderationFired, true, 'the moderation rejection fired');
+    assert.equal(done.completed, true, 'run completes after the split');
+    const units = await runStore.listUnits('run-mod');
+    const children = units.filter(unit => unit.parentUnitId === target.unitId);
+    assert.equal(children.length, 2, 'the flagged batch split into exactly two halves');
+    assert.ok(children.every(unit => unit.status === 'completed' || unit.status === 'canceled'),
+      'both halves done (or superseded by a later calibrated replan)');
+    assert.equal(units.find(unit => unit.unitId === target.unitId)?.status, 'canceled',
+      'the flagged parent is canceled, never retried');
+    assert.ok(!units.some(unit => unit.status === 'needs_review'),
+      'no unit needed human review after the downsize');
+    const run = await runStore.getRun('run-mod');
+    const planState = JSON.parse(run.planStateJson);
+    assert.ok((planState.sourceRatio ?? 0.3) >= 0.12,
+      'a moderation reject must NOT shrink the queued tail source ratio');
+    for (const chunk of result.chunks) {
+      const job = await worldStore.getJob('w-mod', `job-extract-${chunk.chunkId}`);
+      assert.equal(job?.status, 'done', `coverage preserved for ${chunk.chunkId}`);
+    }
+  } finally {
+    db.close();
+  }
+});

@@ -312,23 +312,40 @@ test('T6 reasoning_only retries once at the same tier with a bounded reserve boo
       },
     };
 
+    // Calibrated replans may re-plan queued units down to a single range,
+    // which the coordinator then runs through the CHUNK extractor path;
+    // count those too, or the "one extra call" expectation undercounts.
+    const chunkCalls = [];
+    const countingChunkExtractor = {
+      version: fixture.version,
+      async extract(input) {
+        chunkCalls.push(input);
+        return fixture.extract(input);
+      },
+    };
+
     const done = await executeRun({
-      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor,
+      sourceStore, runStore, worldStore, extractor: countingChunkExtractor, groupExtractor,
       sha256Hex: sha.sha256Hex, owner: 't6',
       budget: { ...WINDOWED_BUDGET, reasoningReserveTokens: 2_048 },
     }, 'run-t6');
 
     assert.equal(reasoningOnlyFired, true, 'the mock fired the reasoning_only path');
     // Exactly ONE retry ran with the same tier and 1.5 reserve multiplier;
-    // every other call used the initial frozen reserve. One extra call total.
-    const planned = (await runStore.listUnits('run-t6')).filter(u => u.parentUnitId === null).length;
-    assert.equal(calls.length, planned + 1, 'exactly one extra physical call for the bump retry');
+    // every other call used the initial frozen reserve. One extra call total
+    // (anchored to unitsDone: replan replacements change the unit roster).
+    assert.equal(calls.length + chunkCalls.length, done.unitsDone + 1,
+      'exactly one extra physical call for the bump retry');
     assert.equal(calls.filter(value => value === 1.5).length, 1, 'one same-tier reserve retry');
     assert.equal(done.completed, true, 'the bumped retry completed the unit');
     const units = await runStore.listUnits('run-t6');
     assert.equal(units.filter(unit => unit.parentUnitId !== null).length, 0,
       'no split happened for a reasoning_only failure');
-    for (const unit of units) assert.equal(unit.status, 'completed');
+    // 'canceled' rows are original units replaced by a calibrated replan.
+    for (const unit of units) {
+      assert.ok(unit.status === 'completed' || unit.status === 'canceled',
+        `unexpected unit status ${unit.status}`);
+    }
   } finally {
     db.close();
   }

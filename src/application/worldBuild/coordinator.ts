@@ -66,10 +66,24 @@ export { PLAN_VERSION_ANALYSIS };
 export const RESIDENT_WINDOW_RATIO = 0.85;
 export const RESIDENT_DEGRADED_TOO_LARGE = 'resident_degraded_book_too_large';
 export const RESIDENT_DEGRADED_NO_CACHE = 'resident_degraded_no_prompt_cache';
-export const DEFAULT_WORKER_CONCURRENCY = 3;
+/**
+ * Default worker concurrency (2026-10-01: 3 -> 2). Rate-limited accounts
+ * 429-storm far more often at 3 wide; the global scheduler's adaptive
+ * spacing serializes further under pressure anyway.
+ */
+export const DEFAULT_WORKER_CONCURRENCY = 2;
 export const MAX_WORKER_CONCURRENCY = 4;
 /** Conservative TPM scheduling share (plan §6); cached traffic counts fully. */
 export const TPM_SCHEDULING_RATIO = 0.7;
+/**
+ * Exponential unit backoff for provider rate limiting: the account itself
+ * needs recovery time, and the global scheduler floor stacks on top of this.
+ * 15s -> 30s -> 60s -> 120s -> 240s (cap), plus jitter so sibling workers
+ * that failed together do not retry in lockstep.
+ */
+const RATE_LIMIT_BACKOFF_BASE_MS = 15_000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 240_000;
+const RATE_LIMIT_BACKOFF_JITTER_MS = 3_000;
 /** Legacy reserve helper retained for imported run records and compatibility tests. */
 const REASONING_RESERVE_LADDER = [2_048, 4_096, 8_192, 16_384, 32_768] as const;
 
@@ -1135,14 +1149,16 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       const is4xxRejection = (lastMetric?.httpStatus ?? 0) >= 400 && (lastMetric?.httpStatus ?? 0) < 500;
       const requiresReview = classification === 'config' || classification === 'outcome_unknown'
         || (classification === 'unknown' && is4xxRejection && unit.attempt >= 2)
-        || (classification === 'input_too_large' && ranges.length === 1);
+        || (classification === 'input_too_large' && ranges.length === 1)
+        || (classification === 'content_filter' && ranges.length === 1);
       const persistedMessage = classification === 'outcome_unknown'
         ? '上次模型请求的扣费结果未知。请先在请求账本确认，避免重复计费。'
         : error instanceof LlmRequestFailure
         ? safeProviderFailureText(error, classification)
         : message.slice(0, 500);
       const needsDownsize = classification === 'truncation' || classification === 'budget_infeasible'
-        || classification === 'input_too_large' || isTimeoutFailure;
+        || classification === 'input_too_large' || classification === 'content_filter'
+        || isTimeoutFailure;
       if (needsDownsize && ranges.length > 1) {
         // Transactional split (plan §7.2, generalized by §5 calibration and the
         // timeout/4xx downsize rules): the oversized group is replaced by
@@ -1153,9 +1169,13 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const chunk = chunksByRange.get(range.chunkId);
           return sum + (chunk ? Math.ceil(chunk.charCount) : 0);
         }, 0);
-        const parts = analysisPlanned
-          ? densitySplitPartCount(failedInputTokens, densityCalibrator.currentDensity, contentBudgetForSplits())
-          : splitPartCount(ranges.length, calibrator.currentEstimate, contentBudgetForSplits());
+        // Content moderation is binary per content, not per size: halve so the
+        // clean half proceeds and only the tripped chapters keep splitting.
+        const parts = classification === 'content_filter'
+          ? 2
+          : analysisPlanned
+            ? densitySplitPartCount(failedInputTokens, densityCalibrator.currentDensity, contentBudgetForSplits())
+            : splitPartCount(ranges.length, calibrator.currentEstimate, contentBudgetForSplits());
         const childDefs = splitRangesEvenly(ranges, Math.max(2, parts));
         const children = [];
         for (let index = 0; index < childDefs.length; index += 1) {
@@ -1190,8 +1210,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         // ambitious for this content AND provider - shrink the ratio for every
         // unit nobody has claimed yet. The split children above already cover
         // this unit; the replan covers the TAIL (completion, not just the
-        // first half at the old size).
-        if (analysisPlanned) {
+        // first half at the old size). Content-moderation rejections say
+        // nothing about batch SIZE - never shrink the tail for them.
+        if (analysisPlanned && classification !== 'content_filter') {
           truncationsSinceCheckpoint += 1;
           const currentRatio = getSourceRatio();
           const shrunk = nextSourceRatioDown(currentRatio);
@@ -1216,7 +1237,16 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       // claimUnit increments the persisted attempt after `unit` was read;
       // account for that in the first backoff too, or a failed first request
       // is immediately sent a second physical time before the loop yields.
-      const backoffMs = requiresReview ? 0 : 5_000 * Math.min(unit.attempt + 1, 6);
+      // Rate limiting backs off exponentially (the account needs recovery
+      // time and the global scheduler floor stacks on top); every other
+      // retryable class keeps the short linear ladder.
+      const backoffMs = requiresReview ? 0
+        : classification === 'rate_limit'
+          ? Math.min(
+            RATE_LIMIT_BACKOFF_BASE_MS * 2 ** Math.min(unit.attempt, 4),
+            RATE_LIMIT_BACKOFF_MAX_MS,
+          ) + Math.floor(Math.random() * RATE_LIMIT_BACKOFF_JITTER_MS)
+          : 5_000 * Math.min(unit.attempt + 1, 6);
       await deps.runStore.completeUnit({
         unitId: unit.unitId,
         fencingToken,
@@ -1416,7 +1446,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
 }
 
 type ErrorClass = 'network' | 'rate_limit' | 'config' | 'outcome_unknown' | 'truncation'
-  | 'budget_infeasible' | 'input_too_large' | 'unknown';
+  | 'budget_infeasible' | 'input_too_large' | 'content_filter' | 'unknown';
 
 /**
  * Provider rejection signatures that mean "the REQUEST BODY as a whole is too
@@ -1428,6 +1458,19 @@ function isInputTooLargeMessage(message: string): boolean {
   return /maximum context length|context length exceeded|context window exceeded|prompt too long|input too long|too many (input )?tokens|request too large|payload too large/i
     .test(message)
     || /上下文.{0,8}(超|过长|超出)|(输入|提示词?|请求体?).{0,6}(过长|超限|超出)|token.{0,4}(数)?超过/i
+      .test(message);
+}
+
+/**
+ * Provider content-moderation rejections (GLM: "不安全或敏感内容"; OpenAI
+ * style: content_filter). Deterministic for an identical body, but a SMALLER
+ * batch often passes because only a few chapters trip the filter: split
+ * once before parking, exactly like an input-too-large downsize.
+ */
+function isContentModerationMessage(message: string): boolean {
+  return /content[_ ]?filter|safety|moderation|sensitive|inappropriate/i
+    .test(message)
+    || /敏感|不安全|违规|安全策略|内容审核/i
       .test(message);
 }
 
@@ -1583,6 +1626,8 @@ function classifyExtractionError(message: string, error?: unknown): ErrorClass {
     if ((metric?.httpStatus ?? 0) >= 500 && (metric?.httpStatus ?? 0) <= 599) return 'network';
     if ((metric?.httpStatus ?? 0) >= 400 && (metric?.httpStatus ?? 0) < 500
       && isInputTooLargeMessage(message)) return 'input_too_large';
+    if ((metric?.httpStatus ?? 0) >= 400 && (metric?.httpStatus ?? 0) < 500
+      && isContentModerationMessage(message)) return 'content_filter';
     if (metric?.errorCategory === 'timeout' || metric?.errorCategory === 'network') return 'network';
   }
   const lower = message.toLowerCase();

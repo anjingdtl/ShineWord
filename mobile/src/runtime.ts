@@ -2,7 +2,9 @@ import { RejectionSamplingRandomSource } from '../../src/domain/rules/random';
 // Static imports: runtime module groups must ship in the initial bundle, not
 // lazy-fetch at play time (lazy group requests can fail on device networks).
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
-import type { ApiProfile } from '../../src/application/llm/types';
+import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
+import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
+import { schedulerForProfile } from './llmScheduler';
 import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
 import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
@@ -50,7 +52,7 @@ export interface CampaignListItem {
  */
 export async function createSession(
   profile: ApiProfile,
-  provider: OpenAICompatibleProvider,
+  provider: LlmProvider,
 ): Promise<CampaignSession> {
   const runtime = await getDatabaseRuntime();
   return new CampaignSession(
@@ -78,8 +80,14 @@ export async function getInteractionOperationJournal(): Promise<SqliteInteractio
   return new SqliteInteractionOperationJournal(runtime.db);
 }
 
-export async function buildProvider(profile: ApiProfile): Promise<OpenAICompatibleProvider> {
-  return new OpenAICompatibleProvider(profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000);
+export async function buildProvider(profile: ApiProfile): Promise<LlmProvider> {
+  // Rate governance (2026-10-01): game turns ride the same per-endpoint
+  // scheduler as world build, so 429 penalties learned during a build keep
+  // pacing the play loop and vice versa.
+  return new RateScheduledProvider(
+    new OpenAICompatibleProvider(profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000),
+    schedulerForProfile(profile),
+  );
 }
 
 export async function listCampaigns(): Promise<CampaignListItem[]> {

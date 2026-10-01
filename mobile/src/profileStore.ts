@@ -74,7 +74,7 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
       contentOutputTokens: 16_384,
       reasoningTier: 'low',
       reasoningDialect: 'deepseek',
-      concurrency: 3,
+      concurrency: 2,
     },
   },
   {
