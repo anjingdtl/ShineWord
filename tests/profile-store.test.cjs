@@ -161,3 +161,47 @@ test('save rejects a legacy or unknown tier instead of persisting it', async () 
     reasoningTier: 'off',
   }), /supported reasoning tier/);
 });
+
+const configuredInput = {
+  endpoint: 'https://example.invalid/v1', model: 'glm-5.3-flash',
+  presetId: 'glm-5.3-flash', reasoningTier: 'low',
+};
+
+test('first-run missing key does not publish a profile that bypasses setup after restart', async () => {
+  const storage = memoryStorage();
+  const { saveConfiguredApiProfile, loadApiProfile } = loadProfileStore(storage);
+  await assert.rejects(saveConfiguredApiProfile(configuredInput, '', {
+    async get() { return null; }, async set() { assert.fail('must not write a blank key'); },
+  }), /请输入 API Key/);
+  assert.equal(await loadApiProfile(), null);
+});
+
+test('Keychain failure preserves the previous profile and validation does not rotate its key', async () => {
+  const storage = memoryStorage();
+  const { saveApiProfile, saveConfiguredApiProfile, loadApiProfile } = loadProfileStore(storage);
+  const previous = await saveApiProfile({ ...configuredInput, endpoint: 'https://old.invalid/v1' });
+  await assert.rejects(saveConfiguredApiProfile(configuredInput, 'private-key', {
+    async set() { throw new Error('Keychain unavailable'); },
+  }), /Keychain unavailable/);
+  assert.deepEqual(await loadApiProfile(), previous);
+  await assert.rejects(saveConfiguredApiProfile({ ...configuredInput, endpoint: '' }, 'private-key', {
+    async set() { assert.fail('invalid profile must not rotate the credential'); },
+  }), /Endpoint and model/);
+  assert.deepEqual(await loadApiProfile(), previous);
+});
+
+test('configured save writes only keyRef to ordinary storage and allows saved key reuse', async () => {
+  const storage = memoryStorage();
+  const { saveConfiguredApiProfile } = loadProfileStore(storage);
+  let secret = null;
+  const secrets = {
+    async set(ref, value) { assert.equal(ref, 'llm.default'); secret = value; },
+    async get(ref) { assert.equal(ref, 'llm.default'); return secret; },
+  };
+  await saveConfiguredApiProfile(configuredInput, ' private-key ', secrets);
+  assert.equal(secret, 'private-key');
+  assert.equal(storage.data.get('shineword.api.profile.v1').includes('private-key'), false);
+  const profile = await saveConfiguredApiProfile({ ...configuredInput, reasoningTier: 'max' }, '', secrets);
+  assert.equal(profile.reasoningTier, 'max');
+  assert.equal(profile.keyRef, 'llm.default');
+});

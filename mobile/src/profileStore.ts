@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { ApiProfile, ReasoningDialect, ReasoningTier } from '../../src/application/llm/types';
+import type { ApiProfile, ReasoningDialect, ReasoningTier, SecretStore } from '../../src/application/llm/types';
 import { normalizeStoredApiProfile } from '../../src/application/llm/profileMigration';
 
 const PROFILE_KEY = 'shineword.api.profile.v1';
@@ -73,7 +73,7 @@ export async function loadApiProfile(): Promise<ApiProfile | null> {
   return profile;
 }
 
-export async function saveApiProfile(input: {
+export interface SaveApiProfileInput {
   endpoint: string;
   model: string;
   reasoningTier: ReasoningTier;
@@ -82,7 +82,9 @@ export async function saveApiProfile(input: {
   contextWindowTokens?: number;
   maxOutputTokens?: number;
   reasoningDialect?: ReasoningDialect;
-}): Promise<ApiProfile> {
+}
+
+function buildApiProfile(input: SaveApiProfileInput): ApiProfile {
   const endpoint = input.endpoint.trim();
   const model = input.model.trim();
   if (!endpoint || !model) throw new Error('Endpoint and model are required.');
@@ -124,6 +126,28 @@ export async function saveApiProfile(input: {
     reasoningTier: input.reasoningTier,
     ...(input.reasoningDialect ? { reasoningDialect: input.reasoningDialect } : {}),
   };
+  return profile;
+}
+
+export async function saveApiProfile(input: SaveApiProfileInput): Promise<ApiProfile> {
+  const profile = buildApiProfile(input);
+  await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  return profile;
+}
+
+/** Publish the profile only after its Keychain credential is available. */
+export async function saveConfiguredApiProfile(
+  input: SaveApiProfileInput,
+  apiKey: string,
+  secrets: SecretStore,
+): Promise<ApiProfile> {
+  const profile = buildApiProfile(input);
+  const trimmedKey = apiKey.trim();
+  if (trimmedKey) {
+    await secrets.set(profile.keyRef, trimmedKey);
+  } else if (!await secrets.get(profile.keyRef)) {
+    throw new Error('请输入 API Key（将只写入系统 Keychain）。');
+  }
   await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
   return profile;
 }

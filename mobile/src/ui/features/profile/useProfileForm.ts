@@ -13,7 +13,7 @@
  * endpoint/key/model/reasoning compatibility before saving.
  */
 import { useState } from 'react';
-import { MODEL_PRESETS, saveApiProfile } from '../../../profileStore';
+import { MODEL_PRESETS, saveConfiguredApiProfile } from '../../../profileStore';
 import { normalizeReasoningTier, type ReasoningTier } from '../../../../../src/application/llm/types';
 import { KeychainSecretStore } from '../../../secureKeyStore';
 import { FetchHttpTransport } from '../../../fetchTransport';
@@ -118,7 +118,7 @@ export function useProfileForm(): ProfileFormState {
     setNotice(null);
     void (async () => {
       try {
-        const saved = await saveApiProfile({
+        const saved = await saveConfiguredApiProfile({
           endpoint,
           model,
           presetId: presetId ?? undefined,
@@ -126,16 +126,8 @@ export function useProfileForm(): ProfileFormState {
           contextWindowTokens: parseOptionalPositiveInteger(contextWindowTokens, '上下文窗口'),
           maxOutputTokens: parseOptionalPositiveInteger(maxOutputTokens, '最大输出 Token'),
           reasoningDialect: reasoningParameterSupport === 'unsupported' ? 'unsupported' : undefined,
-        });
-        const trimmedKey = apiKey.trim();
-        const keyStore = new KeychainSecretStore();
-        if (trimmedKey) {
-          await keyStore.set(saved.keyRef, trimmedKey);
-          setApiKey('');
-        } else {
-          const existing = await keyStore.get(saved.keyRef);
-          if (!existing) throw new Error('请输入 API Key（将只写入系统 Keychain）。');
-        }
+        }, apiKey, new KeychainSecretStore());
+        setApiKey('');
         setProfile(saved);
         setNotice('已保存。密钥只存放在系统 Keychain 中。');
         onSaved();
