@@ -7,7 +7,7 @@
 | M0 | 通过（已修复） | 577/577 核心回归，移动类型与版本门禁通过；独立 debug APK 安装、冷启动与重启通过，v2 签名有效 |
 | M1 | 通过（已修复） | 设备 GLM 低/高/最高三档真实连接成功；配置、Keychain 密钥重启复用成功；修复无密钥保存失败却发布配置 |
 | M2 | 通过（已修复） | 完整小说导入、第一阶段发布、暂停/重启续建和同文件去重通过；修复冲突审查与续建死路 |
-| M3 | 待执行 | |
+| M3 | 通过（已修复） | 原创两步开局、原著四步开局、首回合生成、重启继续通过；修复游玩页返回入口 |
 | M4 | 待执行 | |
 | M5 | 待执行 | |
 | M6 | 待执行 | |
@@ -45,3 +45,13 @@
 - 同一完整 TXT 再导入后自动回到原项目；仍为 1 世界 / 1 active 源 / 1 run / 5 请求，未重复计费。导入提示显示小说名称。
 - 核心回归 582/582、移动类型检查通过；新增审查/续建回归验证证据保存、不能空豁免、无证据不能确认、待核实不映射、跨世界/重复决定拒绝与保留已完成批次。
 - 原始证据：`m2-review-blocked.xml`、`m2-reviewed-detail.xml`、`m2-second-conflict.xml`、`m2-three-books.xml`、`m2-mapping-status.xml`、`m2-reimport-final.xml`；截图：[M2_REVIEW.png](M2_REVIEW.png)、[M2_PUBLISHED.png](M2_PUBLISHED.png)。
+
+## M3 两种身份开局与重入
+
+- 原创两步流程：空姓名时下一步禁用；填写 Shiheng、短描述与目标，确认推荐属性/技能、原著事件锚点与定安伯府地点后成功创建。无可招募同伴时展示独自开局空态。
+- 原著四步流程：世界起点 → 原著角色（定安伯）→ 同伴 → 确认，通过证据派生属性/技能，世界包 r1 与规则 0.2.0 锁定。两个独立战役各完成首个真实观察回合，Planner 与 Narrator 均成功，状态版本各为 v1。
+- 开局初始页明确要求第一个行动；首回合才生成故事。原创首回合 Planner 3,522ms、Narrator 3,194ms，角色卡显示气血/体力 10/10、六属性和初始技能。
+- 重装保留数据并强停重启，在战役列表看到两场战役，继续原创战役时保留原叙事与 v1，无额外模型请求。
+- 缺陷：从项目开局后「‹ 战役」实际返回项目页。修复为显式返回战役列表，设备复测入口与标签一致；移动类型检查和独立 APK 构建通过。
+- 连续游玩模块继续核查已发现的夜间时钟与清晨叙事不一致；不将 M3 首回合证明扩大为全部叙事质量保证。
+- 证据：`m3-quick-identity.xml`、`m3-quick-confirm.xml`、`m3-advanced-world.xml`、`m3-advanced-companions.xml`、`m3-advanced-confirm.xml`、`m3-canon-first-turn.xml`、`m3-restart-campaigns.xml`、`m3-original-reentered.xml`、`m3-back-fixed.xml`；截图：[M3_FIRST_TURN.png](M3_FIRST_TURN.png)、[M3_CANON_START.png](M3_CANON_START.png)。
