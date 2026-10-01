@@ -1121,16 +1121,33 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       if (deps.signal?.aborted) return 'paused';
       const message = error instanceof Error ? error.message : String(error);
       const classification = classifyExtractionError(message, error);
-      const requiresReview = classification === 'config' || classification === 'outcome_unknown';
+      const lastMetric = error instanceof LlmRequestFailure
+        ? error.requestMetrics[error.requestMetrics.length - 1]
+        : undefined;
+      // A 300s-class timeout already burned a full request cycle; retrying the
+      // SAME oversized body just burns another one. Downsizing on the first
+      // timeout (halving + tail-ratio shrink) converges to a size the provider
+      // can answer inside the transport cap - retrying never does.
+      const isTimeoutFailure = classification === 'network' && lastMetric?.errorCategory === 'timeout';
+      // A 4xx rejection is deterministic for an identical body: three strikes
+      // on one unit means park it for review WITH the provider's own text.
+      const is4xxRejection = (lastMetric?.httpStatus ?? 0) >= 400 && (lastMetric?.httpStatus ?? 0) < 500;
+      const requiresReview = classification === 'config' || classification === 'outcome_unknown'
+        || (classification === 'unknown' && is4xxRejection && unit.attempt >= 2)
+        || (classification === 'input_too_large' && ranges.length === 1);
       const persistedMessage = classification === 'outcome_unknown'
         ? '上次模型请求的扣费结果未知。请先在请求账本确认，避免重复计费。'
         : error instanceof LlmRequestFailure
         ? safeProviderFailureText(error, classification)
         : message.slice(0, 500);
-      if ((classification === 'truncation' || classification === 'budget_infeasible') && ranges.length > 1) {
-        // Transactional split (plan §7.2, generalized by §5 calibration): the
-        // oversized group is replaced by calibrated, output-budget-fitting
-        // child units; the parent is canceled and never counts.
+      const needsDownsize = classification === 'truncation' || classification === 'budget_infeasible'
+        || classification === 'input_too_large' || isTimeoutFailure;
+      if (needsDownsize && ranges.length > 1) {
+        // Transactional split (plan §7.2, generalized by §5 calibration and the
+        // timeout/4xx downsize rules): the oversized group is replaced by
+        // calibrated, budget-fitting child units; the parent is canceled and
+        // never counts. Halving per failure converges: whatever the provider's
+        // real window/speed, some split size completes within the transport cap.
         const failedInputTokens = ranges.reduce((sum, range) => {
           const chunk = chunksByRange.get(range.chunkId);
           return sum + (chunk ? Math.ceil(chunk.charCount) : 0);
@@ -1167,11 +1184,12 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           unitId: unit.unitId, fencingToken, children, now: now(),
         });
         if (!replaced) { lostLease = true; return 'lost_lease'; }
-        // Ladder shrink (unified P1 §7 + planner-v2 §6): a truncation proves
-        // the current source ratio / density prediction was too ambitious for
-        // this content - shrink the ratio for every unit nobody has claimed
-        // yet. The split children above already cover this unit; the replan
-        // covers the TAIL (completion, not just the first half at the old size).
+        // Ladder shrink (unified P1 §7 + planner-v2 §6): a downsize-triggering
+        // failure proves the current source ratio / density prediction was too
+        // ambitious for this content AND provider - shrink the ratio for every
+        // unit nobody has claimed yet. The split children above already cover
+        // this unit; the replan covers the TAIL (completion, not just the
+        // first half at the old size).
         if (analysisPlanned) {
           truncationsSinceCheckpoint += 1;
           const currentRatio = getSourceRatio();
@@ -1389,7 +1407,21 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   }
 }
 
-type ErrorClass = 'network' | 'rate_limit' | 'config' | 'outcome_unknown' | 'truncation' | 'budget_infeasible' | 'unknown';
+type ErrorClass = 'network' | 'rate_limit' | 'config' | 'outcome_unknown' | 'truncation'
+  | 'budget_infeasible' | 'input_too_large' | 'unknown';
+
+/**
+ * Provider rejection signatures that mean "the REQUEST BODY as a whole is too
+ * large for this endpoint" (a 400/413 whose real window is smaller than the
+ * declared one, gateway input caps...). Such a unit must downsize, not retry:
+ * an identical body is deterministically rejected again.
+ */
+function isInputTooLargeMessage(message: string): boolean {
+  return /maximum context length|context length exceeded|context window exceeded|prompt too long|input too long|too many (input )?tokens|request too large|payload too large/i
+    .test(message)
+    || /上下文.{0,8}(超|过长|超出)|(输入|提示词?|请求体?).{0,6}(过长|超限|超出)|token.{0,4}(数)?超过/i
+      .test(message);
+}
 
 /** World-side done check (C1 guards) for one chunk. */
 async function isChunkDone(
@@ -1541,6 +1573,8 @@ function classifyExtractionError(message: string, error?: unknown): ErrorClass {
     if (metric?.httpStatus === 401 || metric?.httpStatus === 403) return 'config';
     if (metric?.httpStatus === 429) return 'rate_limit';
     if ((metric?.httpStatus ?? 0) >= 500 && (metric?.httpStatus ?? 0) <= 599) return 'network';
+    if ((metric?.httpStatus ?? 0) >= 400 && (metric?.httpStatus ?? 0) < 500
+      && isInputTooLargeMessage(message)) return 'input_too_large';
     if (metric?.errorCategory === 'timeout' || metric?.errorCategory === 'network') return 'network';
   }
   const lower = message.toLowerCase();
@@ -1561,7 +1595,8 @@ function classifyExtractionError(message: string, error?: unknown): ErrorClass {
 function safeProviderFailureText(error: LlmRequestFailure, classification: ErrorClass): string {
   const metric = error.requestMetrics[error.requestMetrics.length - 1];
   if (metric?.httpStatus !== null && metric?.httpStatus !== undefined) {
-    return `模型服务请求失败（HTTP ${metric.httpStatus}，${classification}）。`;
+    const detail = metric.providerErrorText ? `：${metric.providerErrorText}` : '';
+    return `模型服务请求失败（HTTP ${metric.httpStatus}，${classification}）${detail}。`;
   }
   if (metric?.errorCategory === 'timeout') {
     return `模型请求超时（${metric.durationMs}ms）。`;

@@ -144,9 +144,12 @@ export function usePlayController(): PlayController {
 
   // Between-turn stage maintenance (unified P3): every committed turn ends at
   // a safe boundary, so pending stage packages activate here and the next
-  // stage's proximity/dependency triggers evaluate. Stage work runs in the
-  // dataSync service; play never waits on it (missing content shows as
-  // "资料准备中", never as invented narrative).
+  // stage's proximity/dependency triggers evaluate. The anchor is derived
+  // from the campaign's locked opening plus the player's CURRENT scene
+  // location (deriveNarrativeAnchorCp) - travelling into later-book geography
+  // moves it; long stays never sweep stages. Stage work runs in the dataSync
+  // service; play never waits on it (missing content shows as "资料准备中",
+  // never as invented narrative).
   useEffect(() => {
     const worldId = projection?.worldId;
     if (!worldId) return;
@@ -154,17 +157,18 @@ export function usePlayController(): PlayController {
     (async () => {
       try {
         await tryActivateStagePackages(worldId);
-        // Proximity anchors and dependency entities are supplied by explicit
-        // narrative moments (the harness/test actions pass them); the passive
-        // hook evaluates without an anchor so long stays never sweep stages.
-        await checkStageTriggers({ worldId });
+        await checkStageTriggers({
+          worldId,
+          campaignId,
+          anchorLocationId: projection?.player?.locationId ?? null,
+        });
       } catch {
         // Stage maintenance must never block or crash play.
       }
       void cancelled;
     })();
     return () => { cancelled = true; };
-  }, [projection?.worldId, projection?.stateVersion]);
+  }, [projection?.worldId, projection?.stateVersion, projection?.player?.locationId, campaignId]);
 
   // Recruitment eligibility is derived from current location, quests and
   // relationships, so it re-reads after every committed state change.

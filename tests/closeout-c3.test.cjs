@@ -422,12 +422,29 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
         }]);
       },
     };
+    // The chunk path must fail too: without this, the downsize policy splits
+    // every group down to single chunks and the fixture chunk extractor would
+    // complete them, leaving nothing failed_retryable to retry.
+    const failingChunkExtractor = {
+      version: fixture.version,
+      async extract() {
+        throw new LlmRequestFailure('network timeout PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
+          attempt: 1, durationMs: 90000, httpStatus: null, outcome: 'transport_error',
+          errorCategory: 'timeout', timings: { completeResponseMs: 90000 },
+        }]);
+      },
+    };
     await executeRun({
-      sourceStore, runStore, worldStore, extractor: fixture, groupExtractor: failed,
+      sourceStore, runStore, worldStore, extractor: failingChunkExtractor, groupExtractor: failed,
       sha256Hex: sha.sha256Hex, owner: 'metrics-owner',
     }, 'run-g0-metrics');
-    const pending = (await runStore.listUnits('run-g0-metrics'))[0];
-    assert.equal(pending.status, 'failed_retryable');
+    // Build-downsize policy: a timeout SPLITS a multi-slice batch instead of
+    // retrying the identical body, so after an always-timeout extractor the
+    // ledger holds canceled split parents plus single-slice leaves in
+    // failed_retryable - the leaves carry the surviving failure metrics.
+    const unitsAfterFailure = await runStore.listUnits('run-g0-metrics');
+    const pending = unitsAfterFailure.find(unit => unit.status === 'failed_retryable');
+    assert.ok(pending, `a single-slice leaf parks failed_retryable: ${JSON.stringify(unitsAfterFailure.map(u => u.status))}`);
     assert.equal(JSON.parse(pending.usageJson).requestMetrics[0].errorCategory, 'timeout');
     assert.doesNotMatch(pending.errorMessage, /PRIVATE_RAW_RESPONSE/);
     assert.doesNotMatch((await runStore.getRun('run-g0-metrics')).lastErrorMessage ?? '', /PRIVATE_RAW_RESPONSE/);
@@ -446,11 +463,16 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
       owner: 'metrics-owner-retry',
     }, 'run-g0-metrics');
     assert.equal(retried.completed, true);
-    const completed = (await runStore.listUnits('run-g0-metrics'))[0];
-    const usage = JSON.parse(completed.usageJson);
+    // The first row may be a canceled split parent; the metrics append ran
+    // before the split transaction, so the physical failure record survives.
+    const finalUnits = await runStore.listUnits('run-g0-metrics');
+    const metricsHolder = finalUnits[0];
+    const usage = JSON.parse(metricsHolder.usageJson);
     assert.equal(usage.requestMetrics.length, 1, JSON.stringify(usage.requestMetrics));
     assert.equal(usage.requestMetrics[0].durationMs, 90000);
-    assert.equal(usage.rejectedQuotes, 0);
+    const finished = finalUnits.find(unit => unit.status === 'completed');
+    assert.ok(finished, 'retry completes the requeued work');
+    assert.equal(finished.errorMessage, null, 'completed work carries no lingering failure text');
   } finally {
     db.close();
   }

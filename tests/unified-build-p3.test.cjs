@@ -28,6 +28,7 @@ const { buildPackageFromCanon } = require('../dist/application/worldPackage/buil
 const {
   computeStagePlan,
   evaluateStageTriggers,
+  deriveNarrativeAnchorCp,
   DEFAULT_BOUNDARY_PREBUILD_RATIO,
 } = require('../dist/application/worldBuild/stagePlan');
 const {
@@ -179,6 +180,43 @@ test('U08 triggers: boundary proximity fires inside the last 15% of the built st
   assert.equal(outside.length, 0);
   // Long stays never auto-sweep: no anchor, no need -> nothing fires.
   assert.equal(evaluateStageTriggers({ plan, states }).length, 0);
+});
+
+test('U08 anchor derivation: opening chapters + current location, furthest wins', () => {
+  const chapterSpans = new Map([
+    ['ch-0001', { startCp: 0, endCp: 3_000 }],
+    ['ch-0006', { startCp: 15_000, endCp: 18_000 }],
+    ['ch-0090', { startCp: 250_000, endCp: 253_000 }],
+  ]);
+  const events = [
+    { worldTimeOrder: 1, narrativeChapterId: 'ch-0006' },
+    { worldTimeOrder: 2, narrativeChapterId: 'ch-0006' },
+    { worldTimeOrder: 5, narrativeChapterId: 'ch-0090' },
+  ];
+  // Early opening lock, early location: anchor stays at the opening chapter.
+  assert.equal(deriveNarrativeAnchorCp({
+    events, chapterSpans, anchorWorldTimeOrder: 2,
+    locationSpans: [{ startCp: 1_000, endCp: 4_000 }],
+  }), 18_000);
+  // Travelling to a location evidenced in late chapters moves the anchor -
+  // this is what eventually queues the next stage's pre-build.
+  assert.equal(deriveNarrativeAnchorCp({
+    events, chapterSpans, anchorWorldTimeOrder: 2,
+    locationSpans: [{ startCp: 240_000, endCp: 251_000 }],
+  }), 251_000);
+  // A late-anchored campaign carries its opening position from day one.
+  assert.equal(deriveNarrativeAnchorCp({
+    events, chapterSpans, anchorWorldTimeOrder: 5, locationSpans: [],
+  }), 253_000);
+  // Origin anchor with no location evidence: no anchor signal at all.
+  assert.equal(deriveNarrativeAnchorCp({
+    events, chapterSpans, anchorWorldTimeOrder: null, locationSpans: [],
+  }), null);
+  // Unknown location/missing chapters degrade to the remaining signals.
+  assert.equal(deriveNarrativeAnchorCp({
+    events, chapterSpans: new Map(), anchorWorldTimeOrder: 2,
+    locationSpans: [{ startCp: 12_000, endCp: 13_500 }],
+  }), 13_500);
 });
 
 test('U08 triggers: dependency demand fires only for the NEXT unbuilt stage', () => {

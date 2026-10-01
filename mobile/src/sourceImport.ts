@@ -43,6 +43,7 @@ import {
   builtStageRanges,
   type StageRunTemplate,
 } from '../../src/application/worldBuild/stageOrchestrator';
+import { deriveNarrativeAnchorCp } from '../../src/application/worldBuild/stagePlan';
 import { freezeRunConfig, reviveRunConfig, providerProfileFromFrozen } from '../../src/application/worldBuild/runConfig';
 import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
@@ -390,16 +391,79 @@ export async function importNovelUnified(
 }
 
 /**
+ * Anchor derivation over persisted rows (see deriveNarrativeAnchorCp for the
+ * policy): the campaign's locked opening chapters plus the current scene
+ * location's evidence spans. One bounded query set; misses degrade to no
+ * anchor (the passive trigger then simply stays inert).
+ */
+async function deriveStageAnchorFromCampaign(
+  runtime: Awaited<ReturnType<typeof getDatabaseRuntime>>,
+  input: { worldId: string; campaignId: string; anchorLocationId: string | null },
+): Promise<number | null> {
+  try {
+    const anchorRow = await runtime.db.queryOne<{ anchor_json: string | null }>(
+      'SELECT anchor_json FROM campaigns WHERE campaign_id = ?',
+      [input.campaignId],
+    );
+    const anchorOrder = (() => {
+      try {
+        const parsed = anchorRow?.anchor_json ? JSON.parse(anchorRow.anchor_json) as { worldTimeOrder?: unknown } : null;
+        return Number.isFinite(parsed?.worldTimeOrder) ? Number(parsed.worldTimeOrder) : 0;
+      } catch {
+        return 0;
+      }
+    })();
+    const events = await runtime.db.queryAll<{ world_time_order: number; narrative_chapter_id: string | null }>(
+      'SELECT world_time_order, narrative_chapter_id FROM canon_events WHERE world_id = ?',
+      [input.worldId],
+    );
+    const chapterRows = await runtime.db.queryAll<{ chapter_id: string; start_offset: number; end_offset: number }>(
+      'SELECT chapter_id, start_offset, end_offset FROM source_chapters WHERE world_id = ?',
+      [input.worldId],
+    );
+    const chapterSpans = new Map(chapterRows.map(row =>
+      [row.chapter_id, { startCp: Number(row.start_offset), endCp: Number(row.end_offset) }]));
+    let locationSpans: Array<{ startCp: number; endCp: number }> = [];
+    if (input.anchorLocationId) {
+      const factRows = await runtime.db.queryAll<{ start_offset: number; end_offset: number }>(
+        `SELECT fs.start_offset, fs.end_offset
+           FROM fact_sources fs
+           JOIN canon_facts f ON f.fact_id = fs.fact_id AND f.world_id = fs.world_id
+           JOIN entities e ON e.entity_id = f.subject_entity_id AND e.world_id = f.world_id
+          WHERE e.world_id = ? AND e.type = 'location' AND e.name = ?`,
+        [input.worldId, input.anchorLocationId],
+      );
+      locationSpans = factRows.map(row => ({ startCp: Number(row.start_offset), endCp: Number(row.end_offset) }));
+    }
+    return deriveNarrativeAnchorCp({
+      events: events.map(row => ({
+        worldTimeOrder: Number(row.world_time_order),
+        narrativeChapterId: row.narrative_chapter_id,
+      })),
+      chapterSpans,
+      anchorWorldTimeOrder: anchorOrder,
+      locationSpans,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Narrative-trigger hook (P3 §3): evaluates boundary proximity / dependency
  * demand, claims at most one task per stage, and hands new runs to the
  * foreground service. `neededEntityId` resolves the entity's evidence spans
  * into neededRanges; `anchorCp` is the narrative position of the current
- * confirmed scene.
+ * confirmed scene. Callers without an explicit anchor pass the campaign id
+ * and the player's current scene location - the anchor is then derived from
+ * the campaign's locked opening chapters plus that location's evidence.
  */
 export async function checkStageTriggers(input: {
   worldId: string;
   anchorCp?: number | null;
   neededEntityId?: string | null;
+  campaignId?: string | null;
+  anchorLocationId?: string | null;
 }): Promise<Array<{ stageIndex: number; reason: string; runId: string | null; deduped: boolean }>> {
   const runtime = await getDatabaseRuntime();
   const sourceStore = new SqliteSourceStore(runtime.db);
@@ -417,6 +481,14 @@ export async function checkStageTriggers(input: {
       neededRanges = spans.map(span => ({ startCp: span.startOffset, endCp: span.endOffset }));
     }
   }
+  let anchorCp = input.anchorCp ?? null;
+  if (anchorCp === null && input.campaignId) {
+    anchorCp = await deriveStageAnchorFromCampaign(runtime, {
+      worldId: input.worldId,
+      campaignId: input.campaignId,
+      anchorLocationId: input.anchorLocationId ?? null,
+    });
+  }
   const deps = {
     db: runtime.db,
     stageStore,
@@ -428,7 +500,7 @@ export async function checkStageTriggers(input: {
   const outcomes = await evaluateAndClaimTriggers(deps, {
     worldId: input.worldId,
     title: world.title,
-    anchorCp: input.anchorCp ?? null,
+    anchorCp,
     neededRanges,
     template: await stageRunTemplateFromWorld(input.worldId),
   });
@@ -680,6 +752,25 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
                 WHERE u.run_id = world_build_runs.run_id AND u.status <> 'completed')))
             AND pause_requested = 0 AND cancel_requested = 0`,
         [now, now, runId],
+      );
+      // Retry-safe review recovery: units parked by transport/4xx failures go
+      // back to the queue on an explicit resume. outcome_unknown stays parked
+      // (request-ledger replay gate); canon conflicts keep their review gate
+      // through the run-level code filter below.
+      await runtime.db.execute(
+        `UPDATE world_build_units SET status = 'queued', retry_at = NULL, updated_at = ?
+           WHERE run_id = ? AND status = 'needs_review'
+             AND error_code IN ('network', 'unknown', 'input_too_large', 'config')`,
+        [now, runId],
+      );
+      await runtime.db.execute(
+        `UPDATE world_build_runs SET status = 'queued', updated_at = ?
+           WHERE run_id = ? AND status = 'needs_review'
+             AND (last_error_code IS NULL OR last_error_code IN
+               ('network', 'unknown', 'input_too_large', 'config'))
+             AND NOT EXISTS (SELECT 1 FROM world_build_units u
+               WHERE u.run_id = world_build_runs.run_id AND u.status = 'needs_review')`,
+        [now, runId],
       );
     }
     if (kind !== 'resume' && !activeRuns.has(runId)) {

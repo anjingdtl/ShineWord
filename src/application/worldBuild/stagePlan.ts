@@ -167,6 +167,45 @@ export interface StageTriggerDecision {
   dedupeKey: string;
 }
 
+export interface NarrativeAnchorInput {
+  /** Canon events with their world-time ordinal and source chapter. */
+  events: ReadonlyArray<{ worldTimeOrder: number; narrativeChapterId: string | null }>;
+  /** Normalized codepoint spans by chapterId. */
+  chapterSpans: ReadonlyMap<string, { startCp: number; endCp: number }>;
+  /** The campaign's locked opening order; null/0 = origin (no event spans). */
+  anchorWorldTimeOrder: number | null;
+  /** Evidence spans of the player's CURRENT scene location (may be empty). */
+  locationSpans: ReadonlyArray<{ startCp: number; endCp: number }>;
+}
+
+/**
+ * Narrative anchor derivation (unified P3 §3, "已确认场景/事件的来源锚点").
+ * The play loop has no per-turn event confirmation artifact yet, so the
+ * anchor is the FURTHEST source position the story verifiably stands at:
+ *   - chapters of canon events at/below the campaign's locked opening order
+ *     (where the campaign was born - static), UNION
+ *   - evidence spans of the player's current scene location (where the scene
+ *     is NOW - moves as the player travels into later-book geography).
+ * Long stays in early locations therefore never sweep later stages, while a
+ * late anchor or travel into the boundary window queues the pre-build.
+ */
+export function deriveNarrativeAnchorCp(input: NarrativeAnchorInput): number | null {
+  const anchorOrder = input.anchorWorldTimeOrder ?? 0;
+  let anchorCp: number | null = null;
+  const consider = (endCp: number): void => {
+    if (anchorCp === null || endCp > anchorCp) anchorCp = endCp;
+  };
+  if (anchorOrder > 0) {
+    for (const event of input.events) {
+      if (event.worldTimeOrder > anchorOrder) continue;
+      const span = event.narrativeChapterId ? input.chapterSpans.get(event.narrativeChapterId) : undefined;
+      if (span) consider(span.endCp);
+    }
+  }
+  for (const span of input.locationSpans) consider(span.endCp);
+  return anchorCp;
+}
+
 /**
  * Trigger evaluation (unified P3 §3): a next stage becomes queued when either
  *   - boundary proximity: the narrative anchor sits in the last 15% of the

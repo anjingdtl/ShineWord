@@ -50,6 +50,12 @@ export interface LlmPhysicalRequestMetric {
   outcome: 'completed' | 'reasoning_only' | 'http_error' | 'transport_error' | 'invalid_response';
   completionState?: 'content_filter' | 'length' | 'reasoning_only' | 'no_choices' | 'empty';
   errorCategory?: 'timeout' | 'network' | 'provider_http' | 'invalid_response';
+  /**
+   * Sanitized, length-capped provider error text from the HTTP error body
+   * (e.g. the reason behind a 400). Without it the UI can only say "HTTP 400"
+   * and the actual rejection reason is lost for diagnosis.
+   */
+  providerErrorText?: string;
   timings?: {
     localQueueMs?: number | null;
     responseHeadersMs?: number | null;

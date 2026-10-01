@@ -160,6 +160,17 @@ function sanitizedFailureMessage(message: string, apiKey: string): string {
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]');
 }
 
+const PROVIDER_ERROR_TEXT_MAX_CHARS = 300;
+
+/** Metric-safe provider error text: sanitized, single-line, length-capped. */
+function providerErrorText(message: string | undefined, apiKey: string): string | undefined {
+  if (!message || !message.trim()) return undefined;
+  return sanitizedFailureMessage(message, apiKey)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PROVIDER_ERROR_TEXT_MAX_CHARS);
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   constructor(
     private readonly profile: ApiProfile,
@@ -285,6 +296,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           outcome: 'http_error',
           errorCategory: 'provider_http',
           timings: response.timings,
+          providerErrorText: providerErrorText(parsed.error?.message, apiKey),
         });
         if (isUnsupportedReasoningParameter(response.status, parsed.error?.message)) {
           throw new LlmRequestFailure(
