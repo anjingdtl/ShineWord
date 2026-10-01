@@ -9,7 +9,7 @@
 
 > 当前版本：**V0.4.4** · versionCode 40400。本版本补齐世界映射的后台预算调整、拆批与退避续试；技术故障不再进入人工内容审查。支持多条 API 配置保存与切换、重复内容审查策略记忆，以及涵盖映射、审查校验、发布的真实任务进度。变更明细见 [CHANGELOG](CHANGELOG.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
-DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页 Planner 预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。此轮 Hotfix 的自动化验收与限制见 [HOTFIX_FINAL.md](docs/reviews/reasoning-closeout/HOTFIX_FINAL.md)；DeepSeek 真实 API 未测试。
+内置预设 DeepSeek V4.1 Flash 与 GLM-5.3-Flash 均按官方模型列表登记真实能力（DeepSeek 请求 ID `deepseek-flash`，上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。V0.4.4 世界构建恢复的自动化验收与限制见 [RESULTS.md](docs/reviews/world-build-recovery/RESULTS.md)：映射恢复以本地合成端点与生产 HTTP 传输验证，未调用付费模型，不能据此保证任何真实供应商故障都能恢复。
 
 ## 核心特性
 
@@ -17,6 +17,8 @@ DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下�
 - **TXT 原著导入**：编码探测（UTF-8/GBK）、标准分章、码点偏移体系。LLM 只产出 verbatim 引文，本地解析偏移并检查证据位置；长篇压力实测 2469 章 / 760 万码点导入 1.5s（桌面 Node 基准）。
 - **LLM 权限边界**：Planner 只能提出行动合同（ActionContract JSON），本地校验器严格把关（禁止骰点/结果/数值等权威字段，畸形合同干净拒绝）；Narrator 不得更改冻结的结果等级。
 - **统一 LLM 基础设施**（V0.4.0–V0.4.1）：模型能力来源治理（不再伪造 128K）、Low/High/Max 推理策略与预算联动、Soft/Burst/Hard 弹性请求预算、六 Board 弹性回合上下文（Planner/Narrator 分离）、结构化 JSON 管线、物理请求账本（强杀后 outcome_unknown 防重复计费）、Story Memory V2 长期叙事记忆与完全本地 Episodic 召回。
+- **世界构建管线与自动恢复**（V0.4.3–V0.4.4）：TXT 导入后「抽取 → 映射 → 内容审查 → 发布」后台全链路执行。请求超时、上下文超限自动拆小批次并降档排队规模；映射 JSON 截断或仅返回思考内容时，后台自动提高正文与同档思考预算、拆小超限批次并按持久化退避续试（5s/10s，持续失败从第 3 波起 5 分钟），已完成抽取与映射成果保留，检查点按实际输入哈希重放合并；技术故障不进入人工内容审查，旧 `mapping_failed` 审查项自动退役。构建卡按「抽取批次 + 映射 + 审查校验 + 发布」计真实进度，发布成功才到 100%，存在待审项时可直达审查页；相同内容与严重度的豁免策略默认在本世界内记忆复用，内容变化重新审查。
+- **多 API 配置**（V0.4.4）：保存多条具名 API 配置，各持独立端点/模型/推理档位/并发与 Keychain keyRef，冷启动保留、点击即切换；正在运行的任务冻结配置，暂停或失败的任务可明确选择「用当前 API 继续」。旧单配置自动迁移。
 - **战役引擎模块**：技能成长、冲突检定、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；同伴/NPC 可依规则自动推进到玩家决策。玩家仍决定目标、撤退、关键物品支出、成长选择和谜题答案。
 - **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`，schema 27）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时本地确定性行动仍可结算；生成中断保留原行动与已完成检定，云端结果未知时由玩家确认重试。
 
@@ -62,7 +64,7 @@ APK 输出到 dist/apk/{debug|release}/，不入库。发版流程（签名校�
 - 项目建设进度（PROGRESS）：[docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md)
 - 第四期验收：[docs/reviews/phase4/Q4_FINAL_REPORT.md](docs/reviews/phase4/Q4_FINAL_REPORT.md)、[设备矩阵](docs/reviews/phase4/Q4_DEVICE_MATRIX.md)
 - 最终收尾验收：[docs/reviews/final-closeout/FINAL_REPORT.md](docs/reviews/final-closeout/FINAL_REPORT.md)
-- 各阶段评审：[docs/reviews/](docs/reviews/)（一期～四期与 llm-memory 专项）
+- 各阶段评审：[docs/reviews/](docs/reviews/)（一期～四期、llm-memory、世界构建恢复等专项）
 
 ## 参考底座
 
