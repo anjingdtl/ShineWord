@@ -1,13 +1,13 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.4.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V0.4.3-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.4.2** · versionCode 40200。本版本修复 Android 启动、模型设置、世界冲突审查、故事时间与阅读跟随、存档及强停恢复、返回页面累积问题。指定 GLM 与完整《白篱梦》已在本机模拟器完成 16 个真实回合，覆盖 Low / High / Max、存档、断网与强停恢复；588 项核心回归通过。范围和限制见 [Android 验收报告](docs/reviews/android-qa-20261001/TEST_RESULTS.md)，正式产物见 [V0.4.2 发版记录](docs/releases/V0.4.2.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
+> 当前版本：**V0.4.3** · versionCode 40300。本版本修复构建阶段 0/N 批永不推进：模型请求超时与上下文超限 4xx 现在自动拆小批次并降档排队规模，持续 4xx 转入审查并首次透出服务商错误原文，「继续构建」可恢复停审单元。GLM-5.3-Flash 真实端点 + 完整《白篱梦》端到端验证至「可游玩」；591 项核心回归通过。变更明细见 [CHANGELOG](CHANGELOG.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
 DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页 Planner 预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。此轮 Hotfix 的自动化验收与限制见 [HOTFIX_FINAL.md](docs/reviews/reasoning-closeout/HOTFIX_FINAL.md)；DeepSeek 真实 API 未测试。
 
@@ -22,7 +22,7 @@ DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下�
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.4.2`，`versionCode=40200`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.4.3`，`versionCode=40300`。
 
 ## 安全与隐私
 
