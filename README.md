@@ -1,13 +1,13 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.4.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V0.4.2-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.4.1** · versionCode 40100。本版本完成 LLM 思考档位、Provider 参数、Reasoning Reserve、正文输出预算、弹性上下文、Story Memory 与 World Build 请求账本的治理闭环。Low / High / Max 由用户选择，新设置作用于后续请求；运行中的 World Build 使用冻结配置。真实 GLM 三档映射与 3 回合档位切换已在主机端验证。DeepSeek 与 Android 设备真实 LLM 未进行实测；分层验收与其余设备/Release 证据见[Reasoning & LLM Governance Closeout 最终报告](docs/reviews/reasoning-closeout/FINAL_REPORT.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
+> 当前版本：**V0.4.2** · versionCode 40200。本版本修复 Android 启动、模型设置、世界冲突审查、故事时间与阅读跟随、存档及强停恢复、返回页面累积问题。指定 GLM 与完整《白篱梦》已在本机模拟器完成 16 个真实回合，覆盖 Low / High / Max、存档、断网与强停恢复；588 项核心回归通过。范围和限制见 [Android 验收报告](docs/reviews/android-qa-20261001/TEST_RESULTS.md)，正式产物见 [V0.4.2 发版记录](docs/releases/V0.4.2.md)。仅支持 Android；LLM 由用户自行配置 OpenAI-compatible 端点。
 
 DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页 Planner 预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。此轮 Hotfix 的自动化验收与限制见 [HOTFIX_FINAL.md](docs/reviews/reasoning-closeout/HOTFIX_FINAL.md)；DeepSeek 真实 API 未测试。
 
@@ -18,11 +18,11 @@ DeepSeek V4.1 Flash 内置预设使用官方请求 ID `deepseek-flash`（上下�
 - **LLM 权限边界**：Planner 只能提出行动合同（ActionContract JSON），本地校验器严格把关（禁止骰点/结果/数值等权威字段，畸形合同干净拒绝）；Narrator 不得更改冻结的结果等级。
 - **统一 LLM 基础设施**（V0.4.0–V0.4.1）：模型能力来源治理（不再伪造 128K）、Low/High/Max 推理策略与预算联动、Soft/Burst/Hard 弹性请求预算、六 Board 弹性回合上下文（Planner/Narrator 分离）、结构化 JSON 管线、物理请求账本（强杀后 outcome_unknown 防重复计费）、Story Memory V2 长期叙事记忆与完全本地 Episodic 召回。
 - **战役引擎模块**：技能成长、冲突检定、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；同伴/NPC 可依规则自动推进到玩家决策。玩家仍决定目标、撤退、关键物品支出、成长选择和谜题答案。
-- **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`，schema 21）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时确定性行动仍可结算，恢复后无缝衔接。
+- **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`，schema 26）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时本地确定性行动仍可结算；生成中断保留原行动与已完成检定，云端结果未知时由玩家确认重试。
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.4.1`，`versionCode=40100`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.4.2`，`versionCode=40200`。
 
 ## 安全与隐私
 
