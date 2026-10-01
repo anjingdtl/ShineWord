@@ -7,12 +7,14 @@
  *   · the button keeps a ≥ 44dp touch target and shows the busy state;
  *   · a failed submit restores the text (the controller writes it back);
  *   · Enter inserts a newline on mobile; sending is the button's job;
- *   · the composer stays visible under the keyboard: the activity already runs
- *     `adjustResize` (AndroidManifest), and the field is plain RN `TextInput`
- *     inside the themed frame.
+ *   · the composer stays visible above the keyboard: on Android 15+ the
+ *     system enforces edge-to-edge (EDGE_TO_EDGE_ENFORCED - the theme
+ *     opt-out is ignored on newer APIs), so adjustResize never shrinks the
+ *     window and we lift the composer by the measured keyboard height
+ *     ourselves.
  */
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Keyboard, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { TextField } from '../../components/TextField';
 import { typeStyle } from '../../components/typography';
@@ -29,7 +31,16 @@ export function ActionComposer(props: {
   encounterActive?: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const canSend = props.value.trim().length > 0 && !props.busy && !props.blocked;
+
+  useEffect(() => {
+    const shown = Keyboard.addListener('keyboardDidShow', event => {
+      setKeyboardHeight(Math.max(0, event.endCoordinates.height));
+    });
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => { shown.remove(); hidden.remove(); };
+  }, []);
 
   return (
     <View
@@ -38,7 +49,7 @@ export function ActionComposer(props: {
         {
           paddingHorizontal: theme.space.lg,
           paddingTop: theme.space.sm,
-          paddingBottom: theme.space.sm,
+          paddingBottom: keyboardHeight > 0 ? keyboardHeight : theme.space.sm,
           gap: theme.space.xs,
           backgroundColor: theme.bg.base,
           borderTopWidth: theme.border.hairline,

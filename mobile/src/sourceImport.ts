@@ -111,19 +111,26 @@ function makeSourceId(rawSha256: string): string {
  * Extraction itself is driven separately (`executeRun`) so background runners
  * (closeout C5) own the long LLM phase.
  */
-async function importNovelInternal(
+interface StagedSourceActivation {
+  sourceId: string;
+  manifest: SourceManifest;
+  reusedSource: boolean;
+  fileName: string;
+}
+
+/**
+ * Shared staging + activation for every import entry: streams the picked
+ * document, reuses an existing active source for identical bytes, or parses
+ * and activates a new one. Emits the parse-finished closure progress.
+ */
+async function stageAndActivateSource(
   uri: string,
   fileName: string,
-  profile: ApiProfile,
   onProgress: (progress: WorldBuildProgress) => void,
-  mode: 'full' | 'unified',
-  unifiedStrategy: 'full' | 'progressive' = 'progressive',
-): Promise<StreamedImportSummary | UnifiedImportSummary> {
-  const importStartedAt = Date.now();
+): Promise<StagedSourceActivation> {
   onProgress({ phase: 'importing', message: '正在读取并解析小说…' });
   const runtime = await getDatabaseRuntime();
   const sourceStore = new SqliteSourceStore(runtime.db);
-  const runStore = new SqliteBuildRunStore(runtime.db);
 
   // Stage the picked document natively (streaming copy + SHA-256).
   const staged = await stageUri(uri, `pending-${Date.now().toString(36)}`);
@@ -216,6 +223,21 @@ async function importNovelInternal(
     phase: 'importing',
     message: `原文解析完成：${parsedCounts?.chapters ?? 0} 章 · ${parsedCounts?.chunks ?? 0} 块`,
   });
+  return { sourceId, manifest, reusedSource, fileName };
+}
+
+async function importNovelInternal(
+  uri: string,
+  fileName: string,
+  profile: ApiProfile,
+  onProgress: (progress: WorldBuildProgress) => void,
+  mode: 'full' | 'unified',
+  unifiedStrategy: 'full' | 'progressive' = 'progressive',
+): Promise<StreamedImportSummary | UnifiedImportSummary> {
+  const runtime = await getDatabaseRuntime();
+  const runStore = new SqliteBuildRunStore(runtime.db);
+  const { sourceId, manifest, reusedSource } = await stageAndActivateSource(uri, fileName, onProgress);
+  const sourceStore = new SqliteSourceStore(runtime.db);
 
   if (mode === 'unified') {
     // Unified build (P3): persistent 30/30/40 stage plan; progressive queues
@@ -390,6 +412,82 @@ export async function importNovelUnified(
   onProgress: (progress: WorldBuildProgress) => void,
 ): Promise<UnifiedImportSummary> {
   return await importNovelInternal(uri, fileName, profile, onProgress, 'unified', strategy) as UnifiedImportSummary;
+}
+
+/**
+ * Multi-part append (product ask 2026-10-01 #2): imports another book of the
+ * same saga into an EXISTING project. The part registers as world_sources
+ * ordinal N, mirrors its chapters/chunks with the `s{N}-` prefix (world-side
+ * ids stay globally unique) and runs one whole-source extraction run - no
+ * stage plan, because TTFP already happened with part 1. Canon accumulates
+ * in the same world; the next published revision includes both parts.
+ */
+export async function importNovelPartToProject(
+  uri: string,
+  fileName: string,
+  worldId: string,
+  profile: ApiProfile,
+  onProgress: (progress: WorldBuildProgress) => void,
+): Promise<UnifiedImportSummary> {
+  const runtime = await getDatabaseRuntime();
+  const world = await runtime.worldStore.getWorld(worldId);
+  if (!world) throw new Error('目标项目不存在；请先从书库进入该项目。');
+  const { sourceId, manifest, reusedSource } = await stageAndActivateSource(uri, fileName, onProgress);
+
+  const membership = await runtime.worldStore.findWorldOfSource(sourceId);
+  if (membership && membership.worldId === worldId) {
+    throw new Error('这一部已经在当前项目里了；请选择下一部的 TXT。');
+  }
+  if (membership && membership.worldId !== worldId) {
+    throw new Error('这个文件已属于另一个项目；同一份 TXT 不能同时挂在两个项目下。');
+  }
+
+  const budget = modelBudgetFromProfile(profile);
+  const config = freezeRunConfig(profile, budget);
+  const runId = `run-${sourceId}-part-${Date.now().toString(36)}`;
+  const run = await createExtractionRun(
+    {
+      sourceStore: new SqliteSourceStore(runtime.db),
+      runStore: new SqliteBuildRunStore(runtime.db),
+      worldStore: runtime.worldStore,
+      sha256Hex: async (input: string) => nativeSha256.sha256Hex(input),
+    },
+    {
+      runId,
+      worldId,
+      sourceId,
+      modelFingerprint: `${profile.endpoint}#${profile.model}`,
+      title: world.title,
+      extractorVersion: worldBuildExtractorVersion(budget.reasoningTier ?? 'low'),
+      mode: 'group',
+      budget,
+      config,
+    },
+  );
+
+  const partStore = new SqliteSourceStore(runtime.db);
+  const chapterCount = (await partStore.getChapters(sourceId)).length;
+  const chunkCount = (await partStore.getChunks(sourceId)).length;
+
+  onProgress({
+    phase: 'extracting',
+    chunksDone: 0,
+    chunksTotal: run.unitsTotal,
+    message: `新的一部已入队：${run.unitsTotal} 个构建组`,
+  });
+
+  return {
+    sourceId,
+    worldId,
+    strategy: 'full',
+    runIds: [run.runId],
+    stages: [],
+    byteLength: manifest.byteLength,
+    codePointCount: manifest.codePointCount,
+    chapterCount,
+    chunkCount,
+    reusedSource,
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ import type { SourceChunk, SourceChapter } from '../../domain/world/types';
 import type { SourceStore } from '../ports/sourceStore';
 import type { BuildRunPhase, BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/worldBuildStore';
 import type { WorldStore, WorldRecord } from '../ports/worldStore';
+import { mirrorSourceId } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
@@ -512,8 +513,13 @@ export async function createExtractionRun(
   await deps.runStore.createRun(run, units);
 
   // The world row mirrors the source snapshot so the library and publishers
-  // keep working with the existing world-scoped tables.
+  // keep working with the existing world-scoped tables. Multi-part imports
+  // (product ask 2026-10-01 #2): a source not yet registered under this world
+  // is mirrored even when the world row already exists - part N>=2 mirrors
+  // with an `s{N}-` id prefix and a globally continuing chapter index.
   const existing = await deps.worldStore.getWorld(input.worldId);
+  const memberships = await deps.worldStore.listWorldSources(input.worldId);
+  const registered = memberships.find(m => m.sourceId === input.sourceId);
   if (!existing) {
     const world: WorldRecord = {
       worldId: input.worldId,
@@ -527,8 +533,24 @@ export async function createExtractionRun(
       updatedAt: createdAt,
     };
     await deps.worldStore.createWorld(world);
+  }
+  // Register after the world row exists (world_sources carries FKs to both).
+  const sourceOrdinal = registered
+    ? registered.sourceOrdinal
+    : await deps.worldStore.addWorldSource({
+      worldId: input.worldId,
+      sourceOrdinal: memberships.length + 1,
+      sourceId: input.sourceId,
+      rawSha256: manifest.rawSha256Hex,
+      createdAt,
+    });
+  if (!registered) {
     // Mirror chapters/chunks into the world-scoped tables: one authority for
-    // world content, the source tables stay the import-side truth.
+    // world content, the source tables stay the import-side truth. The base
+    // index continues after every already-mirrored part.
+    const chaptersSoFar = memberships.length > 0
+      ? (await deps.worldStore.getChapters(input.worldId)).length
+      : 0;
     await deps.worldStore.saveImportedSource(input.worldId, {
       encoding: manifest.encoding,
       sourceSha256Hex: manifest.rawSha256Hex,
@@ -540,7 +562,9 @@ export async function createExtractionRun(
       codePointCount: manifest.codePointCount,
       chapters: await deps.sourceStore.getChapters(input.sourceId),
       chunks,
-    }, createdAt);
+    }, createdAt, { sourceOrdinal, baseChapterCount: chaptersSoFar });
+  }
+  if (!existing) {
     await deps.worldStore.setWorldStatus(input.worldId, 'extracting', now());
   }
   return run;
@@ -580,8 +604,22 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: false };
   }
   const chapters: SourceChapter[] = await deps.sourceStore.getChapters(run.sourceId);
+  // Multi-part mirror view (product ask 2026-10-01 #2): world-side ids for a
+  // part N>=2 source carry the `s{N}-` prefix, while every read of the raw
+  // text and every unit range keeps native source ids. The wrappers below
+  // are the single translation point for the whole executor.
+  const memberships = await deps.worldStore.listWorldSources(run.worldId);
+  const sourceOrdinal = memberships.find(m => m.sourceId === run.sourceId)?.sourceOrdinal ?? 1;
+  const toWorldChunk = (chunk: SourceChunk): SourceChunk => sourceOrdinal <= 1 ? chunk : {
+    ...chunk,
+    chunkId: mirrorSourceId(sourceOrdinal, chunk.chunkId),
+    chapterId: mirrorSourceId(sourceOrdinal, chunk.chapterId),
+  };
   const evidenceSource: EvidenceSource = {
-    chapters,
+    chapters: sourceOrdinal <= 1 ? chapters : chapters.map(chapter => ({
+      ...chapter,
+      chapterId: mirrorSourceId(sourceOrdinal, chapter.chapterId),
+    })),
     sliceRange: (startCp, endCp) => deps.sourceStore.readRange(run.sourceId, startCp, endCp),
   };
   const chunksByRange = new Map<string, SourceChunk>();
@@ -936,7 +974,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           sourceDrifted = true;
           break;
         }
-        unitChunks.push(chunk);
+        // World-side identity (mirrored for part N>=2) from here on: chunk
+        // jobs, fact evidence and package provenance all use these ids.
+        unitChunks.push(toWorldChunk(chunk));
       }
       if (sourceDrifted) {
         await deps.runStore.completeUnit({
@@ -1016,7 +1056,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
         } else {
-          const titleByChapter = new Map(chapters.map(chapter => [chapter.chapterId, chapter.title]));
+          // pendingChunks carry world-side (mirrored) chapter ids for part
+          // N>=2, so title lookup mirrors the same way (identity at N=1).
+          const titleByChapter = new Map(
+            chapters.map(chapter => [mirrorSourceId(sourceOrdinal, chapter.chapterId), chapter.title]),
+          );
           const segments: GroupSegmentInput[] = [];
           if (analysisPlanned) {
             // Planner-v2 wire protocol: ONE segment per contiguous same-chapter

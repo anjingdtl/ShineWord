@@ -11,11 +11,12 @@
  * No `legacyStyles` import remains.
  */
 import React, { useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
+import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
@@ -66,6 +67,7 @@ export function OpeningScreen(): React.JSX.Element {
   const [companions, setCompanions] = useState<string[]>([]);
   const [companionDirectives, setCompanionDirectives] = useState<Record<string, CompanionDirective>>({});
   const [goal, setGoal] = useState('');
+  const [goalSuggestions, setGoalSuggestions] = useState<readonly string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [noPackage, setNoPackage] = useState(false);
@@ -117,6 +119,17 @@ export function OpeningScreen(): React.JSX.Element {
         setSetup(current => current ? { ...anchored, anchorEvents: current.anchorEvents } : anchored);
         if (!anchored.locations.includes(locationId) && anchored.locations[0]) setLocationId(anchored.locations[0]);
         setCompanions(current => current.filter(id => anchored.companionTemplates.some(template => template.entryId === id)));
+        // Product ask 2026-10-01 #3: two AI-proposed goals over the world
+        // package for the chosen anchor; the third option is the player's
+        // own words. Pure enhancement - failures resolve to no suggestions.
+        const goals = await suggestOpeningGoals(await buildProvider(profile), {
+          worldTitle: title,
+          anchorTitle: setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.title ?? '开局时刻',
+          locationName: anchored.locations[0],
+          characterNames: anchored.canonCharacters.slice(0, 6).map(character => character.name),
+          playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
+        });
+        if (!cancelled) setGoalSuggestions(goals);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -348,7 +361,7 @@ export function OpeningScreen(): React.JSX.Element {
         />
       </View>
 
-      <ScrollView
+      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
         {setup && setup.locations.length === 0 ? (
@@ -416,6 +429,7 @@ export function OpeningScreen(): React.JSX.Element {
                 directives={companionDirectives}
                 goal={goal}
                 onGoalChange={setGoal}
+                goalSuggestions={goalSuggestions}
                 themeLabel={THEMES[themeId].label}
                 busy={busy}
                 canStart={advancedStartReady}
@@ -451,6 +465,7 @@ export function OpeningScreen(): React.JSX.Element {
             onCharacterDescriptionChange={setCharacterDescription}
             goal={goal}
             onGoalChange={setGoal}
+            goalSuggestions={goalSuggestions}
             loadout={quickAdvancedOpen ? { attributes: points as typeof recommendation.attributes, initialSkills: chosenSkills } : recommendation}
             companions={companions}
             directives={companionDirectives}
@@ -490,7 +505,7 @@ export function OpeningScreen(): React.JSX.Element {
             )}
           />
         )}
-      </ScrollView>
+      </ScrollView></KeyboardAvoidingView>
 
       {advancedWizard && step < WIZARD_STEPS.length - 1 ? (
         <View

@@ -170,12 +170,42 @@ export interface WorldJobRecord {
   updatedAt: string;
 }
 
+export interface WorldSourceMembership {
+  worldId: string;
+  /** 1-based import order; 1 is the founding source. */
+  sourceOrdinal: number;
+  sourceId: string;
+  rawSha256: string;
+  createdAt: string;
+}
+
+/** Multi-part import identity: part N mirrors its chapters/chunks with an
+ * `s{N}-` id prefix and a globally continuing chapter index, so world-side
+ * ids stay unique while run-level addressing keeps native source ids. */
+export function mirrorSourceId(sourceOrdinal: number, id: string): string {
+  return sourceOrdinal <= 1 ? id : `s${sourceOrdinal}-${id}`;
+}
+
+export function mirrorSourceIndex(sourceOrdinal: number, baseChapterCount: number, index: number): number {
+  return sourceOrdinal <= 1 ? index : baseChapterCount + index;
+}
+
 export interface WorldStore {
   createWorld(record: WorldRecord): Promise<void>;
   getWorld(worldId: string): Promise<WorldRecord | null>;
   setWorldStatus(worldId: string, status: string, updatedAt: string): Promise<void>;
 
-  saveImportedSource(worldId: string, parsed: ParsedTxtSource, createdAt: string): Promise<void>;
+  /** Registers (world, source) membership. First write also fixes ordinal 1. */
+  addWorldSource(membership: WorldSourceMembership): Promise<number>;
+  listWorldSources(worldId: string): Promise<WorldSourceMembership[]>;
+  findWorldOfSource(sourceId: string): Promise<WorldSourceMembership | null>;
+
+  saveImportedSource(
+    worldId: string,
+    parsed: ParsedTxtSource,
+    createdAt: string,
+    mirror?: { sourceOrdinal: number; baseChapterCount: number },
+  ): Promise<void>;
   getChapters(worldId: string): Promise<StoredChapter[]>;
   getChunks(worldId: string): Promise<StoredChunk[]>;
   getChunksByStatus(worldId: string, status: StoredChunk['extractionStatus']): Promise<StoredChunk[]>;

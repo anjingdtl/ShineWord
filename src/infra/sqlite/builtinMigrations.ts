@@ -1168,4 +1168,29 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
     UPDATE review_issues SET status = 'resolved', resolved_at = created_at
       WHERE kind = 'mapping_failed' AND status = 'open';
   ` },
+  { version: 28, name: 'world_source_memberships', sql: `
+    CREATE TABLE world_sources (
+      world_id TEXT NOT NULL,
+      source_ordinal INTEGER NOT NULL CHECK(source_ordinal >= 1),
+      source_id TEXT NOT NULL,
+      raw_sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(world_id, source_ordinal),
+      UNIQUE(world_id, source_id),
+      UNIQUE(source_id),
+      FOREIGN KEY(world_id) REFERENCES worlds(world_id) ON DELETE CASCADE,
+      FOREIGN KEY(source_id) REFERENCES imported_sources(source_id) ON DELETE CASCADE
+    );
+    -- Backfill the first membership for every unified-import world. Legacy
+    -- timestamp-named worlds (worldImport path) stay empty until a source is
+    -- appended, which the append path handles lazily.
+    INSERT OR IGNORE INTO world_sources(world_id, source_ordinal, source_id, raw_sha256, created_at)
+    SELECT w.world_id, 1, replace(w.world_id, 'world-', ''), w.source_sha256, w.created_at
+    FROM worlds w
+    WHERE w.world_id LIKE 'world-%'
+      AND EXISTS (
+        SELECT 1 FROM imported_sources s
+        WHERE s.source_id = replace(w.world_id, 'world-', '') AND s.status = 'active'
+      );
+  ` },
 ];

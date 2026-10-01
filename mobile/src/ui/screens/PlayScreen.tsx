@@ -1,6 +1,7 @@
 /** Text-first play surface: story, at most three direct choices, and free input. */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenShell } from '../components/ScreenShell';
@@ -44,6 +45,23 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const [targetPickerOpen, setTargetPickerOpen] = useState(false);
   const [scenePickerOpen, setScenePickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // First-session guide (product ask #4): once per device, dismissed by
+  // "开始游玩" or implicitly after the first committed turn.
+  const [guideVisible, setGuideVisible] = useState(false);
+  const guideHidden = turns.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    void AsyncStorage.getItem('shineword.play.guide.v1').then(flag => {
+      if (!cancelled && flag === null) setGuideVisible(true);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  const dismissGuide = (): void => {
+    setGuideVisible(false);
+    void AsyncStorage.setItem('shineword.play.guide.v1', 'seen').catch(() => undefined);
+  };
 
   const choices = useContextualActions({
     projection: view,
@@ -127,7 +145,13 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
       />
 
-      <NarrativeFeed turns={turns} goal={view?.goal ?? ''} busy={busy} />
+      <NarrativeFeed
+        turns={turns}
+        goal={view?.goal ?? ''}
+        busy={busy}
+        guideVisible={guideVisible && !guideHidden}
+        onDismissGuide={dismissGuide}
+      />
 
       <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.xs }}>
         {recoveryLocked ? <>

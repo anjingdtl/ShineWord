@@ -19,8 +19,9 @@ import {
   type BuildTaskPerfStats,
   type BuildTaskView,
 } from '../../buildTasks';
-import { pauseRun, cancelRun, useCurrentApiForRun } from '../../sourceImport';
+import { importNovelPartToProject, pauseRun, cancelRun, useCurrentApiForRun } from '../../sourceImport';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
+import { pickTextRef } from '../../fileBridge';
 import { deriveProjectStatus, listProjectBuildSummaries, summarizeProjectBuild, PROJECT_STATUS_LABEL, type ProjectBuildSummary } from '../../projectLibrary';
 import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
 import { getWorldEntry } from '../../worldImport';
@@ -90,6 +91,38 @@ export function ProjectHubScreen(): React.JSX.Element {
       })();
     }, [refresh, profile, worldId]),
   );
+
+  const [appending, setAppending] = useState(false);
+
+  /** Multi-part append (product ask #2): pick the next book's TXT, import it
+   *  into THIS project, and start its whole-source build run. */
+  async function appendNextPart() {
+    if (appending || !profile) return;
+    setAppending(true);
+    setError(null);
+    try {
+      const picked = await pickTextRef();
+      if (!picked) return;
+      const imported = await importNovelPartToProject(
+        picked.uri,
+        picked.name,
+        worldId,
+        profile,
+        () => undefined,
+      );
+      void (async () => {
+        for (const runId of imported.runIds) {
+          await startOrResumeBuild(runId, profile);
+        }
+        await refresh();
+      })().catch(e => setError(e instanceof Error ? e.message : String(e)));
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAppending(false);
+    }
+  }
 
   useEffect(() => {
     if (!focused || !isTaskListDynamic(tasks)) return;
@@ -193,6 +226,13 @@ export function ProjectHubScreen(): React.JSX.Element {
                 }
                 navigation.navigate('Opening', { worldId, title });
               }}
+            />
+            <Button
+              label={appending ? '导入中…' : '追加下一部书籍'}
+              variant="secondary"
+              disabled={appending || !profile}
+              onPress={() => void appendNextPart()}
+              testID="project-append-part"
             />
           </View>
         </Card>

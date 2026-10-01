@@ -9,6 +9,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { Chip } from '../../components/Chip';
 import { SectionHeader } from '../../components/SectionHeader';
 import { TextField } from '../../components/TextField';
 import { typeStyle } from '../../components/typography';
@@ -49,6 +50,8 @@ export function StepConfirm(props: {
   directives: Record<string, CompanionDirective>;
   goal: string;
   onGoalChange: (value: string) => void;
+  /** AI-proposed goals over the published world package; empty while loading or on failure. */
+  goalSuggestions?: readonly string[];
   themeLabel: string;
   busy: boolean;
   canStart: boolean;
@@ -103,12 +106,30 @@ export function StepConfirm(props: {
 
       <Card>
         <SectionHeader title="目标" subtitle="这次冒险要达成什么" />
+        {(props.goalSuggestions?.length ?? 0) > 0 && (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm, marginBottom: theme.space.sm }}>
+            {props.goalSuggestions!.map((suggestion, index) => (
+              <Chip
+                key={suggestion}
+                label={suggestion}
+                hot={index === 0}
+                onPress={() => props.onGoalChange(suggestion)}
+                accessibilityLabel={`采用推荐目标：${suggestion}`}
+                testID={`opening-goal-suggestion-${index + 1}`}
+              />
+            ))}
+          </View>
+        )}
         <TextField
           value={props.goal}
           onChangeText={props.onGoalChange}
           multiline
           minLines={3}
-          placeholder="例如：在开局锚点处找到失踪的同伴"
+          placeholder={
+            (props.goalSuggestions?.length ?? 0) > 0
+              ? '点上面的推荐目标，或自己写一句'
+              : '例如：在开局锚点处找到失踪的同伴'
+          }
           hint="留空则使用默认目标「在开局锚点处开始一段冒险」。"
           testID="opening-goal"
         />

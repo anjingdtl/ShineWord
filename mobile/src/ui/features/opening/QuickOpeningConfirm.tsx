@@ -4,6 +4,7 @@ import type { CompanionDirective } from '../../../../../src/domain/characters/ca
 import type { RecommendedOpeningLoadout } from '../../../../../src/application/campaign/openingRecommendation';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { Chip } from '../../components/Chip';
 import { SectionHeader } from '../../components/SectionHeader';
 import { StatusBanner } from '../../components/StatusBanner';
 import { TextField } from '../../components/TextField';
@@ -23,6 +24,8 @@ export function QuickOpeningConfirm(props: {
   onCharacterDescriptionChange: (value: string) => void;
   goal: string;
   onGoalChange: (value: string) => void;
+  /** AI-proposed goals over the published world package; empty while loading or on failure. */
+  goalSuggestions?: readonly string[];
   loadout: RecommendedOpeningLoadout;
   companions: string[];
   directives: Record<string, CompanionDirective>;
@@ -80,13 +83,31 @@ export function QuickOpeningConfirm(props: {
 
       <Card>
         <SectionHeader title="这次想做什么" subtitle="目标可留空，故事行动中也可以随时调整" />
+        {(props.goalSuggestions?.length ?? 0) > 0 && (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm, marginBottom: theme.space.sm }}>
+            {props.goalSuggestions!.map((suggestion, index) => (
+              <Chip
+                key={suggestion}
+                label={suggestion}
+                hot={index === 0}
+                onPress={() => props.onGoalChange(suggestion)}
+                accessibilityLabel={`采用推荐目标：${suggestion}`}
+                testID={`quick-opening-goal-suggestion-${index + 1}`}
+              />
+            ))}
+          </View>
+        )}
         <TextField
           value={props.goal}
           onChangeText={props.onGoalChange}
           multiline
           minLines={2}
           maxLength={240}
-          placeholder="可选：例如，弄清门边新留下的脚印"
+          placeholder={
+            (props.goalSuggestions?.length ?? 0) > 0
+              ? '点上面的推荐目标，或自己写一句'
+              : '可选：例如，弄清门边新留下的脚印'
+          }
           testID="quick-opening-goal"
         />
       </Card>

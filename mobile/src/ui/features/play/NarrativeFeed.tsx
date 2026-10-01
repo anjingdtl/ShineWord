@@ -13,6 +13,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { typeStyle } from '../../components/typography';
 import { BackgroundPattern } from '../../theme/ornaments/BackgroundPattern';
 import { useTheme } from '../../theme/ThemeContext';
+import { PlayGuideCard } from './PlayGuideCard';
 import { TurnCard } from './TurnCard';
 import type { TurnView } from '../../../runtime';
 
@@ -24,6 +25,9 @@ export function NarrativeFeed(props: {
   goal: string;
   /** True while a turn is being settled; shown without clearing the list. */
   busy: boolean;
+  /** First-session guide (product ask #4): caller owns the once-flag. */
+  guideVisible?: boolean;
+  onDismissGuide?: () => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const listRef = useRef<FlatList<TurnView>>(null);
@@ -73,6 +77,11 @@ export function NarrativeFeed(props: {
         onLayout={followLatest}
         scrollEventThrottle={64}
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
+        ListHeaderComponent={
+          props.guideVisible && props.onDismissGuide ? (
+            <PlayGuideCard onDismiss={props.onDismissGuide} />
+          ) : null
+        }
         ListEmptyComponent={
           <EmptyState
             title="故事还没开始"

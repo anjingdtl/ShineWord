@@ -18,9 +18,11 @@ import type {
   StoredRuleMapping,
   WorldJobRecord,
   WorldRecord,
+  WorldSourceMembership,
   WorldStore,
   WorldCanonSnapshot,
 } from '../../application/ports/worldStore';
+import { mirrorSourceId, mirrorSourceIndex } from '../../application/ports/worldStore';
 
 interface WorldRow extends SqliteRow {
   world_id: string;
@@ -272,7 +274,63 @@ export class SqliteWorldStore implements WorldStore {
     }));
   }
 
-  async saveImportedSource(worldId: string, parsed: ParsedTxtSource, createdAt: string): Promise<void> {
+  async addWorldSource(membership: WorldSourceMembership): Promise<number> {
+    const inserted = await this.db.execute(
+      `INSERT OR IGNORE INTO world_sources(world_id, source_ordinal, source_id, raw_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [membership.worldId, membership.sourceOrdinal, membership.sourceId, membership.rawSha256, membership.createdAt],
+    );
+    if (!inserted) {
+      const existing = await this.db.queryOne<{ source_ordinal: number }>(
+        'SELECT source_ordinal FROM world_sources WHERE world_id = ? AND source_id = ?',
+        [membership.worldId, membership.sourceId],
+      );
+      if (existing) return existing.source_ordinal;
+    }
+    return membership.sourceOrdinal;
+  }
+
+  async listWorldSources(worldId: string): Promise<WorldSourceMembership[]> {
+    const rows = await this.db.queryAll<{
+      world_id: string; source_ordinal: number; source_id: string; raw_sha256: string; created_at: string;
+    }>(
+      'SELECT world_id, source_ordinal, source_id, raw_sha256, created_at FROM world_sources WHERE world_id = ? ORDER BY source_ordinal',
+      [worldId],
+    );
+    return rows.map(row => ({
+      worldId: row.world_id,
+      sourceOrdinal: row.source_ordinal,
+      sourceId: row.source_id,
+      rawSha256: row.raw_sha256,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async findWorldOfSource(sourceId: string): Promise<WorldSourceMembership | null> {
+    const row = await this.db.queryOne<{
+      world_id: string; source_ordinal: number; source_id: string; raw_sha256: string; created_at: string;
+    }>(
+      'SELECT world_id, source_ordinal, source_id, raw_sha256, created_at FROM world_sources WHERE source_id = ?',
+      [sourceId],
+    );
+    if (!row) return null;
+    return {
+      worldId: row.world_id,
+      sourceOrdinal: row.source_ordinal,
+      sourceId: row.source_id,
+      rawSha256: row.raw_sha256,
+      createdAt: row.created_at,
+    };
+  }
+
+  async saveImportedSource(
+    worldId: string,
+    parsed: ParsedTxtSource,
+    createdAt: string,
+    mirror?: { sourceOrdinal: number; baseChapterCount: number },
+  ): Promise<void> {
+    const ordinal = mirror?.sourceOrdinal ?? 1;
+    const baseIndex = mirror?.baseChapterCount ?? 0;
     await this.db.transaction(async tx => {
       for (const chapter of parsed.chapters) {
         await tx.execute(
@@ -289,8 +347,8 @@ export class SqliteWorldStore implements WorldStore {
              content_hash = excluded.content_hash`,
           [
             worldId,
-            chapter.chapterId,
-            chapter.index,
+            mirrorSourceId(ordinal, chapter.chapterId),
+            mirrorSourceIndex(ordinal, baseIndex, chapter.index),
             chapter.title,
             chapter.startOffset,
             chapter.endOffset,
@@ -325,8 +383,8 @@ export class SqliteWorldStore implements WorldStore {
              END`,
           [
             worldId,
-            chunk.chunkId,
-            chunk.chapterId,
+            mirrorSourceId(ordinal, chunk.chunkId),
+            mirrorSourceId(ordinal, chunk.chapterId),
             chunk.chunkIndex,
             chunk.startOffset,
             chunk.endOffset,

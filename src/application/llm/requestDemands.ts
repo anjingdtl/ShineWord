@@ -12,4 +12,5 @@ export const DEFAULT_OUTPUT_DEMANDS: Record<LlmRequestKind, OutputDemand> = {
   timeline: { minimum: 800, target: 2_000, maximum: 6_000 },
   registry: { minimum: 800, target: 2_000, maximum: 8_000 },
   summarizer: { minimum: 400, target: 800, maximum: 2_000 },
+  opening_goal: { minimum: 200, target: 500, maximum: 1_200 },
 };

@@ -25,7 +25,8 @@ export type LlmRequestKind =
   | 'world_adjudication'
   | 'timeline'
   | 'registry'
-  | 'summarizer';
+  | 'summarizer'
+  | 'opening_goal';
 
 export function normalizeReasoningTier(value: unknown): ReasoningTier {
   if (value === 'high' || value === 'max') return value;
