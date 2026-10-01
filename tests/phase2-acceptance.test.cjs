@@ -754,6 +754,14 @@ test('A05: exported save restores dependencies, cards, contracts and dice; play 
   assert.equal(exported.save.manifest.packageRevision, 1, 'dependency lock exported');
 
   await restoreSave({ db: adapter, save: exported.save, sha256Hex: sha.sha256Hex, newCampaignId: 'restored-c', newBranchId: 'restored-b', createdAt: 'review' });
+  const originalTitle = db.prepare("SELECT title FROM campaigns WHERE campaign_id='camp-s'").get().title;
+  assert.equal(exported.save.manifest.title, originalTitle);
+  assert.equal(db.prepare("SELECT title FROM campaigns WHERE campaign_id='restored-c'").get().title, `${originalTitle}（导入）`);
+  const legacyTitleSave = structuredClone(exported.save);
+  delete legacyTitleSave.manifest.title;
+  await restoreSave({ db: adapter, save: legacyTitleSave, sha256Hex: sha.sha256Hex,
+    newCampaignId: 'legacy-title-c', newBranchId: 'legacy-title-b', createdAt: 'review' });
+  assert.ok(!db.prepare("SELECT title FROM campaigns WHERE campaign_id='legacy-title-c'").get().title.includes('(imported)'));
   const restored = await session.getSummary('restored-c', 'restored-b');
   assert.equal(restored.cards.length, 2, 'cards restored');
   assert.equal(restored.packageRevision, 1, 'package lock restored');

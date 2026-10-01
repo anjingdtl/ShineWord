@@ -38,6 +38,7 @@ interface AttemptRow extends SqliteRow {
   estimated_usage: number;
   started_at: number;
   finished_at: number | null;
+  replay_approved_at: number | null;
 }
 
 function toRecord(row: AttemptRow): LlmRequestAttemptRecord {
@@ -69,6 +70,7 @@ function toRecord(row: AttemptRow): LlmRequestAttemptRecord {
     estimatedUsage: row.estimated_usage,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    replayApprovedAt: row.replay_approved_at,
   };
 }
 
@@ -76,7 +78,7 @@ const COLUMN_LIST = `attempt_id, logical_request_id, request_kind, campaign_id, 
   state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
   reasoning_policy_version, wire_output_tokens, attempt_no, status, failure_class, error_code, http_status,
   provider_request_id, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
-  estimated_usage, started_at, finished_at`;
+  estimated_usage, started_at, finished_at, replay_approved_at`;
 
 export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
   constructor(private readonly db: SqliteDatabase) {}

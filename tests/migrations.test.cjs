@@ -213,13 +213,14 @@ test('v25 also repairs legacy canceled builds on clients which already applied v
     const adapter = new NodeSqliteAdapter(db);
     await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.filter(m => m.version <= 24));
     populateLegacyBuilds(db); // Old v24 allowed these rows without converting them.
-    assert.deepEqual(await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS), [25]);
+    const throughV25 = BUILTIN_MIGRATIONS.filter(m => m.version <= 25);
+    assert.deepEqual(await applySqliteMigrations(adapter, throughV25), [25]);
     assert.equal((await new SqliteBuildRunStore(adapter).getRun('C')).status, 'stopped_user');
     assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-0'`).get().status, 'completed');
     assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-6'`).get().status, 'queued');
     assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-7'`).get().status, 'needs_review');
     assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-20'`).get().status, 'canceled');
-    assert.deepEqual(await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS), []);
+    assert.deepEqual(await applySqliteMigrations(adapter, throughV25), []);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { db.close(); }
 });

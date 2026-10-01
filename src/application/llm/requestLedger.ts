@@ -116,7 +116,7 @@ export class LedgeredProvider implements LlmProvider {
     const prior = await this.store.listAttempts(meta.logicalRequestId);
     if (
       !this.options.allowOutcomeUnknownReplay &&
-      prior.some(attempt => attempt.status === 'outcome_unknown')
+      prior.some(attempt => attempt.status === 'outcome_unknown' && attempt.replayApprovedAt == null)
     ) {
       throw new OutcomeUnknownReplayError(meta.logicalRequestId);
     }

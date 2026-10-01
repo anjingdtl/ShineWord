@@ -15,6 +15,21 @@ import { KeychainSecretStore } from './secureKeyStore';
 import { publishUserRequestedSourceLookupDelta } from '../../src/application/worldPackage/progressiveDelta';
 import { SqliteInteractionOperationJournal } from '../../src/application/campaign/interactionOrchestrator';
 import { projectStoryEntry } from '../../src/application/campaign/storyEntry';
+import * as playRecovery from '../../src/application/campaign/playRecovery';
+
+export type { PlayRecovery } from '../../src/application/campaign/playRecovery';
+export async function loadPlayRecovery(campaignId: string, branchId: string) {
+  return playRecovery.loadPlayRecovery((await getDatabaseRuntime()).db, campaignId, branchId);
+}
+export async function savePlayIntentDraft(campaignId: string, branchId: string, intent: string) {
+  return playRecovery.savePlayIntentDraft((await getDatabaseRuntime()).db, campaignId, branchId, intent);
+}
+export async function clearPlayIntentDraft(branchId: string, version: number) {
+  return playRecovery.clearPlayIntentDraft((await getDatabaseRuntime()).db, branchId, version);
+}
+export async function acknowledgePlayReplay(campaignId: string, branchId: string, version: number, ids: string[]) {
+  return playRecovery.acknowledgePlayReplay((await getDatabaseRuntime()).db, campaignId, branchId, version, ids);
+}
 
 export type { PlayTurnResult };
 

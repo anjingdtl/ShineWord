@@ -25,10 +25,11 @@ export function ActionComposer(props: {
   onChangeText: (value: string) => void;
   onSubmit: () => void;
   busy: boolean;
+  blocked?: boolean;
   encounterActive?: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
-  const canSend = props.value.trim().length > 0 && !props.busy;
+  const canSend = props.value.trim().length > 0 && !props.busy && !props.blocked;
 
   return (
     <View
@@ -50,7 +51,7 @@ export function ActionComposer(props: {
         multiline
         minLines={1}
         maxLength={MAX_LENGTH}
-        disabled={props.busy}
+        disabled={props.busy || props.blocked}
         placeholder={props.encounterActive ? '描述你的战斗行动' : '你打算怎么做？'}
         tone="base"
         hint={

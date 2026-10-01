@@ -24,6 +24,11 @@ import {
   loadHistory,
   getInteractionOperationJournal,
   createReadOnlySession,
+  loadPlayRecovery,
+  savePlayIntentDraft,
+  clearPlayIntentDraft,
+  acknowledgePlayReplay,
+  type PlayRecovery,
   type EncounterView,
   type TurnView,
 } from '../../../../runtime';
@@ -61,6 +66,8 @@ export interface PlayController {
   intent: string;
   setIntent: (value: string) => void;
   busy: boolean;
+  recovery: PlayRecovery | null;
+  recoverTurn: () => Promise<void>;
   error: string | null;
   notice: string | null;
   setError: (value: string | null) => void;
@@ -93,6 +100,7 @@ export function usePlayController(): PlayController {
   const [turns, setTurns] = useState<TurnView[]>([]);
   const [intent, setIntent] = useState('');
   const [busy, setBusy] = useState(false);
+  const [recovery, setRecovery] = useState<PlayRecovery | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [encounter, setEncounter] = useState<EncounterView | null>(null);
@@ -114,14 +122,17 @@ export function usePlayController(): PlayController {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextProjection, history, nextSceneEncounters] = await Promise.all([
+      const [nextProjection, history, nextSceneEncounters, pending] = await Promise.all([
         getPlayUiProjection(campaignId, branchId),
         loadHistory(branchId),
         createReadOnlySession().then(session => session.getCurrentSceneEncounterOptions(campaignId, branchId)),
+        loadPlayRecovery(campaignId, branchId),
       ]);
       setProjection(nextProjection);
       setTurns(history);
       setSceneEncounterOptions(nextSceneEncounters);
+      setRecovery(pending);
+      if (pending?.intent && !actionInFlight.current) setIntent(previous => previous || pending.intent);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -288,7 +299,7 @@ export function usePlayController(): PlayController {
   }, [foregroundEpoch, profile, encounter?.encounterId, encounter?.status, encounter?.currentActorIsPlayer,
     progressAutomaticActors, refresh]);
 
-  async function submit(intentOverride?: string) {
+  async function submit(intentOverride?: string, approveRecovery = false) {
     if (actionInFlight.current || busy || !profile) return;
     const fromComposer = intentOverride === undefined;
     const value = (intentOverride ?? intent).trim();
@@ -300,6 +311,15 @@ export function usePlayController(): PlayController {
     const activeEncounter = encounter?.status === 'active' ? encounter : null;
     setNotice(activeEncounter ? '识别战斗行动…' : '拟定检定…');
     try {
+      let draftVersion: number | null = null;
+      if (!activeEncounter) {
+        const pending = await loadPlayRecovery(campaignId, branchId);
+        if (pending?.unknownAttemptIds.length) {
+          if (!approveRecovery) throw new Error('上次生成结果未知，请使用「确认重试这一回合」恢复原行动。');
+          await acknowledgePlayReplay(campaignId, branchId, pending.expectedStateVersion, pending.unknownAttemptIds);
+        }
+        draftVersion = await savePlayIntentDraft(campaignId, branchId, value);
+      }
       const session = await createSession(profile, await buildProvider(profile));
       if (activeEncounter) {
         const proposal = proposeEncounterIntent(value, activeEncounter);
@@ -346,6 +366,8 @@ export function usePlayController(): PlayController {
         return;
       }
       const result = await session.playTurn({ campaignId, branchId, intent: value });
+      if (draftVersion !== null) await clearPlayIntentDraft(branchId, draftVersion);
+      setIntent(previous => previous === value ? '' : previous);
       const turnView: TurnView = { ...result, mechanicalOnly: false };
       // The turn is already committed; merge it into the feed by id so a
       // resumed turn never duplicates (plan §18.3).
@@ -359,16 +381,32 @@ export function usePlayController(): PlayController {
     } catch (e) {
       // A failed submit restores the intent so nothing the player typed is lost.
       if (fromComposer) setIntent(value);
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message === 'Network request failed' ? '网络连接失败。行动已保留，联网后可重试。' : message);
       setNotice(null);
+      await refresh();
     } finally {
       actionInFlight.current = false;
       setBusy(false);
     }
   }
 
+  async function recoverTurn() {
+    if (!recovery?.intent) return;
+    await submit(recovery.intent, true);
+  }
+
+  function pendingTurnBlocksAction(): boolean {
+    if (actionInFlight.current || busy) return true;
+    if (recovery && (recovery.frozen || recovery.unknownAttemptIds.length > 0)) {
+      setError('请先恢复未完成的回合，再进行其他行动。');
+      return true;
+    }
+    return false;
+  }
+
   async function partyCall(action: (session: Awaited<ReturnType<typeof createSession>>) => Promise<void>) {
-    if (!profile) return;
+    if (!profile || pendingTurnBlocksAction()) return;
     setBusy(true);
     setError(null);
     try {
@@ -383,7 +421,7 @@ export function usePlayController(): PlayController {
   }
 
   async function encounterCall(work: (session: Awaited<ReturnType<typeof createSession>>) => Promise<EncounterView>) {
-    if (!profile || actionInFlight.current) return;
+    if (!profile || pendingTurnBlocksAction()) return;
     actionInFlight.current = true;
     setBusy(true);
     setError(null);
@@ -418,7 +456,7 @@ export function usePlayController(): PlayController {
   }
 
   async function rest(kind: 'short' | 'long') {
-    if (!profile) return;
+    if (!profile || pendingTurnBlocksAction()) return;
     setBusy(true);
     setError(null);
     try {
@@ -438,6 +476,7 @@ export function usePlayController(): PlayController {
   }
 
   async function rewind() {
+    if (pendingTurnBlocksAction()) return;
     if (!projection || !profile) return;
     const target = projection.stateVersion - 1;
     if (target < 0) {
@@ -484,7 +523,7 @@ export function usePlayController(): PlayController {
   }
 
   async function trainSkill(skillId: string) {
-    if (!projection?.player || !profile) return;
+    if (!projection?.player || !profile || pendingTurnBlocksAction()) return;
     setBusy(true);
     setError(null);
     try {
@@ -547,6 +586,8 @@ export function usePlayController(): PlayController {
     intent,
     setIntent,
     busy,
+    recovery,
+    recoverTurn,
     error,
     notice,
     setError,

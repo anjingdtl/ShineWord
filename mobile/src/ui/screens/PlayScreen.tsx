@@ -114,6 +114,8 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   };
 
   const hostiles = encounter?.actors.filter(actor => actor.side === 'hostile' && actor.hp > 0) ?? [];
+  const recovery = controller.recovery;
+  const recoveryLocked = !!recovery && (recovery.frozen || recovery.unknownAttemptIds.length > 0);
 
   return (
     <ScreenShell bottom>
@@ -128,16 +130,24 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
       <NarrativeFeed turns={turns} goal={view?.goal ?? ''} busy={busy} />
 
       <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.xs }}>
+        {recoveryLocked ? <>
+          <StatusBanner tone="info" title="有一回合尚未完成" message={recovery.unknownAttemptIds.length
+            ? '上次云端生成结果未知，可能已经计费。重试会发送新的生成请求；已保存的行动与骰点将继续沿用。'
+            : '已保存原行动与检定结果，可继续完成这一回合。'} />
+          <Button label={recovery.unknownAttemptIds.length ? '确认重试这一回合' : '继续未完成的回合'}
+            onPress={() => void controller.recoverTurn()} disabled={busy || !recovery.intent} testID="play-recover-turn" />
+        </> : null}
         {notice ? <StatusBanner tone="info" message={notice} /> : null}
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
       </View>
 
-      <ActionChoices choices={choices} disabled={busy} onChoose={onChoose} />
+      <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} />
       <ActionComposer
         value={intent}
         onChangeText={setIntent}
         onSubmit={() => void submit()}
         busy={busy}
+        blocked={recoveryLocked}
         encounterActive={encounter?.status === 'active'}
       />
 

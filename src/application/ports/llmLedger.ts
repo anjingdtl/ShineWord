@@ -64,6 +64,8 @@ export interface LlmRequestAttemptRecord {
   estimatedUsage: number;
   startedAt: number;
   finishedAt: number | null;
+  /** Explicit player acknowledgement; preserves the unknown outcome and usage. */
+  replayApprovedAt?: number | null;
 }
 
 export interface NewLlmRequestAttempt {

@@ -9,7 +9,7 @@
 | M2 | 通过（已修复） | 完整小说导入、第一阶段发布、暂停/重启续建和同文件去重通过；修复冲突审查与续建死路 |
 | M3 | 通过（已修复） | 原创两步开局、原著四步开局、首回合生成、重启继续通过；修复游玩页返回入口 |
 | M4 | 通过（已修复） | 同一分支 10 次真实行动；三档、4 次本地掷骰、五个面板与 v8 记忆保存；修复时间与阅读跟随 |
-| M5 | 待执行 | |
+| M5 | 通过（已修复） | 存档与世界包往返、校验失败、分支休息、断网重试、后台、两处强停恢复通过；修复恢复死路、导入标题和菜单回执 |
 | M6 | 待执行 | |
 
 完整范围与通过条件见 [TEST_PLAN.md](TEST_PLAN.md)。
@@ -67,3 +67,18 @@
 - 阅读缺陷：键盘缩小视窗和新增内容被误判为读旧故事，最新故事偶尔藏在下面。修复为记录用户滚动意图，在原生尺寸测量稳定后跟随末尾。设备验证：第 7/10 回合自动显示新故事；主动上滑阅读 5/6 回合时，第 8 回合提交保持原位置，手动下滑可看新故事。
 - 核心回归 584/584、移动类型检查、独立 APK 构建通过；时间边界与 Planner/Narrator 必需上下文新增回归通过。
 - 证据：`m4-turn02.xml`、`m4-turn03-watch.xml`、`m4-turn05-complete.xml`、`m4-turn06-complete.xml`、`m4-reading-old.xml`、`m4-turn08-reader-position.xml`、`m4-turn09-visible.xml`、`m4-turn10.xml`、`m4-panel-{party,quests,items,knowledge}.xml`；截图：[M4_LATEST_TURN.png](M4_LATEST_TURN.png)、[M4_TURN10.png](M4_TURN10.png)。
+
+## M5 存档、分支与故障恢复
+
+- 原创 v10 通过系统文件选择器导出 79,011 bytes 的 v6 存档，包含 10 回合、11 个快照与 4,500 秒世界时间。改变状态但不更新摘要的副本被拒绝（`Payload digest mismatch`），没有创建半成品战役；完整存档导入为新战役并保持 v10，原战役不变。
+- 导入战役从 v10 回退到新分支 v9；主线仍 v10。短休和长休分别推进 1,800 / 28,800 秒，得到 v11 / 34,500 秒，两次均为本地结算，无模型请求。
+- 断网时提交失败，输入恢复、v11 不变；联网后重试并连续点两次，仅提交一个回合到 v12。账本为 Planner 已知网络失败 a1 → 成功 a2，Narrator 成功 a1；没有重复结算。网络错误补上中文提示。
+- 下一次交涉生成期间切到桌面再返回，正常提交 v13；本地 `[1]` / DC4 大失败，叙事保持失败结果。
+- 强停阻滞复现：第 14 回合 Planner 已成功，本地状态 `Resolved`、骰点 `[3]` 已保存，Narrator 请求发送后强停。重启失去原输入；重试被 `outcome_unknown` 保护挡住，界面却没有账本确认或恢复入口。
+- 修复：migration 26 保存提交前的原始行动；恢复旧版已冻结合同；增加说明上次可能已计费的「确认重试这一回合」，只认可当前战役/分支/状态下明确选定的未知请求，保留未知状态与用量而非伪造完成。新一次中断仍需再次确认，其他动作不能绕过未完成回合。Narrator 恢复沿用冻结行动，既有骰点不重掷。
+- 设备复测救回 v14：合同哈希仍为 `0c11cc0549d9b8c44f27e3109d38625d6bc34a71f0fd2bcc1dfb2ecd15aafb03`，原 `[3]` 与创建时间不变；Planner 仍只有 a1，Narrator 为原未知 a1（记录确认时间）及成功 a2。连续点恢复按钮未新增第三次尝试。
+- 再于第 15 回合 Planner 发送时强停。重启完整恢复原英文输入；无自动重发；确认后 Planner a2 / Narrator a1 成功，分支 v15，行动草稿清零。普通输入和选择在未完成回合中禁用，恢复后重新可用。
+- 菜单导出成功提示原先在折叠视窗外，移至菜单顶部，设备无需滚动即可看到回执。新存档保存战役标题，旧存档从世界名和玩家卡恢复标题；实际重新导入旧 v10 文件显示「《白篱梦》作者：希行 · Shiheng（导入）」并可继续。此前已导入的旧战役不改名。
+- 世界包 r1 导出 ZIP 202,954 bytes，包含 `package.json`；经 UI 导入为独立可游玩项目，没有额外模型调用。导出存档、世界包未包含真实凭据。
+- 80 项针对性回归、588/588 核心回归、移动类型和版本门禁通过；独立 APK 构建、保留数据更新、migration 25→26 和上述恢复复测通过。
+- 证据：`m5-exported.xml`、`m5-corrupt-rejected.xml`、`m5-save-imported.xml`、`m5-offline-error.xml`、`m5-background-result.xml`、`m5-kill-blocked.xml`、`m5-recovery-fixed.xml`、`m5-recovered-turn14.xml`、`m5-planner-draft-recovery.xml`、`m5-planner-recovered15.xml`、`m5-export-receipt-fixed.xml`、`m5-import-title-fixed.xml`、`m5-world-import-final.xml`；截图：[M5_RECOVERY.png](M5_RECOVERY.png)、[M5_RESUMED_ROLL.png](M5_RESUMED_ROLL.png)、[M5_IMPORTED_SAVE.png](M5_IMPORTED_SAVE.png)。

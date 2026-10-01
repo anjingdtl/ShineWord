@@ -348,7 +348,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       system: narratorSystem(),
       user: JSON.stringify({
         turnId: input.turnId,
-        playerIntent: input.playerIntent,
+        playerIntent: resumed ? compiled.contract.intent : input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
         worldClock: {

@@ -51,6 +51,8 @@ export function GameMenu(props: {
       subtitle="系统动作与战役信息"
       onClose={props.onClose}>
       <View style={{ gap: theme.space.md }}>
+        {notice ? <StatusBanner tone="success" message={notice} /> : null}
+        {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
         <Card>
           <SectionHeader title="休息与存档" subtitle="休息会推进世界时间" />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>
@@ -126,9 +128,6 @@ export function GameMenu(props: {
             testID="menu-open-info"
           />
         </Card>
-
-        {notice ? <StatusBanner tone="success" message={notice} /> : null}
-        {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
 
         <Button
           label="退出到战役列表"

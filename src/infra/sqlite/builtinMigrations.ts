@@ -1140,4 +1140,14 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 24, name: 'stopped_user_status', sql: STOPPED_USER_STATUS_SCHEMA_SQL, foreignKeys: 'off' },
   // Clients which already applied the original v24 still need data recovery.
   { version: 25, name: 'legacy_canceled_recovery', sql: LEGACY_CANCELED_RECOVERY_SQL },
+  { version: 26, name: 'play_turn_recovery', sql: `
+    ALTER TABLE llm_request_attempts ADD COLUMN replay_approved_at INTEGER;
+    CREATE TABLE play_intent_drafts (
+      branch_id TEXT PRIMARY KEY,
+      expected_state_version INTEGER NOT NULL,
+      intent_text TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
+    );
+  ` },
 ];

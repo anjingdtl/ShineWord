@@ -27,6 +27,8 @@ export interface SaveManifest {
   schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
+  /** Optional for older saves; preserves the user-facing campaign name. */
+  title?: string;
   worldRef: {
     worldId: string;
     sourceSha256: string;
@@ -432,6 +434,7 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     schemaVersion: SAVE_SCHEMA_VERSION,
     createdAt: input.createdAt,
     campaignId: input.campaignId,
+    title: campaign.title,
     worldRef: {
       worldId: campaign.world_id,
       sourceSha256: world.source_sha256,
@@ -529,6 +532,9 @@ export async function validateSaveJsonBytes(
   if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
       (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
     errors.push('Save is missing the full branch snapshot history required for rewind and combat recovery.');
+  }
+  if (parsed.manifest?.title !== undefined && typeof parsed.manifest.title !== 'string') {
+    errors.push('Manifest title must be text when present.');
   }
   if (schemaVersion === SAVE_SCHEMA_VERSION && !Array.isArray(parsed.contentDeltas)) {
     errors.push('Save v6 is missing its immutable progressive content package list.');
@@ -836,6 +842,13 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
   const branchExists = await db.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [input.newBranchId]);
   if (branchExists) throw new Error(`Branch id already in use: ${input.newBranchId}.`);
 
+  const restoredWorld = await db.queryOne<{ title: string }>('SELECT title FROM worlds WHERE world_id = ?', [resolvedWorldId]);
+  const playerId = save.party.find(member => member.controller === 'player')?.actorId;
+  const playerCardJson = save.cards.find(card => card.actorId === playerId)?.cardJson;
+  const playerCard = playerCardJson ? JSON.parse(playerCardJson) as { name?: unknown } : null;
+  const playerName = typeof playerCard?.name === 'string' ? playerCard.name : '旅人';
+  const restoredTitle = manifest.title?.trim() || `${restoredWorld?.title ?? '导入的冒险'} · ${playerName}`;
+
   await db.transaction(async tx => {
     await tx.execute(
       `INSERT INTO campaigns
@@ -845,7 +858,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       [
         input.newCampaignId,
         resolvedWorldId,
-        `${manifest.campaignId} (imported)`,
+        `${restoredTitle.replace(/（导入）$/, '')}（导入）`,
         manifest.rulesetId,
         manifest.rulesetVersion,
         JSON.stringify({
