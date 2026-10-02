@@ -347,12 +347,14 @@ export class SqliteBuildRunStore implements BuildRunStore {
     now: string;
   }): Promise<boolean> {
     return this.db.transaction(async tx => {
-      const run = await tx.queryOne<{ fencing_token: number; usage_json: string | null }>(
-        `SELECT r.fencing_token, u.usage_json FROM world_build_runs r
+      const run = await tx.queryOne<{ fencing_token: number; usage_json: string | null; unit_status: string }>(
+        `SELECT r.fencing_token, u.usage_json, u.status AS unit_status FROM world_build_runs r
            JOIN world_build_units u ON u.run_id = r.run_id WHERE u.unit_id = ?`,
         [input.unitId],
       );
       if (!run || run.fencing_token !== input.fencingToken) return false;
+      // A late duplicate completion is idempotent; completed work is immutable.
+      if (run.unit_status === 'completed') return input.status === 'completed';
       await tx.execute(
         `UPDATE world_build_units SET
            status = ?, result_ref = ?, usage_json = ?, error_code = ?, error_message = ?,

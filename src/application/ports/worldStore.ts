@@ -127,6 +127,21 @@ export interface CommitChunkResultInput {
   job: WorldJobRecord;
   createdAt: string;
   updatedAt: string;
+  /** Checked in the SAME transaction before any canon/checkpoint write. */
+  executionGuard?: {
+    runId: string; unitId: string; inputHash: string;
+    sourceSnapshotHash: string; fencingToken: number;
+  };
+  /** Exact batch response checkpoint, atomically with first chunk commit. */
+  requestCheckpoint?: WorldJobRecord;
+  /** Partial storage-chunk extraction must not claim whole-chunk coverage. */
+  completeChunk?: boolean;
+  /** Compatible per-route extraction marker plus the legacy latest marker. */
+  additionalJobs?: readonly WorldJobRecord[];
+}
+
+export class StaleBuildCommitError extends Error {
+  constructor() { super('Build execution fence/source/input/project no longer matches.'); this.name = 'StaleBuildCommitError'; }
 }
 
 export interface CommitChunkResultOutcome {

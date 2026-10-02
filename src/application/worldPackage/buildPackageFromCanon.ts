@@ -16,6 +16,9 @@ import type {
 import { publishWorldPackage } from './publish';
 import { sourceRangesCoverWholeText } from './preparationStatus';
 import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
+import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION,
+  type IncrementalMappingOptions, type SelectedCanon } from '../incrementalMapping/canonSelection';
+import { validatePackage } from './validate';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -59,6 +62,11 @@ export interface BuildPackageInput {
   runId?: string;
   sourceSha256: string;
   mappingVersion: string;
+  /** Exact frozen provider/reasoning fingerprint, including on scoped drafts. */
+  executionConfigFingerprint?: string;
+  incrementalMapping?: IncrementalMappingOptions;
+  /** Run generation/input/lease/source/project guard supplied by execution owner. */
+  assertCurrent?(): Promise<void>;
   createdAt: string;
   /** Mobile builds must publish a world that can actually create a campaign. */
   requirePlayableOpening?: boolean;
@@ -93,6 +101,15 @@ export interface BuildPackageResult {
   sections: BookSection[];
   reviewIssues: number;
   mappingUsage: unknown | null;
+}
+
+export interface BuildPackageDraftResult {
+  entries: ContentEntry[];
+  sections: BookSection[];
+  reviewIssues: number;
+  mappingUsage: unknown | null;
+  canonSnapshotHash: string;
+  selection: SelectedCanon;
 }
 
 // ---------------------------------------------------------------------------
@@ -735,12 +752,14 @@ interface MapperPromptPayload {
   }>;
   entities: Array<{ entityId: string; type: string; name: string }>;
   events: Array<{ eventId: string; title: string; summary: string }>;
+  existingEntries?: readonly ContentEntry[];
 }
 
 function buildMapperUserPrompt(
   facts: readonly StoredFact[],
   entities: readonly StoredEntity[],
   events: readonly StoredEvent[],
+  existingEntries?: readonly ContentEntry[],
 ): string {
   const nameByEntity = new Map(entities.map(entity => [entity.entityId, entity.name]));
   const payload: MapperPromptPayload = {
@@ -755,6 +774,7 @@ function buildMapperUserPrompt(
     })),
     entities: entities.map(entity => ({ entityId: entity.entityId, type: entity.type, name: entity.name })),
     events: events.map(event => ({ eventId: event.eventId, title: event.title, summary: event.summary })),
+    ...(existingEntries?.length ? { existingEntries } : {}),
   };
   return JSON.stringify(payload);
 }
@@ -886,11 +906,33 @@ async function requestMappingProposals(
         .slice(0, 300);
     }
 
-    const user = buildMapperUserPrompt(batch, relatedEntities, relatedEvents);
+    const subjectIds = new Set(batch.map(fact => fact.subjectEntityId));
+    const subjectNames = new Set(relatedEntities.filter(entity => subjectIds.has(entity.entityId)).map(entity => entity.name));
+    const oldEntries = input.incrementalMapping?.previousEntries ?? [];
+    const contextIds = new Set(oldEntries.filter(entry => {
+      const name = asRecord(entry.definition)?.name;
+      return entry.provenance.sourceFactIds.some(id => batch.some(f => f.factId === id))
+        || typeof name === 'string' && subjectNames.has(name);
+    }).map(entry => entry.entryId));
+    let extended = true;
+    while (extended) {
+      extended = false;
+      for (const entry of oldEntries) if (contextIds.has(entry.entryId)) for (const id of entry.dependencyIds) {
+        if (!contextIds.has(id)) { contextIds.add(id); extended = true; }
+      }
+    }
+    const dependencyEntries = oldEntries.filter(entry => contextIds.has(entry.entryId));
+    const user = buildMapperUserPrompt(batch, relatedEntities, relatedEvents, dependencyEntries);
     // Hash the actual mapping input: a corrected fact with the same factId
     // must not reuse an obsolete proposal.
-    const batchHash = await input.sha256Hex(`${MAPPER_SYSTEM}\n${user}`);
-    const doneJob = await input.worldStore.getJob(input.worldId, batchJobId);
+    const executionFingerprint = input.incrementalMapping?.executionConfigFingerprint
+      ?? input.executionConfigFingerprint ?? 'legacy-unspecified';
+    const batchHash = await input.sha256Hex(JSON.stringify({ system: MAPPER_SYSTEM, user,
+      ruleset: SHINEWORD_RULESET_VERSION, mappingVersion: input.mappingVersion,
+      executionFingerprint, selectionVersion: input.incrementalMapping ? CANON_SELECTION_VERSION : 'legacy',
+      dependencies: dependencyEntries }));
+    const exactJobId = input.incrementalMapping ? `job-map-${input.worldId}-${batchHash}` : batchJobId;
+    const doneJob = await input.worldStore.getJob(input.worldId, exactJobId);
     const reusable = doneJob?.contentHash === batchHash
       && doneJob.extractorVersion === `mapper-${input.mappingVersion}`;
     const checkpoint = reusable && doneJob?.resultJson
@@ -899,10 +941,10 @@ async function requestMappingProposals(
     const splitBatch = async (persist = true): Promise<void> => {
       const midpoint = Math.ceil(batch.length / 2);
       if (persist) await input.worldStore.upsertJob({
-        worldId: input.worldId, jobId: batchJobId, kind: 'rule_mapping', targetId: null,
+        worldId: input.worldId, jobId: exactJobId, kind: 'rule_mapping', targetId: null,
         status: 'pending', attempts: (doneJob?.attempts ?? 0) + 1,
         contentHash: batchHash, extractorVersion: `mapper-${input.mappingVersion}`,
-        modelFingerprint: null, usageJson: null, resultJson: JSON.stringify({ split: true }),
+        modelFingerprint: executionFingerprint, usageJson: null, resultJson: JSON.stringify({ split: true }),
         error: null, createdAt: doneJob?.createdAt ?? input.createdAt, updatedAt: input.createdAt,
       }, input.createdAt);
       batches.splice(index + 1, 0,
@@ -934,7 +976,7 @@ async function requestMappingProposals(
             * (work.recovery ? 2 : 1),
           ...(work.recovery ? { reserveMultiplier: 1.5 } : {}),
           jsonMode: true,
-          logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${batchJobId}`,
+          logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${exactJobId}`,
         });
         if (input.signal?.aborted) throw new Error('World package mapping canceled.');
         raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
@@ -964,7 +1006,9 @@ async function requestMappingProposals(
     completedBatches += 1;
     usagePerBatch.push(response.usage ?? null);
 
-    const ctx: CleanContext = { knownFactIds, rejected: [] };
+    await input.assertCurrent?.();
+    const ctx: CleanContext = { knownFactIds: input.incrementalMapping
+      ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [] };
     // WorldMapper V2 (plan P4): evidence-verified rule mappings land through
     // the store's idempotent path; rejects surface in the review queue.
     if (Array.isArray(raw.ruleMappings)) {
@@ -1013,14 +1057,14 @@ async function requestMappingProposals(
     // a crash before this write re-runs exactly this batch, nothing else.
     if (!(doneJob?.status === 'done' && checkpoint?.proposal)) await input.worldStore.upsertJob({
       worldId: input.worldId,
-      jobId: batchJobId,
+      jobId: exactJobId,
       kind: 'rule_mapping',
       targetId: null,
       status: 'done',
       attempts: (doneJob?.attempts ?? 0) + 1,
       contentHash: batchHash,
       extractorVersion: `mapper-${input.mappingVersion}`,
-      modelFingerprint: null,
+      modelFingerprint: executionFingerprint,
       usageJson: JSON.stringify({
         usage: response.usage ?? null,
         requestMetrics: response.requestMetrics ?? [],
@@ -1129,6 +1173,17 @@ async function compileCanonScenes(
  * failures refuse publication and leave extracted canon available for retry.
  */
 export async function buildPackageFromCanon(input: BuildPackageInput): Promise<BuildPackageResult> {
+  const result = await buildPackagePipeline(input, true);
+  if (!('manifest' in result)) throw new Error('World package publication did not return a manifest.');
+  return result;
+}
+
+/** Mapping owns the draft; M5 alone owns multi-source artifact publication. */
+export async function buildPackageDraftFromCanon(input: BuildPackageInput): Promise<BuildPackageDraftResult> {
+  return buildPackagePipeline(input, false);
+}
+
+async function buildPackagePipeline(input: BuildPackageInput, publish: boolean): Promise<BuildPackageDraftResult | (BuildPackageDraftResult & BuildPackageResult)> {
   const { worldStore, worldId } = input;
   const progress = (phase: string, message?: string): void => input.onProgress?.({ phase, message });
 
@@ -1143,23 +1198,32 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
       }
       cursor = range.endCodePoint;
     }
-  } else if (input.sourceRanges?.length
+  } else if (!input.incrementalMapping && input.sourceRanges?.length
     && !sourceRangesCoverWholeText(input.sourceRanges, input.sourceCodePointCount ?? 0)) {
     throw new Error('无法证明已抽取的来源范围连续覆盖全文，因此不会发布全量精编包。');
   }
   if (input.signal?.aborted) throw new Error('World package mapping canceled.');
+  await input.assertCurrent?.();
 
   await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed']);
 
   progress('load', '读取小说事实、事件与实体');
-  const [allFacts, events, entities] = await Promise.all([
+  const [allFacts, allEvents, allEntities] = await Promise.all([
     worldStore.listFacts(worldId),
     worldStore.listEvents(worldId),
     worldStore.listEntities(worldId),
   ]);
+  const selection: SelectedCanon = input.incrementalMapping
+    ? selectCanonSubset({ facts: allFacts, events: allEvents, entities: allEntities, options: input.incrementalMapping })
+    : { facts: [...allFacts], events: [...allEvents], entities: [...allEntities], affectedEntryIds: [], diagnostics: [] };
+  if (selection.diagnostics.length > 0) throw new Error(`开局/增量依赖门禁未通过：${selection.diagnostics.join('；')}`);
+  const events = selection.events;
+  const entities = selection.entities;
   // World-wide deterministic preflight, BEFORE scene validation or any paid
   // mapping. A stage prefix must not waive conflicts elsewhere in this world.
-  const conflictFacts = allFacts.filter(fact => fact.status === 'conflict');
+  // Old paths retain the world-wide blocker. Scoped paths may exclude a
+  // proved unrelated later conflict, while publication still checks review.
+  const conflictFacts = (input.incrementalMapping ? selection.facts : allFacts).filter(fact => fact.status === 'conflict');
   if (conflictFacts.length > 0) {
     await worldStore.saveReviewIssue({
       worldId,
@@ -1183,7 +1247,7 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     return fact.sources.some(span =>
       stageRanges.some(range => span.endOffset > range.startCodePoint && span.startOffset < range.endCodePoint));
   };
-  const scopedFacts = allFacts.filter(factInRange);
+  const scopedFacts = selection.facts.filter(factInRange);
   const canonScenes = await compileCanonScenes(worldStore, entities, scopedFacts, input.createdAt);
   const firstAnchor = events.filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
     .sort((a, b) => a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
@@ -1283,10 +1347,11 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
   }
 
   // c. Local deterministic cleaning results + design_fill baseline.
-  const entries: ContentEntry[] = [];
+  let entries: ContentEntry[] = [];
   entries.push(...canonScenes);
 
-  const acceptedSkillIds = new Set(proposals.skills.map(entry => entry.entryId));
+  const acceptedSkillIds = new Set([...proposals.skills.map(entry => entry.entryId),
+    ...(input.incrementalMapping?.previousEntries ?? []).filter(entry => entry.kind === 'skill').map(entry => entry.entryId)]);
   for (const skill of proposals.skills) entries.push(skill);
   for (const constraint of proposals.constraints) entries.push(constraint);
   for (const lore of proposals.lore) entries.push(lore);
@@ -1351,7 +1416,22 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     },
   }));
 
+  if (input.incrementalMapping?.kind === 'incremental') {
+    entries = mergeIncrementalEntries(input.incrementalMapping.previousEntries ?? [], entries,
+      [...selection.affectedEntryIds, 'lore-review-summary']);
+  }
   const sections = buildSections(entries);
+  const canonSnapshotHash = await input.sha256Hex(JSON.stringify({
+    selectionVersion: CANON_SELECTION_VERSION, facts: scopedFacts, entities, events,
+  }));
+  const draft: BuildPackageDraftResult = { entries, sections, reviewIssues: reviewIssueCount, mappingUsage,
+    canonSnapshotHash, selection: { ...selection, facts: scopedFacts } };
+  if (!publish) {
+    const report = validatePackage({ worldId, revision: 0 }, entries, sections);
+    if (!report.ok) throw new Error(`映射草稿引用/协议校验失败：${report.errors.join('；')}`);
+    await input.assertCurrent?.();
+    return draft;
+  }
 
   // g. Publish with explicit coverage accounting. Validation failure FAILS —
   // silently retrying with a stripped design_fill package used to smuggle a
@@ -1393,5 +1473,5 @@ export async function buildPackageFromCanon(input: BuildPackageInput): Promise<B
     onValidated: () => progress('validated', '审查与结构校验通过，正在写入世界包'),
   });
   progress('published', '全量精编三宝书已通过发布校验');
-  return { manifest: result.manifest, entries, sections, reviewIssues: reviewIssueCount, mappingUsage };
+  return { ...draft, manifest: result.manifest };
 }

@@ -18,7 +18,7 @@ import type { SourceChunk, SourceChapter } from '../../domain/world/types';
 import type { SourceStore } from '../ports/sourceStore';
 import type { BuildRunPhase, BuildRunRecord, BuildRunStore, BuildUnitRecord } from '../ports/worldBuildStore';
 import type { WorldStore, WorldRecord } from '../ports/worldStore';
-import { mirrorSourceId } from '../ports/worldStore';
+import { mirrorSourceId, StaleBuildCommitError, type CommitChunkResultInput, type WorldJobRecord } from '../ports/worldStore';
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
@@ -49,7 +49,7 @@ import {
   TokenDensityCalibrator,
   DEFAULT_EXTRACTION_DENSITY,
 } from './analysisBatchPlanner';
-import { revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
+import { frozenConfigIdentity, reviveRunConfig, revivePlanState, type FrozenRunConfig, type RunPlanState } from './runConfig';
 import type { GroupExtractionResult, GroupSegmentInput, LlmGroupExtractor } from '../world/llmGroupExtractor';
 import { deriveSafetyMargin } from '../context/modelEnvelope';
 import { AUTOMATIC_MAPPING_RETRY, isAutomaticMappingFailure } from './automaticMappingRecovery';
@@ -347,6 +347,18 @@ export async function createExtractionRun(
     if (plannedChunks.length === 0) {
       throw new Error(`Scope [${input.scope.startCp}, ${input.scope.endCp}) covers no chunks.`);
     }
+    // Segments are logical codepoint ranges, not storage chunk boundaries.
+    // A strict bootstrap cap must never send the rest of an overlapping chunk.
+    const clipped: SourceChunk[] = [];
+    for (const chunk of plannedChunks) {
+      const startOffset = Math.max(chunk.startOffset, input.scope.startCp);
+      const endOffset = Math.min(chunk.endOffset, input.scope.endCp);
+      clipped.push(startOffset === chunk.startOffset && endOffset === chunk.endOffset ? chunk : {
+        ...chunk, startOffset, endOffset, charCount: endOffset - startOffset,
+        contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(input.sourceId, startOffset, endOffset)),
+      });
+    }
+    plannedChunks = clipped;
   }
   let mode: 'chunk' | 'group' | 'resident' = requestedMode;
   let residentDegraded: ResidentViability | null = null;
@@ -359,7 +371,8 @@ export async function createExtractionRun(
       residentDegraded = viability;
     }
   }
-  const configFingerprint = `${PIPELINE_VERSION}#${input.extractorVersion}#${input.modelFingerprint}`;
+  const configFingerprint = `${PIPELINE_VERSION}#${input.extractorVersion}#${input.modelFingerprint}`
+    + (input.config ? `#${frozenConfigIdentity(reviveRunConfig(JSON.stringify(input.config)) ?? input.config)}` : '');
   const createdAt = now();
 
   const routes = input.routes ?? 'single';
@@ -603,6 +616,12 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     await deps.runStore.setRunStatus(runId, 'failed_terminal', now(), 'source_missing', 'Source is no longer active.');
     return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: false };
   }
+  if (run.sourceSnapshotHash !== `${manifest.rawSha256Hex}:${manifest.normalizedTreeHash}`
+    || !await deps.worldStore.getWorld(run.worldId)) {
+    await deps.runStore.setRunStatus(runId, 'failed_terminal', now(), 'source_changed', 'Frozen source/project no longer matches.');
+    await deps.runStore.releaseLease(runId, owner, fencingToken, now());
+    return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: false };
+  }
   const chapters: SourceChapter[] = await deps.sourceStore.getChapters(run.sourceId);
   // Multi-part mirror view (product ask 2026-10-01 #2): world-side ids for a
   // part N>=2 source carry the `s{N}-` prefix, while every read of the raw
@@ -637,9 +656,18 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   // ever contain the run's authorized range - un-triggered stages never ride
   // along, not even as "context".
   const runScope = run.scopeJson ? JSON.parse(run.scopeJson) as { startCp: number; endCp: number } : null;
-  const bookChunks = runScope
+  const scopedBookChunks = runScope
     ? allChunks.filter(chunk => chunk.endOffset > runScope.startCp && chunk.startOffset < runScope.endCp)
     : allChunks;
+  const bookChunks: SourceChunk[] = [];
+  for (const chunk of scopedBookChunks) {
+    const startOffset = Math.max(chunk.startOffset, runScope?.startCp ?? chunk.startOffset);
+    const endOffset = Math.min(chunk.endOffset, runScope?.endCp ?? chunk.endOffset);
+    bookChunks.push(startOffset === chunk.startOffset && endOffset === chunk.endOffset ? chunk : {
+      ...chunk, startOffset, endOffset, charCount: endOffset - startOffset,
+      contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(run.sourceId, startOffset, endOffset)),
+    });
+  }
   const globalSegmentIndexOf = new Map(bookChunks.map((chunk, index) => [chunk.chunkId, index + 1]));
 
   const resident = run.planVersion === PLAN_VERSION_RESIDENT;
@@ -673,8 +701,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     for (const chunk of bookChunks) {
       const text = await deps.sourceStore.readRange(run.sourceId, chunk.startOffset, chunk.endOffset);
       segments.push({
-        chunkId: chunk.chunkId,
-        chapterId: chunk.chapterId,
+        chunkId: mirrorSourceId(sourceOrdinal, chunk.chunkId),
+        chapterId: mirrorSourceId(sourceOrdinal, chunk.chapterId),
         chapterTitle: titleByChapter.get(chunk.chapterId) ?? chunk.chapterId,
         startCp: chunk.startOffset,
         text,
@@ -976,7 +1004,14 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         }
         // World-side identity (mirrored for part N>=2) from here on: chunk
         // jobs, fact evidence and package provenance all use these ids.
-        unitChunks.push(toWorldChunk(chunk));
+        if (range.startCp < chunk.startOffset || range.endCp > chunk.endOffset
+          || range.startCp >= range.endCp) { sourceDrifted = true; break; }
+        const clipped = range.startCp !== chunk.startOffset || range.endCp !== chunk.endOffset
+          ? { ...chunk, startOffset: range.startCp, endOffset: range.endCp,
+            charCount: range.endCp - range.startCp,
+            contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(run.sourceId, range.startCp, range.endCp)) }
+          : chunk;
+        unitChunks.push(toWorldChunk(clipped));
       }
       if (sourceDrifted) {
         await deps.runStore.completeUnit({
@@ -989,8 +1024,12 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       // Idempotent fast path per chunk: world-side done under the same
       // content hash and config fingerprints (C1 guards) needs no LLM call.
       const pendingChunks: SourceChunk[] = [];
+      const partialChunkIds = new Set(unitChunks.filter((chunk, index) => {
+        const original = chunksByRange.get(ranges[index]!.chunkId)!;
+        return chunk.startOffset !== original.startOffset || chunk.endOffset !== original.endOffset;
+      }).map(chunk => chunk.chunkId));
       for (const chunk of unitChunks) {
-        if (!(await isChunkDone(deps, run, chunk))) pendingChunks.push(chunk);
+        if (!(await isChunkDone(deps, run, chunk, route, partialChunkIds.has(chunk.chunkId)))) pendingChunks.push(chunk);
       }
       if (pendingChunks.length === 0) {
         const ok = await deps.runStore.completeUnit({
@@ -1024,7 +1063,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         // a successful response here would bill the same unit again on resume.
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         const committed = await commitExtractionForChunks(
-          deps, run, [chunk], extraction, evidenceSource,
+          deps, run, [chunk], extraction, evidenceSource, {
+            guard: { runId, unitId: unit.unitId, inputHash: unit.inputHash,
+              sourceSnapshotHash: run.sourceSnapshotHash, fencingToken }, route, partialChunkIds,
+          },
         );
         if (!committed) { lostLease = true; return 'lost_lease'; }
         const ok = await deps.runStore.completeUnit({
@@ -1041,6 +1083,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           throw new Error('Group unit planned but no group extractor was provided.');
         }
         let group: GroupExtractionResult;
+        let requestCheckpoint: WorldJobRecord | undefined;
         if (resident && bookSegments) {
           const firstSegment = globalSegmentIndexOf.get(ranges[0]!.chunkId) ?? 1;
           const lastSegment = globalSegmentIndexOf.get(ranges[ranges.length - 1]!.chunkId) ?? firstSegment;
@@ -1102,15 +1145,42 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               });
             }
           }
+          const compatibility = extractionCompatibility(deps, run, route);
+          const requestHash = await deps.sha256Hex(JSON.stringify({
+            version: 'extraction-request-1', compatibility, sourceId: run.sourceId,
+            // The original frozen unit identity survives a partial per-chunk
+            // commit. Its exact response is then replayed for pending members
+            // rather than making a new paid request over the shortened tail.
+            ranges: unit.sourceRangesJson,
+            chunks: unitChunks.map(chunk => ({ id: chunk.chunkId, hash: chunk.contentHash,
+              startCp: chunk.startOffset, endCp: chunk.endOffset })), route: route ?? 'all',
+          }));
+          const checkpointId = `job-extract-request-${requestHash}`;
+          const checkpoint = await deps.worldStore.getJob(run.worldId, checkpointId);
           const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extract({
               unitId: unit.unitId, segments, worldId: run.worldId, reserveMultiplier,
               route: route ?? undefined,
             });
-          group = await runWithReasoningReserveBump(unit, makeRequest);
+          const cached = checkpoint?.status === 'done' && checkpoint.contentHash === requestHash
+            && checkpoint.extractorVersion === compatibility && checkpoint.resultJson
+            ? parseExtractionCheckpoint(checkpoint.resultJson) : null;
+          group = cached ?? await runWithReasoningReserveBump(unit, makeRequest);
+          requestCheckpoint = {
+            worldId: run.worldId, jobId: checkpointId, kind: 'extract_chunk', targetId: null,
+            status: 'done', attempts: checkpoint?.attempts ?? (cached ? 0 : 1),
+            contentHash: requestHash, extractorVersion: compatibility, modelFingerprint: run.modelFingerprint,
+            usageJson: cached ? checkpoint?.usageJson ?? null : usageSummaryFor(group),
+            resultJson: JSON.stringify({ version: 'extraction-request-1', group,
+              exactInputHash: await deps.sha256Hex(JSON.stringify({ segments, route: route ?? 'all' })) }),
+            error: null, createdAt: checkpoint?.createdAt ?? now(), updatedAt: now(),
+          };
         }
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
-        await commitGroupResult(deps, run, pendingChunks, group, evidenceSource);
+        await commitGroupResult(deps, run, pendingChunks, group, evidenceSource, {
+          guard: { runId, unitId: unit.unitId, inputHash: unit.inputHash,
+            sourceSnapshotHash: run.sourceSnapshotHash, fencingToken }, route, requestCheckpoint, partialChunkIds,
+        });
         const unitInputTokens = pendingChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0);
         recordCalibrationSample(group, pendingChunks.length, unitInputTokens);
         completedGroups += 1;
@@ -1170,6 +1240,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         }
       }
     } catch (error) {
+      if (error instanceof StaleBuildCommitError) { lostLease = true; return 'lost_lease'; }
       if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
         const recorded = await deps.runStore.appendUnitRequestMetrics(
           unit.unitId, fencingToken, error.requestMetrics, now(),
@@ -1520,15 +1591,54 @@ function isContentModerationMessage(message: string): boolean {
 
 /** World-side done check (C1 guards) for one chunk. */
 async function isChunkDone(
-  deps: Pick<CoordinatorDeps, 'worldStore' | 'extractor'>,
+  deps: Pick<CoordinatorDeps, 'worldStore' | 'extractor' | 'groupExtractor' | 'sha256Hex'>,
   run: BuildRunRecord,
   chunk: SourceChunk,
+  route: ExtractionRoute | null,
+  partial: boolean,
 ): Promise<boolean> {
-  const job = await deps.worldStore.getJob(run.worldId, chunkJobId(chunk.chunkId));
+  const job = await deps.worldStore.getJob(run.worldId, await chunkExecutionJobId(deps, run, chunk, route, partial));
   return job?.status === 'done'
     && job.contentHash === chunk.contentHash
-    && job.extractorVersion === deps.extractor.version
+    && job.extractorVersion === extractionCompatibility(deps, run, route)
     && (job.modelFingerprint ?? null) === run.modelFingerprint;
+}
+
+async function chunkExecutionJobId(deps: Pick<CoordinatorDeps, 'extractor' | 'groupExtractor' | 'sha256Hex'>,
+  run: BuildRunRecord, chunk: SourceChunk, route: ExtractionRoute | null, partial: boolean): Promise<string> {
+  const base = partial ? `${chunkJobId(chunk.chunkId)}-cp${chunk.startOffset}-${chunk.endOffset}` : chunkJobId(chunk.chunkId);
+  return run.configJson || route ? `${base}-cfg${await deps.sha256Hex(extractionCompatibility(deps, run, route))}` : base;
+}
+
+function extractionCompatibility(deps: Pick<CoordinatorDeps, 'extractor' | 'groupExtractor'>,
+  run: BuildRunRecord, route: ExtractionRoute | null): string {
+  const config = reviveRunConfig(run.configJson);
+  // The legacy all-category path remains resumable under its original key.
+  if (!config && !route) return deps.extractor.version;
+  return [deps.extractor.version, deps.groupExtractor?.version ?? 'single', 'extraction-schema-1',
+    run.planVersion, route ?? 'all', run.sourceId, run.sourceSnapshotHash,
+    config ? frozenConfigIdentity(config) : run.modelFingerprint].join('#');
+}
+
+function parseExtractionCheckpoint(json: string): GroupExtractionResult | null {
+  try {
+    const raw: unknown = JSON.parse(json);
+    if (!raw || typeof raw !== 'object' || !('version' in raw) || raw.version !== 'extraction-request-1'
+      || !('group' in raw) || !raw.group || typeof raw.group !== 'object') return null;
+    const group = raw.group as Partial<GroupExtractionResult>;
+    if (!Array.isArray(group.entities) || !Array.isArray(group.facts) || !Array.isArray(group.events)
+      || !Array.isArray(group.ruleMappings) || typeof group.rejectedQuotes !== 'number') return null;
+    // These payloads were parsed by the existing extractor and verbatim-quote
+    // validated before atomic persistence; a damaged checkpoint is not reused.
+    return group as GroupExtractionResult;
+  } catch { return null; }
+}
+
+interface ExtractionCommitContext {
+  guard: NonNullable<CommitChunkResultInput['executionGuard']>;
+  route: ExtractionRoute | null;
+  requestCheckpoint?: WorldJobRecord;
+  partialChunkIds: ReadonlySet<string>;
 }
 
 /**
@@ -1542,6 +1652,7 @@ async function commitExtractionForChunks(
   chunks: readonly SourceChunk[],
   extraction: ExtractionResult,
   evidenceSource: EvidenceSource,
+  context: ExtractionCommitContext,
 ): Promise<boolean> {
   const now = deps.now ?? (() => new Date().toISOString());
   for (const chunk of chunks) {
@@ -1552,7 +1663,7 @@ async function commitExtractionForChunks(
       createdAt: now(),
       sha256Hex: deps.sha256Hex,
     });
-    await commitResolvedChunk(deps, run, chunk, resolved);
+    await commitResolvedChunk(deps, run, chunk, resolved, context);
   }
   return true;
 }
@@ -1569,6 +1680,7 @@ async function commitGroupResult(
   chunks: readonly SourceChunk[],
   group: GroupExtractionResult,
   evidenceSource: EvidenceSource,
+  context: ExtractionCommitContext,
 ): Promise<void> {
   const now = deps.now ?? (() => new Date().toISOString());
   const fallbackChunk = chunks[0]!;
@@ -1595,8 +1707,6 @@ async function commitGroupResult(
         : [],
       ruleMappings: chunk === fallbackChunk ? group.ruleMappings : [],
     };
-    if (facts.length === 0 && extraction.events.length === 0 && group.entities.length === 0
-      && extraction.ruleMappings.length === 0) continue;
     const resolved = await applyExtraction({
       worldId: run.worldId,
       source: evidenceSource,
@@ -1605,7 +1715,9 @@ async function commitGroupResult(
       sha256Hex: deps.sha256Hex,
       additionalVerifiedQuotes: groupVerifiedQuotes,
     });
-    await commitResolvedChunk(deps, run, chunk, resolved);
+    await commitResolvedChunk(deps, run, chunk, resolved, {
+      ...context, requestCheckpoint: chunk === fallbackChunk ? context.requestCheckpoint : undefined,
+    });
   }
 }
 
@@ -1615,6 +1727,7 @@ async function commitResolvedChunk(
   run: BuildRunRecord,
   chunk: SourceChunk,
   resolved: Awaited<ReturnType<typeof applyExtraction>>,
+  context: ExtractionCommitContext,
 ): Promise<void> {
   const now = deps.now ?? (() => new Date().toISOString());
   const eventProposals = resolved.events.map(event => ({
@@ -1626,12 +1739,25 @@ async function commitResolvedChunk(
     narrativeChapterId: event.narrativeChapterId ?? null,
     dependsOnEventKeys: event.dependsOnEventKeys ?? [],
   }));
-  const existing = await deps.worldStore.getJob(run.worldId, chunkJobId(chunk.chunkId));
+  const partial = context.partialChunkIds.has(chunk.chunkId);
+  const jobId = await chunkExecutionJobId(deps, run, chunk, context.route, partial);
+  const existing = await deps.worldStore.getJob(run.worldId, jobId);
   let factCounter = 0;
-  const factsWithIds = resolved.facts.map(fact => {
+  const factsWithIds = await Promise.all(resolved.facts.map(async fact => {
     factCounter += 1;
-    return { ...fact, factId: `fact-${run.worldId}-${chunk.chunkId}-${factCounter}` };
-  });
+    const suffix = run.configJson || context.route || context.partialChunkIds.has(chunk.chunkId)
+      ? await deps.sha256Hex(JSON.stringify({ subject: fact.subjectEntityId, predicate: fact.predicate,
+        value: fact.value, status: fact.status, sources: fact.sources })) : String(factCounter);
+    return { ...fact, factId: `fact-${run.worldId}-${chunk.chunkId}-${suffix}` };
+  }));
+  const job: WorldJobRecord = {
+    worldId: run.worldId, jobId, kind: 'extract_chunk', targetId: chunk.chunkId,
+    status: 'done', attempts: (existing?.attempts ?? 0) + 1, contentHash: chunk.contentHash,
+    extractorVersion: extractionCompatibility(deps, run, context.route), modelFingerprint: run.modelFingerprint,
+    usageJson: JSON.stringify({ entities: resolved.entities.length, facts: resolved.facts.length }),
+    resultJson: JSON.stringify({ ok: true }), error: null,
+    createdAt: existing?.createdAt ?? now(), updatedAt: now(),
+  };
   await deps.worldStore.commitChunkResult({
     worldId: run.worldId,
     chunkId: chunk.chunkId,
@@ -1639,24 +1765,14 @@ async function commitResolvedChunk(
     facts: factsWithIds,
     eventProposals,
     ruleMappings: resolved.ruleMappings,
-    job: {
-      worldId: run.worldId,
-      jobId: chunkJobId(chunk.chunkId),
-      kind: 'extract_chunk',
-      targetId: chunk.chunkId,
-      status: 'done',
-      attempts: (existing?.attempts ?? 0) + 1,
-      contentHash: chunk.contentHash,
-      extractorVersion: deps.extractor.version,
-      modelFingerprint: run.modelFingerprint,
-      usageJson: JSON.stringify({ entities: resolved.entities.length, facts: resolved.facts.length }),
-      resultJson: JSON.stringify({ ok: true }),
-      error: null,
-      createdAt: existing?.createdAt ?? now(),
-      updatedAt: now(),
-    },
+    job,
     createdAt: now(),
     updatedAt: now(),
+    executionGuard: context.guard,
+    requestCheckpoint: context.requestCheckpoint,
+    completeChunk: !partial,
+    additionalJobs: !partial && jobId !== chunkJobId(chunk.chunkId)
+      ? [{ ...job, jobId: chunkJobId(chunk.chunkId) }] : [],
   });
 }
 
@@ -1710,7 +1826,7 @@ function safeProviderFailureText(error: LlmRequestFailure, classification: Error
  * the C1 batch builder: dedupe by eventId, resolve dependencies against open
  * proposals and committed canon events).
  */
-async function resolveEventProposals(deps: CoordinatorDeps, worldId: string): Promise<void> {
+export async function resolveEventProposals(deps: Pick<CoordinatorDeps, 'worldStore' | 'now'>, worldId: string): Promise<void> {
   const now = deps.now ?? (() => new Date().toISOString());
   const proposals = await deps.worldStore.listEventProposals(worldId);
   const byEventId = new Map(proposals.map(p => [p.eventId, p]));
@@ -1733,12 +1849,10 @@ async function resolveEventProposals(deps: CoordinatorDeps, worldId: string): Pr
   const resolvedIds: string[] = [];
   for (const proposal of proposals) {
     const resolvedDependencies = proposal.dependsOnEventKeys
-      .map(key => {
-        const id = eventIdFor(worldId, key);
-        if (known.has(id)) return id;
-        return null;
-      })
-      .filter((id): id is string => id !== null);
+      // Missing dependencies remain explicit blockers for the scoped opening
+      // closure. Silently removing a missing action/event prerequisite would
+      // make incomplete content look ready.
+      .map(key => known.has(key) ? key : eventIdFor(worldId, key));
     await deps.worldStore.saveEvent({
       worldId,
       eventId: proposal.eventId,

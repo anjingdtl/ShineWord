@@ -22,7 +22,7 @@ import type {
   WorldStore,
   WorldCanonSnapshot,
 } from '../../application/ports/worldStore';
-import { mirrorSourceId, mirrorSourceIndex } from '../../application/ports/worldStore';
+import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
 
 interface WorldRow extends SqliteRow {
   world_id: string;
@@ -981,6 +981,25 @@ export class SqliteWorldStore implements WorldStore {
   async commitChunkResult(input: CommitChunkResultInput): Promise<CommitChunkResultOutcome> {
     const factOutcomes: Array<'inserted' | 'duplicate' | 'conflict'> = [];
     await this.db.transaction(async tx => {
+      if (input.executionGuard) {
+        const guard = input.executionGuard;
+        const current = await tx.queryOne<{ ok: number }>(
+          `SELECT 1 AS ok FROM world_build_runs r
+           JOIN world_build_units u ON u.run_id = r.run_id
+           JOIN worlds w ON w.world_id = r.world_id
+           JOIN imported_sources s ON s.source_id = r.source_id
+           JOIN world_sources ws ON ws.world_id = r.world_id AND ws.source_id = r.source_id
+           WHERE r.run_id = ? AND r.world_id = ? AND u.unit_id = ?
+             AND u.input_hash = ? AND u.status = 'running'
+             AND r.source_snapshot_hash = ? AND r.fencing_token = ?
+             AND r.lease_owner IS NOT NULL AND r.lease_expires_at > ?
+             AND r.status IN ('running','paused_user','stopped_user') AND s.status = 'active'
+             AND r.source_snapshot_hash = s.raw_sha256 || ':' || s.normalized_tree_hash`,
+          [guard.runId, input.worldId, guard.unitId, guard.inputHash,
+            guard.sourceSnapshotHash, guard.fencingToken, input.updatedAt],
+        );
+        if (!current) throw new StaleBuildCommitError();
+      }
       for (const entity of input.entities) {
         await this.upsertEntityTx(tx, entity, input.createdAt);
       }
@@ -1020,11 +1039,13 @@ export class SqliteWorldStore implements WorldStore {
       for (const mapping of input.ruleMappings ?? []) {
         await this.saveRuleMappingTx(tx, mapping, input.createdAt);
       }
-      await tx.execute(
+      if (input.completeChunk !== false) await tx.execute(
         `UPDATE source_chunks SET extraction_status = 'extracted' WHERE world_id = ? AND chunk_id = ?`,
         [input.worldId, input.chunkId],
       );
       await this.upsertJobTx(tx, input.job, input.updatedAt);
+      if (input.requestCheckpoint) await this.upsertJobTx(tx, input.requestCheckpoint, input.updatedAt);
+      for (const job of input.additionalJobs ?? []) await this.upsertJobTx(tx, job, input.updatedAt);
     });
     return { factOutcomes };
   }

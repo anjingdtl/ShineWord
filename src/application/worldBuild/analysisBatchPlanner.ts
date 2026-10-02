@@ -284,7 +284,8 @@ export function planAnalysisBatches(
       chapterIds: run.chapterIds,
       segments,
       estInputTokens: run.tokens,
-      inputHashSeed: run.slices.map(slice => slice.sliceId).join('|'),
+      inputHashSeed: run.slices.map(slice => `${slice.sliceId}:${slice.startCp}-${slice.endCp}:` +
+        slice.memberChunkIds.map(id => `${id}:${orderedChunks.find(chunk => chunk.chunkId === id)!.contentHash}`).join(',')).join('|'),
     };
     if (route) batch.route = route;
     return batch;

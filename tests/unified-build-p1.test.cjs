@@ -722,10 +722,14 @@ test('U04 control flags: cross-process pause and cancel stop the coordinator bet
 
     // Stop: a fresh run is stopped between units (P0-4: the visible cancel
     // is a RECOVERABLE stop - stopped_user, not the terminal 'canceled').
+    const independent = { ...(await sourceStore.getManifest('src-flags')), sourceId: 'src-flags2', rawSha256Hex: await sha.sha256Hex('second-fixture') };
+    await sourceStore.beginStaging({ ...independent, status: 'staging' });
+    await sourceStore.saveShard({ sourceId: 'src-flags2', shardIndex: 0, startCp: 0, endCp: independent.codePointCount, text: await sourceStore.readRange('src-flags', 0, independent.codePointCount) });
+    await sourceStore.activateSource({ manifest: independent, chapters: await sourceStore.getChapters('src-flags'), chunks: await sourceStore.getChunks('src-flags') });
     await createExtractionRun(
       { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
       {
-        runId: 'run-cancel', worldId: 'w-flags2', sourceId: 'src-flags', modelFingerprint: 'ep#m',
+        runId: 'run-cancel', worldId: 'w-flags2', sourceId: 'src-flags2', modelFingerprint: 'ep#m',
         title: 't', extractorVersion: fixture.version, mode: 'group', budget,
       },
     );

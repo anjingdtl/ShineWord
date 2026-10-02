@@ -481,12 +481,17 @@ test('V2-12 TTFP hook: fires after each completed batch of stage-scoped v2 runs 
       await createExtractionRun(
         { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
         {
-          runId, worldId, sourceId: 'src-ttfp', modelFingerprint: 'ep#m',
+          runId, worldId, sourceId: worldId === 'w-ttfp2' ? 'src-ttfp2' : 'src-ttfp', modelFingerprint: 'ep#m',
           title: 't', extractorVersion: fixture.version, mode: 'group', budget: BUDGET_1M, scope,
         },
       );
     };
     await makeRun('run-scoped', 'w-ttfp', { startCp: 0, endCp: Math.floor(imported.codePointCount / 2) });
+    // schema 28 assigns each physical source to exactly one project.
+    const duplicate = { ...(await sourceStore.getManifest('src-ttfp')), sourceId: 'src-ttfp2', rawSha256Hex: await sha.sha256Hex('independent-fixture') };
+    await sourceStore.beginStaging({ ...duplicate, status: 'staging' });
+    await sourceStore.saveShard({ sourceId: 'src-ttfp2', shardIndex: 0, startCp: 0, endCp: imported.codePointCount, text: await sourceStore.readRange('src-ttfp', 0, imported.codePointCount) });
+    await sourceStore.activateSource({ manifest: duplicate, chapters: imported.chapters, chunks: imported.chunks });
     await makeRun('run-whole', 'w-ttfp2', null);
 
     let scopedHookCalls = 0;

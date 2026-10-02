@@ -323,10 +323,15 @@ test('in-process stop signal persists stopped_user; pause signal persists paused
       ['run-sig-pause', false, 'paused_user'],
     ];
     for (const [runId, stopRequested, expected] of cases) {
+      const sourceId = `src-signal-${runId}`;
+      const manifest = { ...(await sourceStore.getManifest('src-signal')), sourceId, rawSha256Hex: await sha.sha256Hex(runId) };
+      await sourceStore.beginStaging({ ...manifest, status: 'staging' });
+      await sourceStore.saveShard({ sourceId, shardIndex: 0, startCp: 0, endCp: manifest.codePointCount, text: await sourceStore.readRange('src-signal', 0, manifest.codePointCount) });
+      await sourceStore.activateSource({ manifest, chapters: await sourceStore.getChapters('src-signal'), chunks: await sourceStore.getChunks('src-signal') });
       await createExtractionRun(
         { sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex },
         {
-          runId, worldId: `w-${runId}`, sourceId: 'src-signal', modelFingerprint: 'ep#m',
+          runId, worldId: `w-${runId}`, sourceId, modelFingerprint: 'ep#m',
           title: 't', extractorVersion: fixture.version, mode: 'group', budget: BUDGET,
         },
       );
