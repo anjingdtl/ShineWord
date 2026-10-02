@@ -15,6 +15,9 @@ import type {
 } from '../../domain/content/types';
 import { publishWorldPackage } from './publish';
 import { sourceRangesCoverWholeText } from './preparationStatus';
+import { hasCharacterLocationEvidence } from '../world/locationEvidence';
+import { isFactVisibleAtAnchor } from '../world/opening';
+import { compileOpeningActors } from './compileOpeningActors';
 import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
 import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION, factCoveredByRanges,
   type IncrementalMappingOptions, type SelectedCanon } from '../incrementalMapping/canonSelection';
@@ -63,6 +66,8 @@ export interface BuildPackageInput {
   runId?: string;
   sourceSha256: string;
   mappingVersion: string;
+  /** Evidenced identities with ruleset defaults; no paid semantic mapping at first startup. */
+  mappingMode?: 'startup_local';
   /** Exact frozen provider/reasoning fingerprint, including on scoped drafts. */
   executionConfigFingerprint?: string;
   incrementalMapping?: IncrementalMappingOptions;
@@ -92,6 +97,7 @@ export interface BuildPackageInput {
   stageScope?: {
     ranges: ReadonlyArray<{ startCodePoint: number; endCodePoint: number; contentSha256: string }>;
     coversWholeText: boolean;
+    openingWorldTimeOrder?: number;
   };
   signal?: { aborted: boolean };
   onProgress?(info: { phase: string; message?: string }): void;
@@ -1167,6 +1173,25 @@ async function compileCanonScenes(
   return entries;
 }
 
+/** A referenced named entity may only have evidence on another subject.
+ * Project the literal, unambiguous mention, never its inferred role or event narrative. */
+async function projectNamedMentionEvidence(store: SqliteWorldStore, entities: readonly StoredEntity[], facts: StoredFact[],
+  createdAt: string, guard?: (tx: SqliteTransaction) => Promise<void>): Promise<void> {
+  for (const entity of entities) {
+    if (facts.some(f => f.subjectEntityId === entity.entityId && (f.status === 'explicit' || f.status === 'inference'))) continue;
+    const names = [entity.name, ...entity.aliases].filter(name => Array.from(name).length >= 2
+      && !entities.some(other => other.entityId !== entity.entityId && [other.name,...other.aliases].includes(name)));
+    const support = facts.find(f => f.status === 'explicit' && f.sources.some(span => names.some(name => span.quote.includes(name))));
+    if (!support) continue;
+    const spans = support.sources.filter(span => names.some(name => span.quote.includes(name)));
+    const mention = names.find(name => spans[0]!.quote.includes(name))!;
+    const fact: StoredFact = { ...support, factId: `fact-${entity.entityId}-named-mention`, subjectEntityId: entity.entityId,
+      predicate: 'mentioned_as', value: { mention }, sources: spans };
+    await store.saveFact(fact, createdAt, guard);
+    facts.push(fact);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline
 // ---------------------------------------------------------------------------
@@ -1223,6 +1248,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   if (input.incrementalMapping) {
     const eligible = allFacts.filter(f => factCoveredByRanges(f, input.incrementalMapping!));
     await input.assertCurrent?.();
+    await projectNamedMentionEvidence(worldStore, allEntities, eligible, input.createdAt, input.assertCurrentTx);
     await compileCanonScenes(worldStore, allEntities, eligible, input.createdAt, input.assertCurrentTx);
     for (const fact of eligible) if (!allFacts.some(f => f.factId === fact.factId)) allFacts.push(fact);
   }
@@ -1263,7 +1289,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   const scopedFacts = selection.facts.filter(factInRange);
   const canonScenes = await compileCanonScenes(worldStore, entities, scopedFacts, input.createdAt, input.assertCurrentTx);
   const firstAnchor = events.filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
-    .sort((a, b) => a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
+    .sort((a, b) => input.mappingMode === 'startup_local' ? b.worldTimeOrder! - a.worldTimeOrder! : a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
   if (input.requirePlayableOpening && !canonScenes.some(scene => isEntryVisibleAtAnchor(scene, scopedFacts, firstAnchor))) {
     throw new Error('原著抽取缺少当前开局可用的地点证据，未发布世界包。请补齐地点分析后继续构建。');
   }
@@ -1285,7 +1311,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   // parse, structure) degrades to the pure local baseline — but the result is
   // published as an explicitly labeled needs_review PREVIEW, never as the
   // novel's complete three books (P2 acceptance G04).
-  progress('mapping', 'LLM 映射小说事实为世界包条目提案');
+  progress('mapping', input.mappingMode === 'startup_local' ? '本地编译有证据的开局人物与规则' : 'LLM 映射小说事实为世界包条目提案');
   let mappingUsage: unknown | null = null;
   let proposals: CleanedProposals = { skills: [], constraints: [], lore: [] };
   let actorTemplates: RawActorTemplate[] = [];
@@ -1293,7 +1319,15 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   let mappingSucceeded = false;
   let mappedFactCount = 0;
   let mappingBatches = 0;
-  try {
+  if (input.mappingMode === 'startup_local') {
+    if (input.incrementalMapping?.kind !== 'opening') throw new Error('local_opening_requires_scoped_opening');
+    actorTemplates = compileOpeningActors(entities, mappableFacts, firstAnchor).map(entry => ({
+      entryId: entry.entryId, entry, attackSkillIds: [], weaponSkillIds: [],
+    }));
+    // Here success describes local compilation; the persisted method and zero
+    // model batches distinguish it from an LLM mapping result.
+    mappingSucceeded = true;
+  } else try {
     const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds);
     proposals = mapped.proposals;
     // Closeout C3: aggregate usage across batches (sum token counters,
@@ -1416,9 +1450,8 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       const linked = actorTemplates.filter(template => {
         const name = (template.entry.definition as { name?: string }).name;
         const character = entities.find(e => e.type === 'character' && e.name === name);
-        return character && scopedFacts.some(f => f.subjectEntityId === character.entityId
-          && (values(f.value).some(v => v === location.entityId || v === location.name)
-            || f.sources.some(span => span.quote.includes(location.name) && span.quote.includes(character.name))));
+        return character && scopedFacts.some(f => isFactVisibleAtAnchor(f, firstAnchor ?? 0)
+          && hasCharacterLocationEvidence(f, character, location));
       }).map(t => t.entry.entryId).slice(0, 5);
       definition.actors = linked;
       scene.dependencyIds = [...new Set([...scene.dependencyIds, ...linked])];
@@ -1430,7 +1463,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     // an exact structured canon citation, never as invented generic lore.
     const represented = new Set(entries.flatMap(e => [...e.provenance.sourceFactIds,
       ...Object.values(e.fieldProvenance ?? {}).flatMap(p => [...p.sourceFactIds])]));
-    for (const fact of mappableFacts) if (!represented.has(fact.factId)) {
+    for (const fact of mappableFacts) if (input.mappingMode === 'startup_local' || !represented.has(fact.factId)) {
       const subject = entities.find(e => e.entityId === fact.subjectEntityId);
       if (!subject) continue;
       entries.push(makeEntry({ entryId: `lore-canon-${fact.factId}`, kind: 'lore',
@@ -1441,10 +1474,21 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     }
   }
 
+  if (input.mappingMode === 'startup_local') {
+    // The default scene is the earliest visible, evidenced action entry.
+    const playable = entries.find(e => e.kind === 'scene' && e.visibility === 'public'
+      && isEntryVisibleAtAnchor(e, scopedFacts, firstAnchor)
+      && (e.definition as { actors?: string[] }).actors?.length);
+    if (!playable) throw new Error('开局缺少同一时点带证据的行动依赖闭包');
+    entries = [playable, ...entries.filter(e => e !== playable)];
+  }
+
   // GM-facing review summary: conflict facts and open issues, always attached.
   const openIssues = await worldStore.listReviewIssues(worldId, 'open');
   const summaryParts = [
-    `本世界包基于 ${mappableFacts.length} 条已采纳事实构建（映射分 ${mappingBatches} 批全部覆盖）。`,
+    input.mappingMode === 'startup_local'
+      ? `本世界包基于 ${mappableFacts.length} 条已采纳事实本地编译；深度语义映射尚未执行。`
+      : `本世界包基于 ${mappableFacts.length} 条已采纳事实构建（映射分 ${mappingBatches} 批全部覆盖）。`,
     conflictFacts.length > 0
       ? `检测到 ${conflictFacts.length} 条冲突事实，发布被阻止，需 GM 仲裁。`
       : '未检测到冲突事实。',
@@ -1503,6 +1547,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
         scope: input.stageScope.coversWholeText ? 'whole_source' as const : 'incremental' as const,
         completeness: input.stageScope.coversWholeText ? 'complete' as const : 'partial' as const,
         sourceRanges: input.stageScope.ranges.map(range => ({ ...range })),
+        ...(input.stageScope.openingWorldTimeOrder !== undefined ? { openingWorldTimeOrder: input.stageScope.openingWorldTimeOrder } : {}),
       },
     } : input.sourceRanges?.length ? {
       buildScope: {
@@ -1513,6 +1558,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       },
     } : {}),
     coverage: {
+      mappingMethod: input.mappingMode ?? 'llm',
       mappableFacts: mappableFacts.length,
       factsOfferedToMapper: mappedFactCount,
       mappingBatches,
@@ -1524,5 +1570,5 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     assertCurrent: input.assertCurrentTx,
   });
   progress('published', '全量精编三宝书已通过发布校验');
-  return { ...draft, manifest: result.manifest };
+  return { ...draft, entries: draft.entries.map(entry => ({ ...entry, revision: result.manifest.revision })), manifest: result.manifest };
 }

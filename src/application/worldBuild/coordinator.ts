@@ -1524,7 +1524,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const missingOpeningLocation = reason.includes('当前开局可用的地点证据');
           const mappingFailed = reason.includes('小说→三宝书映射失败');
           const automaticRecovery = mappingFailed && isAutomaticMappingFailure(reason);
-          const errorCode = canonConflict ? 'canon_conflict'
+          const unknownOutcome = error instanceof OutcomeUnknownReplayError || reason.includes('outcome_unknown');
+          const errorCode = unknownOutcome ? 'outcome_unknown' : canonConflict ? 'canon_conflict'
             : missingOpeningLocation ? 'opening_location_missing'
             : mappingFailed ? (automaticRecovery ? AUTOMATIC_MAPPING_RETRY : 'mapping_configuration_required')
             : reason.includes('连续覆盖全文')
@@ -1534,10 +1535,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
               : 'package_finalize_failed';
           await deps.runStore.setRunStatus(
             runId,
-            canonConflict || missingOpeningLocation ? 'needs_review' : 'failed_retryable',
+            unknownOutcome || canonConflict || missingOpeningLocation ? 'needs_review' : 'failed_retryable',
             now(),
             errorCode,
-            canonConflict
+            unknownOutcome ? '模型请求的服务端结局未知，禁止自动重发；请在请求账本确认后继续。' : canonConflict
               ? '发现需核对的原著事实；请进入「审查」逐条处理，已完成抽取会保留。'
               : missingOpeningLocation
                 ? '缺少开局地点的原文证据，请补齐地点资料后继续构建。'
@@ -1637,10 +1638,10 @@ function extractionCompatibility(deps: Pick<CoordinatorDeps, 'extractor' | 'grou
   return [deps.extractor.version, deps.groupExtractor?.version ?? 'single', 'extraction-schema-1',
     run.planVersion, route ?? 'all', run.sourceId, run.sourceSnapshotHash,
     config ? frozenConfigIdentity(config) : run.modelFingerprint,
-    ...(run.runId.startsWith('phase6-') ? ['opening-focus-location-schema-2'] : [])].join('#');
+    ...(run.runId.startsWith('phase6-') ? ['opening-focus-location-schema-3'] : [])].join('#');
 }
 
-function parseExtractionCheckpoint(json: string): GroupExtractionResult | null {
+export function parseExtractionCheckpoint(json: string): GroupExtractionResult | null {
   try {
     const raw: unknown = JSON.parse(json);
     if (!raw || typeof raw !== 'object' || !('version' in raw) || raw.version !== 'extraction-request-1'

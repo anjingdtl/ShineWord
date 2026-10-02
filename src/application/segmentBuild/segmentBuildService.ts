@@ -211,6 +211,38 @@ export class SegmentBuildService {
   }
   async resume(worldId: string): Promise<void> { await this.setPause(worldId,null); }
   async cancelDemand(demandId: string): Promise<void> { await this.ports.store.cancelDemand(demandId); }
+  async releaseStaleBranchDemands(input: { worldId: string; campaignId: string; branchId: string; stateVersion: number | null }): Promise<void> {
+    for (const demand of await this.ports.store.listDemands(input.worldId)) if (demand.active && demand.ref
+      && demand.ref.campaignId === input.campaignId && demand.ref.branchId === input.branchId
+      && (input.stateVersion === null || demand.ref.stateVersion !== input.stateVersion)) {
+      await this.ports.store.cancelDemand(demand.demandId);
+    }
+    const demands = await this.ports.store.listDemands(input.worldId);
+    const readiness = await this.readReadiness({ worldId: input.worldId });
+    for (const segment of readiness.segments) if (!segment.artifactIds.length && segment.runIds.length
+      && !demands.some(d => d.active && d.segmentId === segment.intent.segmentId)) {
+      // A sent request remains billed/unknown if stopped. The existing host
+      // controls execution and fencing; the planner never pretends to preempt it.
+      for (const id of segment.runIds) await this.ports.executor.requestControl(id, 'cancel');
+    }
+  }
+  async replaceStoppedExecution(input: { worldId: string; segmentId: string; executionConfigFingerprint: string }): Promise<SegmentRecordV1[]> {
+    const segment=(await this.ports.store.listSegments(input.worldId)).find(s=>s.intent.segmentId===input.segmentId);
+    if (!segment || segment.artifactIds.length) throw new Error('segment_not_replaceable');
+    for (const runId of segment.runIds) {
+      const execution=await this.ports.executor.readExecution(runId);
+      if (execution.requestOutcome==='outcome_unknown') throw new Error('outcome_unknown_requires_ledger_confirmation');
+      if (!['failed_retryable','needs_review','paused','paused_user','paused_system','stopped_user','waiting_unlock','failed_terminal','canceled'].includes(execution.status)) throw new Error('segment_still_running');
+    }
+    await this.ports.store.saveProjection({...segment,status:'stale',lastErrorCode:'explicit_api_replacement',updatedAt:this.now()});
+    for (const demand of await this.ports.store.listDemands(input.worldId)) if (demand.active && demand.segmentId===input.segmentId) await this.ports.store.cancelDemand(demand.demandId);
+    const refs=segment.intent.demandRefs.length ? segment.intent.demandRefs : [null];
+    const result: SegmentRecordV1[]=[];
+    for (const ref of refs) result.push(...await this.requestDemand({worldId:input.worldId,executionConfigFingerprint:input.executionConfigFingerprint,
+      ranges:segment.intent.ranges,reason:segment.intent.reason,priority:segment.intent.priority,...(ref?{demandRef:ref}:{})}));
+    return result;
+  }
+
   async findSegmentByRunId(runId: string): Promise<SegmentRecordV1 | null> { return this.ports.store.findSegmentByRunId(runId); }
 
   private async nearbyCandidates(worldId: string,currentRanges: readonly SourceRangeV1[], cap: number): Promise<SourceRangeV1[][]> {
@@ -259,6 +291,7 @@ function priorityForReason(reason: BuildIntentV1['reason']): BuildIntentV1['prio
   return reason==='bootstrap' || reason==='action_dependency' ? 'P1' : reason==='user_full' ? 'P3' : 'P2';
 }
 function projectStatus(record: SegmentRecordV1,views: readonly BuildExecutionViewV1[]): SegmentRecordV1['status'] {
+  if (['stale','canceled','failed_terminal'].includes(record.status)) return record.status;
   if (!views.length) return record.runIds.length ? 'failed_retryable' : record.status;
   if (views.some(v => v.status==='needs_review')) return 'needs_review';
   if (views.some(v => v.status==='failed_terminal')) return 'failed_terminal';

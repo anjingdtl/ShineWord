@@ -9,7 +9,7 @@ test('production streaming entry uses bounded segments, persistent index and one
   const first=await h.sourceImport.importNovelForOpeningStreaming('memory','synthetic.txt',profile,()=>{});
   assert.equal(first.strategy,'progressive');assert.deepEqual(first.stages,[]);assert.equal(first.runIds.length,1);
   const run=await h.runStore.getRun(first.runIds[0]);const scope=JSON.parse(run.scopeJson);
-  assert.equal(scope.startCp,0);assert.equal(scope.endCp,3200);assert.ok(first.codePointCount>scope.endCp*3);
+  assert.equal(scope.startCp,0);assert.equal(scope.endCp,6000);assert.ok(first.codePointCount>scope.endCp*3);
   assert.equal((await h.adapter.queryOne('SELECT COUNT(*) AS n FROM world_stage_plans')).n,0);
   assert.ok((await h.adapter.queryOne('SELECT COUNT(*) AS n FROM source_index_pages')).n>0);
   const again=await h.sourceImport.importNovelForOpeningStreaming('memory','synthetic.txt',profile,()=>{});
@@ -30,6 +30,6 @@ test('production partial extraction never publishes empty canon; failed opening 
   const result=await h.sourceImport.runExtraction(first.runIds[0],profile,()=>{});
   assert.equal(result.completed,false);assert.equal(await h.runtime.worldStore.getPublishedPackageRevision(first.worldId),null);
   assert.ok((await h.adapter.queryOne('SELECT COUNT(*) AS n FROM segment_publication_diagnostics')).n>0);
-  assert.equal(calls,2,'one bounded survey and one exact extraction; no full-book registry or timeline call');
+  assert.equal(calls,1,'one exact focused extraction; no separate survey, registry, timeline or paid mapping call');
  }finally{h.db.close()}
 });

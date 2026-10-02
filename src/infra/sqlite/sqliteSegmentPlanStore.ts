@@ -89,7 +89,7 @@ export class SqliteSegmentPlanStore implements SegmentPlanStoreV1 {
     if (!statuses.includes(segment.status) || !segment.publishedCoverage.every(isSourceRangeV1)) throw new Error('invalid_segment_projection');
     // Do not overwrite intent metadata that another demand may have promoted since the read.
     return (await this.db.execute(`UPDATE world_segments SET artifact_ids_json=?,published_coverage_json=?,status=?,last_error_code=?,updated_at=?
-      WHERE segment_id=? AND generation=? AND (status<>'canceled' OR ?='canceled')`,[JSON.stringify(segment.artifactIds),JSON.stringify(segment.publishedCoverage),segment.status,
+      WHERE segment_id=? AND generation=? AND (status NOT IN ('canceled','stale') OR status=?)`,[JSON.stringify(segment.artifactIds),JSON.stringify(segment.publishedCoverage),segment.status,
       segment.lastErrorCode,segment.updatedAt,segment.intent.segmentId,segment.intent.generation,segment.status]))>0;
   }
   async attachRuns(segmentId:string,generation:number,runIds:readonly string[],now:string): Promise<boolean> {
@@ -121,6 +121,14 @@ export class SqliteSegmentPlanStore implements SegmentPlanStoreV1 {
       const demand=await tx.queryOne<DemandRow>('SELECT * FROM segment_demands WHERE demand_id=?',[demandId]);
       if (!demand) return;
       await tx.execute('UPDATE segment_demands SET active=0 WHERE demand_id=?',[demandId]);
+      const row=await tx.queryOne<SegmentRow>('SELECT * FROM world_segments WHERE segment_id=?',[demand.segment_id]);
+      if (row) {
+        const current=fromRow(row);
+        const active=await tx.queryAll<DemandRow>('SELECT * FROM segment_demands WHERE segment_id=? AND active=1',[demand.segment_id]);
+        const refs=active.flatMap(d=>d.ref_json ? [JSON.parse(d.ref_json) as BuildIntentV1['demandRefs'][number]] : []);
+        const intent={...current.intent,demandRefs:refs.filter((ref,index)=>refs.findIndex(r=>refKey(r)===refKey(ref))===index)};
+        await tx.execute('UPDATE world_segments SET intent_json=? WHERE segment_id=?',[JSON.stringify(intent),demand.segment_id]);
+      }
       await cancelUnneededPlanned(tx,demand.segment_id);
     });
   }

@@ -65,6 +65,8 @@ export interface WorldPackageManifest {
 }
 
 export interface WorldPackageBuildScope {
+  /** Frozen current-prefix opening floor, included in the package content hash. */
+  openingWorldTimeOrder?: number;
   strategy: 'progressive' | 'full';
   scope: 'opening' | 'incremental' | 'whole_source';
   completeness: 'partial' | 'complete';

@@ -238,3 +238,23 @@ test('a rebuild with FK violations rolls back and restores foreign_keys=ON', asy
     assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   } finally { db.close(); }
 });
+
+test('phase6 schema 28/29/30 upgrade preserves populated interaction operations and prepared/committed steps', async () => {
+  for (const baseline of [28,29,30]) {
+    const db=new DatabaseSync(':memory:');try {
+      const adapter=new NodeSqliteAdapter(db);await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS.filter(m=>m.version<=baseline));
+      db.exec(`INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at) VALUES ('w','旧世界','hash',100,'n','c','ready','now','now');
+        INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at) VALUES ('c','w','旧战役','shineword','1','old','{}','now');
+        INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('b','c',3,'now');
+        INSERT INTO interaction_operations VALUES ('old-op','c','b','encounter_auto','paused_system',2,8,1,8,'now','now');
+        INSERT INTO interaction_operation_steps VALUES ('old-op',0,'npc_turn','paid-old-0',1,2,'committed','now','now');
+        INSERT INTO interaction_operation_steps VALUES ('old-op',1,'npc_turn','paid-old-1',2,NULL,'prepared','now','now');`);
+      const before=db.prepare('SELECT * FROM interaction_operations').all(), steps=db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all();
+      assert.deepEqual(await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS),Array.from({length:31-baseline},(_,i)=>baseline+i+1));
+      assert.deepEqual(db.prepare('SELECT * FROM interaction_operations').all(),before);assert.deepEqual(db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all(),steps);
+      assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys,1);assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+      db.exec(`INSERT INTO interaction_operations VALUES ('new-turn','c','b','play_turn','running',3,9,0,1,'now','now')`);
+      assert.throws(()=>db.exec(`INSERT INTO interaction_operations VALUES ('other-turn','c','b','play_turn','running',3,10,0,1,'now','now')`),/UNIQUE/);
+    }finally{db.close()}
+  }
+});

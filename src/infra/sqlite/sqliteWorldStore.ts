@@ -956,6 +956,11 @@ export class SqliteWorldStore implements WorldStore {
     return this.jobFromRow(row);
   }
 
+  async listExtractionRequestCheckpoints(worldId: string, modelFingerprint: string): Promise<WorldJobRecord[]> {
+    const rows = await this.db.queryAll<JobRow>("SELECT * FROM world_jobs WHERE world_id=? AND model_fingerprint=? AND status='done' AND job_id LIKE 'job-extract-request-%' ORDER BY job_id", [worldId, modelFingerprint]);
+    return rows.map(row => this.jobFromRow(row));
+  }
+
   async findReusableJob(
     worldId: string,
     kind: WorldJobRecord['kind'],

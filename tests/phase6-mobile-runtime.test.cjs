@@ -8,7 +8,7 @@ const fact=(id,start,end,revealAt=null)=>({worldId:'world',factId:id,subjectEnti
   sources:[{chapterId:'chapter-1',startOffset:start,endOffset:end,quote:'旧桥',quoteSha256:'b'.repeat(64)}]});
 function fixture({anchor=0,appState='active',pauseReason=null,adopt='adopted',dependency=false,dependencyReason='action_dependency',unknown=false,
   admission={requestFeasible:true,backgroundBudgetAvailable:true,higherPriorityPending:false,retryAfterUntil:null}}={}){
-  const prepared=[],searched=[],started=[];
+  const prepared=[],searched=[],started=[],released=[];
   const input={worldId:'world',campaignId:'campaign',branchId:'branch',stateVersion:2,locationId:'future-place'};
   const artifact0={artifactId:'a0',worldId:'world',segmentId:'bootstrap',generation:1,coverage:[range(0,3200)]};
   const artifact1={artifactId:'a1',worldId:'world',segmentId:'dependency',generation:1,coverage:[range(3200,6400)]};
@@ -22,7 +22,7 @@ function fixture({anchor=0,appState='active',pauseReason=null,adopt='adopted',de
     segmentPlans:{async getPlan(){return{worldId:'world',executionConfigFingerprint:hash,pauseReason}}},
     segmentConfigs:{async get(){return{endpoint:'https://example.invalid',model:'m',keyRef:'k',profileId:'p',profileName:'p',concurrency:2,contextWindowTokens:60000,
       maxOutputTokens:16000,contentOutputTokens:8000,reasoningReserveTokens:1000,reasoningTier:'low',reasoningDialect:'generic'}}},
-    segments:{async readReadiness(){return readiness()},async prepareRecent(value){prepared.push(value);return[]},async dispatch(){return[]}},
+    segments:{async releaseStaleBranchDemands(value){released.push(value)},async readReadiness(){return readiness()},async prepareRecent(value){prepared.push(value);return[]},async dispatch(){return[]}},
     segmentPublication:{async adoptAtSafeBoundary(){if(adopt==='adopted')currentBinding={...currentBinding,artifactIds:readiness().availableArtifacts.map(a=>a.artifactId)};return{status:adopt}}},
     segmentArtifacts:{async recordDiagnostic(){throw new Error('unexpected diagnostic')}},
     sourceCatalog:{async snapshot(){return{binding:{sourceSetHash:hash,members:[{sourceId:'source',sourceOrdinal:1,normalizedTreeHash:hash}]},members:[{sourceId:'source',sourceOrdinal:1,normalizedTreeHash:hash,codePointCount:20000}]}},async createRange(sourceId,start,end){return range(start,end)}},
@@ -36,11 +36,12 @@ function fixture({anchor=0,appState='active',pauseReason=null,adopt='adopted',de
     './nativeCrypto':{nativeSha256:sha},'./secureKeyStore':{KeychainSecretStore:class{async get(){return'private'}}},
     './sourceImport':{async requestSegmentRunControl(){}},'./llmScheduler':{async readSegmentSchedulingAdmission(){return admission}},
   });
-  return{module,runtime,input,prepared,searched,started};
+  return{module,runtime,input,prepared,searched,started,released};
 }
 
 test('segment runtime uses the persisted player location and campaign anchor; null/malformed anchors fail closed',async()=>{
   const f=fixture();await f.module.maintainSegmentContent({...f.input,anchorWorldTimeOrder:100});
+  assert.deepEqual(f.released,[{worldId:'world',campaignId:'campaign',branchId:'branch',stateVersion:2}]);
   assert.equal(f.prepared.length,1);assert.deepEqual(f.prepared[0].currentRanges.map(r=>[r.startCp,r.endCp]),[[100,180]]);
   assert.deepEqual(f.prepared[0].candidateRanges.map(rs=>rs.map(r=>[r.startCp,r.endCp])),[[[3200,6400]],[[6400,9600]]]);
   for(const anchor of [null,'10']){const blocked=fixture({anchor});await blocked.module.maintainSegmentContent(blocked.input);assert.equal(blocked.prepared.length,0)}

@@ -119,6 +119,9 @@ export function assertValidWorldPackageBuildScope(scope: WorldPackageBuildScope)
     || !Array.isArray(scope.sourceRanges) || scope.sourceRanges.length === 0) {
     throw new Error('World package build scope is invalid.');
   }
+  if (scope.openingWorldTimeOrder !== undefined && !Number.isFinite(scope.openingWorldTimeOrder)) {
+    throw new Error('World package opening anchor must be finite.');
+  }
   for (const range of scope.sourceRanges) {
     if (!Number.isSafeInteger(range.startCodePoint) || !Number.isSafeInteger(range.endCodePoint)
       || range.startCodePoint < 0 || range.endCodePoint <= range.startCodePoint

@@ -61,6 +61,7 @@ import {
   type TrainingConditions,
 } from '../../domain/progression/growth';
 import {
+  createTemplateCard,
   rollSpecForSkill,
   resolveSkillKey,
   SkillNotDefinedError,
@@ -69,6 +70,7 @@ import {
   type SkillCatalog,
 } from '../../domain/characters/card';
 import type {
+  ActorTemplateDefinition,
   AbilityDefinition,
   BookSection,
   BranchContentManifest,
@@ -329,6 +331,7 @@ export class CampaignSession {
     intent: string;
     settlement?: Partial<TurnSettlementPlan>;
     expectedStateVersion?: number;
+    coordinationFence?: { campaignId: string; fenceToken: number };
     updateState?: (state: GameStateSnapshot) => void;
     events?: Array<{ eventType: string; payload: unknown }>;
   }): Promise<void> {
@@ -371,6 +374,7 @@ export class CampaignSession {
       contract,
       contractHash: await this.deps.hashProvider.sha256Hex(JSON.stringify(contract)),
       contractOrigin: 'engine',
+      coordinationFence: input.coordinationFence,
       outcomeGrade: 'success',
       settlement,
       updateNextState: input.updateState,
@@ -1610,6 +1614,7 @@ export class CampaignSession {
     try {
       const available = await this.deps.db.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='interaction_operations'");
       if (!available) return await this.playTurnInForeground(options);
+      if (!options.turnIdOverride) await this.prepareAdoptedSceneActors(options);
       const state = await this.deps.turns.getState(options.branchId);
       if (!state) throw new Error('Unknown branch.');
       const turnId = options.turnIdOverride ?? `turn-${String(state.stateVersion+1).padStart(4,'0')}`;
@@ -1619,6 +1624,65 @@ export class CampaignSession {
       this.deps.progressiveTurnContext?.setForegroundBusy(false);
       this.deps.onForegroundActivity?.(false);
     }
+  }
+
+  /** Materialize adopted scene templates only at a new player-action boundary.
+   * Background publication/adoption never writes cards or actor state. */
+  private async prepareAdoptedSceneActors(options: PlayTurnOptions): Promise<void> {
+    if (!this.deps.segmentContent) return;
+    const pending = await this.deps.db.queryOne(`SELECT turn_id FROM turns WHERE branch_id=? AND status<>'Committed' LIMIT 1`, [options.branchId]);
+    const operation = await this.deps.db.queryOne(`SELECT operation_id FROM interaction_operations WHERE branch_id=? AND status IN ('running','paused_system') LIMIT 1`, [options.branchId]);
+    if (pending || operation) return;
+    const summary = await this.getSummary(options.campaignId, options.branchId);
+    if (!summary.state.segmentContentBinding) return;
+    const player = summary.cards.find(card => card.controller === 'player');
+    const playerState = player && summary.state.actors[player.actorId];
+    if (!player || !playerState?.locationId || playerState.lifeStatus === 'dead' || playerState.lifeStatus === 'critical') return;
+    await this.assertNoActiveEncounter(options.branchId);
+    const { worldTimeOrder } = await this.campaignAnchor(options.campaignId);
+    const catalog = await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding });
+    const facts = await this.deps.worldStore.listFacts(summary.worldId);
+    const known = new Set((summary.state.discoveries ?? []).filter(d => d.actorId === player.actorId).map(d => d.entryId));
+    const visible = projectPlayerEntriesAtAnchor(catalog.entries, facts, worldTimeOrder, known);
+    const scenes = visible.filter(entry => entry.kind === 'scene' && (entry.definition as SceneDefinition).locationId === playerState.locationId);
+    const templateIds = new Set(scenes.flatMap(entry => (entry.definition as SceneDefinition).actors));
+    const existing = await this.loadAllCards(options.branchId);
+    const cards = visible.filter(entry => entry.kind === 'actor_template' && templateIds.has(entry.entryId)
+      && isTemplateValidAtAnchor(entry, worldTimeOrder)
+      && !existing.some(card => card.templateId === entry.entryId || card.name === (entry.definition as ActorTemplateDefinition).name))
+      .map(entry => createTemplateCard({ actorId: `npc-${entry.entryId}`, worldId: summary.worldId, worldPackageRevision: summary.packageRevision,
+        templateId: entry.entryId, definition: entry.definition as ActorTemplateDefinition, controller: 'gm', kind: 'npc' }));
+    if (!cards.length) return;
+    const loadout: Array<{ itemId: string; actorId: string; templateId: string }> = [];
+    for (const card of cards) {
+      const template = visible.find(entry => entry.entryId === card.templateId)!;
+      for (const itemId of (template.definition as ActorTemplateDefinition).startingItems ?? []) {
+        if (!visible.some(entry => entry.entryId === itemId && entry.kind === 'item')) throw new Error(`场景人物起始物品不可用：${itemId}`);
+        if (summary.state.itemOwners[itemId] !== undefined || loadout.some(item => item.itemId === itemId)) throw new Error(`场景人物起始物品已归属：${itemId}`);
+        loadout.push({ itemId, actorId: card.actorId, templateId: template.entryId });
+      }
+    }
+    const version = summary.state.stateVersion;
+    const turnId = `system-scene_actors-${String(version + 1).padStart(6,'0')}`;
+    await new SqliteInteractionOperationJournal(this.deps.db).guardTurn({ ...options, turnId, expectedStateVersion: version }, async fence => {
+      await this.commitLifecycleAction({ ...options, actorId: player.actorId, actionType: 'scene_actors',
+        intent: '当前场景已采用的人物资料载入', expectedStateVersion: version, coordinationFence: fence,
+        settlement: { cardUpserts: cards.map(card => ({ actorId: card.actorId, card })), relationships: cards.map(card => ({
+          relId: `rel-${card.actorId}-${player.actorId}`, fromActorId: card.actorId, toActorId: player.actorId,
+          stance: 'neutral', closeness: 0, updatedTurnId: turnId,
+        })) },
+        updateState: state => { for (const card of cards) {
+          if (state.actors[card.actorId]) throw new Error('scene_actor_already_exists');
+          state.actors[card.actorId] = { actorId: card.actorId, locationId: playerState.locationId,
+            ...(playerState.zoneId ? { zoneId: playerState.zoneId } : {}), resources: { ...card.resourceMax }, conditions: [], lifeStatus: 'active' };
+        }
+          for (const item of loadout) {
+            state.itemOwners[item.itemId] = item.actorId;
+            state.itemSources ??= {};
+            state.itemSources[item.itemId] = { kind: 'starting_loadout', sourceId: item.templateId, obtainedAtStateVersion: version + 1 };
+          }
+        }, events: [{ eventType: 'adopted_scene_actors_instantiated', payload: { templateIds: cards.map(card => card.templateId) } }] });
+    });
   }
 
   private async playTurnInForeground(options: PlayTurnOptions): Promise<PlayTurnResult> {
@@ -2389,7 +2453,8 @@ export class CampaignSession {
     // pick a REAL point in the story, not a fixed placeholder), plus the
     // world's person entities as canon-protagonist candidates.
     const anchors = [...anchorEvents]
-      .filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
+      .filter(event => event.status === 'canon' && event.worldTimeOrder !== null
+        && (pkg?.manifest.buildScope?.openingWorldTimeOrder === undefined || event.worldTimeOrder! >= pkg.manifest.buildScope.openingWorldTimeOrder))
       .filter(event => lockedPackageRevision === undefined || event.worldTimeOrder! <= (worldTimeOrder ?? 0))
       .sort((a, b) => (a.worldTimeOrder ?? 0) - (b.worldTimeOrder ?? 0))
       .slice(0, 40)

@@ -33,7 +33,7 @@ import {
   type TurnView,
 } from '../../../../runtime';
 import { setPlayScreenActivity } from '../../../../llmScheduler';
-import { maintainSegmentContent, getSegmentReadiness } from '../../../../segmentRuntime';
+import { maintainSegmentContent, getSegmentReadiness, releaseRewoundSegmentDemands } from '../../../../segmentRuntime';
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
@@ -524,6 +524,7 @@ export function usePlayController(): PlayController {
         atStateVersion: target,
         newBranchId,
       });
+      await releaseRewoundSegmentDemands(projection.worldId, campaignId, branchId);
       setNotice(`已从版本 ${result.stateVersion} 创建分支 ${result.branchId}（回「战役」页可继续游玩该分支）`);
       await refresh();
     } catch (e) {

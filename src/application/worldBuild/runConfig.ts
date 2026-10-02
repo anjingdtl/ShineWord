@@ -75,6 +75,8 @@ export interface FrozenRunConfig {
   /** Sanitized provider id/name for logs (no secrets). */
   profileId: string;
   profileName: string;
+  /** Optional frozen opening strategy; absent keeps legacy paid survey/mapping behavior. */
+  openingPolicyVersion?: 'opening-90s-1' | 'opening-90s-2' | 'opening-90s-3';
 }
 
 /** Strips userinfo and query strings so a logged endpoint can't leak secrets. */
@@ -88,6 +90,7 @@ export function freezeRunConfig(
   profile: ApiProfile,
   budget: ModelBudget,
   options: {
+    openingPolicyVersion?: 'opening-90s-1' | 'opening-90s-2' | 'opening-90s-3';
     bodyTargetRatio?: number;
     contextWindowSource?: 'declared' | 'probed' | 'fallback';
   } = {},
@@ -135,6 +138,7 @@ export function freezeRunConfig(
     contextWindowSource: options.contextWindowSource ?? 'declared',
     profileId: profile.id,
     profileName: profile.name,
+    ...(options.openingPolicyVersion ? { openingPolicyVersion: options.openingPolicyVersion } : {}),
   };
 }
 
@@ -156,6 +160,7 @@ export function frozenConfigIdentity(config: FrozenRunConfig): string {
     String(config.concurrency),
     config.tpm === undefined ? '' : String(config.tpm),
     config.rpm === undefined ? '' : String(config.rpm),
+    ...(config.openingPolicyVersion ? [config.openingPolicyVersion] : []),
   ];
   return parts.join('#');
 }
@@ -201,6 +206,7 @@ export function reviveRunConfig(json: string | null): FrozenRunConfig | null {
       contextWindowSource: raw.contextWindowSource ?? 'declared',
       profileId: raw.profileId ?? 'default',
       profileName: raw.profileName ?? '',
+      ...((raw.openingPolicyVersion === 'opening-90s-1' || raw.openingPolicyVersion === 'opening-90s-2' || raw.openingPolicyVersion === 'opening-90s-3') ? { openingPolicyVersion: raw.openingPolicyVersion } : {}),
     };
   } catch {
     return null;

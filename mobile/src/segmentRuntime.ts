@@ -72,6 +72,7 @@ export async function maintainSegmentContent(input: {
   if (row.state_version !== input.stateVersion) return { pending: true, message: '战役状态已更新，请刷新后继续原行动。' };
   const state = await runtime.turns.getState(input.branchId);
   if (!state || state.stateVersion !== input.stateVersion) return { pending: true, message: '战役状态已更新，请刷新后继续原行动。' };
+  await runtime.segments.releaseStaleBranchDemands({ worldId: input.worldId, campaignId: input.campaignId, branchId: input.branchId, stateVersion: input.stateVersion });
   const anchor = finiteAnchor(row.anchor_json);
   let readiness = await runtime.segments.readReadiness(input);
   // The persisted campaign anchor is authoritative. A UI hint may be stale
@@ -202,4 +203,9 @@ export async function maintainSegmentContent(input: {
     : !admission.requestFeasible ? '当前 API 配额不足以完成行动依赖；原行动已保留，请调整配额后继续。'
     : requiredSegments.some(segment => segment.status === 'needs_review') ? '行动依赖的资料需要审查；原行动已保留。'
     : '当前行动需要的资料正在准备；原行动已保留，就绪后可继续。' };
+}
+
+export async function releaseRewoundSegmentDemands(worldId: string, campaignId: string, branchId: string): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  if (await runtime.segmentPlans.getPlan(worldId)) await runtime.segments.releaseStaleBranchDemands({ worldId, campaignId, branchId, stateVersion: null });
 }

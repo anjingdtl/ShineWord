@@ -5,6 +5,7 @@ import type { ContentEntry } from '../../domain/content/types';
 import type { StoredEntity, StoredEvent, StoredFact } from '../ports/worldStore';
 import { validatePackage } from '../worldPackage/validate';
 import { evaluatePlayabilityGate } from '../worldPackage/playabilityGate';
+import { hasCharacterLocationEvidence } from '../world/locationEvidence';
 import { isSegmentArtifactV1, rangeCovered } from './protocol';
 
 export interface PublicationReviewIssueV1 {
@@ -93,8 +94,7 @@ export function validateSegmentArtifactContent(input:{artifact:SegmentArtifactV1
         if(!characterIds.size||locations.length!==1)return false;
         const location=locations[0]!;
         return cited.some(f=>characterIds.has(f.subjectEntityId)
-          &&(Object.values(f.value).some(value=>value===location.entityId||value===location.name)
-            ||f.sources.some(source=>source.quote.includes(location.name)&&input.entities.some(e=>e.entityId===f.subjectEntityId&&source.quote.includes(e.name)))));
+          && input.entities.some(character=>character.entityId===f.subjectEntityId && hasCharacterLocationEvidence(f,character,location)));
       };
       if(!(def.actors??[]).some(id=>supportedAction(id,'actor_template'))&&!(def.questIds??[]).some(id=>supportedAction(id,'quest')))errors.push('opening_interaction_missing');
       for(const id of [...(def.actors??[]),...(def.questIds??[])])if(!known.has(id)||!openingScene.dependencyIds.includes(id))errors.push(`opening_action_dependency_missing:${id}`);

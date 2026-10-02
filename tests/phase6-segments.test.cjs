@@ -158,3 +158,36 @@ test('malformed ranges/config and damaged persisted contracts are rejected rathe
   await h.service.ensureBootstrap({worldId:'w',executionConfigFingerprint:config});h.db.exec("UPDATE world_segments SET intent_json='{}'");
   await assert.rejects(h.store.listSegments('w'),/invalid_persisted_segment/);h.db.close();
 });
+
+test('explicit API replacement freezes prior intent, refuses unknown or live calls and preserves both branch demands',async()=>{
+ const h=await harness();try {
+  const [old]=await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,ranges:[await h.range(0,1000)],reason:'action_dependency',demandRef:ref('b1')});
+  await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,ranges:old.intent.ranges,reason:'action_dependency',demandRef:ref('b2')});
+  await h.service.dispatch('w');const saved=(await h.store.listSegments('w'))[0],run=h.executions.get(saved.runIds[0]),next=sha('new frozen API');
+  await assert.rejects(h.service.replaceStoppedExecution({worldId:'w',segmentId:old.intent.segmentId,executionConfigFingerprint:next}),/segment_still_running/);
+  Object.assign(run,{status:'needs_review',requestOutcome:'outcome_unknown'});
+  await assert.rejects(h.service.replaceStoppedExecution({worldId:'w',segmentId:old.intent.segmentId,executionConfigFingerprint:next}),/ledger_confirmation/);
+  assert.equal((await h.store.listSegments('w')).length,1);assert.equal((await h.store.listDemands('w')).filter(d=>d.active).length,2);
+  Object.assign(run,{status:'failed_retryable',requestOutcome:'known_failed'});
+  const replacements=await h.service.replaceStoppedExecution({worldId:'w',segmentId:old.intent.segmentId,executionConfigFingerprint:next});
+  assert.ok(replacements.every(s=>s.intent.segmentId!==old.intent.segmentId&&s.intent.executionConfigFingerprint===next));
+  await h.service.dispatch('w');const records=await h.store.listSegments('w'),prior=records.find(s=>s.intent.segmentId===old.intent.segmentId),fresh=records.find(s=>s.intent.segmentId!==old.intent.segmentId);
+  assert.equal(prior.status,'stale');assert.equal(prior.intent.executionConfigFingerprint,config);assert.equal(fresh.intent.demandRefs.length,2);
+  assert.deepEqual((await h.store.listDemands('w')).filter(d=>d.active).map(d=>d.ref.branchId).sort(),['b1','b2']);
+  assert.equal(h.ensures.filter(i=>i.segmentId===old.intent.segmentId).length,1);
+  assert.equal(await h.store.saveProjection({...prior,status:'mapping'}),false);
+ }finally{h.db.close()}
+});
+
+test('rewind/advanced state releases obsolete demand refs; a second branch keeps the shared sent work alive',async()=>{
+ const h=await harness();try{
+  const range=await h.range(3200,6400);
+  await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,ranges:[range],reason:'action_dependency',demandRef:ref('b1')});
+  await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,ranges:[range],reason:'action_dependency',demandRef:ref('b2')});
+  await h.service.dispatch('w');
+  await h.service.releaseStaleBranchDemands({worldId:'w',campaignId:'c',branchId:'b1',stateVersion:1});
+  assert.deepEqual(h.controls,[]);assert.deepEqual((await h.store.listSegments('w'))[0].intent.demandRefs.map(r=>r.branchId),['b2']);
+  await h.service.releaseStaleBranchDemands({worldId:'w',campaignId:'c',branchId:'b2',stateVersion:null});
+  assert.equal(h.controls.length,1);assert.equal(h.controls[0][1],'cancel');assert.deepEqual((await h.store.listSegments('w'))[0].intent.demandRefs,[]);
+ }finally{h.db.close()}
+});

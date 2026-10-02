@@ -19,3 +19,11 @@ P6-1/P6-2 基础定向验证（2026-10-02）：`npm run build:core` 退出 0；`
 | P6-3 | M5定向隔离编译 | 0；19/19 | phase6-publication-final.log，fence/source/canon/review后写、通用actor负例、旧delta事务重基 |
 | P6-3 | sourceImport + 10%粗读协议 | 0；6/6 | phase6-survey.log；码点含emoji、缓存、错误引用、删除、所在地值；合成不证明真实内容 |
 | P6-3 | 原生standalone Debug / API30安装 | 0 / Success | phase6-apk.log；boot_completed=1，首配屏截图在私有scratch；最终改动需重建 |
+
+| P6-4 | 首轮 npm run verify:core | 1；748/751 | 3 个 runtime 夹具缺新增端口，修复后不跳过断言 |
+| P6-4 | npm run verify:core（修复后） | 0；752/752 | phase6-p4-final-core.log；迁移、恢复、旧回归、新开局合同 |
+| P6-4 | build:core + segments/runtime/incremental/campaign/migrations | 0；39/39 | phase6-p4-retest.log；API更换新冻结intent/unknown阻断/旧操作FK |
+| P6-4 | NPC物品与发现投影修复后的 campaign/segments/runtime | 0；23/23 | phase6-p4-final-targets.log；本地commit，不在后台写人物 |
+| P6-4 | npm run typecheck --prefix mobile / git diff --check | 0 / 0 | phase6-p4-mobile.log |
+
+P6-5 探索中的真实样本（非性能完整验收）：用户授权小说 UTF-8，7,178,905 字节，3,460,333 规范化码点、1504 章；GLM-5.3-Flash、low、同一 Linux 主机。全新本地项目一次定向抽取，导入 9.142 秒、抽取及发布 42.859 秒、TTFP 52.046 秒，29 facts / 6 events / 1 artifact；1 次真实 HTTP200，provider usage 5064 input / 2995 output / 8059 total，cached input 5056。服务端缓存为热，不能称全冷样本或真机数据。负例以及已有响应本地修复后的成功分别记录，不能合并为稳定成功率。

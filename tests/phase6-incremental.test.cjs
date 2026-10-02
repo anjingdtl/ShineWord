@@ -165,3 +165,48 @@ test('M4 scoped mapper exact checkpoint covers frozen model configuration and no
     assert.equal(calls, 2, 'frozen model/reasoning change invalidates exact proposal');
   } finally { h.db.close(); }
 });
+
+test('90s opening locally compiles evidenced action closure with zero mapper calls and blocks insufficient/conflicting canon', async () => {
+  const h = await setup();
+  try {
+    await h.worldStore.createWorld({ worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now() });
+    await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+    const data=canon(24); data.facts[0].value={location:'旧桥'};data.facts[0].predicate='current_location';
+    for(const e of data.entities)await h.worldStore.upsertEntity(e,now());
+    for(const f of data.facts)await h.worldStore.saveFact(f,now());
+    for(const e of data.events)await h.worldStore.saveEvent(e,now());
+    let calls=0;const input={worldStore:h.worldStore,provider:{async complete(){calls++;throw Error('must_not_dispatch_mapper')}},sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'opening-local-rules-1',mappingMode:'startup_local',createdAt:now(),requirePlayableOpening:true,incrementalMapping:options('opening',{openingFactLimit:40})};
+    const draft=await buildPackageDraftFromCanon(input);
+    assert.equal(calls,0);assert.equal(draft.selection.facts.length,24);
+    const scene=draft.entries[0];assert.equal(scene.kind,'scene');assert.deepEqual(scene.definition.actors,['actor-canon-hero']);
+    const actor=draft.entries.find(e=>e.entryId==='actor-canon-hero');assert.equal(actor.provenance.kind,'explicit');assert.equal(actor.fieldProvenance.attributes.kind,'rule_mapping');assert.deepEqual(actor.definition.attacks,[]);assert.deepEqual(actor.definition.skills,{});
+    assert.ok(draft.entries.some(e=>e.kind==='lore' && e.provenance.sourceFactIds.includes('f-0')));
+    assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
+    const bad={...data.facts[0],factId:'conflict',value:{location:'别处'},status:'conflict'};await h.worldStore.saveFact(bad,now());
+    await assert.rejects(buildPackageDraftFromCanon(input),/冲突/);assert.equal(calls,0);
+  }finally{h.db.close()}
+});
+
+test('event self identity does not create a second fact-store dependency; missing external entity and event dependencies still block',()=>{
+ const data=canon(24);data.events[0].eventId='evt-w-occurred';data.entities.push(entity('ent-w-occurred','event',data.events[0].title));
+ assert.deepEqual(selectCanonSubset({...data,options:options()}).diagnostics,[]);
+ data.events[0].dependsOnEventIds=['evt-missing'];assert.ok(selectCanonSubset({...data,options:options()}).diagnostics.some(x=>x.includes('evt-missing')));
+ data.facts[0].value={other:'ent-unsupported'};assert.ok(selectCanonSubset({...data,options:options()}).diagnostics.some(x=>x.includes('ent-unsupported')));
+});
+
+test('completed nested location checkpoint repairs locally with exact quote validation and a transactional fence',async()=>{
+ const h=await setup();try{
+  await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
+  await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+  await h.worldStore.upsertEntity(entity('ent-w-hero','character','林辰'),now());await h.worldStore.upsertEntity(entity('ent-w-place','location','旧桥'),now());
+  const group={entities:[{entityKey:'hero',type:'character',name:'林辰',aliases:[]},{entityKey:'place',type:'location',name:'旧桥',aliases:[]}],facts:[{subjectKey:'hero',predicate:'current_location',value:{current_location:{location:'旧桥'}},status:'explicit',confidence:1,chunkId:'c-0',evidence:{chapterId:'ch-1',startOffset:0,endOffset:7,quote:'林辰抵达旧桥。'}}],events:[],ruleMappings:[],rejectedQuotes:0};
+  await h.worldStore.upsertJob({worldId:'w',jobId:'job-extract-request-cached',kind:'extract_chunk',targetId:null,status:'done',attempts:1,contentHash:sha('request'),extractorVersion:'parser#snapshot-proof',modelFingerprint:'model',usageJson:'{}',resultJson:JSON.stringify({version:'extraction-request-1',group}),error:null,createdAt:now(),updatedAt:now()},now());
+  const {replayCompletedLocationAdapter}=load('application/worldBuild/replayLocationAdapter');
+  const input={worldStore:h.worldStore,sourceStore:h.sourceStore,run:{worldId:'w',sourceId:'src',scopeJson:JSON.stringify({startCp:0,endCp:100}),modelFingerprint:'model',sourceSnapshotHash:'snapshot-proof'},sha256Hex:async text=>sha(text),assertCurrent:async()=>{throw Error('stale_fence')}};
+  await assert.rejects(replayCompletedLocationAdapter(input),/stale_fence/);assert.equal((await h.worldStore.listFacts('w')).length,0);
+  let guards=0;await replayCompletedLocationAdapter({...input,assertCurrent:async tx=>{assert.equal(tx,h.adapter);guards++;}});
+  const facts=await h.worldStore.listFacts('w');assert.equal(facts.length,1);assert.deepEqual(facts[0].value,{location:'旧桥'});assert.equal(facts[0].sources[0].quote,group.facts[0].evidence.quote);assert.equal(guards,1);
+  await replayCompletedLocationAdapter({...input,assertCurrent:async()=>{}});assert.equal((await h.worldStore.listFacts('w')).length,1);
+  assert.equal((await h.worldStore.getJob('w','job-extract-request-cached')).attempts,1);
+ }finally{h.db.close()}
+});

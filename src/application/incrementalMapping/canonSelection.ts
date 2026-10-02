@@ -6,6 +6,9 @@ import { PLAYABILITY_MIN_FACTS } from '../worldPackage/playabilityGate';
 export const CANON_SELECTION_VERSION = 'canon-selection-1';
 export interface IncrementalMappingOptions {
   kind: 'opening' | 'incremental';
+  /** Opening-specific cap, never lowers the minimum playability gate. */
+  openingFactLimit?: number;
+  openingEventPolicy?: 'latest_covered';
   ranges: readonly SourceRangeV1[];
   sourceBinding: SourceSetBindingV1;
   executionConfigFingerprint: string;
@@ -116,14 +119,17 @@ export function selectCanonSubset(input: {
       else diagnostics.push(`开局缺少带来源依据的${type === 'character' ? '人物' : '地点'}`);
     }
     const coveredChapters = new Set(good.flatMap(f => f.sources.map(s => s.chapterId)));
-    const event = input.events.find(e => e.status === 'canon' && e.narrativeChapterId && coveredChapters.has(e.narrativeChapterId));
+    const coveredEvents = input.events.filter(e => e.status === 'canon' && e.narrativeChapterId && coveredChapters.has(e.narrativeChapterId));
+    const event = options.openingEventPolicy === 'latest_covered'
+      ? coveredEvents.filter(e => e.worldTimeOrder !== null).sort((a,b) => b.worldTimeOrder! - a.worldTimeOrder!)[0]
+      : coveredEvents[0];
     if (event) chosenEvents.add(event.eventId);
     else diagnostics.push('开局缺少已解析且带场景来源的事件');
     // Retain the old 20-fact gate; prioritize selected people/places, then fill
     // with evidenced facts, rather than lowering the quality requirement.
     const ordered = [...good.filter(f => chosenEntities.has(f.subjectEntityId)), ...good];
     for (const fact of ordered) {
-      if (chosenFacts.size >= PLAYABILITY_MIN_FACTS) break;
+      if (chosenFacts.size >= Math.max(PLAYABILITY_MIN_FACTS, Math.min(40, options.openingFactLimit ?? PLAYABILITY_MIN_FACTS))) break;
       addFact(fact.factId);
     }
   }
@@ -153,7 +159,8 @@ export function selectCanonSubset(input: {
         diagnostics.push(`事件缺少授权范围内的来源闭包：${id}`);
       }
       for (const dep of event.dependsOnEventIds) chosenEvents.add(dep);
-      for (const entity of input.entities) if (entity.name.length >= 2
+      for (const entity of input.entities) if (!(entity.type === 'event' && entity.entityId === event.eventId.replace(/^evt-/, 'ent-'))
+        && entity.name.length >= 2
         && (event.title.includes(entity.name) || event.summary.includes(entity.name))) chosenEntities.add(entity.entityId);
     }
     expanded = before !== chosenFacts.size + chosenEntities.size + chosenEvents.size;

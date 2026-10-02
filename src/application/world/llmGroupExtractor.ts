@@ -13,6 +13,7 @@ import type {
   FactProposal,
   RuleMappingProposal,
 } from '../../domain/world/types';
+import { normalizeFactValue } from './factValueAdapter';
 import { codePointLength } from '../../domain/world/textOffsets';
 import { LlmRequestFailure, normalizeReasoningTier, type LlmPhysicalRequestMetric, type LlmRequest, type ReasoningTier } from '../../application/llm/types';
 import type { ReasoningEffort } from '../worldBuild/groupPlanner';
@@ -336,15 +337,7 @@ export class LlmGroupExtractor {
           ?? segment.memberChunks[segment.memberChunks.length - 1]
         : undefined;
       const attributedChunkId = ownerChunk ? ownerChunk.chunkId : segment.chunkId;
-      const rawValue = candidate.value && typeof candidate.value === 'object' && !Array.isArray(candidate.value)
-        ? candidate.value as Record<string, unknown>
-        : {};
-      // Real models (GLM run 2026-09-30) sometimes emit schema facts with an
-      // EMPTY value object; empty values all share the '' value key, so two
-      // same-predicate facts on one subject would falsely register as canon
-      // conflicts. The verbatim quote is real extracted content - carrying it
-      // as value.text keeps the fact distinct and honest (no invention).
-      const value = Object.keys(rawValue).length > 0 ? rawValue : { text: quote };
+      const value = normalizeFactValue(predicate, candidate.value, quote);
       facts.push({
         subjectKey: subject,
         predicate,

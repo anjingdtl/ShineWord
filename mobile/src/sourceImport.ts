@@ -15,6 +15,7 @@ import { LlmChunkExtractor, worldBuildExtractorVersion } from '../../src/applica
 import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor';
 import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
 import { runTimelinePass } from '../../src/application/world/timelinePass';
+import { replayCompletedLocationAdapter } from '../../src/application/worldBuild/replayLocationAdapter';
 import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { LedgeredProvider } from '../../src/application/llm/requestLedger';
@@ -55,8 +56,10 @@ import {
 } from '../../src/application/worldPackage/playabilityGate';
 import { hasPlayableOpening } from '../../src/application/worldPackage/openingRecovery';
 import { executeWithAutomaticMappingRecovery } from '../../src/application/worldBuild/automaticMappingRecovery';
+import { OPENING_POLICY_VERSION, OPENING_EXTRACTION_FOCUS, openingInputCodePoints } from '../../src/application/worldBuild/openingPolicy';
 import { OpeningSurveyService, type OpeningSurveyV1 } from '../../src/application/segmentBuild/openingSurvey';
 import type { BuildIntentV1 } from '../../src/domain/build/phase6';
+import { canonicalStringify, type CanonicalJson } from '../../src/domain/turns/canonical';
 import type { SqliteTransaction } from '../../src/application/ports/sqlite';
 
 async function assertSegmentExecution(tx: SqliteTransaction, intent: BuildIntentV1,
@@ -267,7 +270,10 @@ async function importNovelInternal(
     // stage. Both share the same extraction/mapping/publish pipeline.
     const worldId = `world-${sourceId}`;
     const budget = modelBudgetFromProfile(profile);
-    const config = freezeRunConfig(profile, budget);
+    const openingBudget = runtime.segments && unifiedStrategy === 'progressive'
+      ? { ...budget, maxContentOutputTokens: Math.min(6000, budget.maxContentOutputTokens) } : budget;
+    const config = freezeRunConfig(profile, openingBudget, runtime.segments && unifiedStrategy === 'progressive'
+      ? { openingPolicyVersion: OPENING_POLICY_VERSION, bodyTargetRatio: 0.10 } : {});
     const stageStore = new SqliteStagePlanStore(runtime.db);
     const deps = {
       db: runtime.db,
@@ -316,7 +322,7 @@ async function importNovelInternal(
       await runtime.worldStore.addWorldSource({ worldId, sourceId, sourceOrdinal: 1,
         rawSha256: manifest.rawSha256Hex, createdAt: new Date().toISOString() });
       const fingerprint = await runtime.segmentConfigs.register(worldId, config);
-      const bootstrap = await runtime.segments.ensureBootstrap({ worldId, executionConfigFingerprint: fingerprint });
+      const bootstrap = await runtime.segments.ensureBootstrap({ worldId, executionConfigFingerprint: fingerprint, maxCodePoints: openingInputCodePoints(openingBudget) });
       await runtime.sourceIndex.ensureIndexed(bootstrap.intent.ranges);
       const queued = await runtime.segments.dispatch(worldId);
       const runIds = queued.flatMap(segment => [...segment.runIds]);
@@ -734,6 +740,35 @@ export async function tryActivateStagePackages(worldId: string): Promise<number>
   return activated;
 }
 
+/** Explicit full mode advances only two bounded windows at a time. */
+async function queueExplicitFullWindows(worldId: string): Promise<string[]> {
+  const runtime = await getDatabaseRuntime();
+  const plan = await runtime.segmentPlans.getPlan(worldId);
+  if (!plan || plan.pauseReason) return [];
+  const readiness = await runtime.segments.readReadiness({ worldId });
+  if (!readiness.availableArtifacts.length) throw new Error('请先完成有证据的开局资料，再启动完整整理。');
+  let pending = readiness.segments.filter(s=>s.intent.reason==='user_full'&&!['ready','canceled','stale','failed_terminal'].includes(s.status)).length;
+  const { members } = await runtime.sourceCatalog.snapshot(worldId);
+  const newlyPlanned = new Set<string>();
+  const occupied = [...readiness.availableArtifacts.flatMap(a=>a.coverage), ...readiness.segments.filter(s=>!['canceled','stale','failed_terminal'].includes(s.status)).flatMap(s=>s.intent.ranges)];
+  for (const member of members) {
+    if (pending >= 2) break;
+    let cursor = 0;
+    const known = occupied.filter(r=>r.sourceId===member.sourceId).sort((a,b)=>a.startCp-b.startCp);
+    while (pending < 2 && cursor < member.codePointCount) {
+      const containing = known.filter(r=>r.startCp<=cursor&&r.endCp>cursor);
+      if (containing.length) { cursor=Math.max(...containing.map(r=>r.endCp)); continue; }
+      const next = known.find(r=>r.startCp>cursor);
+      const range = await runtime.sourceCatalog.createRange(member.sourceId,cursor,Math.min(member.codePointCount,cursor+3200,next?.startCp??member.codePointCount));
+      const records = await runtime.segments.requestDemand({worldId,executionConfigFingerprint:plan.executionConfigFingerprint,ranges:[range],reason:'user_full',priority:'P3'});
+      for (const record of records) newlyPlanned.add(record.intent.segmentId);
+      known.push(range);known.sort((a,b)=>a.startCp-b.startCp);cursor=range.endCp;pending++;
+    }
+  }
+  const queued=await runtime.segments.dispatch(worldId);
+  return queued.filter(s=>newlyPlanned.has(s.intent.segmentId)).flatMap(s=>[...s.runIds]);
+}
+
 /**
  * Mode switch progressive -> full (P3 §6): claim every still-untriggered
  * stage and queue its run. Already-built stages are never re-paid; the
@@ -741,6 +776,12 @@ export async function tryActivateStagePackages(worldId: string): Promise<number>
  */
 export async function switchToFullBuild(worldId: string): Promise<string[]> {
   const runtime = await getDatabaseRuntime();
+  if (await runtime.segmentPlans?.getPlan(worldId)) {
+    const ids=await queueExplicitFullWindows(worldId);
+    const { startSegmentRun }=await import('./segmentRuntime');
+    for (const id of ids) void startSegmentRun(id).catch(()=>undefined);
+    return ids;
+  }
   const stageStore = new SqliteStagePlanStore(runtime.db);
   const plan = await stageStore.getStagePlanByWorld(worldId);
   if (!plan) throw new Error('该世界没有阶段计划。');
@@ -803,7 +844,19 @@ export async function getStagePlanView(worldId: string): Promise<{
   const runtime = await getDatabaseRuntime();
   const stageStore = new SqliteStagePlanStore(runtime.db);
   const plan = await stageStore.getStagePlanByWorld(worldId);
-  if (!plan) return null;
+  if (!plan) {
+    if (!await runtime.segmentPlans?.getPlan(worldId)) return null;
+    const readiness=await runtime.segments.readReadiness({worldId});
+    const {members}=await runtime.sourceCatalog.snapshot(worldId);
+    const total=Math.max(1,members.reduce((sum,m)=>sum+m.codePointCount,0));
+    const full=(await runtime.segmentPlans.listDemands(worldId)).some(d=>d.active&&d.reason==='user_full');
+    const revision=await runtime.worldStore.getPublishedPackageRevision(worldId);
+    return {strategy:full?'full':'progressive',stages:readiness.segments.map((segment,index)=>({
+      index,startCp:segment.intent.ranges[0]?.startCp??0,endCp:segment.intent.ranges[0]?.endCp??0,
+      ratio:segment.intent.ranges.reduce((sum,r)=>sum+r.endCp-r.startCp,0)/total,
+      status:segment.status,runId:segment.runIds[0]??null,packageRevision:segment.artifactIds.length?revision:null,
+    }))};
+  }
   const states = await stageStore.listStageStates(plan.planId);
   return {
     strategy: plan.strategy,
@@ -993,10 +1046,28 @@ export async function resumeRun(runId: string): Promise<{ activeInProcess: boole
 
 /** Explicit user opt-in: retry a stopped/failed run with the selected API.
  * Completed extraction stays committed; a live executor's config is immutable. */
-export async function useCurrentApiForRun(runId: string, profile: ApiProfile): Promise<void> {
+export async function useCurrentApiForRun(runId: string, profile: ApiProfile): Promise<string> {
   if (activeRuns.has(runId)) throw new Error('请先暂停当前构建，再切换构建所用的 API。');
   const config = freezeRunConfig(profile, modelBudgetFromProfile(profile));
   const runtime = await getDatabaseRuntime();
+  const runs=new SqliteBuildRunStore(runtime.db);
+  const oldRun=await runs.getRun(runId);
+  const segment=await runtime.segmentPlans?.findSegmentByRunId(runId);
+  if (segment && oldRun) {
+    if (oldRun.leaseOwner && oldRun.leaseExpiresAt && oldRun.leaseExpiresAt > new Date().toISOString()) throw new Error('构建仍在执行，请先暂停后切换 API。');
+    const oldConfig=reviveRunConfig(oldRun.configJson);
+    const budget=modelBudgetFromProfile(profile);
+    const nextConfig=freezeRunConfig(profile, oldConfig?.openingPolicyVersion ? {...budget,maxContentOutputTokens:Math.min(6000,budget.maxContentOutputTokens)} : budget,
+      oldConfig?.openingPolicyVersion ? {openingPolicyVersion:oldConfig.openingPolicyVersion,bodyTargetRatio:0.10} : {});
+    const fingerprint=await runtime.segmentConfigs.register(oldRun.worldId,nextConfig);
+    const replacements=await runtime.segments.replaceStoppedExecution({worldId:oldRun.worldId,segmentId:segment.intent.segmentId,executionConfigFingerprint:fingerprint});
+    await cancelRun(runId);
+    const replacementIds=new Set(replacements.map(s=>s.intent.segmentId));
+    const queued=await runtime.segments.dispatch(oldRun.worldId);
+    const id=queued.find(s=>replacementIds.has(s.intent.segmentId))?.runIds[0];
+    if (!id) throw new Error('replacement_run_unavailable');
+    return id;
+  }
   const now = new Date().toISOString();
   const changed = await runtime.db.execute(
     `UPDATE world_build_runs SET config_json = ?, model_fingerprint = ?, updated_at = ?
@@ -1006,6 +1077,7 @@ export async function useCurrentApiForRun(runId: string, profile: ApiProfile): P
   );
   if (!changed) throw new Error('构建仍在执行或已经完成，暂时不能切换 API。');
   await runtime.db.execute('DELETE FROM world_jobs WHERE job_id = ?', [`job-map-recovery-${runId}`]);
+  return runId;
 }
 
 export function isRunActive(runId: string): boolean {
@@ -1239,6 +1311,10 @@ async function runExtractionInternal(
       tpmTokensPerMinute: effectiveProfile.tpm,
       budget: runBudget,
       ...(segmentRecord?.intent.reason === 'bootstrap' ? { prepareContext: async ({ fencingToken, owner }: { fencingToken: number; owner: string }) => {
+        if ((runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION)) {
+          onProgress({ phase: 'extracting', message: '正在一次精准阅读开局所需内容；输入不超过上下文 10%' });
+          return OPENING_EXTRACTION_FOCUS;
+        }
         onProgress({ phase: 'extracting', message: '以模型上下文 10% 为上限，精准粗读开局所需的人物、地点、事件与关系' });
         const service = new OpeningSurveyService({ catalog: runtime.sourceCatalog, store: runtime.openingSurveys,
           provider: makeProvider(), profile: effectiveProfile, governance: requestGovernance, sha256Hex: async input => nativeSha256.sha256Hex(input) });
@@ -1393,57 +1469,66 @@ async function runExtractionInternal(
             const r = await runStore.getRun(linked);
             if (r?.status !== 'completed') return;
           }
+          if (intent.reason === 'bootstrap') await replayCompletedLocationAdapter({ worldStore: runtime.worldStore, sourceStore, run, sha256Hex: nativeSha256.sha256Hex,
+            assertCurrent: tx => assertSegmentExecution(tx, intent, run.runId, run.fencingToken, run.leaseOwner) });
           await setPhase('mapping');
           await resolveEventProposals({ worldStore: runtime.worldStore }, run.worldId);
           const published = await runtime.segmentArtifacts.listArtifacts(run.worldId);
           if (published.some(a => a.segmentId === intent.segmentId && a.generation === intent.generation)) return;
           const baseRevision = await runtime.worldStore.getPublishedPackageRevision(run.worldId);
+          const openingBuild = baseRevision === null || intent.reason === 'bootstrap' && published.length === 0;
           const world = await runtime.worldStore.getWorld(run.worldId);
           if (!world) throw new Error('project_deleted');
           const ranges = [...intent.ranges];
-          if (baseRevision === null) for (const segment of await runtime.segmentPlans.listSegments(run.worldId)) {
+          if (openingBuild) for (const segment of await runtime.segmentPlans.listSegments(run.worldId)) {
             if (segment.intent.reason !== 'bootstrap' || segment.intent.segmentId === intent.segmentId || !segment.runIds.length) continue;
             const linked = await Promise.all(segment.runIds.map(id => runStore.getRun(id)));
             if (linked.every(r => r && r.unitsDone === r.unitsTotal && r.unitsFailed === 0)) ranges.push(...segment.intent.ranges);
           }
           const provider = makeProvider();
-          const mappingVersion = `mapper-1#${effectiveProfile.model}#${effectiveProfile.reasoningTier ?? 'low'}`;
+          const localOpening = openingBuild && intent.reason === 'bootstrap' && (runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION);
+          const mappingVersion = localOpening ? 'opening-local-rules-1' : `mapper-1#${effectiveProfile.model}#${effectiveProfile.reasoningTier ?? 'low'}`;
           const input = { worldStore: runtime.worldStore,
             provider: { complete: (request: Parameters<typeof governMappingRequest>[0]) => governMappingRequest(request, r => provider.complete(r), requestGovernance) },
             sha256Hex: nativeSha256.sha256Hex, worldId: run.worldId, runId: run.runId,
-            sourceSha256: world.sourceSha256, mappingVersion, createdAt: new Date().toISOString(),
-            executionConfigFingerprint: intent.executionConfigFingerprint, requirePlayableOpening: baseRevision === null,
-            incrementalMapping: { kind: baseRevision === null ? 'opening' as const : 'incremental' as const,
-              ranges, sourceBinding: intent.sourceBinding, executionConfigFingerprint: intent.executionConfigFingerprint },
+            sourceSha256: world.sourceSha256, mappingVersion, ...(localOpening ? { mappingMode: 'startup_local' as const } : {}), createdAt: new Date().toISOString(),
+            executionConfigFingerprint: intent.executionConfigFingerprint, requirePlayableOpening: openingBuild,
+            incrementalMapping: { kind: openingBuild ? 'opening' as const : 'incremental' as const,
+              ranges, sourceBinding: intent.sourceBinding, executionConfigFingerprint: intent.executionConfigFingerprint,
+              ...(localOpening ? { openingFactLimit: 40, openingEventPolicy: 'latest_covered' as const } : {}) },
             assertCurrent, assertCurrentTx: (tx: SqliteTransaction) => assertSegmentExecution(tx, intent, run.runId, run.fencingToken, run.leaseOwner), signal };
           try {
             const draft = await buildPackageDraftFromCanon(input);
             await assertCurrent();
-            if (baseRevision === null && !draft.entries.some(e => e.kind === 'scene' && e.visibility === 'public'
+            if (openingBuild && !draft.entries.some(e => e.kind === 'scene' && e.visibility === 'public'
               && ((e.definition as { actors?: string[]; questIds?: string[] }).actors?.length
                 || (e.definition as { questIds?: string[] }).questIds?.length))) throw new Error('开局缺少带证据的行动依赖闭包');
             let base = baseRevision === null ? null : await runtime.worldStore.getWorldPackage(run.worldId, baseRevision);
-            if (!base) {
+            if (!base || openingBuild && canonicalStringify(base.entries as unknown as CanonicalJson)
+              !== canonicalStringify(draft.entries.map(e => ({ ...e, revision: base!.manifest.revision })) as unknown as CanonicalJson)) {
               const end = Math.max(...ranges.map(r => r.endCp));
               const text = await sourceStore.readRange(run.sourceId, 0, end);
               const built = await buildPackageFromCanon({ ...input, stageScope: { ranges: [{ startCodePoint: 0, endCodePoint: end,
-                contentSha256: await nativeSha256.sha256Hex(text) }], coversWholeText: false }, sourceCodePointCount: (await sourceStore.getManifest(run.sourceId))?.codePointCount });
+                contentSha256: await nativeSha256.sha256Hex(text) }], coversWholeText: false,
+                ...(localOpening ? { openingWorldTimeOrder: Math.max(0, ...draft.selection.events.filter(e => e.worldTimeOrder !== null).map(e => e.worldTimeOrder!)) } : {}) }, sourceCodePointCount: (await sourceStore.getManifest(run.sourceId))?.codePointCount });
               base = { manifest: built.manifest, entries: built.entries, sections: built.sections };
             }
             const known = new Map([...base.entries, ...published.flatMap(a => [...a.entries])].map(e => [e.entryId, e]));
             const renames = new Map(draft.entries.filter(e => known.has(e.entryId)
               && JSON.stringify(known.get(e.entryId)) !== JSON.stringify({ ...e, revision: base!.manifest.revision })).map(e => [e.entryId, `${e.entryId}:segment-${intent.segmentId.slice(-12)}`]));
-            const entries = baseRevision === null ? base.entries : draft.entries.map(e => ({ ...e, revision: base!.manifest.revision,
+            const entries = openingBuild ? base.entries : draft.entries.map(e => ({ ...e, revision: base!.manifest.revision,
               entryId: renames.get(e.entryId) ?? e.entryId,
+              ...(e.provenance.kind !== 'design_fill' && e.visibility === 'public'
+                ? { visibility: 'discoverable' as const, revealPolicyId: 'segment-explicit-discovery' } : {}),
               dependencyIds: e.dependencyIds.map(id => renames.get(id) ?? id) }));
-            const sections = baseRevision === null ? base.sections : draft.sections.map(s => ({ ...s, entryIds: s.entryIds.map(id => renames.get(id) ?? id) }));
+            const sections = openingBuild ? base.sections : draft.sections.map(s => ({ ...s, entryIds: s.entryIds.map(id => renames.get(id) ?? id) }));
             await setPhase('validating');
             await assertCurrent();
             await runtime.segmentPublication.publishIntentDraft({ intent, coverage: ranges,
               basePackage: { revision: base.manifest.revision, contentHash: base.manifest.contentHash },
               ruleset: base.manifest.ruleset, mappingVersion: base.manifest.mappingVersion,
               canonSnapshotHash: draft.canonSnapshotHash, entries, sections, createdAt: input.createdAt,
-              ...(baseRevision === null ? { openingRequirements: {
+              ...(openingBuild ? { openingRequirements: {
                 requiredEntityIds: draft.selection.entities.map(e => e.entityId), requiredFactIds: [],
                 requiredEventIds: draft.selection.events.map(e => e.eventId), requiredEntryIds: [], ranges } } : {}),
               dependencies: published.filter(a => entries.some(e => e.dependencyIds.some(id => a.entries.some(prior => prior.entryId === id)))
@@ -1451,14 +1536,25 @@ async function runExtractionInternal(
                 .map(a => ({ artifactId: a.artifactId, contentHash: a.contentHash })),
               assertCurrent: tx => assertSegmentExecution(tx, intent, run.runId, run.fencingToken, run.leaseOwner) });
             await runtime.segments.readReadiness({ worldId: run.worldId });
-            onProgress({ phase: 'done', message: baseRevision === null ? '开局资料已就绪，可以开始游玩' : '近期资料已就绪，可在回合间采用' });
+            if ((await runtime.segmentPlans.listDemands(run.worldId)).some(d=>d.active&&d.reason==='user_full')) {
+              const ids=await queueExplicitFullWindows(run.worldId);
+              void import('./segmentRuntime').then(module=>{for(const id of ids) void module.startSegmentRun(id).catch(()=>undefined);});
+            }
+            if (openingBuild && runtime.projectStyle) {
+              void import('./writerStyle').then(module => module.ensureAutomaticProjectStyleAnalysis(run.worldId)).catch(async () => {
+                if (!await runtime.worldStore.getWorld(run.worldId)) return;
+                await runtime.segmentArtifacts.recordDiagnostic({ worldId: run.worldId, segmentId: intent.segmentId,
+                  generation: intent.generation, errors: ['optional_style_analysis_unavailable'], createdAt: new Date().toISOString() });
+              });
+            }
+            onProgress({ phase: 'done', message: openingBuild ? '开局资料已就绪，可以开始游玩' : '近期资料已就绪，可在回合间采用' });
           } catch (error) {
             await runtime.segmentArtifacts.recordDiagnostic({ worldId: run.worldId, segmentId: intent.segmentId,
               generation: intent.generation, errors: [error instanceof Error ? error.message.slice(0, 500) : 'publication_failed'], createdAt: input.createdAt });
             // Only missing opening evidence extends the bounded bootstrap. A
             // conflict, unknown paid outcome or provider error stays parked.
             const message = error instanceof Error ? error.message : '';
-            if (baseRevision === null && /事实不足|开局缺少|来源闭包|引用实体缺失/.test(message)) {
+            if (openingBuild && /事实不足|开局缺少|来源闭包|引用实体缺失/.test(message)) {
               const source = (await runtime.sourceCatalog.snapshot(run.worldId)).members.find(m => m.sourceId === run.sourceId);
               const end = Math.max(...ranges.filter(r => r.sourceId === run.sourceId).map(r => r.endCp));
               if (source && end < source.codePointCount && end < 12000) {

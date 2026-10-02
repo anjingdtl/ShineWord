@@ -137,8 +137,8 @@ export function ProjectHubScreen(): React.JSX.Element {
     if (taskBusy || !profile) return;
     setTaskBusy(true);
     try {
-      if (currentApi) await useCurrentApiForRun(runId, profile);
-      void startOrResumeBuild(runId, profile, { resume: true })
+      const effectiveRunId = currentApi ? await useCurrentApiForRun(runId, profile) : runId;
+      void startOrResumeBuild(effectiveRunId, profile, { resume: true })
         .then(refresh)
         .catch(e => setError(e instanceof Error ? e.message : String(e)));
       await refresh();

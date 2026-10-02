@@ -103,6 +103,11 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   }
   const anchorEvents = (await input.worldStore.listEvents(input.worldId))
     .filter(event => event.status === 'canon' && event.worldTimeOrder !== null);
+  if (pkg.manifest.buildScope?.openingWorldTimeOrder !== undefined
+    && input.anchor.worldTimeOrder < pkg.manifest.buildScope.openingWorldTimeOrder) {
+    throw new Error('精准开局资料代表当前已读前部的状态，请选择本批资料最新的已验证事件锚点。');
+  }
+
   if (input.anchor.anchorEventId) {
     const selectedAnchor = anchorEvents.find(event => event.eventId === input.anchor.anchorEventId);
     if (!selectedAnchor || selectedAnchor.worldTimeOrder !== input.anchor.worldTimeOrder) {

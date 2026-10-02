@@ -398,6 +398,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
     if (!scope || !['progressive', 'full'].includes(scope.strategy)
       || !['opening', 'incremental', 'whole_source'].includes(scope.scope)
       || !['partial', 'complete'].includes(scope.completeness)
+      || (scope.openingWorldTimeOrder !== undefined && !Number.isFinite(scope.openingWorldTimeOrder))
       || !Array.isArray(scope.sourceRanges) || scope.sourceRanges.length === 0
       || scope.sourceRanges.some(range => !Number.isSafeInteger(range.startCodePoint)
         || !Number.isSafeInteger(range.endCodePoint) || range.startCodePoint < 0
