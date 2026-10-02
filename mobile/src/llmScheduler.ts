@@ -1,27 +1,35 @@
-/**
- * Process-wide rate scheduler registry (rate-limit governance 2026-10-01).
- *
- * One GlobalRateScheduler per endpoint+model survives individual build runs
- * and play sessions, so adaptive penalties learned during a build (429
- * streaks -> penalty floor + request spacing) still pace the game loop that
- * runs afterwards, and background stage builds share one budget with
- * foreground turns instead of hammering the account from two sides.
- */
-import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
+/** Foreground and Headless consumers share an endpoint bucket, including across models. */
+import { GlobalRateScheduler, endpointBucketId } from '../../src/application/worldBuild/rateScheduler';
+import type { SchedulerActivity, SchedulerResourceStore } from '../../src/application/worldBuild/rateScheduler';
 import type { ApiProfile } from '../../src/application/llm/types';
 
 const registry = new Map<string, GlobalRateScheduler>();
+let resourceStore: SchedulerResourceStore | undefined;
+let activity: SchedulerActivity = { playing: false };
 
+/** No endpoint query, user info, credential, model, or profile name enters persisted metrics. */
+export { endpointBucketId };
+/** M0 calls this after database migration and before constructing billable providers. */
+export function configureSchedulerPersistence(store: SchedulerResourceStore): void {
+  resourceStore = store;
+  for (const scheduler of registry.values()) scheduler.setResourceStore(store);
+}
+export function setSchedulerActivity(next: SchedulerActivity): void {
+  activity = { ...next };
+  for (const scheduler of registry.values()) scheduler.setActivity(activity);
+}
+export function cancelQueuedWorldRequests(worldId: string): void {
+  for (const scheduler of registry.values()) scheduler.cancelWorld(worldId);
+}
 export function schedulerForProfile(profile: ApiProfile): GlobalRateScheduler {
-  const key = `${profile.endpoint}#${profile.model}`;
+  const key = endpointBucketId(profile.endpoint);
+  const limits = { rpm: profile.rpm, tpm: profile.tpm,
+    maxConcurrent: Math.max(1, Math.min(4, profile.concurrency ?? 2)) };
   let scheduler = registry.get(key);
   if (!scheduler) {
-    scheduler = new GlobalRateScheduler({
-      rpm: profile.rpm,
-      tpm: profile.tpm,
-      maxConcurrent: Math.max(1, Math.min(4, profile.concurrency ?? 2)),
-    });
+    scheduler = new GlobalRateScheduler({ ...limits, endpointBucketId: key, resourceStore });
+    scheduler.setActivity(activity);
     registry.set(key, scheduler);
-  }
+  } else scheduler.constrain(limits);
   return scheduler;
 }

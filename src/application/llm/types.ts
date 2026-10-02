@@ -1,3 +1,5 @@
+import type { RequestSchedulingMetadataV1 } from '../ports/phase6';
+
 export type LlmRole =
   | 'Extractor'
   | 'WorldMapper'
@@ -26,6 +28,7 @@ export type LlmRequestKind =
   | 'timeline'
   | 'registry'
   | 'summarizer'
+  | 'style_analyzer'
   | 'opening_goal';
 
 export function normalizeReasoningTier(value: unknown): ReasoningTier {
@@ -98,6 +101,15 @@ export interface LlmRequest {
   user: string;
   /** Exact provider wire max_tokens ceiling (business output + reasoning reserve). */
   maxOutputTokens: number;
+  /** Local admission metadata; never included in the provider HTTP payload. */
+  scheduling?: RequestSchedulingMetadataV1 & {
+    /** Conservative estimate used by concurrency-one background admission. */
+    expectedDurationMs?: number;
+    /** Allows project deletion to cancel unsent work without touching shared work. */
+    worldId?: string;
+  };
+  /** Only cancels a queued request. Dispatch is never treated as safely reversible. */
+  queueSignal?: AbortSignal;
   /** Optional per-call cap for physical transport attempts; app-level recovery may own the next bounded attempt. */
   maxPhysicalRequests?: number;
   jsonMode?: boolean;

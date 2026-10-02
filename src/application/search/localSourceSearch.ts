@@ -1,3 +1,4 @@
+import type { IndexCoverageV1 } from '../ports/phase6';
 import type { SourceStore } from '../ports/sourceStore';
 import type { WorldStore } from '../ports/worldStore';
 import { codePointLength } from '../../domain/world/textOffsets';
@@ -27,8 +28,15 @@ export interface LocalSourcePassage {
   text: string;
 }
 
+export interface LocalSourcePersistentBackend {
+  searchLocal(input: { sourceId:string; worldId:string; query:string; topK?:number;
+    sourceRanges?:readonly LocalSourceRange[]; signal?:AbortSignal }):Promise<LocalSourceLookupResult>;
+}
+
 export interface LocalSourceLookupResult {
   result: SourceSearchResult;
+  coverage?: readonly IndexCoverageV1[];
+  completeness?: 'complete' | 'partial';
   passages: LocalSourcePassage[];
   /** Same-chapter neighbors are fetched locally for later prefetch selection. */
   adjacentPrefetch: LocalSourcePassage[];
@@ -46,6 +54,7 @@ export class LocalSourceSearchService {
   constructor(
     private readonly sources: Pick<SourceStore, 'getManifest' | 'getChapters' | 'getChunks' | 'readRange'>,
     private readonly worlds: Pick<WorldStore, 'listEntities'>,
+    private readonly persistentBackend?: LocalSourcePersistentBackend,
   ) {}
 
   async search(input: {
@@ -57,6 +66,7 @@ export class LocalSourceSearchService {
     sourceRanges?: readonly LocalSourceRange[];
     signal?: AbortSignal;
   }): Promise<LocalSourceLookupResult> {
+    if (this.persistentBackend) return this.persistentBackend.searchLocal(input);
     const index = await this.getOrBuildIndex(input.sourceId, input.worldId, input.sourceRanges, input.signal);
     const result = searchLocalSource(index, { query: input.query, topK: input.topK, adjacentPrefetch: 2 });
     const chapters = await this.sources.getChapters(input.sourceId);

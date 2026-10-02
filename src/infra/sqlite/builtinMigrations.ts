@@ -1,4 +1,10 @@
 import type { SqliteMigration } from './migrations';
+import { PHASE6_SOURCE_INDEX_SCHEMA } from './phase6SourceIndexSchema';
+import { PHASE6_WRITER_STYLE_SCHEMA_SQL } from './phase6WriterStyleSchema';
+import { PHASE6_SEGMENT_SCHEMA_SQL } from './phase6SegmentSchema';
+import { phase6ArtifactSchema } from './sqliteSegmentArtifactStore';
+import { RESOURCE_GOVERNANCE_SQL } from './sqliteSchedulerResourceStore';
+import { PHASE6_EXECUTION_CONFIG_SQL } from './sqliteSegmentExecutionConfigStore';
 
 export const CORE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
@@ -1193,4 +1199,7 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
         WHERE s.source_id = replace(w.world_id, 'world-', '') AND s.status = 'active'
       );
   ` },
+  { version: 29, name: 'phase6_progressive_segments_and_writer_style', sql:
+    PHASE6_SOURCE_INDEX_SCHEMA + PHASE6_WRITER_STYLE_SCHEMA_SQL + PHASE6_SEGMENT_SCHEMA_SQL
+      + phase6ArtifactSchema + RESOURCE_GOVERNANCE_SQL + PHASE6_EXECUTION_CONFIG_SQL },
 ];

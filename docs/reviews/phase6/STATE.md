@@ -1,10 +1,11 @@
 # 第六阶段持续建设状态
 
-- 分支：feat/phase6-progressive-build-and-writer-style
-- 基线：51033973445825f01b730b7e62eec0a3352414e1
-- 当前阶段：P6-0 合同冻结；进入 P6-1。集成负责人 M0：主 agent。
-- 已完成：读取基线与全方案；依赖安装；620 项核心基线通过；phase6-contracts-1 类型、来源运行时校验、兼容 fixture；迁移/角色/协议决议。
-- 提交：本阶段提交随后用 git log 查询（避免把尚未生成的 hash 写成事实）。
-- 未解决：Android SDK/JDK17/设备配置；真实小说/API/人工标注/真机资源未提供；后续全部 M1～M9 实现、生产装配、兼容/故障、验收与 PR。
-- 检查：npm run verify:core；npm run typecheck；npm run typecheck --prefix mobile；git diff --check；Android Debug；版本若变化 verify:version。
-- 下一步：按冻结合同分工 M1/2、M6、M8、M3、M4、M5；M0 单独维护共享迁移和移动装配。每阶段 review/fix/验证/commit 后自主继续。
+- 分支：feat/phase6-progressive-build-and-writer-style；基线 main 51033973445825f01b730b7e62eec0a3352414e1。
+- 集成负责人：M0 主 agent。P6-0 提交 fdf4612；P6-1 基础代码与审查完成，正在阶段提交；P6-2 发布/映射集成进行中。
+- 已实现：来源/hash/多来源合同，持久中文索引与损坏恢复，优先队列/资源保留/请求账本适配，项目风格/缓存/编译/快照；M3 小段规划、M4 范围裁剪与变化集、M5 不变成果/安全采用已写入并测试。
+- 环境：Node 24.19.0；本地 Temurin17、SDK36/NDK27 已配置。原生 Debug 构建成功；软件模拟器启动中（无 KVM）。GLM 测试凭据和小说已由用户提供，仅私有目录使用。
+- 进行中：production sourceImport、runtime/session、分支/存档/UI/Android 接线；全量回归发现的暂停与来源夹具问题已修复待复测。
+- 未完成：P6-3～6 集成故障/恢复验收；有界真实 API、模拟器完整流程；真机、人工标注、跨题材样本不可用；版本、APK、PR/CI。
+- 命令：npm run verify:core；npm run typecheck；npm run typecheck --prefix mobile；git diff --check；JAVA_HOME=/workspace/toolchains/jdk17 ANDROID_HOME=/workspace/toolchains/android-sdk GRADLE_USER_HOME=/workspace/toolchains/gradle npm run apk:debug --prefix mobile；涉及版本时 npm run verify:version。
+- 证据日志：/workspace/scratch/phase6-*.log（脱敏结果汇总入 TEST_RESULTS.md）。不得记录密钥、小说全文或原始请求。
+- 下一步：完成 M3/M4/M5 的生产装配与阶段审查/commit；再完成 UI/恢复/存档，逐阶段自主推进。
