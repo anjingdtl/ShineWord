@@ -23,6 +23,7 @@ import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION, fa
   type IncrementalMappingOptions, type SelectedCanon } from '../incrementalMapping/canonSelection';
 import { validatePackage } from './validate';
 import type { SqliteTransaction } from '../ports/sqlite';
+import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -1524,6 +1525,14 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     const report = validatePackage({ worldId, revision: 0 }, entries, sections);
     if (!report.ok) throw new Error(`映射草稿引用/协议校验失败：${report.errors.join('；')}`);
     await input.assertCurrent?.();
+    if (input.incrementalMapping?.outputMode === 'change_set') {
+      const prior = new Map((input.incrementalMapping.previousEntries ?? []).map(e => [e.entryId, e]));
+      const changed = entries.filter(e => !prior.has(e.entryId)
+        || canonicalStringify({ ...prior.get(e.entryId)!, revision: e.revision } as unknown as CanonicalJson)
+          !== canonicalStringify(e as unknown as CanonicalJson));
+      const ids = new Set(changed.map(e => e.entryId));
+      return { ...draft, entries: changed, sections: sections.map(s => ({ ...s, entryIds: s.entryIds.filter(id => ids.has(id)) })).filter(s => s.entryIds.length) };
+    }
     return draft;
   }
 

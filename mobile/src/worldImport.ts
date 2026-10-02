@@ -8,7 +8,7 @@ import { buildWorldFromTxt } from '../../src/application/world/buildWorld';
 import { LlmChunkExtractor } from '../../src/application/world/llmExtractor';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
 import { getDatabaseRuntime } from './database';
-import { nativeSha256, nativeSha256BytesHex } from './nativeCrypto';
+import { nativeSha256, nativeSha256BytesHex, nativeSha256BytesBatchHex } from './nativeCrypto';
 import { mobileTextDecoder } from './textDecode';
 import { buildPackageFromCanon } from '../../src/application/worldPackage/buildPackageFromCanon';
 import type { ApiProfile } from '../../src/application/llm/types';
@@ -41,6 +41,7 @@ import { hasPlayableOpening } from '../../src/application/worldPackage/openingRe
  */
 export const bytesSha = makeBase64NativeByteSha({
   sha256BytesHexFromBase64: nativeSha256BytesHex,
+  sha256BytesBatchHexFromBase64: nativeSha256BytesBatchHex,
   sha256Hex: async input => nativeSha256.sha256Hex(input),
 });
 

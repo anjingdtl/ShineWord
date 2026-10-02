@@ -47,6 +47,7 @@ import type { TurnSettlementPlan } from '../ports/turnStore';
 import type { ProgressiveTurnContextService } from '../progressiveBuild/progressiveTurnContext';
 import type { SourceStore } from '../ports/sourceStore';
 import { visibleEvidenceRanges } from '../progressiveBuild/progressiveTurnContext';
+import { segmentKnowledgeFromConfirmedEvidence } from './segmentKnowledge';
 import {
   assertTrainingAllowed,
   awardPractice,
@@ -881,16 +882,25 @@ export class CampaignSession {
       }
     }
     const nextVersion = state.stateVersion + 1;
+    const knowledgeAnchor = await this.campaignAnchor(options.campaignId);
+    const knowledgeFacts = await this.deps.worldStore.listFacts(summary.worldId);
+    const knownIds = new Set((state.discoveries ?? []).filter(d=>d.actorId===player.actorId).map(d=>d.entryId));
+    const newlyKnown = segmentKnowledgeFromConfirmedEvidence({ entries, facts: knowledgeFacts, worldTimeOrder: knowledgeAnchor.worldTimeOrder,
+      knownEntryIds: knownIds, knownRanges: [...visibleEvidenceRanges(projectPlayerEntriesAtAnchor(entries,knowledgeFacts,knowledgeAnchor.worldTimeOrder,knownIds),knowledgeFacts,knowledgeAnchor.worldTimeOrder,knownIds),
+        ...ids.flatMap(id=>byId.get(id)!.provenance.sourceRanges ?? [])] });
+    await new SqliteInteractionOperationJournal(this.deps.db).guardTurn({ campaignId: options.campaignId, branchId: options.branchId,
+      turnId: `system-source_knowledge_recorded-${String(nextVersion).padStart(6,'0')}`, expectedStateVersion: state.stateVersion }, async fence => {
     await this.commitLifecycleAction({
       campaignId: options.campaignId,
       branchId: options.branchId,
       actorId: player.actorId,
       actionType: 'source_knowledge_recorded',
+      coordinationFence: fence,
       intent: `玩家确认 ${ids.length} 条主动查书摘录为角色已知资料。`,
       expectedStateVersion: state.stateVersion,
       updateState: next => {
         next.discoveries ??= [];
-        for (const entryId of ids) {
+        for (const entryId of [...ids,...newlyKnown]) {
           next.discoveries.push({
             entryId,
             actorId: player.actorId,
@@ -900,12 +910,13 @@ export class CampaignSession {
           });
         }
       },
-      events: ids.map(entryId => ({ eventType: 'knowledge_discovered', payload: {
+      events: [...ids,...newlyKnown].map(entryId => ({ eventType: 'knowledge_discovered', payload: {
         entryId,
         actorId: player.actorId,
         knownVia: 'told',
-        source: 'user_confirmed_source_lookup',
+        source: newlyKnown.includes(entryId) ? 'confirmed_segment_evidence' : 'user_confirmed_source_lookup',
       } })),
+    });
     });
   }
 
@@ -1326,7 +1337,7 @@ export class CampaignSession {
       .filter(member => (member.groupId ?? 'main') === viewerGroupId)
       .map(member => member.actorId));
     const visibleNpcTemplateIds = new Set(entries.filter(entry => entry.kind === 'actor_template'
-      && entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
+      && (entry.visibility === 'public' || (state.discoveries ?? []).some(d=>d.actorId===viewerActorId&&d.entryId===entry.entryId)) && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder)
       && isTemplateValidAtAnchor(entry, worldTimeOrder))
       .map(entry => entry.entryId));
     for (const card of cards) {
@@ -1768,7 +1779,7 @@ export class CampaignSession {
       .filter(member => (member.groupId ?? 'main') === partyGroupId).map(member => member.actorId));
     const publicLocalNpcIds = new Set(allCards.filter(card => card.kind === 'npc'
       && card.templateId && entries.some(entry => entry.kind === 'actor_template'
-        && entry.entryId === card.templateId && entry.visibility === 'public'
+        && entry.entryId === card.templateId
         && isTemplateValidAtAnchor(entry, worldTimeOrder))
       && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId)
       .map(card => card.actorId));

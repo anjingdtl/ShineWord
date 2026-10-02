@@ -7,6 +7,7 @@ interface ShineWordCryptoNative {
   sha256Hex(input: string): Promise<string>;
   /** SHA-256 over raw bytes delivered as base64 (P2 acceptance G06). */
   sha256BytesHex(base64Input: string): Promise<string>;
+  sha256BytesBatchHex?(base64Inputs: readonly string[]): Promise<readonly string[]>;
 }
 
 function native(): ShineWordCryptoNative {
@@ -43,4 +44,13 @@ function assertDigest(value: string): string {
  */
 export async function nativeSha256BytesHex(base64Input: string): Promise<string> {
   return assertDigest(await native().sha256BytesHex(base64Input));
+}
+
+export async function nativeSha256BytesBatchHex(inputs: readonly string[]): Promise<readonly string[]> {
+  const module = native();
+  const values = module.sha256BytesBatchHex
+    ? await module.sha256BytesBatchHex(inputs)
+    : await Promise.all(inputs.map(value => module.sha256BytesHex(value)));
+  if (values.length !== inputs.length) throw new Error('Native SHA-256 returned an invalid batch.');
+  return values.map(assertDigest);
 }

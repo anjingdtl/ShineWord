@@ -16,6 +16,10 @@ export interface IncrementalMappingOptions {
   delta?: CanonDeltaV1;
   /** Previously published immutable content; cloned before merge. */
   previousEntries?: readonly ContentEntry[];
+  /** Only evidence already certified by immutable, compatible artifacts. */
+  publishedEvidence?: ReadonlyArray<{ sourceFactIds: readonly string[]; coverage: readonly SourceRangeV1[] }>;
+  /** Draft emission only: immutable predecessors remain dependency content. */
+  outputMode?: 'change_set';
 }
 export interface SelectedCanon {
   facts: StoredFact[];
@@ -60,8 +64,12 @@ export function selectCanonSubset(input: {
   if (!options.executionConfigFingerprint.trim() || options.ranges.length === 0) {
     diagnostics.push('范围或冻结执行配置缺失');
   }
-  const eligible = input.facts.filter(fact => factCoveredByRanges(fact, options));
+  const current = input.facts.filter(fact => factCoveredByRanges(fact, options));
+  const eligible = input.facts.filter(fact => current.includes(fact) || options.kind === 'incremental'
+    && options.publishedEvidence?.some(proof => proof.sourceFactIds.includes(fact.factId)
+      && factCoveredByRanges(fact, { ranges: proof.coverage, sourceBinding: options.sourceBinding })));
   const good = eligible.filter(fact => fact.status === 'explicit' || fact.status === 'inference');
+  const changedGood = good.filter(fact => current.includes(fact));
   const byFact = new Map(good.map(fact => [fact.factId, fact]));
   const byEntity = new Map(input.entities.map(entity => [entity.entityId, entity]));
   const byEvent = new Map(input.events.filter(event => event.status === 'canon').map(event => [event.eventId, event]));
@@ -80,7 +88,7 @@ export function selectCanonSubset(input: {
   for (const id of requirements?.requiredEntityIds ?? []) chosenEntities.add(id);
   for (const id of requirements?.requiredEventIds ?? []) chosenEvents.add(id);
   if (options.kind === 'incremental') {
-    for (const id of options.delta?.factIds ?? good.map(fact => fact.factId)) addFact(id);
+    for (const id of options.delta?.factIds ?? changedGood.map(fact => fact.factId)) addFact(id);
     for (const id of options.delta?.entityIds ?? []) chosenEntities.add(id);
     for (const id of options.delta?.eventIds ?? []) chosenEvents.add(id);
     // An old entry touched by new evidence pulls in only its existing evidence,
@@ -90,10 +98,11 @@ export function selectCanonSubset(input: {
       ...good.filter(f => changedFacts.has(f.factId)).map(f => f.subjectEntityId)]);
     const allByFact = new Map(input.facts.map(f => [f.factId, f]));
     for (const entry of options.previousEntries ?? []) {
+      const followsEntityChanges = entry.kind !== 'lore'; // exact historical lore remains an immutable fact projection
       if (entry.provenance.sourceFactIds.some(id => changedFacts.has(id))
-        || entry.provenance.sourceFactIds.some(id => changedEntities.has(allByFact.get(id)?.subjectEntityId ?? ''))
+        || followsEntityChanges && entry.provenance.sourceFactIds.some(id => changedEntities.has(allByFact.get(id)?.subjectEntityId ?? ''))
         || Object.values(entry.fieldProvenance ?? {}).some(p => p.sourceFactIds.some(id => changedFacts.has(id)))
-        || valueStrings(entry.definition).some(value => changedEntities.has(value)
+        || followsEntityChanges && valueStrings(entry.definition).some(value => changedEntities.has(value)
           || input.entities.some(e => changedEntities.has(e.entityId) && (e.name === value || e.aliases.includes(value))))) affectedEntries.add(entry.entryId);
     }
     let expanded = true;

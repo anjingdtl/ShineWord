@@ -77,7 +77,7 @@ const sha = {
   sha256BytesHex(bytes) { return crypto.createHash('sha256').update(bytes).digest('hex'); },
 };
 
-async function createMobileHarness({ bytes, dbPath, coordinator, transport, secrets, serviceStart = async () => false, nativeControl } = {}) {
+async function createMobileHarness({ bytes, dbPath, coordinator, transport, secrets, serviceStart = async () => false, nativeControl, moduleMocks = {} } = {}) {
   const db = new DatabaseSync(dbPath ?? ':memory:');
   const adapter = new NodeSqliteAdapter(db);
   await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
@@ -100,6 +100,7 @@ async function createMobileHarness({ bytes, dbPath, coordinator, transport, secr
       async deleteStaged() {},
     },
     './buildServiceBridge': { startBuildService: serviceStart, requestRunControl: nativeControl ?? (async () => false), notifyBuildProgress: async () => true },
+    ...moduleMocks,
   };
   if (coordinator) mocks['../../src/application/worldBuild/coordinator'] = coordinator;
   const sourceImport = loadMobileModule('mobile/src/sourceImport.ts', mocks);

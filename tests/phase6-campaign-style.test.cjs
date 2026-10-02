@@ -20,6 +20,7 @@ const { publishWorldPackage } = require('../dist/application/worldPackage/publis
 const { cloneGameState } = require('../dist/domain/state/types');
 const { forkBranch } = require('../dist/application/branch/fork');
 const { runV2Turn } = require('../dist/application/game/v2Turn');
+const { publishUserRequestedSourceLookupDelta } = require('../dist/application/worldPackage/progressiveDelta');
 const now = '2026-10-02T00:00:00Z';
 const entry = (entryId, kind, definition) => ({ entryId, kind, definition, revision: 1,
   provenance: { kind: 'design_fill', sourceFactIds: [], rationale: '协议测试中的显式规则夹具', policyId: 'fixture-rule' },
@@ -45,7 +46,7 @@ async function fixture() {
   const entries = [skill('stealth'), entry('scene', 'scene', { name: '桥头', description: '可进入的测试地点', locationId: 'bridge',
     zones: [{ zoneId: 'z', name: '石阶', cover: false, exits: [] }], actors: [], visibleItems: [], hazards: [], clues: [] })];
   const published = await publishWorldPackage({ worldStore: worlds, sha256Hex: sha.sha256Hex, worldId: 'w', sourceSha256: rawHash,
-    mappingVersion: 'map-1', entries, sections: [], createdAt: now });
+    mappingVersion: 'map-1', entries, sections: [{ sectionKey: 'player-intro', book: 'player_handbook', title: '开局资料', position: 0, entryIds: entries.map(e => e.entryId) }], createdAt: now });
   const campaign = await createCampaign({ db: adapter, worldStore: worlds, campaignId: 'c', title: '分支协议', worldId: 'w',
     packageRevision: published.manifest.revision, anchor: { worldTimeOrder: 1, locationId: 'bridge' },
     protagonist: { actorId: 'pc', kind: 'original', name: '玩家', attributes: { physique: 1, agility: 2, insight: 1, knowledge: 1, willpower: 1, social: 1 }, initialSkills: ['stealth'] },
@@ -61,7 +62,7 @@ async function fixture() {
     if (this.failNarrator) { this.failNarrator = false; throw new Error('synthetic_narrator_failure'); }
     return { text: JSON.stringify({ turnId: value.turnId, outcomeGrade: value.outcomeGrade, text: '你查看了桥头的石阶。' }), usage: { inputTokens: 100, outputTokens: 60, estimated: false } };
   } };
-  const session = new CampaignSession({ db: adapter, turns, game, worldStore: worlds, narratives, projectStyle: styles,
+  const session = new CampaignSession({ db: adapter, turns, game, worldStore: worlds, sourceStore: sources, narratives, projectStyle: styles,
     segmentContent: publication, hashProvider: sha, random: { nextIntInclusive: () => 3 } }, provider,
     { endpoint: 'https://example.invalid', model: 'test', keyRef: 'test', reasoningTier: 'low', capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } });
   async function artifact(entries, segmentId = 'seg') {
@@ -77,8 +78,56 @@ async function fixture() {
       expectedStateVersion: b.stateVersion, expectedManifestHash: b.artifactManifestHash ?? b.manifestHash, artifactIds: [a.artifactId] });
     assert.equal(result.status, 'adopted'); return result.binding;
   }
-  return { db, adapter, worlds, turns, game, narratives, publication, styles, provider, session, campaign, artifact, adopt };
+  return { db, adapter, worlds, sources, text, published, turns, game, narratives, publication, styles, provider, session, campaign, artifact, adopt };
 }
+
+test('confirmed source evidence unlocks adopted knowledge; NPC materializes only on the next player action', async () => {
+  const h = await fixture(); try {
+    const quote = '甲走到桥头，乙站在石阶旁。', end = Array.from(quote).length, rawHash = 'a'.repeat(64);
+    const chapters = await h.sources.getChapters('src');
+    await h.worlds.saveImportedSource('w', { encoding: 'utf-8', sourceSha256Hex: rawHash, sourceByteLength: 100,
+      normalizeVersion: 'n', chapterSplitVersion: 'c', splitStrategy: 'standard', text: '',
+      codePointCount: Array.from(h.text).length, chapters, chunks: [] }, now);
+    await h.worlds.upsertEntity({ worldId: 'w', entityId: 'person-yi', type: 'character', name: '乙', aliases: [], firstSeenChapterId: 'ch' }, now);
+    await h.worlds.saveFact({ worldId: 'w', factId: 'known-location', subjectEntityId: 'person-yi', predicate: 'current_location',
+      value: { location: 'bridge' }, status: 'explicit', confidence: 1, validFrom: null, validTo: null, revealAt: 1, scope: 'world',
+      sources: [{ chapterId: 'ch', startOffset: 0, endOffset: end, quote, quoteSha256: await sha.sha256Hex(quote) }] }, now);
+    const proof = { kind: 'explicit', sourceFactIds: ['known-location'], rationale: '原文明确说明位置' };
+    const npc = { ...entry('evidenced-npc', 'actor_template', { name: '乙', category: 'human', description: '乙站在石阶旁。',
+      attributes: { physique: 1, agility: 1 }, skills: {}, hp: 6, stamina: 4, defense: 2, attacks: [], abilities: [], startingItems: [],
+      behavior: { goal: '原地等待', retreatThreshold: 0.25, morale: 'steady' }, lootPolicy: '无',
+      threat: { damage: 0, durability: 1, actions: 1, control: 0, environment: 0 } }),
+      visibility: 'discoverable', revealPolicyId: 'segment-explicit-discovery', provenance: proof };
+    for (const field of ['attributes','skills','hp','stamina','defense','attacks','abilities','startingItems','behavior','lootPolicy','threat'])
+      npc.fieldProvenance[`definition.${field}`] = { kind: 'rule_mapping', sourceFactIds: [], rationale: '明确标记的测试规则默认值' };
+    const scene = { ...entry('evidenced-scene', 'scene', { name: '桥头', description: quote, locationId: 'bridge',
+      zones: [{ zoneId: 'z', name: '石阶', cover: false, exits: [] }], actors: [npc.entryId], visibleItems: [], hazards: [], clues: [] }),
+      visibility: 'discoverable', revealPolicyId: 'segment-explicit-discovery', provenance: proof, dependencyIds: [npc.entryId] };
+    await h.adopt(await h.artifact([npc, scene]));
+    assert.equal((await h.turns.getState(h.campaign.branchId)).actors['npc-evidenced-npc'], undefined);
+    assert.deepEqual((await h.turns.getState(h.campaign.branchId)).discoveries ?? [], []);
+    const lookup = await publishUserRequestedSourceLookupDelta({ db: h.adapter, worldStore: h.worlds, sourceStore: h.sources,
+      sha256Hex: sha.sha256Hex, worldId: 'w', branchId: h.campaign.branchId, stateVersion: 0,
+      baseRevision: h.published.manifest.revision, sourceSha256: rawHash, book: 'player_handbook',
+      passages: [{ chapterId: 'ch', chapterTitle: '开篇', startCodePoint: 0, endCodePoint: end, text: quote }],
+      existingEntryIds: new Set((await h.worlds.getWorldPackage('w', h.published.manifest.revision)).entries.map(e => e.entryId)), createdAt: now,
+      rebaseLegacyOverlay: (tx, input) => h.publication.rebaseLegacyOverlay(tx, input) });
+    await h.session.recordProgressiveSourceKnowledge({ campaignId: 'c', branchId: h.campaign.branchId, entryIds: lookup.entryIds });
+    const learned = await h.turns.getState(h.campaign.branchId);
+    assert.equal(learned.stateVersion, 1);
+    assert.ok(learned.discoveries.some(d => d.entryId === npc.entryId));
+    assert.ok(learned.discoveries.some(d => d.entryId === scene.entryId));
+    assert.equal(learned.actors['npc-evidenced-npc'], undefined, 'learning does not mutate actor state');
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '看看石阶旁的乙' });
+    const after = await h.turns.getState(h.campaign.branchId);
+    assert.equal(after.stateVersion, 3, 'one fenced local actor load followed by one ordinary turn');
+    assert.equal(after.actors['npc-evidenced-npc'].locationId, 'bridge');
+    assert.match(h.provider.requests.find(r => r.role === 'Planner').user, /npc-evidenced-npc/);
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '继续观察' });
+    assert.equal((await h.turns.getState(h.campaign.branchId)).stateVersion, 4);
+    assert.equal((await h.adapter.queryOne("SELECT COUNT(*) n FROM actor_cards WHERE actor_id='npc-evidenced-npc'")).n, 1);
+  } finally { h.db.close(); }
+});
 
 test('local rest preserves adopted content and historical fork keeps its original artifact set', async () => {
   const h = await fixture(); try {

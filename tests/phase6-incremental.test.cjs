@@ -88,11 +88,12 @@ test('M4 source-local multi-part ranges preserve mirror IDs and do not select sa
 });
 
 test('M4 changed facts expand affected-entry dependencies but keep unrelated immutable mappings', () => {
-  const original = [entry('hero-card', ['old']), entry('action', [], ['hero-card']), entry('unrelated', ['other'])];
+  const original = [{...entry('hero-card', ['old']),kind:'actor_template'}, entry('action', [], ['hero-card']), entry('unrelated', ['other']), entry('historical-lore', ['old'])];
   const selected = selectCanonSubset({ entities: [entity('hero', 'character'), entity('other-actor', 'character')],
     facts: [fact('old', 'hero'), fact('new', 'hero'), fact('other', 'other-actor')], events: [],
     options: options('incremental', { previousEntries: original, delta: { worldId: 'w', factIds: ['new'], entityIds: [], eventIds: [], canonSnapshotHash: sha('delta'), executionConfigFingerprint: 'frozen-model-low' } }) });
   assert.deepEqual(selected.affectedEntryIds.sort(), ['action', 'hero-card']);
+  assert.ok(!selected.affectedEntryIds.includes('historical-lore'),'a new identity fact does not rewrite historical fact lore');
   assert.deepEqual(selected.facts.map(f => f.factId).sort(), ['new', 'old']);
   const updated = entry('hero-card', ['old', 'new']); updated.definition.text = '增量修订';
   const merged = mergeIncrementalEntries(original, [updated, { ...entry('unrelated', ['other']), definition: { text: '禁止改写' } }], selected.affectedEntryIds);
@@ -192,6 +193,24 @@ test('event self identity does not create a second fact-store dependency; missin
  assert.deepEqual(selectCanonSubset({...data,options:options()}).diagnostics,[]);
  data.events[0].dependsOnEventIds=['evt-missing'];assert.ok(selectCanonSubset({...data,options:options()}).diagnostics.some(x=>x.includes('evt-missing')));
  data.facts[0].value={other:'ent-unsupported'};assert.ok(selectCanonSubset({...data,options:options()}).diagnostics.some(x=>x.includes('ent-unsupported')));
+});
+
+test('incremental closure reuses only certified compatible old evidence and does not map unrelated old facts',()=>{
+ const data=canon(24),fresh={...data.facts[0],factId:'fresh',value:{location:'place'},sources:[{...data.facts[0].sources[0],startOffset:210,endOffset:217}]};
+ const old=data.facts.find(f=>f.subjectEntityId==='place');
+ const r=(startCp,endCp)=>({...range,startCp,endCp});
+ const scoped=options('incremental',{ranges:[r(200,300)],publishedEvidence:[{sourceFactIds:[old.factId],coverage:[r(0,100)]}]});
+ const selected=selectCanonSubset({...data,facts:[...data.facts,fresh],options:scoped});
+ assert.deepEqual(selected.diagnostics,[]);assert.deepEqual(new Set(selected.facts.map(f=>f.factId)),new Set(['fresh',old.factId]));
+ assert.ok(selectCanonSubset({...data,facts:[...data.facts,fresh],options:{...scoped,publishedEvidence:[]}}).diagnostics.some(x=>x.includes('place')));
+ assert.ok(selectCanonSubset({...data,facts:[...data.facts,fresh],options:{...scoped,publishedEvidence:[{sourceFactIds:[old.factId],coverage:[{...r(0,100),normalizedTreeHash:sha('changed')}]}]}}).diagnostics.length);
+});
+
+test('immutable entry versioning rewrites nested scene/card/item references and keeps prose',()=>{
+ const {remapEntryReferences}=load('application/worldPackage/remapEntryReferences');
+ const entry={entryId:'scene',kind:'scene',revision:1,dependencyIds:['actor','item'],definition:{name:'场所',description:'原著原句',actors:['actor'],visibleItems:['item'],zones:[{zoneId:'z',exits:[{toSceneId:'scene'}]}]}};
+ const mapped=remapEntryReferences(entry,new Map([['scene','scene-new'],['actor','actor-new'],['item','item-new']]));
+ assert.equal(mapped.entryId,'scene-new');assert.deepEqual(mapped.definition.actors,['actor-new']);assert.deepEqual(mapped.definition.visibleItems,['item-new']);assert.equal(mapped.definition.zones[0].exits[0].toSceneId,'scene-new');assert.equal(mapped.definition.description,'原著原句');assert.equal(entry.definition.actors[0],'actor');
 });
 
 test('completed nested location checkpoint repairs locally with exact quote validation and a transactional fence',async()=>{

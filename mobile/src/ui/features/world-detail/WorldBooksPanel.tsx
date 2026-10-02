@@ -271,7 +271,7 @@ export function WorldBooksPanel(props: {
         entryIds: pendingSourceEntryIds,
       });
       setPendingSourceEntryIds([]);
-      setLookupMessage('已记入当前角色知识；回退或分支时会按对应存档恢复。');
+      setLookupMessage('已记入当前角色知识；已采用小段中证据完整且符合时点的资料也可使用。回退与分支按存档恢复。');
       setRefreshVersion(version => version + 1);
     } catch (cause) {
       setLookupMessage(`确认失败：${cause instanceof Error ? cause.message : String(cause)}`);

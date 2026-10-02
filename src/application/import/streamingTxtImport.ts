@@ -20,7 +20,7 @@ import type {
   SourceChapter,
   SourceChunk,
 } from '../../domain/world/types';
-import { codePointLength, utf8Bytes } from '../../domain/world/textOffsets';
+import { codePointLength, utf8Bytes, CodePointOffsetIndex } from '../../domain/world/textOffsets';
 import {
   CHAPTER_SPLIT_VERSION,
   buildChapterDraftsFromMeta,
@@ -70,6 +70,8 @@ export interface StreamingImportProgress {
   phase: 'reading' | 'planning' | 'hashing';
   bytesRead: number;
   totalBytes: number;
+  completedRecords?: number;
+  totalRecords?: number;
 }
 
 export interface StreamingImportOptions {
@@ -81,6 +83,7 @@ export interface StreamingImportOptions {
   onProgress?: (progress: StreamingImportProgress) => void;
   sha256Hex(input: string): Promise<string>;
   sha256BytesHex(bytes: Uint8Array): Promise<string>;
+  sha256BytesBatchHex?(bytes: readonly Uint8Array[]): Promise<readonly string[]>;
 }
 
 export interface StreamingImportResult {
@@ -293,20 +296,42 @@ export async function importTxtSourceStreaming(
       title: draft.title.trim() || `片段 ${i + 1}`,
       startOffset: draft.startOffset,
       endOffset: draft.endOffset,
-      charCount: 0,
+      charCount: draft.endOffset - draft.startOffset,
       contentHash: '',
     };
-    report({ phase: 'hashing', bytesRead: source.byteLength, totalBytes: source.byteLength });
-    const chapterText = await shards.readRange(sourceId, draft.startOffset, draft.endOffset);
-    chapter.charCount = codePointLength(chapterText);
-    chapter.contentHash = await options.sha256BytesHex(utf8Bytes(chapterText));
     chapters.push(chapter);
     chunks.push(...planChunksForChapter(chapter, draft, paragraphs, targetChunk));
   }
-  for (const chunk of chunks) {
-    const chunkText = await shards.readRange(sourceId, chunk.startOffset, chunk.endOffset);
-    chunk.charCount = codePointLength(chunkText);
-    chunk.contentHash = await options.sha256BytesHex(utf8Bytes(chunkText));
+  // Import owns these finished staging shards. A bounded read-ahead window
+  // avoids thousands of repeated SQLite/bridge reads of the same shard.
+  let cached: { start: number; end: number; index: CodePointOffsetIndex } | null = null;
+  const readRecord = async (start: number, end: number): Promise<string> => {
+    if (end - start > 65_536) return shards.readRange(sourceId, start, end);
+    if (!cached || start < cached.start || end > cached.end) {
+      const until = Math.min(codePointCount, start + 65_536);
+      const text = await shards.readRange(sourceId, start, until);
+      const index = new CodePointOffsetIndex(text);
+      if (index.codePointCount !== until - start) throw new Error('import_shard_coverage_missing');
+      cached = { start, end: until, index };
+    }
+    return cached.index.slice(start - cached.start, end - cached.start);
+  };
+  const records = [...chapters, ...chunks].sort((a,b) => a.startOffset - b.startOffset);
+  for (let offset = 0; offset < records.length; offset += 16) {
+    report({ phase: 'hashing', bytesRead: source.byteLength, totalBytes: source.byteLength, completedRecords: offset, totalRecords: records.length });
+    const batch = records.slice(offset, offset + 16);
+    const bytes: Uint8Array[] = [];
+    for (const record of batch) {
+      const text = await readRecord(record.startOffset, record.endOffset);
+      record.charCount = codePointLength(text);
+      if (record.charCount !== record.endOffset - record.startOffset) throw new Error('import_shard_coverage_missing');
+      bytes.push(utf8Bytes(text));
+    }
+    const digests = options.sha256BytesBatchHex && bytes.reduce((n,v)=>n+v.byteLength,0) <= 1_048_576
+      ? await options.sha256BytesBatchHex(bytes)
+      : await Promise.all(bytes.map(value => options.sha256BytesHex(value)));
+    if (digests.length !== batch.length) throw new Error('invalid_batch_digests');
+    for (let i = 0; i < batch.length; i++) batch[i]!.contentHash = digests[i]!;
   }
 
   const normalizedTreeHash = await options.sha256Hex(shardDigests.join(''));

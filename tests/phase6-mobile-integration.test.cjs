@@ -33,3 +33,28 @@ test('production partial extraction never publishes empty canon; failed opening 
   assert.equal(calls,1,'one exact focused extraction; no separate survey, registry, timeline or paid mapping call');
  }finally{h.db.close()}
 });
+
+test('production API switch returns a new frozen segment run and leaves the old config intact',async()=>{
+ const h=await createPhase6MobileHarness({bytes:Buffer.from('第一章\n'+'林辰来到旧桥。'.repeat(1200))});try{
+  const first=await h.sourceImport.importNovelForOpeningStreaming('memory','synthetic.txt',profile,()=>{}),id=first.runIds[0],before=await h.runStore.getRun(id);
+  await h.runStore.setRunStatus(id,'failed_retryable',new Date().toISOString(),'test_known_failure','synthetic');
+  const next=await h.sourceImport.useCurrentApiForRun(id,{...profile,id:'next',endpoint:'https://backup.invalid/v1'});
+  assert.notEqual(next,id);assert.equal((await h.runStore.getRun(id)).configJson,before.configJson);
+  assert.equal(JSON.parse((await h.runStore.getRun(next)).configJson).endpoint,'https://backup.invalid/v1');
+  const old=await h.runtime.segmentPlans.findSegmentByRunId(id),fresh=await h.runtime.segmentPlans.findSegmentByRunId(next);
+  assert.equal(old.status,'stale');assert.notEqual(old.intent.executionConfigFingerprint,fresh.intent.executionConfigFingerprint);
+ }finally{h.db.close()}
+});
+
+test('explicit full mode admits only two missing P3 windows, resumes the actual host and honors pause',async()=>{
+ const started=[];const h=await createPhase6MobileHarness({bytes:Buffer.from('第一章\n'+'林辰来到旧桥。'.repeat(4000)),moduleMocks:{'./segmentRuntime':{async startSegmentRun(id){started.push(id)}}}});try{
+  const first=await h.sourceImport.importNovelForOpeningStreaming('memory','synthetic.txt',profile,()=>{});
+  await assert.rejects(h.sourceImport.switchToFullBuild(first.worldId),/开局资料/);
+  const bootstrap=(await h.runtime.segmentPlans.listSegments(first.worldId))[0];
+  h.runtime.segmentPublication.listPublishedArtifacts=async()=>[{artifactId:'synthetic-certified-opening',worldId:first.worldId,segmentId:bootstrap.intent.segmentId,generation:1,sourceBinding:bootstrap.intent.sourceBinding,coverage:bootstrap.intent.ranges}];
+  const ids=await h.sourceImport.switchToFullBuild(first.worldId);assert.equal(ids.length,2);assert.deepEqual(started,ids);
+  const windows=(await h.runtime.segmentPlans.listSegments(first.worldId)).filter(s=>s.intent.reason==='user_full');assert.equal(windows.length,2);assert.ok(windows.every(s=>s.intent.priority==='P3'&&s.intent.ranges[0].endCp-s.intent.ranges[0].startCp<=3200));
+  assert.deepEqual(await h.sourceImport.switchToFullBuild(first.worldId),[]);assert.equal(started.length,2);
+  await h.runtime.segments.setPause(first.worldId,'user');assert.deepEqual(await h.sourceImport.switchToFullBuild(first.worldId),[]);
+ }finally{h.db.close()}
+});

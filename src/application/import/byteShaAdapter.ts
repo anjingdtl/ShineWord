@@ -16,11 +16,13 @@ declare const btoa: (data: string) => string;
 export interface Base64NativeSha256 {
   /** Hashes the byte sequence obtained by base64-decoding `base64`. */
   sha256BytesHexFromBase64(base64: string): Promise<string>;
+  sha256BytesBatchHexFromBase64?(base64: readonly string[]): Promise<readonly string[]>;
   sha256Hex(input: string): Promise<string>;
 }
 
 export interface ByteSha256TextProvider {
   sha256BytesHex(bytes: Uint8Array): Promise<string>;
+  sha256BytesBatchHex?(bytes: readonly Uint8Array[]): Promise<readonly string[]>;
   sha256Hex(input: string): Promise<string>;
 }
 
@@ -49,5 +51,10 @@ export function makeBase64NativeByteSha(native: Base64NativeSha256): ByteSha256T
       return native.sha256BytesHexFromBase64(bytesToBase64(bytes));
     },
     sha256Hex: async (input: string) => native.sha256Hex(input),
+    ...(native.sha256BytesBatchHexFromBase64 ? { async sha256BytesBatchHex(bytes: readonly Uint8Array[]): Promise<readonly string[]> {
+      const hashes = await native.sha256BytesBatchHexFromBase64!(bytes.map(bytesToBase64));
+      if (hashes.length !== bytes.length || hashes.some(value => !/^[a-f0-9]{64}$/i.test(value))) throw new Error('invalid_batch_digests');
+      return hashes.map(value => value.toLowerCase());
+    } } : {}),
   };
 }

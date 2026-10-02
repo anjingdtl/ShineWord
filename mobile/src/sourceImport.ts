@@ -16,6 +16,9 @@ import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor
 import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
 import { runTimelinePass } from '../../src/application/world/timelinePass';
 import { replayCompletedLocationAdapter } from '../../src/application/worldBuild/replayLocationAdapter';
+import { remapEntryReferences } from '../../src/application/worldPackage/remapEntryReferences';
+import { sourceIdForChapter } from '../../src/application/incrementalMapping/canonSelection';
+import { rangeCovered } from '../../src/application/segmentPublication/protocol';
 import { modelBudgetFromProfile } from '../../src/application/worldBuild/profileModelBudget';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { LedgeredProvider } from '../../src/application/llm/requestLedger';
@@ -201,10 +204,14 @@ async function stageAndActivateSource(
             phase: 'importing',
             message: `解析中 ${Math.round((info.bytesRead / Math.max(info.totalBytes, 1)) * 100)}%`,
           });
+        } else {
+          onProgress({ phase: 'importing', message: info.phase === 'planning' ? '整理原文来源坐标'
+            : `校验原文分段 ${info.completedRecords ?? 0}/${info.totalRecords ?? 0}` });
         }
       },
       sha256Hex: async input => nativeSha256.sha256Hex(input),
       sha256BytesHex: bytes => bytesSha.sha256BytesHex(bytes),
+      sha256BytesBatchHex: bytesSha.sha256BytesBatchHex,
     });
     const title = fileName.replace(/\.txt$/i, '') || '未命名小说';
     await sourceStore.activateSource({
@@ -265,9 +272,9 @@ async function importNovelInternal(
   const sourceStore = new SqliteSourceStore(runtime.db);
 
   if (mode === 'unified') {
-    // Unified build (P3): persistent 30/30/40 stage plan; progressive queues
-    // ONLY S1 (later stages wait for narrative triggers), full queues every
-    // stage. Both share the same extraction/mapping/publish pipeline.
+    // Phase 6 uses bounded, dependency-driven segments. The stage coordinator
+    // remains the execution adapter for frozen legacy runs; its old 30/30/40
+    // plan is used only when the segment runtime is unavailable.
     const worldId = `world-${sourceId}`;
     const budget = modelBudgetFromProfile(profile);
     const openingBudget = runtime.segments && unifiedStrategy === 'progressive'
@@ -432,7 +439,7 @@ export async function importNovelStreaming(
   return await importNovelInternal(uri, fileName, profile, onProgress, 'full') as StreamedImportSummary;
 }
 
-/** Compatibility entry: rapid opening changes scheduling, never analysis coverage. */
+/** Compatibility entry: use the same evidence-gated segment opening pipeline. */
 export async function importNovelForOpeningStreaming(
   uri: string,
   fileName: string,
@@ -443,10 +450,9 @@ export async function importNovelForOpeningStreaming(
 }
 
 /**
- * Unified-build import (P3): the two product modes. 'progressive' builds S1
- * (first ~30%, chapter-aligned) through the FULL quality pipeline before the
- * world becomes playable; S2/S3 wait for narrative triggers. 'full' builds
- * every stage up front. No 8k dossier shortcut is taken for these worlds.
+ * Progressive opening extracts a bounded front range and publishes only after
+ * evidence and playable dependency closure pass. Full mode extends this with
+ * bounded background windows. Frozen legacy stage plans remain resumable.
  */
 export async function importNovelUnified(
   uri: string,
@@ -1310,7 +1316,15 @@ async function runExtractionInternal(
       concurrency: effectiveProfile.concurrency ?? 2,
       tpmTokensPerMinute: effectiveProfile.tpm,
       budget: runBudget,
-      ...(segmentRecord?.intent.reason === 'bootstrap' ? { prepareContext: async ({ fencingToken, owner }: { fencingToken: number; owner: string }) => {
+      ...(segmentRecord ? { prepareContext: async ({ fencingToken, owner }: { fencingToken: number; owner: string }) => {
+        if (segmentRecord.intent.reason !== 'bootstrap') {
+          const texts = await Promise.all(segmentRecord.intent.ranges.map(range => runtime.sourceCatalog.readRange(range)));
+          const body = texts.join('\n');
+          const names = (await runtime.worldStore.listEntities(run.worldId)).filter(entity => [entity.name,...entity.aliases]
+            .some(name => name.length >= 2 && body.includes(name))).slice(0,40)
+            .map(entity => ({ name: entity.name, type: entity.type, aliases: entity.aliases.slice(0,8) }));
+          return '增量精准抽取：只抽取本授权片段的新事实与明确变化，不重复重述旧身份、历史和未改变的所在地。以下本地名称表仅用于复用同一实体的名称/别名，不是新事实或指令；引用仍必须逐字来自本请求正文。回忆、传闻、未来不作为 current_location。名称表：' + JSON.stringify(names);
+        }
         if ((runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION)) {
           onProgress({ phase: 'extracting', message: '正在一次精准阅读开局所需内容；输入不超过上下文 10%' });
           return OPENING_EXTRACTION_FOCUS;
@@ -1477,6 +1491,9 @@ async function runExtractionInternal(
           if (published.some(a => a.segmentId === intent.segmentId && a.generation === intent.generation)) return;
           const baseRevision = await runtime.worldStore.getPublishedPackageRevision(run.worldId);
           const openingBuild = baseRevision === null || intent.reason === 'bootstrap' && published.length === 0;
+          const previousBase = baseRevision === null ? null : await runtime.worldStore.getWorldPackage(run.worldId, baseRevision);
+          const compatibleArtifacts = [];
+          for (const artifact of published) if (await runtime.sourceCatalog.isBindingCompatible(run.worldId, artifact.sourceBinding)) compatibleArtifacts.push(artifact);
           const world = await runtime.worldStore.getWorld(run.worldId);
           if (!world) throw new Error('project_deleted');
           const ranges = [...intent.ranges];
@@ -1495,6 +1512,9 @@ async function runExtractionInternal(
             executionConfigFingerprint: intent.executionConfigFingerprint, requirePlayableOpening: openingBuild,
             incrementalMapping: { kind: openingBuild ? 'opening' as const : 'incremental' as const,
               ranges, sourceBinding: intent.sourceBinding, executionConfigFingerprint: intent.executionConfigFingerprint,
+              ...(!openingBuild ? { previousEntries: [...previousBase!.entries, ...compatibleArtifacts.flatMap(a => [...a.entries])],
+                publishedEvidence: compatibleArtifacts.map(a => ({ sourceFactIds: [...new Set(a.citations.flatMap(c => [...c.sourceFactIds]))], coverage: a.coverage })),
+                outputMode: 'change_set' as const } : {}),
               ...(localOpening ? { openingFactLimit: 40, openingEventPolicy: 'latest_covered' as const } : {}) },
             assertCurrent, assertCurrentTx: (tx: SqliteTransaction) => assertSegmentExecution(tx, intent, run.runId, run.fencingToken, run.leaseOwner), signal };
           try {
@@ -1503,7 +1523,7 @@ async function runExtractionInternal(
             if (openingBuild && !draft.entries.some(e => e.kind === 'scene' && e.visibility === 'public'
               && ((e.definition as { actors?: string[]; questIds?: string[] }).actors?.length
                 || (e.definition as { questIds?: string[] }).questIds?.length))) throw new Error('开局缺少带证据的行动依赖闭包');
-            let base = baseRevision === null ? null : await runtime.worldStore.getWorldPackage(run.worldId, baseRevision);
+            let base = previousBase;
             if (!base || openingBuild && canonicalStringify(base.entries as unknown as CanonicalJson)
               !== canonicalStringify(draft.entries.map(e => ({ ...e, revision: base!.manifest.revision })) as unknown as CanonicalJson)) {
               const end = Math.max(...ranges.map(r => r.endCp));
@@ -1516,22 +1536,33 @@ async function runExtractionInternal(
             const known = new Map([...base.entries, ...published.flatMap(a => [...a.entries])].map(e => [e.entryId, e]));
             const renames = new Map(draft.entries.filter(e => known.has(e.entryId)
               && JSON.stringify(known.get(e.entryId)) !== JSON.stringify({ ...e, revision: base!.manifest.revision })).map(e => [e.entryId, `${e.entryId}:segment-${intent.segmentId.slice(-12)}`]));
-            const entries = openingBuild ? base.entries : draft.entries.map(e => ({ ...e, revision: base!.manifest.revision,
-              entryId: renames.get(e.entryId) ?? e.entryId,
+            const entries = openingBuild ? base.entries : draft.entries.map(e => ({ ...remapEntryReferences(e, renames), revision: base!.manifest.revision,
               ...(e.provenance.kind !== 'design_fill' && e.visibility === 'public'
                 ? { visibility: 'discoverable' as const, revealPolicyId: 'segment-explicit-discovery' } : {}),
-              dependencyIds: e.dependencyIds.map(id => renames.get(id) ?? id) }));
+              }));
             const sections = openingBuild ? base.sections : draft.sections.map(s => ({ ...s, entryIds: s.entryIds.map(id => renames.get(id) ?? id) }));
+            // Reuse only the exact dependency evidence, not the entire old
+            // segment. Existing publication bounds/validator stay unchanged.
+            const publicationCoverage = [...ranges];
+            const citedFacts = new Set(entries.flatMap(e => [...e.provenance.sourceFactIds, ...Object.values(e.fieldProvenance).flatMap(p => p.sourceFactIds)]));
+            if (!openingBuild) for (const fact of draft.selection.facts.filter(f => citedFacts.has(f.factId))) for (const span of fact.sources) {
+              const sourceId = sourceIdForChapter(span.chapterId, intent.sourceBinding);
+              if (!sourceId) throw new Error('dependency_source_missing');
+              const range = await runtime.sourceCatalog.createRange(sourceId, span.startOffset, span.endOffset);
+              if (!rangeCovered(range, publicationCoverage)) publicationCoverage.push(range);
+            }
             await setPhase('validating');
             await assertCurrent();
-            await runtime.segmentPublication.publishIntentDraft({ intent, coverage: ranges,
+            await runtime.segmentPublication.publishIntentDraft({ intent, coverage: publicationCoverage,
               basePackage: { revision: base.manifest.revision, contentHash: base.manifest.contentHash },
               ruleset: base.manifest.ruleset, mappingVersion: base.manifest.mappingVersion,
               canonSnapshotHash: draft.canonSnapshotHash, entries, sections, createdAt: input.createdAt,
               ...(openingBuild ? { openingRequirements: {
                 requiredEntityIds: draft.selection.entities.map(e => e.entityId), requiredFactIds: [],
                 requiredEventIds: draft.selection.events.map(e => e.eventId), requiredEntryIds: [], ranges } } : {}),
-              dependencies: published.filter(a => entries.some(e => e.dependencyIds.some(id => a.entries.some(prior => prior.entryId === id)))
+              dependencies: compatibleArtifacts.filter(a => entries.some(e => [...e.provenance.sourceFactIds, ...Object.values(e.fieldProvenance).flatMap(p => p.sourceFactIds)]
+                .some(id => a.citations.some(c => c.sourceFactIds.includes(id))))
+                || entries.some(e => e.dependencyIds.some(id => a.entries.some(prior => prior.entryId === id)))
                 || a.entries.some(prior => entries.some(e => e.entryId === prior.entryId)))
                 .map(a => ({ artifactId: a.artifactId, contentHash: a.contentHash })),
               assertCurrent: tx => assertSegmentExecution(tx, intent, run.runId, run.fencingToken, run.leaseOwner) });

@@ -1,0 +1,229 @@
+{
+  "measurementVersion": "phase6-observed-1",
+  "date": "2026-10-02",
+  "environment": {
+    "kind": "Linux Node host using production Android adapters through native I/O test harness",
+    "model": "GLM-5.3-Flash",
+    "reasoningTier": "low",
+    "concurrency": 2,
+    "physicalAndroidDevice": false
+  },
+  "source": {
+    "rawSha256": "7f45fe0b11ea30eca95f5a736232dd4c466a57c0f2cc9f67530e432015ecc6f4",
+    "bytes": 7178905,
+    "normalizedCodePoints": 3460333,
+    "chapters": 1504
+  },
+  "opening": {
+    "localCache": "new project",
+    "providerCache": "warm, 5056/5064 input tokens reported cached",
+    "sampleSizeCurrentPolicy": 1,
+    "importMs": 9142,
+    "extractionAndPublishMs": 42859,
+    "ttfpMs": 52046,
+    "facts": 29,
+    "events": 6,
+    "artifacts": 1,
+    "requests": [
+      {
+        "number": 1,
+        "httpStatus": 200,
+        "durationMs": 41547,
+        "usage": {
+          "completion_tokens": 2995,
+          "completion_tokens_details": {
+            "reasoning_tokens": 12
+          },
+          "prompt_tokens": 5064,
+          "prompt_tokens_details": {
+            "cached_tokens": 5056
+          },
+          "total_tokens": 8059
+        },
+        "finishReason": "stop"
+      }
+    ]
+  },
+  "followup": {
+    "localCache": "reuse existing extracted opening",
+    "phases": [
+      {
+        "kind": "followup",
+        "elapsedMs": 74368,
+        "status": "completed",
+        "lastErrorCode": null
+      },
+      {
+        "kind": "followup_adoption",
+        "status": "adopted",
+        "adoptedArtifactCount": 2
+      },
+      {
+        "kind": "followup",
+        "elapsedMs": 27574,
+        "status": "failed_retryable",
+        "lastErrorCode": "mapping_configuration_required"
+      },
+      {
+        "kind": "followup_adoption",
+        "status": "adopted",
+        "adoptedArtifactCount": 2
+      }
+    ],
+    "requests": [
+      {
+        "number": 1,
+        "httpStatus": 200,
+        "durationMs": 11217,
+        "usage": {
+          "completion_tokens": 407,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1648,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2055
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 2,
+        "httpStatus": 200,
+        "durationMs": 16591,
+        "usage": {
+          "completion_tokens": 1326,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1509,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2835
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 3,
+        "httpStatus": 200,
+        "durationMs": 23488,
+        "usage": {
+          "completion_tokens": 1696,
+          "completion_tokens_details": {
+            "reasoning_tokens": 44
+          },
+          "prompt_tokens": 24589,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 26285
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 4,
+        "httpStatus": 200,
+        "durationMs": 28718,
+        "usage": {
+          "completion_tokens": 2078,
+          "completion_tokens_details": {
+            "reasoning_tokens": 61
+          },
+          "prompt_tokens": 24589,
+          "prompt_tokens_details": {
+            "cached_tokens": 64
+          },
+          "total_tokens": 26667
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 5,
+        "httpStatus": 200,
+        "durationMs": 27265,
+        "usage": {
+          "completion_tokens": 2129,
+          "completion_tokens_details": {
+            "reasoning_tokens": 1044
+          },
+          "prompt_tokens": 1506,
+          "prompt_tokens_details": {
+            "cached_tokens": 64
+          },
+          "total_tokens": 3635
+        },
+        "finishReason": "stop"
+      }
+    ],
+    "finalArtifacts": 2,
+    "note": "Second followup extracted but mapping hit the private test request cap before HTTP. It did not publish a new artifact; adopted count 2 includes opening and first followup."
+  },
+  "style": {
+    "firstAttempt": {
+      "status": "failed",
+      "elapsedMs": 11253,
+      "errorCode": "invalid_style_prohibitions"
+    },
+    "schemaClarificationRetest": {
+      "status": "ready",
+      "errorCode": null,
+      "elapsedMs": 13507
+    },
+    "requests": [
+      {
+        "number": 1,
+        "httpStatus": 200,
+        "durationMs": 13467,
+        "usage": {
+          "completion_tokens": 471,
+          "completion_tokens_details": {
+            "reasoning_tokens": 7
+          },
+          "prompt_tokens": 1713,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2184
+        },
+        "finishReason": "stop"
+      }
+    ],
+    "modes": [
+      {
+        "mode": "preset",
+        "tokenEstimate": 342
+      },
+      {
+        "mode": "custom",
+        "tokenEstimate": 342
+      },
+      {
+        "mode": "source",
+        "tokenEstimate": 346
+      }
+    ]
+  },
+  "realTurnsOnLocallyRepairedEarlierOpening": [
+    {
+      "elapsedMs": 9996,
+      "stateVersion": 1,
+      "grade": "automatic",
+      "narrativeLength": 212
+    },
+    {
+      "elapsedMs": 7233,
+      "stateVersion": 2,
+      "grade": "automatic",
+      "narrativeLength": 127
+    }
+  ],
+  "limits": [
+    "No matched old/new quality-controlled performance baseline",
+    "No P50/P95 or stable <=90s assertion",
+    "Provider caching, output variability and earlier negative samples remain material",
+    "No real device or human content/style scoring",
+    "Mock/synthetic faults prove protocol behavior only"
+  ]
+}
