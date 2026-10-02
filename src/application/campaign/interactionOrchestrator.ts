@@ -6,7 +6,7 @@ export interface InteractionOperation {
   operationId: string;
   campaignId: string;
   branchId: string;
-  kind: 'encounter_auto';
+  kind: 'encounter_auto' | 'play_turn';
   status: InteractionOperationStatus;
   expectedStateVersion: number;
   fenceToken: number;
@@ -29,7 +29,7 @@ export interface InteractionOperationRunInput<TAction> {
   operationId: string;
   campaignId: string;
   branchId: string;
-  kind: 'encounter_auto';
+  kind: 'encounter_auto' | 'play_turn';
   expectedStateVersion: number;
   /** Derive the next action only from the current, authoritative local view. */
   nextAction: (stepIndex: number, stateVersion: number, replayPreparedStep: boolean) => Promise<TAction | null>;
@@ -56,6 +56,29 @@ export interface InteractionOperationRunResult {
  */
 export class SqliteInteractionOperationJournal {
   constructor(private readonly db: SqliteDatabase, private readonly nowIso: () => string = () => new Date().toISOString()) {}
+
+  /** Ordinary turns use the same branch journal BEFORE any Planner request. */
+  async guardTurn<T>(input: { campaignId: string; branchId: string; turnId: string; expectedStateVersion: number },
+    work: (fence: { campaignId: string; fenceToken: number }) => Promise<T>): Promise<T> {
+    // A crash after game commit but before the journal acknowledgement must
+    // not leave a completed turn permanently locking the branch.
+    await this.db.execute(`UPDATE interaction_operations SET status='completed',updated_at=?
+      WHERE branch_id=? AND operation_kind='play_turn' AND status IN ('running','paused_system')
+      AND EXISTS (SELECT 1 FROM turns t WHERE t.branch_id=interaction_operations.branch_id
+        AND t.status='Committed' AND t.committed_state_version=interaction_operations.expected_state_version+1)`, [this.nowIso(),input.branchId]);
+    const operation = await this.open({ ...input, operationId: `play:${input.branchId}:${input.turnId}`,
+      kind: 'play_turn', nextAction: async () => null, actionKind: () => 'npc_turn',
+      executeAction: async () => ({ stateVersion: input.expectedStateVersion, continue: false }) });
+    try {
+      const result = await work({ campaignId: input.campaignId, fenceToken: operation.fenceToken });
+      await this.db.execute(`UPDATE interaction_operations SET status='completed',updated_at=?
+        WHERE operation_id=? AND fence_token=?`, [this.nowIso(),operation.operationId,operation.fenceToken]);
+      return result;
+    } catch (error) {
+      await this.pause(operation,'system');
+      throw error;
+    }
+  }
 
   async run<TAction>(input: InteractionOperationRunInput<TAction>): Promise<InteractionOperationRunResult> {
     validateInput(input);
@@ -131,7 +154,7 @@ export class SqliteInteractionOperationJournal {
   async getResumableOperation(campaignId: string, branchId: string): Promise<InteractionOperation | null> {
     const row = await this.db.queryOne<OperationRow>(
       `SELECT * FROM interaction_operations WHERE campaign_id = ? AND branch_id = ?
-        AND status IN ('running', 'paused_system') ORDER BY updated_at DESC LIMIT 1`,
+        AND operation_kind='encounter_auto' AND status IN ('running', 'paused_system') ORDER BY updated_at DESC LIMIT 1`,
       [campaignId, branchId],
     );
     if (!row) return null;
@@ -362,7 +385,7 @@ export class SqliteInteractionOperationJournal {
 }
 
 interface OperationRow extends SqliteRow {
-  operation_id: string; campaign_id: string; branch_id: string; operation_kind: 'encounter_auto';
+  operation_id: string; campaign_id: string; branch_id: string; operation_kind: 'encounter_auto' | 'play_turn';
   status: InteractionOperationStatus; expected_state_version: number; fence_token: number;
   next_step: number; max_steps: number;
 }

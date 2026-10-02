@@ -138,6 +138,8 @@ export async function deleteProject(
       'SELECT DISTINCT source_id FROM world_build_runs WHERE world_id = ?', [input.worldId],
     );
     const candidateSourceIds = runSourceRows.map(row => row.source_id);
+    const members = await tx.queryAll<{ source_id: string }>('SELECT source_id FROM world_sources WHERE world_id = ?', [input.worldId]);
+    for (const member of members) if (!candidateSourceIds.includes(member.source_id)) candidateSourceIds.push(member.source_id);
     const stageSourceRows = await tx.queryAll<{ source_id: string }>(
       'SELECT DISTINCT source_id FROM world_stage_plans WHERE world_id = ?', [input.worldId],
     );

@@ -1,4 +1,4 @@
-import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
+import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import type { ProjectStyleBindingRecord, SourceStyleAnalysisRecord, SourceStyleProfile, WriterStyleStore } from '../../application/writerStyle/ports';
 import type { EffectiveStyleSnapshotV1, StyleSemanticV1 } from '../../domain/style/types';
 import { validateStyleOverrides, validateStyleSemantic, validateStyleSnapshot } from '../../domain/style/validation';
@@ -53,6 +53,14 @@ export class SqliteWriterStyleStore implements WriterStyleStore {
     if (!stored) throw new Error('style_project_deleted');
     return stored;
   }
+  async initializeImportedBinding(tx: SqliteTransaction, binding: ProjectStyleBindingRecord): Promise<ProjectStyleBindingRecord> {
+    validateStyleSemantic(binding.baseline); validateStyleSemantic(binding.semantic); validateStyleOverrides(binding.overrides);
+    await tx.execute('INSERT OR IGNORE INTO project_writer_style_bindings (project_id, style_version, revision, binding_json) VALUES (?, ?, ?, ?)',
+      [binding.projectId, binding.styleVersion, binding.revision, JSON.stringify(binding)]);
+    const row = await tx.queryOne<JsonRow>('SELECT binding_json AS value FROM project_writer_style_bindings WHERE project_id = ?', [binding.projectId]);
+    if (!row) throw new Error('style_project_deleted');
+    return readBinding(row.value);
+  }
   async compareAndSetBinding(binding: ProjectStyleBindingRecord, expectedVersion: string): Promise<boolean> {
     validateStyleSemantic(binding.baseline); validateStyleSemantic(binding.semantic); validateStyleOverrides(binding.overrides);
     return (await this.db.execute('UPDATE project_writer_style_bindings SET style_version = ?, revision = ?, binding_json = ? WHERE project_id = ? AND style_version = ? AND revision = ?',
@@ -65,6 +73,12 @@ export class SqliteWriterStyleStore implements WriterStyleStore {
   async listProfiles(projectId: string): Promise<SourceStyleProfile[]> {
     const rows = await this.db.queryAll<JsonRow>('SELECT profile_json AS value FROM source_style_profiles WHERE project_id = ? AND status = ? AND profile_json IS NOT NULL ORDER BY updated_at, cache_key', [projectId, 'ready']);
     return rows.map(row => readProfile(row.value));
+  }
+  async listInterruptedAnalyses(): Promise<SourceStyleAnalysisRecord[]> {
+    const rows = await this.db.queryAll<{ project_id: string; cache_key: string }>("SELECT project_id, cache_key FROM source_style_profiles WHERE status = 'running'");
+    const records: SourceStyleAnalysisRecord[] = [];
+    for (const row of rows) { const record = await this.getAnalysis(row.project_id, row.cache_key); if (record) records.push(record); }
+    return records;
   }
   async getAnalysis(projectId: string, cacheKey: string): Promise<SourceStyleAnalysisRecord | null> {
     const row = await this.db.queryOne<AnalysisRow>('SELECT project_id, cache_key, logical_request_id, status, error_code, updated_at FROM source_style_profiles WHERE project_id = ? AND cache_key = ?', [projectId, cacheKey]);

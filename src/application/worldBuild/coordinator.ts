@@ -146,6 +146,8 @@ export interface CoordinatorDeps {
     contentHash: string;
     modelFingerprint: string;
   }) => Promise<string | undefined>;
+  /** Bounded opening planning under the SAME renewed execution lease. */
+  prepareContext?: (input: { run: BuildRunRecord; fencingToken: number; owner: string }) => Promise<string | undefined>;
   /**
    * Pass 3 (plan §4.3): whole-book timeline ordering/dependencies BEFORE the
    * local resolver runs - the model proposes, resolveEventProposals stays as
@@ -781,8 +783,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
    */
   const interruptedResultAfterRequest = async (control?: 'paused' | 'stopped'): Promise<ExecuteRunResult> => {
     const stopped = control === 'stopped' || deps.signal?.stopRequested;
+    const pending = await deps.runStore.getRun(runId);
+    const systemPaused = !stopped && pending?.status === 'paused_system';
     await deps.runStore.requestRunControl(runId, 'resume', now());
-    await deps.runStore.setRunStatus(runId, stopped ? 'stopped_user' : 'paused_user', now());
+    await deps.runStore.setRunStatus(runId, stopped ? 'stopped_user' : systemPaused ? 'paused_system' : 'paused_user', now(),
+      systemPaused ? pending.lastErrorCode : null, systemPaused ? pending.lastErrorMessage : null);
     const fresh = await deps.runStore.getRun(runId);
     return {
       runId,
@@ -1161,6 +1166,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
             deps.groupExtractor!.extract({
               unitId: unit.unitId, segments, worldId: run.worldId, reserveMultiplier,
               route: route ?? undefined,
+              focusSummary: registrySummary,
             });
           const cached = checkpoint?.status === 'done' && checkpoint.contentHash === requestHash
             && checkpoint.extractorVersion === compatibility && checkpoint.resultJson
@@ -1179,7 +1185,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         if (!(await confirmLeaseAfterRequest())) { lostLease = true; return 'lost_lease'; }
         await commitGroupResult(deps, run, pendingChunks, group, evidenceSource, {
           guard: { runId, unitId: unit.unitId, inputHash: unit.inputHash,
-            sourceSnapshotHash: run.sourceSnapshotHash, fencingToken }, route, requestCheckpoint, partialChunkIds,
+            sourceSnapshotHash: run.sourceSnapshotHash, fencingToken }, route, requestCheckpoint, partialChunkIds, renewLease: confirmLeaseAfterRequest,
         });
         const unitInputTokens = pendingChunks.reduce((sum, chunk) => sum + Math.ceil(chunk.charCount), 0);
         recordCalibrationSample(group, pendingChunks.length, unitInputTokens);
@@ -1444,6 +1450,19 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   };
 
   try {
+    if (deps.prepareContext) {
+      try {
+        registrySummary = await deps.prepareContext({ run, fencingToken, owner });
+        if (!await confirmLeaseAfterRequest()) return { runId, completed: false, unitsDone: run.unitsDone,
+          unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: true };
+      } catch (error) {
+        const unknown = error instanceof Error && /outcome_unknown/.test(error.message);
+        await deps.runStore.setRunStatus(runId, unknown ? 'needs_review' : 'failed_retryable', now(),
+          unknown ? 'outcome_unknown' : 'opening_survey_failed', '开局选段未完成，结果已记录，未自动重复发送。');
+        return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal,
+          unitsFailed: run.unitsFailed, lostLease };
+      }
+    }
     const workers = Array.from({ length: workerCount }, () => worker());
     await Promise.all(workers);
 
@@ -1617,7 +1636,8 @@ function extractionCompatibility(deps: Pick<CoordinatorDeps, 'extractor' | 'grou
   if (!config && !route) return deps.extractor.version;
   return [deps.extractor.version, deps.groupExtractor?.version ?? 'single', 'extraction-schema-1',
     run.planVersion, route ?? 'all', run.sourceId, run.sourceSnapshotHash,
-    config ? frozenConfigIdentity(config) : run.modelFingerprint].join('#');
+    config ? frozenConfigIdentity(config) : run.modelFingerprint,
+    ...(run.runId.startsWith('phase6-') ? ['opening-focus-location-schema-2'] : [])].join('#');
 }
 
 function parseExtractionCheckpoint(json: string): GroupExtractionResult | null {
@@ -1639,6 +1659,7 @@ interface ExtractionCommitContext {
   route: ExtractionRoute | null;
   requestCheckpoint?: WorldJobRecord;
   partialChunkIds: ReadonlySet<string>;
+  renewLease?(): Promise<boolean>;
 }
 
 /**
@@ -1662,6 +1683,7 @@ async function commitExtractionForChunks(
       extraction,
       createdAt: now(),
       sha256Hex: deps.sha256Hex,
+      strictLocationClaims: run.runId.startsWith('phase6-'),
     });
     await commitResolvedChunk(deps, run, chunk, resolved, context);
   }
@@ -1714,6 +1736,7 @@ async function commitGroupResult(
       createdAt: now(),
       sha256Hex: deps.sha256Hex,
       additionalVerifiedQuotes: groupVerifiedQuotes,
+      strictLocationClaims: run.runId.startsWith('phase6-'),
     });
     await commitResolvedChunk(deps, run, chunk, resolved, {
       ...context, requestCheckpoint: chunk === fallbackChunk ? context.requestCheckpoint : undefined,
@@ -1755,9 +1778,10 @@ async function commitResolvedChunk(
     status: 'done', attempts: (existing?.attempts ?? 0) + 1, contentHash: chunk.contentHash,
     extractorVersion: extractionCompatibility(deps, run, context.route), modelFingerprint: run.modelFingerprint,
     usageJson: JSON.stringify({ entities: resolved.entities.length, facts: resolved.facts.length }),
-    resultJson: JSON.stringify({ ok: true }), error: null,
+    resultJson: JSON.stringify({ ok: true, rejected: resolved.rejected }), error: null,
     createdAt: existing?.createdAt ?? now(), updatedAt: now(),
   };
+  if (context.renewLease && !await context.renewLease()) throw new StaleBuildCommitError();
   await deps.worldStore.commitChunkResult({
     worldId: run.worldId,
     chunkId: chunk.chunkId,

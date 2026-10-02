@@ -1,5 +1,6 @@
 import type { EffectiveStyleSnapshotV1, ProjectStyleViewV1, StyleSemanticV1 } from '../../domain/style/types';
 import type { SourceRangeV1 } from '../../domain/build/phase6';
+import type { SqliteTransaction } from '../ports/sqlite';
 
 export interface ProjectStyleBindingRecord extends ProjectStyleViewV1 {
   revision: number;
@@ -22,9 +23,12 @@ export interface WriterStyleStore {
   putAsset(asset: { assetId: string; assetVersion: string; semantic: StyleSemanticV1 }): Promise<StyleSemanticV1>;
   getBinding(projectId: string): Promise<ProjectStyleBindingRecord | null>;
   initializeBinding(binding: ProjectStyleBindingRecord): Promise<ProjectStyleBindingRecord>;
+  /** Import uses the caller's archive transaction and never updates an existing binding. */
+  initializeImportedBinding(tx: SqliteTransaction, binding: ProjectStyleBindingRecord): Promise<ProjectStyleBindingRecord>;
   compareAndSetBinding(binding: ProjectStyleBindingRecord, expectedVersion: string): Promise<boolean>;
   getProfile(projectId: string, cacheKey: string): Promise<SourceStyleProfile | null>;
   listProfiles(projectId: string): Promise<SourceStyleProfile[]>;
+  listInterruptedAnalyses(): Promise<SourceStyleAnalysisRecord[]>;
   getAnalysis(projectId: string, cacheKey: string): Promise<SourceStyleAnalysisRecord | null>;
   /** Atomic claim prevents simultaneous analyzers from sending the same paid task. */
   claimAnalysis(record: SourceStyleAnalysisRecord): Promise<boolean>;

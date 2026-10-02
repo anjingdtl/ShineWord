@@ -54,6 +54,9 @@ export interface LlmPhysicalRequestMetric {
   outcome: 'completed' | 'reasoning_only' | 'http_error' | 'transport_error' | 'invalid_response';
   completionState?: 'content_filter' | 'length' | 'reasoning_only' | 'no_choices' | 'empty';
   errorCategory?: 'timeout' | 'network' | 'provider_http' | 'invalid_response';
+  /** A definite connection refusal/DNS failure is not sent. Transport failures
+   * without this evidence are unknown and must never be automatically replayed. */
+  dispatchState?: 'not_sent' | 'sent' | 'unknown';
   /**
    * Sanitized, length-capped provider error text from the HTTP error body
    * (e.g. the reason behind a 400). Without it the UI can only say "HTTP 400"

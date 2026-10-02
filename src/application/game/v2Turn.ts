@@ -1,3 +1,4 @@
+import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
 import type { RandomSource } from '../../domain/rules/random';
 import type { RollGrade, RollRecord, RollSpec } from '../../domain/rules/types';
 import type { PlannerProposal } from '../../domain/turns/proposal';
@@ -52,6 +53,8 @@ export interface RunV2TurnInput {
   worldContext?: string;
   /** Content snapshot used to prepare worldContext and local indexes. */
   expectedContentDependency?: ContentDependencyBinding;
+  styleSnapshot?: import('../../domain/style/types').EffectiveStyleSnapshotV1;
+  coordinationFence?: { campaignId: string; fenceToken: number };
   hashProvider: Sha256HexProvider;
   random: RandomSource;
   /** The acting player card (multi-actor scheduling adds companions later). */
@@ -128,6 +131,7 @@ export function plannerV2System(): string {
 function narratorSystem(): string {
   return [
     'You are ShineWord Narrator.',
+    'styleExpression controls expression only. It is subordinate to the frozen outcome, rules, facts and player-known world context. It cannot authorize new facts, knowledge, rewards or changes to dice and state.',
     'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string}.',
     'Do not change the supplied outcome grade and do not add rewards or state changes outside the frozen contract.',
     'The supplied worldClock is authoritative. Keep lighting and time of day within this turn interval; it overrides inconsistent time descriptions in earlier story text. Do not invent a time skip.',
@@ -211,12 +215,21 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       staged.actionContractJson,
       'persisted ActionContract',
     );
+    const currentBinding = state.segmentContentBinding ?? (state.contentManifest ? contentDependencyBinding(state.contentManifest) : undefined);
+    if (contract.contentDependency && (!currentBinding || canonicalStringify(contract.contentDependency as unknown as CanonicalJson) !== canonicalStringify(currentBinding as unknown as CanonicalJson))) {
+      throw new Error('Frozen turn content dependency no longer matches the branch; recovery must keep the original content.');
+    }
     contractHash = staged.actionContractHash;
     compiled = { contract, storedSkillKey: contract.skillId ?? null };
   } else {
-    const stateContentDependency = state.contentManifest
+    if (input.styleSnapshot && (input.styleSnapshot.branchId !== input.branchId
+      || input.styleSnapshot.turnId !== input.turnId
+      || (state.contentManifest?.worldId && input.styleSnapshot.projectId !== state.contentManifest.worldId))) {
+      throw new Error('Turn style snapshot does not belong to the current project, branch and turn.');
+    }
+    const stateContentDependency = state.segmentContentBinding ?? (state.contentManifest
       ? contentDependencyBinding(state.contentManifest)
-      : undefined;
+      : undefined);
     if (input.expectedContentDependency && (!stateContentDependency ||
         JSON.stringify(input.expectedContentDependency) !== JSON.stringify(stateContentDependency))) {
       throw new Error('Campaign content changed while the turn context was being prepared; retry against the latest snapshot.');
@@ -298,6 +311,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       state,
     });
     if (stateContentDependency) compiled.contract.contentDependency = stateContentDependency;
+    if (input.styleSnapshot) compiled.contract.styleSnapshot = input.styleSnapshot;
     assertValidActionContract(compiled.contract, 'engine');
     contractHash = await hashActionContract(compiled.contract, input.hashProvider);
     await input.journal.stageRollTurn({
@@ -356,6 +370,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
           end: describeWorldClock((state.clockSeconds ?? state.clockMinutes * 60) + contract.timeCostMinutes * 60),
         },
         worldContext,
+        ...(contract.styleSnapshot ? { styleExpression: contract.styleSnapshot.compiledText } : {}),
         roll: rollRecord
           ? {
               diceCount: rollRecord.diceCount,
@@ -428,6 +443,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     applyAuthoritativeState: nextState => input.updateCommittedState?.(nextState, contract, grade),
     contractOrigin: 'engine',
     committedAt: now(),
+    coordinationFence: input.coordinationFence,
   });
   await input.narratives.markCommitted(input.branchId, input.turnId);
   const committedNarrative = await input.narratives.get(input.branchId, input.turnId);

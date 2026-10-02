@@ -13,6 +13,9 @@ import { sampleWriterStyleSource, STYLE_SAMPLER_VERSION } from './sourceSampler'
 import type { StyleHashPort } from './sourceSampler';
 import type { WriterStyleAnalyzerPort } from './sourceAnalyzer';
 import { STYLE_ANALYZER_VERSION } from './sourceAnalyzer';
+import type { SqliteTransaction } from '../ports/sqlite';
+import type { PortableProjectStyleV1 } from '../export/phase6Bundle';
+import { computePortableProjectStyleHash, validatePortableProjectStyle } from '../export/phase6Bundle';
 
 export class StyleVersionConflictError extends Error {
   constructor(readonly currentVersion: string) { super('项目风格已更新，请读取最新版本后保存。'); this.name = 'StyleVersionConflictError'; }
@@ -52,6 +55,24 @@ export class ProjectStyleService implements ProjectStylePortV1 {
     return this.options.store.initializeBinding(initial);
   }
   async getProjectStyle(projectId: string): Promise<ProjectStyleViewV1> { return toView(await this.binding(projectId)); }
+  async exportProjectStyle(projectId: string): Promise<PortableProjectStyleV1 | null> {
+    const binding = await this.options.store.getBinding(projectId);
+    return binding ? { schemaVersion: 'shineword-project-style-1', binding: clone(binding),
+      contentHash: await computePortableProjectStyleHash(binding, this.options.hash.sha256Hex.bind(this.options.hash)) } : null;
+  }
+  async restoreProjectStyle(tx: SqliteTransaction, targetProjectId: string, style: PortableProjectStyleV1): Promise<void> {
+    validateStyleId(targetProjectId);
+    if (!await validatePortableProjectStyle(style, style.binding.projectId, this.options.hash.sha256Hex.bind(this.options.hash))) {
+      throw new Error('invalid_portable_project_style');
+    }
+    const binding: ProjectStyleBindingRecord = { ...clone(style.binding), projectId: targetProjectId,
+      styleId: style.binding.mode === 'custom' ? `custom:${targetProjectId}` : style.binding.styleId,
+      // An in-flight task is neither exported nor resumed from an archive.
+      analysisStatus: style.binding.analysisStatus === 'running' ? 'failed' : style.binding.analysisStatus,
+    };
+    binding.styleVersion = bindingVersion(binding);
+    await this.options.store.initializeImportedBinding(tx, binding);
+  }
   async updateProjectStyle(input: ProjectStyleEditV1): Promise<{ styleVersion: string }> {
     validateStyleOverrides(input.overrides);
     if (!['source', 'preset', 'custom'].includes(input.mode)) throw new Error('invalid_style_mode');
@@ -163,6 +184,12 @@ export class ProjectStyleService implements ProjectStylePortV1 {
       } catch { /* A deleted project must not be recreated by a late completion. */ }
       return { status: 'failed', profile: null, cacheHit: false, cacheKey, errorCode };
     }
+  }
+  async recoverAllInterruptedAnalyses(): Promise<number> {
+    const records = await this.options.store.listInterruptedAnalyses();
+    let count = 0;
+    for (const record of records) if (await this.recoverInterruptedAnalysis(record.projectId, record.cacheKey)) count++;
+    return count;
   }
   /** Cold-start marks work interrupted; this deliberately does not resend. */
   async recoverInterruptedAnalysis(projectId: string, cacheKey: string): Promise<boolean> {

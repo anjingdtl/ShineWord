@@ -153,6 +153,20 @@ function transportErrorCategory(error: unknown): 'timeout' | 'network' {
   return /abort|timeout|timed out/i.test(descriptor) ? 'timeout' : 'network';
 }
 
+/** Only structured socket/DNS errors prove that no HTTP request reached a
+ * server. Generic mobile fetch failures, disconnects and timeout messages do
+ * not prove that billing never occurred. */
+function definitelyNotSent(error: unknown): boolean {
+  let value: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!value || typeof value !== 'object') return false;
+    const record = value as { code?: unknown; cause?: unknown };
+    if (record.code === 'ECONNREFUSED' || record.code === 'ENOTFOUND' || record.code === 'EAI_AGAIN') return true;
+    value = record.cause;
+  }
+  return false;
+}
+
 /** Provider/transport errors can echo credentials with arbitrary key formats. */
 function sanitizedFailureMessage(message: string, apiKey: string): string {
   return message.split(apiKey).join('[redacted]')
@@ -219,8 +233,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
       throw new Error(`maxPhysicalRequests must be an integer from 1 to ${REASONING_ONLY_RETRIES + 1}.`);
     }
     const observe = (metric: LlmPhysicalRequestMetric): void => {
-      requestMetrics.push(metric);
-      try { this.options.onPhysicalRequest?.(metric); } catch { /* telemetry must not fail a turn */ }
+      const normalized: LlmPhysicalRequestMetric = { ...metric,
+        dispatchState: metric.dispatchState ?? (metric.httpStatus === null ? 'unknown' : 'sent') };
+      requestMetrics.push(normalized);
+      try { this.options.onPhysicalRequest?.(normalized); } catch { /* telemetry must not fail a turn */ }
     };
     const requestUrl = normalizeEndpoint(this.profile.endpoint);
 
@@ -272,12 +288,15 @@ export class OpenAICompatibleProvider implements LlmProvider {
         });
       } catch (error) {
         const category = transportErrorCategory(error);
+        const notSent = category === 'network' && definitelyNotSent(error);
         observe({
           attempt: physicalAttempt,
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
           httpStatus: null,
           outcome: 'transport_error',
           errorCategory: category,
+          dispatchState: notSent ? 'not_sent' : 'unknown',
+          ...(notSent ? { usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0, estimated: false } } : {}),
           timings: { completeResponseMs: Math.max(0, Date.now() - physicalStartedAt) },
         });
         if (error instanceof Error && /aborted?/i.test(error.name + error.message)) {

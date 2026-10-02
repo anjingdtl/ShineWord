@@ -52,8 +52,7 @@ export class SegmentBuildService {
     const member = [...snapshot.members].sort((a,b) => a.sourceOrdinal-b.sourceOrdinal)[0];
     if (!member || member.codePointCount < 1) throw new Error('opening_source_missing');
     const cap = boundedPositive(input.maxCodePoints ?? 3200, 3200);
-    const chapter = [...member.chapters].sort((a,b) => a.startCp-b.startCp)[0];
-    const end = Math.min(member.codePointCount, chapter?.endCp ?? member.codePointCount, cap);
+    const end = Math.min(member.codePointCount, cap); // short front matter must not become the entire playable bootstrap
     const range = await this.ports.catalog.createRange(member.sourceId,0,end);
     const segments = await this.requestDemand({ ...input, ranges:[range], reason:'bootstrap',priority:'P1' });
     const first = segments[0];

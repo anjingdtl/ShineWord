@@ -32,6 +32,8 @@ import {
   type EncounterView,
   type TurnView,
 } from '../../../../runtime';
+import { setPlayScreenActivity } from '../../../../llmScheduler';
+import { maintainSegmentContent, getSegmentReadiness } from '../../../../segmentRuntime';
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
@@ -92,6 +94,7 @@ export interface PlayController {
 }
 
 export function usePlayController(): PlayController {
+  useEffect(() => { setPlayScreenActivity(true); return () => setPlayScreenActivity(false); }, []);
   const { profile } = useAppSession();
   const route = useRoute<RouteProp<RootStackParamList, 'Play'>>();
   const { campaignId, branchId } = route.params;
@@ -156,6 +159,11 @@ export function usePlayController(): PlayController {
     let cancelled = false;
     (async () => {
       try {
+        if (await getSegmentReadiness(worldId)) {
+          await maintainSegmentContent({ worldId, campaignId, branchId, stateVersion: projection!.stateVersion,
+            locationId: projection?.player?.locationId ?? null });
+          return;
+        }
         await tryActivateStagePackages(worldId);
         await checkStageTriggers({
           worldId,
@@ -169,6 +177,19 @@ export function usePlayController(): PlayController {
     })();
     return () => { cancelled = true; };
   }, [projection?.worldId, projection?.stateVersion, projection?.player?.locationId, campaignId]);
+
+  useEffect(() => {
+    if (!projection || !recovery?.intent || busy) return;
+    let active = true;
+    const timer = setInterval(() => {
+      if (!foreground.current || actionInFlight.current) return;
+      void maintainSegmentContent({ worldId: projection.worldId, campaignId, branchId, stateVersion: projection.stateVersion,
+        locationId: projection.player?.locationId ?? null, intent: recovery.intent ?? undefined }).then(result => {
+        if (active && !result.pending) { setNotice('资料已就绪，可以继续已保留的原行动。'); void refresh(); }
+      }).catch(() => { /* persisted task diagnostics remain available in the project */ });
+    }, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [projection?.worldId, projection?.stateVersion, recovery?.intent, busy, campaignId, branchId, refresh]);
 
   // Recruitment eligibility is derived from current location, quests and
   // relationships, so it re-reads after every committed state change.
@@ -368,6 +389,11 @@ export function usePlayController(): PlayController {
         }
         await refresh();
         return;
+      }
+      if (projection) {
+        const prepared = await maintainSegmentContent({ worldId: projection.worldId, campaignId, branchId,
+          stateVersion: projection.stateVersion, locationId: projection.player?.locationId ?? null, intent: value });
+        if (prepared.pending) { setNotice(prepared.message); await refresh(); return; }
       }
       const result = await session.playTurn({ campaignId, branchId, intent: value });
       if (draftVersion !== null) await clearPlayIntentDraft(branchId, draftVersion);

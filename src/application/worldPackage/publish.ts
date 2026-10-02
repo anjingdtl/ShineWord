@@ -8,6 +8,7 @@ import type {
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import { computePackageContentHash, validatePackage } from './validate';
+import type { SqliteTransaction } from '../ports/sqlite';
 
 export interface PublishPackageInput {
   worldStore: SqliteWorldStore;
@@ -32,6 +33,7 @@ export interface PublishPackageInput {
   /** When set, publishes a versioned, content-hashed partial/full source scope. */
   buildScope?: WorldPackageBuildScope;
   onValidated?: () => void;
+  assertCurrent?: (tx: SqliteTransaction) => Promise<void>;
 }
 
 export interface PublishPackageResult {
@@ -100,6 +102,11 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
       ...(input.coverage ?? {}),
     }),
     createdAt: input.createdAt,
+    assertCurrent: async tx => {
+      await input.assertCurrent?.(tx);
+      const blockers = await tx.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM review_issues WHERE world_id=? AND status='open' AND severity='blocking'", [input.worldId]);
+      if (Number(blockers?.n ?? 0) > 0) throw new Error('World package has unresolved blocking conflicts at publication.');
+    },
   });
 
   return { manifest, report };

@@ -128,6 +128,9 @@ export interface GameStateSnapshot {
   questRewards?: QuestRewardSnapshotEntry[];
   /** Exact base + published branch deltas visible at this state. */
   contentManifest?: BranchContentManifest;
+  /** Immutable world artifact selection and last historical style binding. */
+  segmentContentBinding?: import('../content/types').ContentDependencyBinding & { artifactIds: readonly string[] };
+  styleSnapshot?: import('../style/types').EffectiveStyleSnapshotV1;
 }
 
 function cloneEncounter(entry: EncounterSnapshotEntry): EncounterSnapshotEntry {
@@ -187,6 +190,11 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
       deltas: state.contentManifest.deltas.map(delta => ({ ...delta })),
     };
   }
+  if (state.segmentContentBinding) cloned.segmentContentBinding = {
+    ...state.segmentContentBinding, deltaIds: [...state.segmentContentBinding.deltaIds],
+    artifactIds: [...state.segmentContentBinding.artifactIds],
+  };
+  if (state.styleSnapshot) cloned.styleSnapshot = JSON.parse(JSON.stringify(state.styleSnapshot)) as import('../style/types').EffectiveStyleSnapshotV1;
   if (state.itemSources) {
     cloned.itemSources = Object.fromEntries(Object.entries(state.itemSources).map(([itemId, source]) => [itemId, { ...source }]));
   }

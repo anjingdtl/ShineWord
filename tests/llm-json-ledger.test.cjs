@@ -298,7 +298,7 @@ test('ledger: retries increment attempt_no under one logical request', async () 
       calls += 1;
       if (calls === 1) {
         throw new LlmRequestFailure('simulated network failure', [{
-          attempt: 1, durationMs: 5, httpStatus: null, outcome: 'transport_error', errorCategory: 'network',
+          attempt: 1, durationMs: 5, httpStatus: null, outcome: 'transport_error', errorCategory: 'network', dispatchState: 'not_sent',
         }]);
       }
       return { text: '{"ok":true}' };

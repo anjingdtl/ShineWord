@@ -7,7 +7,9 @@ import type {
   WorldPackageBuildScope,
 } from '../../domain/content/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
-import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
+import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../ports/sqlite';
+import type { SegmentContentBindingV1 } from '../../domain/content/segmentArtifact';
+import type { LegacyOverlayRebaseInput } from '../segmentPublication/service';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SourceManifest, SourceStore } from '../ports/sourceStore';
 import { codePointLength } from '../../domain/world/textOffsets';
@@ -19,6 +21,9 @@ import { isFactVisibleAtAnchor } from '../world/opening';
 import { visibleEvidenceRanges } from '../progressiveBuild/progressiveTurnContext';
 
 const USER_LOOKUP_PROVENANCE_RATIONALE = '用户主动本地查书后暂存的逐字摘录；未添加总结、解释或规则数值。';
+/** The M5 owner updates the artifact projection in the same publication
+ * transaction. Old branches without an artifact binding need no adapter. */
+export type RebaseLegacyOverlay = (tx:SqliteTransaction,input:LegacyOverlayRebaseInput)=>Promise<SegmentContentBindingV1|null>;
 
 export interface PublishProgressiveDeltaInput {
   db: SqliteDatabase;
@@ -40,12 +45,14 @@ export interface PublishProgressiveDeltaInput {
   purpose?: 'player_requested_book_lookup';
   signal?: AbortSignal;
   createdAt: string;
+  rebaseLegacyOverlay?: RebaseLegacyOverlay;
 }
 
 export interface PublishProgressiveDeltaResult {
   delta: ProgressiveDeltaPackage;
   status: ProgressiveDeltaPackage['status'];
   activeManifest: BranchContentManifest | null;
+  segmentContentBinding?: SegmentContentBindingV1;
 }
 
 export interface PublishUserRequestedSourceLookupInput {
@@ -69,6 +76,7 @@ export interface PublishUserRequestedSourceLookupInput {
   existingEntryIds: ReadonlySet<string>;
   createdAt: string;
   signal?: AbortSignal;
+  rebaseLegacyOverlay?: RebaseLegacyOverlay;
 }
 
 export interface PublishUserRequestedSourceLookupResult {
@@ -167,6 +175,7 @@ export async function publishUserRequestedSourceLookupDelta(
     baseRevision: input.baseRevision,
     sourceSha256: input.sourceSha256,
     mappingVersion: base.manifest.mappingVersion,
+    rebaseLegacyOverlay: input.rebaseLegacyOverlay,
     entries,
     sections: [{
       book: input.book,
@@ -406,6 +415,7 @@ export async function publishProgressiveDelta(input: PublishProgressiveDeltaInpu
     : null;
 
   throwIfAborted(input.signal);
+  let segmentContentBinding:SegmentContentBindingV1|undefined;
   await input.db.transaction(async tx => {
     throwIfAborted(input.signal);
     const current = await tx.queryOne<SqliteRow>(
@@ -435,9 +445,18 @@ export async function publishProgressiveDelta(input: PublishProgressiveDeltaInpu
         delta.basePackage.revision, delta.basePackage.contentHash, delta.status,
         delta.contentHash, JSON.stringify(delta), JSON.stringify(delta.validation), delta.createdAt],
     );
-    if (nextManifest) await insertBranchContentManifest(tx, nextManifest, input.createdAt);
+    if (nextManifest) {
+      await insertBranchContentManifest(tx, nextManifest, input.createdAt);
+      const snapshotRow=await tx.queryOne<{snapshot_json:string}>(
+        'SELECT snapshot_json FROM snapshots WHERE branch_id = ? AND state_version = ?',[input.branchId,input.stateVersion]);
+      const snapshot:unknown=snapshotRow?JSON.parse(snapshotRow.snapshot_json):null;
+      const artifactBound=typeof snapshot==='object'&&snapshot!==null&&!Array.isArray(snapshot)
+        &&Object.prototype.hasOwnProperty.call(snapshot,'segmentContentBinding');
+      if(artifactBound&&!input.rebaseLegacyOverlay)throw new Error('Segment-bound branch requires atomic legacy overlay rebase.');
+      if(input.rebaseLegacyOverlay)segmentContentBinding=await input.rebaseLegacyOverlay(tx,{previousManifest:baseline,nextManifest,createdAt:input.createdAt})??undefined;
+    }
   });
-  return { delta, status: delta.status, activeManifest: nextManifest };
+  return { delta, status: delta.status, activeManifest: nextManifest,...(segmentContentBinding?{segmentContentBinding}:{}) };
 }
 
 async function readCampaignPackageHash(

@@ -1,3 +1,7 @@
+import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
+import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
+import { validatePhase6Bundle, validatePortableProjectStyle, type PortableProjectStyleV1,
+  type ProjectStyleArchivePortV1 } from './phase6Bundle';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import {
   canonicalStringify,
@@ -12,7 +16,9 @@ import { createBaseContentManifest, isBranchContentManifestStructure, isProgress
   verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
-export const SAVE_SCHEMA_VERSION = 'shineword-save-6';
+export const SAVE_SCHEMA_VERSION = 'shineword-save-7';
+export const PRE_PHASE6_SAVE_SCHEMA_VERSION = 'shineword-save-6';
+const hasContentManifestSchema = (schema: unknown): boolean => schema === SAVE_SCHEMA_VERSION || schema === PRE_PHASE6_SAVE_SCHEMA_VERSION;
 export const SAVE_FILE_EXTENSION = '.shineword-save.json';
 /** Previous full-save schema with rewind history, before branch content manifests. */
 export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-5';
@@ -24,7 +30,7 @@ export const OLDER_V3_SAVE_SCHEMA_VERSION = 'shineword-save-3';
 export const LEGACY_SAVE_SCHEMA_VERSION = 'shineword-save-2';
 
 export interface SaveManifest {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
+  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PRE_PHASE6_SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
   /** Optional for older saves; preserves the user-facing campaign name. */
@@ -92,6 +98,9 @@ export interface SaveFile {
   state: GameStateSnapshot;
   /** Immutable published branch deltas referenced by this save's history. */
   contentDeltas?: ProgressiveDeltaPackage[];
+  segmentArtifacts?: SegmentArtifactV1[];
+  /** Project defaults for future turns; frozen historical projections stay inline. */
+  projectStyle?: PortableProjectStyleV1;
   /** Full branch snapshot history, including battlefield state at every rewind point. */
   snapshotHistory?: SavedSnapshot[];
   turns: SavedTurn[];
@@ -161,6 +170,8 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
   if (save.contentDeltas !== undefined) {
     payload.contentDeltas = save.contentDeltas as unknown as CanonicalJson;
   }
+  if (save.segmentArtifacts !== undefined) payload.segmentArtifacts = save.segmentArtifacts as unknown as CanonicalJson;
+  if (save.projectStyle !== undefined) payload.projectStyle = save.projectStyle as unknown as CanonicalJson;
   return payload;
 }
 
@@ -170,6 +181,7 @@ export interface ExportSaveInput {
   campaignId: string;
   branchId: string;
   createdAt: string;
+  projectStyleArchive?: ProjectStyleArchivePortV1;
 }
 
 export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFile; json: string; jsonByteLength: number }> {
@@ -378,8 +390,25 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     [input.branchId],
   );
 
+  const artifactIds = new Set(snapshotHistory.flatMap(s => [...(s.snapshot.segmentContentBinding?.artifactIds ?? [])]));
+  for (const turn of turns) {
+    const contract = JSON.parse(turn.actionContractJson) as { contentDependency?: { artifactIds?: string[] } };
+    for (const id of contract.contentDependency?.artifactIds ?? []) artifactIds.add(id);
+  }
+  const artifactStore = new SqliteSegmentArtifactStore(db, input.sha256Hex);
+  const segmentArtifacts: SegmentArtifactV1[] = [];
+  for (const id of artifactIds) {
+    const artifact = await artifactStore.getArtifact(id);
+    if (!artifact) throw new Error('Cannot export a missing immutable segment artifact.');
+    segmentArtifacts.push(artifact);
+    for (const ref of artifact.dependencies) artifactIds.add(ref.artifactId);
+    if (artifactIds.size > 512) throw new Error('Save segment artifact dependency closure exceeds its limit.');
+  }
+  const projectStyle = await input.projectStyleArchive?.exportProjectStyle(campaign.world_id);
+  if (projectStyle && !await validatePortableProjectStyle(projectStyle, campaign.world_id, input.sha256Hex)) throw new Error('Cannot export an invalid project style binding.');
   const payload = {
-    state,
+    state, segmentArtifacts,
+    ...(projectStyle ? { projectStyle } : {}),
     contentDeltas,
     snapshotHistory,
     turns,
@@ -451,7 +480,12 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
   };
 
   const save: SaveFile = { manifest, ...payload };
-
+  const phase6Errors = await validatePhase6Bundle({ worldId: campaign.world_id,
+    baseRevision: manifest.packageRevision, baseHash: manifest.worldRef.packageContentHash ?? '',
+    artifacts: segmentArtifacts, snapshots: [state, ...snapshotHistory.map(item => item.snapshot)],
+    contracts: turns.map(turn => ({ json: turn.actionContractJson, hash: turn.actionContractHash, turnId: turn.turnId,
+      expectedStateVersion: turn.expectedStateVersion, status: turn.status })) }, input.sha256Hex);
+  if (phase6Errors.length) throw new Error(`Cannot export an invalid phase6 save: ${phase6Errors.join('; ')}`);
   assertNoSecrets(save, 'save');
   const json = JSON.stringify(save, null, 2);
   return { save, json, jsonByteLength: utf8ByteLength(json) };
@@ -498,7 +532,7 @@ export async function validateSaveJsonBytes(
     return { ok: false, errors: ['Save file is not valid JSON.'] };
   }
   const schemaVersion = parsed.manifest?.schemaVersion;
-  if (schemaVersion !== SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
+  if (schemaVersion !== SAVE_SCHEMA_VERSION && schemaVersion !== PRE_PHASE6_SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
       schemaVersion !== OLDER_SAVE_SCHEMA_VERSION && schemaVersion !== OLDER_V3_SAVE_SCHEMA_VERSION) {
     if (schemaVersion === LEGACY_SAVE_SCHEMA_VERSION) {
       return {
@@ -515,6 +549,9 @@ export async function validateSaveJsonBytes(
   if (!parsed.manifest?.branchId || !parsed.manifest?.campaignId) {
     errors.push('Manifest requires campaignId and branchId.');
   }
+  if (typeof parsed.manifest?.worldRef?.worldId !== 'string' || !parsed.manifest.worldRef.worldId.trim()
+    || typeof parsed.manifest?.worldRef?.sourceSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(parsed.manifest.worldRef.sourceSha256)) errors.push('Manifest requires a world identity and source SHA-256.');
+  if (!Number.isSafeInteger(parsed.manifest?.stateVersion) || parsed.manifest.stateVersion < 0) errors.push('Manifest stateVersion must be a non-negative safe integer.');
   if (!Number.isInteger(parsed.manifest?.packageRevision) || (parsed.manifest?.packageRevision ?? 0) < 1) {
     errors.push('Manifest requires a positive packageRevision dependency lock.');
   }
@@ -525,31 +562,36 @@ export async function validateSaveJsonBytes(
   if (!parsed.state?.branchId || typeof parsed.state.stateVersion !== 'number') {
     errors.push('Save state snapshot is malformed.');
   }
-  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
       !Array.isArray(parsed.state?.encounters)) {
     errors.push('Save is missing complete encounter and battlefield snapshots.');
   }
-  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
       (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
     errors.push('Save is missing the full branch snapshot history required for rewind and combat recovery.');
   }
   if (parsed.manifest?.title !== undefined && typeof parsed.manifest.title !== 'string') {
     errors.push('Manifest title must be text when present.');
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && !Array.isArray(parsed.contentDeltas)) {
+  if (hasContentManifestSchema(schemaVersion) && !Array.isArray(parsed.contentDeltas)) {
     errors.push('Save v6 is missing its immutable progressive content package list.');
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.contentDeltas) &&
+  if (hasContentManifestSchema(schemaVersion) && Array.isArray(parsed.contentDeltas) &&
       parsed.contentDeltas.some(delta => !isProgressiveDeltaPackageStructure(delta))) {
     errors.push('Save v6 contains a malformed progressive content package.');
   }
-  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
+  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
       Array.isArray(parsed.snapshotHistory) && parsed.snapshotHistory.some(item =>
         !item || typeof item !== 'object' || Array.isArray(item) ||
         !('snapshot' in item) || !item.snapshot || typeof item.snapshot !== 'object' || Array.isArray(item.snapshot))) {
     errors.push('Save snapshot history contains a malformed entry.');
   }
   if (!Array.isArray(parsed.turns)) errors.push('turns must be an array.');
+  else if (parsed.turns.some(turn => !turn || typeof turn !== 'object' || Array.isArray(turn)
+    || typeof turn.turnId !== 'string' || !turn.turnId.trim() || typeof turn.status !== 'string'
+    || !Number.isSafeInteger(turn.expectedStateVersion) || turn.expectedStateVersion < 0
+    || (turn.committedStateVersion !== null && (!Number.isSafeInteger(turn.committedStateVersion) || turn.committedStateVersion < 0))
+    || typeof turn.actionContractJson !== 'string' || typeof turn.actionContractHash !== 'string')) errors.push('Save contains a malformed frozen turn.');
   if (!Array.isArray(parsed.skills)) errors.push('skills must be an array.');
   if (!Array.isArray(parsed.relationships)) errors.push('relationships must be an array.');
   if (!Array.isArray(parsed.memories)) errors.push('memories must be an array.');
@@ -574,6 +616,22 @@ export async function validateSaveJsonBytes(
         errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a current save.');
     }
   }
+  if (schemaVersion === SAVE_SCHEMA_VERSION && !Array.isArray(parsed.segmentArtifacts)) errors.push('Save v7 requires segmentArtifacts.');
+  if (schemaVersion !== SAVE_SCHEMA_VERSION) {
+    const phase6Keys = new Set(['segmentContentBinding', 'styleSnapshot', 'artifactIds', 'artifactManifestHash']);
+    const hasPhase6 = (value: unknown): boolean => {
+      if (Array.isArray(value)) return value.some(hasPhase6);
+      return value !== null && typeof value === 'object'
+        && Object.entries(value as Record<string, unknown>).some(([key, nested]) => phase6Keys.has(key) || hasPhase6(nested));
+    };
+    let containsPhase6Contract = false;
+    for (const turn of Array.isArray(parsed.turns) ? parsed.turns : []) {
+      try { containsPhase6Contract ||= hasPhase6(JSON.parse(turn.actionContractJson)); }
+      catch { errors.push('Invalid frozen contract JSON.'); }
+    }
+    if (parsed.segmentArtifacts !== undefined || parsed.projectStyle !== undefined || hasPhase6(parsed.state)
+      || hasPhase6(parsed.snapshotHistory) || containsPhase6Contract) errors.push('Phase6 content requires save v7.');
+  }
   if (errors.length > 0) {
     try {
       assertNoSecrets(parsed, 'save');
@@ -589,7 +647,7 @@ export async function validateSaveJsonBytes(
   if (parsed.state.stateVersion !== parsed.manifest.stateVersion) {
     errors.push('Snapshot stateVersion does not match the manifest.');
   }
-  if ((schemaVersion === SAVE_SCHEMA_VERSION || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) && Array.isArray(parsed.snapshotHistory)) {
+  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) && Array.isArray(parsed.snapshotHistory)) {
     let previousVersion = -1;
     for (const [index, item] of parsed.snapshotHistory.entries()) {
       if (!Number.isInteger(item.stateVersion) || item.stateVersion < 0 || item.stateVersion <= previousVersion) {
@@ -613,12 +671,15 @@ export async function validateSaveJsonBytes(
         errors.push(error instanceof Error ? error.message : String(error));
       }
     }
-    const head = parsed.snapshotHistory.find(item => item.stateVersion === parsed.manifest.stateVersion);
+      const head = parsed.snapshotHistory.find(item => item.stateVersion === parsed.manifest.stateVersion);
     if (!head) {
       errors.push('Snapshot history does not include the manifest stateVersion.');
+    } else if (schemaVersion === SAVE_SCHEMA_VERSION && (JSON.stringify(head.snapshot.segmentContentBinding ?? null) !== JSON.stringify(parsed.state.segmentContentBinding ?? null)
+      || JSON.stringify(head.snapshot.styleSnapshot ?? null) !== JSON.stringify(parsed.state.styleSnapshot ?? null))) {
+      errors.push('Phase6 head bindings differ from the current snapshot history entry.');
     }
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && Array.isArray(parsed.snapshotHistory)) {
+  if (hasContentManifestSchema(schemaVersion) && Array.isArray(parsed.snapshotHistory)) {
     const expectedBaseHash = parsed.manifest.worldRef?.packageContentHash;
     if (!expectedBaseHash || !Array.isArray(parsed.contentDeltas)) {
       errors.push('Save v6 requires a locked base package hash and contentDeltas array.');
@@ -630,7 +691,7 @@ export async function validateSaveJsonBytes(
       for (const [index, item] of allSnapshots.entries()) {
         const manifest = item.snapshot.contentManifest;
         if (!isBranchContentManifestStructure(manifest) ||
-            manifest.branchId !== parsed.manifest.branchId || manifest.stateVersion !== item.stateVersion ||
+            manifest.worldId !== parsed.manifest.worldRef.worldId || manifest.branchId !== parsed.manifest.branchId || manifest.stateVersion !== item.stateVersion ||
             manifest.basePackage.revision !== parsed.manifest.packageRevision ||
             manifest.basePackage.contentHash.toLowerCase() !== expectedBaseHash.toLowerCase()) {
           errors.push(`Save v6 content manifest ${index} does not match its branch, state or locked package.`);
@@ -676,6 +737,7 @@ export async function validateSaveJsonBytes(
     if (turn.rollRecord && !Array.isArray(turn.rollRecord.rolls)) {
       errors.push(`Turn ${turn.turnId} carries a malformed roll record.`);
     }
+    if (turn.rollRecord && turn.rollRecord.contractHash !== turn.actionContractHash) errors.push(`Turn ${turn.turnId} roll no longer matches its frozen contract.`);
   }
   for (const skill of parsed.skills) {
     if (!/^(untrained|novice|trained|expert|master)$/.test(skill.rank)) {
@@ -699,6 +761,14 @@ export async function validateSaveJsonBytes(
   } catch (error) {
     errors.push(`Payload digest could not be computed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  if (schemaVersion === SAVE_SCHEMA_VERSION) errors.push(...await validatePhase6Bundle({
+    worldId: parsed.manifest.worldRef.worldId, baseRevision: parsed.manifest.packageRevision,
+    baseHash: parsed.manifest.worldRef.packageContentHash ?? '', artifacts: parsed.segmentArtifacts ?? [],
+    snapshots: [parsed.state, ...(parsed.snapshotHistory ?? []).map(s => s.snapshot)],
+    contracts: parsed.turns.map(t => ({ json: t.actionContractJson, hash: t.actionContractHash, turnId: t.turnId,
+      expectedStateVersion: t.expectedStateVersion, status: t.status })),
+  }, sha256Hex));
+  if (parsed.projectStyle !== undefined && !await validatePortableProjectStyle(parsed.projectStyle, parsed.manifest.worldRef.worldId, sha256Hex)) errors.push('Invalid portable project style.');
   return { ok: errors.length === 0, errors };
 }
 
@@ -710,6 +780,7 @@ export interface RestoreSaveInput {
   newCampaignId: string;
   newBranchId: string;
   createdAt: string;
+  projectStyleArchive?: ProjectStyleArchivePortV1;
 }
 
 export interface RestoreSaveResult {
@@ -733,6 +804,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
   if (!saveValidation.ok) {
     throw new Error(`Save validation failed before restore:\n- ${saveValidation.errors.join('\n- ')}`);
   }
+  if (save.projectStyle && !input.projectStyleArchive) throw new Error('Project style restoration requires its M8 owner port.');
   const { manifest } = save;
 
   const originalWorldId = manifest.worldRef.worldId;
@@ -831,17 +903,14 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       `World package ${originalWorldId} r${originalRevision} has a different content hash from the save; refusing to mix versions.`,
     );
   }
-  if (expectedPackageHash !== undefined && pkg.content_hash !== expectedPackageHash) {
-    throw new Error(
-      `World package ${originalWorldId} r${originalRevision} has a different content hash from the save; refusing to mix versions.`,
-    );
-  }
-
   const campaignExists = await db.queryOne('SELECT campaign_id FROM campaigns WHERE campaign_id = ?', [input.newCampaignId]);
   if (campaignExists) throw new Error(`Campaign id already in use: ${input.newCampaignId}.`);
   const branchExists = await db.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [input.newBranchId]);
   if (branchExists) throw new Error(`Branch id already in use: ${input.newBranchId}.`);
 
+  const hasFrozenStyle = save.state.styleSnapshot || save.snapshotHistory?.some(item => item.snapshot.styleSnapshot)
+    || save.turns.some(turn => Boolean((JSON.parse(turn.actionContractJson) as { styleSnapshot?: unknown }).styleSnapshot));
+  if (((save.segmentArtifacts?.length ?? 0) > 0 || save.projectStyle || hasFrozenStyle) && resolvedWorldId !== originalWorldId) throw new Error('Import the matching phase6 world archive with its immutable world identity before restoring this save.');
   const restoredWorld = await db.queryOne<{ title: string }>('SELECT title FROM worlds WHERE world_id = ?', [resolvedWorldId]);
   const playerId = save.party.find(member => member.controller === 'player')?.actorId;
   const playerCardJson = save.cards.find(card => card.actorId === playerId)?.cardJson;
@@ -877,6 +946,9 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
        VALUES (?, ?, NULL, NULL, ?, ?)`,
       [input.newBranchId, input.newCampaignId, manifest.stateVersion, input.createdAt],
     );
+    const artifactStore = new SqliteSegmentArtifactStore(db, input.sha256Hex);
+    for (const artifact of save.segmentArtifacts ?? []) await artifactStore.insertArtifact(tx, artifact);
+    if (save.projectStyle) await input.projectStyleArchive!.restoreProjectStyle(tx, resolvedWorldId, save.projectStyle);
     for (const delta of save.contentDeltas ?? []) {
       const existingDelta = await tx.queryOne<{ content_hash: string; status: string }>(
         'SELECT content_hash, status FROM progressive_world_deltas WHERE delta_id = ?', [delta.deltaId],
@@ -902,6 +974,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       ...save.state,
       branchId: input.newBranchId,
       encounters: save.state.encounters ?? [],
+      ...(save.state.segmentContentBinding ? { segmentContentBinding: { ...save.state.segmentContentBinding, branchId: input.newBranchId } } : {}),
       ...(save.state.contentManifest ? {
         contentManifest: rebindBranchContentManifest(save.state.contentManifest, input.newBranchId,
           save.state.stateVersion, resolvedWorldId),
@@ -927,6 +1000,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       const restoredSnapshot: GameStateSnapshot = item.stateVersion === state.stateVersion
         ? state
         : { ...item.snapshot, branchId: input.newBranchId,
+            ...(item.snapshot.segmentContentBinding ? { segmentContentBinding: { ...item.snapshot.segmentContentBinding, branchId: input.newBranchId } } : {}),
             ...(item.snapshot.contentManifest ? {
               contentManifest: rebindBranchContentManifest(item.snapshot.contentManifest, input.newBranchId,
                 item.stateVersion, resolvedWorldId),

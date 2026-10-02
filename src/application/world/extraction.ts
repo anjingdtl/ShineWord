@@ -122,6 +122,8 @@ export interface ApplyExtractionInput {
    * source. (1M plan P4.)
    */
   additionalVerifiedQuotes?: readonly string[];
+  /** Phase6 location values must denote an evidenced place, not a prose sentence. */
+  strictLocationClaims?: boolean;
 }
 
 /**
@@ -165,6 +167,16 @@ export async function applyExtraction(input: ApplyExtractionInput): Promise<Reso
     if (!subject) {
       rejected.push({ kind: 'entity', detail: `unknown subject ${proposal.subjectKey}` });
       continue;
+    }
+    if (input.strictLocationClaims && ['current_location','home_location'].includes(proposal.predicate)) {
+      const location = entities.find(e => e.type === 'location'
+        && [e.name, ...e.aliases].some(name => name.length >= 2 && proposal.evidence.quote.includes(name))
+        && Object.values(proposal.value).some(value => typeof value === 'string'
+          && [e.name, ...e.aliases, e.entityId, ...extraction.entities.filter(p => p.type === 'location' && p.name === e.name).map(p => p.entityKey)].includes(value)));
+      if (!location) {
+        rejected.push({ kind: 'evidence', detail: `${proposal.subjectKey}.${proposal.predicate}: location value lacks a named place supported by its quote` });
+        continue;
+      }
     }
     factCounter += 1;
     facts.push({

@@ -1,3 +1,4 @@
+import { OPENING_SURVEY_SCHEMA_SQL } from './sqliteOpeningSurveyStore';
 import type { SqliteMigration } from './migrations';
 import { PHASE6_SOURCE_INDEX_SCHEMA } from './phase6SourceIndexSchema';
 import { PHASE6_WRITER_STYLE_SCHEMA_SQL } from './phase6WriterStyleSchema';
@@ -1202,4 +1203,19 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
   { version: 29, name: 'phase6_progressive_segments_and_writer_style', sql:
     PHASE6_SOURCE_INDEX_SCHEMA + PHASE6_WRITER_STYLE_SCHEMA_SQL + PHASE6_SEGMENT_SCHEMA_SQL
       + phase6ArtifactSchema + RESOURCE_GOVERNANCE_SQL + PHASE6_EXECUTION_CONFIG_SQL },
+  { version: 30, name: 'phase6_bounded_opening_survey', sql: OPENING_SURVEY_SCHEMA_SQL },
+  { version: 31, name: 'phase6_free_turn_interaction_fence', foreignKeys: 'off', sql: `
+    CREATE TABLE interaction_operations_v31 (
+      operation_id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+      branch_id TEXT NOT NULL REFERENCES branches(branch_id) ON DELETE CASCADE,
+      operation_kind TEXT NOT NULL CHECK(operation_kind IN ('encounter_auto','play_turn')),
+      status TEXT NOT NULL CHECK(status IN ('running','paused_system','completed','failed')),
+      expected_state_version INTEGER NOT NULL CHECK(expected_state_version>=0),
+      fence_token INTEGER NOT NULL CHECK(fence_token>0), next_step INTEGER NOT NULL DEFAULT 0 CHECK(next_step>=0),
+      max_steps INTEGER NOT NULL CHECK(max_steps>0 AND max_steps<=32), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    INSERT INTO interaction_operations_v31 SELECT * FROM interaction_operations;
+    DROP TABLE interaction_operations;
+    ALTER TABLE interaction_operations_v31 RENAME TO interaction_operations;
+    CREATE UNIQUE INDEX idx_interaction_one_running_per_branch ON interaction_operations(branch_id) WHERE status='running';
+  ` },
 ];

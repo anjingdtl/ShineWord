@@ -56,21 +56,47 @@ export function validateSegmentArtifactContent(input:{artifact:SegmentArtifactV1
   }
   if(input.openingRequirements) {
     const req=input.openingRequirements;
+    const cited=input.facts.filter(f=>usedFacts.has(f.factId)&&f.worldId===a.worldId&&['explicit','inference'].includes(f.status)&&f.sources.length>0);
+    const citedChapters=new Set(cited.flatMap(f=>f.sources.map(source=>source.chapterId)));
+    const openingEvents=input.events.filter(e=>e.worldId===a.worldId&&e.status==='canon'
+      &&e.narrativeChapterId!==null&&citedChapters.has(e.narrativeChapterId));
+    const eventById=new Map(openingEvents.map(e=>[e.eventId,e]));
     for(const id of req.requiredEntryIds) if(!known.has(id))errors.push(`opening_entry_missing:${id}`);
-    for(const id of req.requiredEntityIds) if(!input.entities.some(e=>e.entityId===id))errors.push(`opening_entity_missing:${id}`);
+    for(const id of req.requiredEntityIds) {
+      if(!input.entities.some(e=>e.worldId===a.worldId&&e.entityId===id))errors.push(`opening_entity_missing:${id}`);
+      else if(!cited.some(f=>f.subjectEntityId===id))errors.push(`opening_entity_unproven:${id}`);
+    }
     for(const id of req.requiredFactIds) if(!factById.has(id)||!usedFacts.has(id))errors.push(`opening_fact_missing:${id}`);
-    for(const id of req.requiredEventIds) if(!input.events.some(e=>e.eventId===id&&e.status==='canon'))errors.push(`opening_event_missing:${id}`);
+    for(const id of req.requiredEventIds) {
+      const event=eventById.get(id);
+      if(!event)errors.push(`opening_event_missing:${id}`);
+      else for(const dependency of event.dependsOnEventIds)if(!eventById.has(dependency))errors.push(`opening_event_dependency_missing:${id}:${dependency}`);
+    }
     for(const r of req.ranges) if(!rangeCovered(r,a.coverage))errors.push('opening_range_missing');
-    const cited=input.facts.filter(f=>usedFacts.has(f.factId));
-    const gate=evaluatePlayabilityGate({entities:input.entities,facts:cited,eventCount:input.events.filter(e=>e.status==='canon').length,
+    const gate=evaluatePlayabilityGate({entities:input.entities.filter(e=>e.worldId===a.worldId),facts:cited,eventCount:openingEvents.length,
       openBlockingReviewIssues:errors.filter(e=>e.startsWith('blocking_review:')).length});
     if(!gate.playable)errors.push(...gate.reasons.map(reason=>`opening_gate:${reason}`));
     const openingScene=a.entries.find(e=>e.kind==='scene'&&e.visibility==='public');
     if(!openingScene)errors.push('opening_scene_missing');
     else {
       const def=openingScene.definition as {locationId?:string;actors?:readonly string[];questIds?:readonly string[]};
-      if(!input.entities.some(e=>e.entityId===def.locationId&&e.type==='location')||!cited.some(f=>f.subjectEntityId===def.locationId))errors.push('opening_location_unproven');
-      if(!(def.actors??[]).some(id=>known.get(id)?.kind==='actor_template')&&!(def.questIds??[]).some(id=>known.get(id)?.kind==='quest'))errors.push('opening_interaction_missing');
+      const locations=input.entities.filter(e=>e.worldId===a.worldId&&e.type==='location'&&(e.entityId===def.locationId||e.name===def.locationId));
+      if(locations.length!==1||!cited.some(f=>f.subjectEntityId===locations[0]!.entityId))errors.push('opening_location_unproven');
+      const supportedAction=(id:string,kind:'actor_template'|'quest'):boolean=>{
+        const entry=known.get(id);
+        if(entry?.kind!==kind||entry.provenance.kind==='design_fill'||entry.provenance.kind==='user_override')return false;
+        const evidence=cited.filter(f=>entry.provenance.sourceFactIds.includes(f.factId));
+        if(!evidence.length)return false;
+        if(kind==='quest')return true;
+        const characterIds=new Set(evidence.filter(f=>input.entities.some(e=>e.worldId===a.worldId&&e.entityId===f.subjectEntityId&&e.type==='character'))
+          .map(f=>f.subjectEntityId));
+        if(!characterIds.size||locations.length!==1)return false;
+        const location=locations[0]!;
+        return cited.some(f=>characterIds.has(f.subjectEntityId)
+          &&(Object.values(f.value).some(value=>value===location.entityId||value===location.name)
+            ||f.sources.some(source=>source.quote.includes(location.name)&&input.entities.some(e=>e.entityId===f.subjectEntityId&&source.quote.includes(e.name)))));
+      };
+      if(!(def.actors??[]).some(id=>supportedAction(id,'actor_template'))&&!(def.questIds??[]).some(id=>supportedAction(id,'quest')))errors.push('opening_interaction_missing');
       for(const id of [...(def.actors??[]),...(def.questIds??[])])if(!known.has(id)||!openingScene.dependencyIds.includes(id))errors.push(`opening_action_dependency_missing:${id}`);
     }
   }

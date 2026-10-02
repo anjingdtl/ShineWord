@@ -87,42 +87,65 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
     input: NewLlmRequestAttempt,
     startedAt: number,
   ): Promise<LlmRequestAttemptRecord> {
-    const existing = await this.db.queryAll<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM llm_request_attempts WHERE logical_request_id = ?',
-      [input.logicalRequestId],
-    );
-    const attemptNo = (existing[0]?.count ?? 0) + 1;
-    const attemptId = `${input.logicalRequestId}#a${attemptNo}`;
-    await this.db.execute(
-      `INSERT INTO llm_request_attempts
-        (attempt_id, logical_request_id, request_kind, campaign_id, branch_id, world_id,
-         state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
-         reasoning_policy_version, wire_output_tokens, attempt_no, status, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
-      [
-        attemptId,
-        input.logicalRequestId,
-        input.requestKind,
-        input.campaignId ?? null,
-        input.branchId ?? null,
-        input.worldId ?? null,
-        input.stateVersion ?? null,
-        input.modelProfileFingerprint,
-        input.reasoningTier ?? null,
-        input.reasoningReserveTokens ?? null,
-        input.reasoningPolicyVersion ?? null,
-        input.wireOutputTokens ?? null,
-        attemptNo,
-        startedAt,
-      ],
-    );
-    const rows = await this.db.queryAll<AttemptRow>(
-      `SELECT ${COLUMN_LIST} FROM llm_request_attempts WHERE attempt_id = ?`,
-      [attemptId],
-    );
-    const row = rows[0];
-    if (!row) throw new Error(`Ledger beginAttempt failed to persist ${attemptId}.`);
-    return toRecord(row);
+    return this.db.transaction(async tx => {
+      const pending = await tx.queryAll<{ status: string; replay_approved_at: number | null }>(
+        `SELECT status, replay_approved_at FROM llm_request_attempts
+         WHERE logical_request_id = ? AND status IN ('prepared', 'sent', 'outcome_unknown')`,
+        [input.logicalRequestId],
+      );
+      if (pending.some(attempt => attempt.status === 'prepared' || attempt.status === 'sent')) {
+        throw new Error('logical_request_in_flight');
+      }
+      if (!input.allowOutcomeUnknownReplay && pending.some(attempt =>
+        attempt.status === 'outcome_unknown' && attempt.replay_approved_at == null)) {
+        throw new Error('outcome_unknown_replay_blocked');
+      }
+      // Explicit operator replay is auditable and does not erase the unknown outcome.
+      // A later unknown attempt requires a separate approval.
+      if (input.allowOutcomeUnknownReplay) {
+        await tx.execute(
+          `UPDATE llm_request_attempts SET replay_approved_at = ?
+           WHERE logical_request_id = ? AND status = 'outcome_unknown' AND replay_approved_at IS NULL`,
+          [startedAt, input.logicalRequestId],
+        );
+      }
+      const existing = await tx.queryAll<{ attempt_no: number | null }>(
+        'SELECT MAX(attempt_no) AS attempt_no FROM llm_request_attempts WHERE logical_request_id = ?',
+        [input.logicalRequestId],
+      );
+      const attemptNo = (existing[0]?.attempt_no ?? 0) + 1;
+      const attemptId = `${input.logicalRequestId}#a${attemptNo}`;
+      await tx.execute(
+        `INSERT INTO llm_request_attempts
+          (attempt_id, logical_request_id, request_kind, campaign_id, branch_id, world_id,
+           state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
+           reasoning_policy_version, wire_output_tokens, attempt_no, status, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
+        [
+          attemptId,
+          input.logicalRequestId,
+          input.requestKind,
+          input.campaignId ?? null,
+          input.branchId ?? null,
+          input.worldId ?? null,
+          input.stateVersion ?? null,
+          input.modelProfileFingerprint,
+          input.reasoningTier ?? null,
+          input.reasoningReserveTokens ?? null,
+          input.reasoningPolicyVersion ?? null,
+          input.wireOutputTokens ?? null,
+          attemptNo,
+          startedAt,
+        ],
+      );
+      const rows = await tx.queryAll<AttemptRow>(
+        `SELECT ${COLUMN_LIST} FROM llm_request_attempts WHERE attempt_id = ?`,
+        [attemptId],
+      );
+      const row = rows[0];
+      if (!row) throw new Error(`Ledger beginAttempt failed to persist ${attemptId}.`);
+      return toRecord(row);
+    });
   }
 
   async updateAttempt(attemptId: string, patch: LlmAttemptPatch): Promise<void> {
@@ -144,10 +167,18 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
     if (patch.estimatedUsage !== undefined) push('estimated_usage', patch.estimatedUsage);
     if (patch.finishedAt !== undefined) push('finished_at', patch.finishedAt);
     if (sets.length === 0) return;
-    await this.db.execute(
-      `UPDATE llm_request_attempts SET ${sets.join(', ')} WHERE attempt_id = ?`,
+    // The sent transition must still own a prepared attempt. A cold-start
+    // sweep racing this boundary cannot permit an untracked HTTP dispatch.
+    const guard = patch.status === 'sent' ? " AND status = 'prepared'"
+      : patch.status === 'outcome_unknown' ? " AND status IN ('prepared', 'sent')" : '';
+    // Use the same transaction queue as beginAttempt. An unqueued execute
+    // can otherwise become part of another host's transaction and be rolled
+    // back after the HTTP request was already sent.
+    const affected = await this.db.transaction(tx => tx.execute(
+      `UPDATE llm_request_attempts SET ${sets.join(', ')} WHERE attempt_id = ?${guard}`,
       [...params, attemptId],
-    );
+    ));
+    if (patch.status === 'sent' && affected !== 1) throw new Error('logical_request_dispatch_fenced');
   }
 
   async listAttempts(logicalRequestId: string): Promise<LlmRequestAttemptRecord[]> {

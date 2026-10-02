@@ -143,6 +143,7 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     if (manifest) snapshot.contentManifest = rebindBranchContentManifest(manifest, input.targetBranchId, targetStateVersion);
   }
   snapshot.branchId = input.targetBranchId;
+  if (snapshot.segmentContentBinding) snapshot.segmentContentBinding = { ...snapshot.segmentContentBinding, branchId: input.targetBranchId, stateVersion: targetStateVersion };
   const skills: SkillSnapshotEntry[] = snapshot.skills ?? [];
   const relationships: RelationshipSnapshotEntry[] = snapshot.relationships ?? [];
   if (cards.length > 0) snapshot.cards = cards;

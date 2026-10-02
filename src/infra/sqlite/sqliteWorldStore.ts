@@ -199,6 +199,8 @@ function optionalNumber(row: SqliteRow, key: string): number | null {
 
 export class SqliteWorldStore implements WorldStore {
   constructor(private readonly db: SqliteDatabase) {}
+  /** Shared archive composition uses the existing connection. */
+  get database(): SqliteDatabase { return this.db; }
 
   async createWorld(record: WorldRecord): Promise<void> {
     // INSERT OR REPLACE would DELETE the existing row and cascade-wipe every
@@ -511,12 +513,12 @@ export class SqliteWorldStore implements WorldStore {
     };
   }
 
-  async listEntities(worldId: string): Promise<StoredEntity[]> {
-    const rows = await this.db.queryAll<EntityRow>(
+  async listEntities(worldId: string,reader:Pick<SqliteTransaction,'queryAll'>=this.db): Promise<StoredEntity[]> {
+    const rows = await reader.queryAll<EntityRow>(
       'SELECT entity_id, type, name, first_seen_chapter_id FROM entities WHERE world_id = ? ORDER BY entity_id',
       [worldId],
     );
-    const aliases = await this.db.queryAll<AliasRow>(
+    const aliases = await reader.queryAll<AliasRow>(
       'SELECT entity_id, alias, score FROM entity_aliases WHERE world_id = ?',
       [worldId],
     );
@@ -544,8 +546,8 @@ export class SqliteWorldStore implements WorldStore {
     );
   }
 
-  async saveFact(fact: StoredFact, createdAt: string): Promise<'inserted' | 'duplicate' | 'conflict'> {
-    return this.db.transaction(async tx => this.saveFactTx(tx, fact, createdAt));
+  async saveFact(fact: StoredFact, createdAt: string, assertCurrent?: (tx: SqliteTransaction) => Promise<void>): Promise<'inserted' | 'duplicate' | 'conflict'> {
+    return this.db.transaction(async tx => { await assertCurrent?.(tx); return this.saveFactTx(tx, fact, createdAt); });
   }
 
   /** Dedupe rules shared by single-fact saves and atomic chunk commits. */
@@ -641,19 +643,19 @@ export class SqliteWorldStore implements WorldStore {
     return this.factsFromRows(worldId, rows);
   }
 
-  async listFacts(worldId: string): Promise<StoredFact[]> {
-    const rows = await this.db.queryAll<FactRow>(
+  async listFacts(worldId: string,reader:Pick<SqliteTransaction,'queryAll'>=this.db): Promise<StoredFact[]> {
+    const rows = await reader.queryAll<FactRow>(
       `SELECT fact_id, subject_entity_id, predicate, value_json, status, confidence,
               valid_from, valid_to, reveal_at, scope
          FROM canon_facts WHERE world_id = ? ORDER BY fact_id`,
       [worldId],
     );
-    return this.factsFromRows(worldId, rows);
+    return this.factsFromRows(worldId, rows,reader);
   }
 
-  private async factsFromRows(worldId: string, rows: readonly FactRow[]): Promise<StoredFact[]> {
+  private async factsFromRows(worldId: string, rows: readonly FactRow[],reader:Pick<SqliteTransaction,'queryAll'>=this.db): Promise<StoredFact[]> {
     if (rows.length === 0) return [];
-    const sources = await this.db.queryAll<FactSourceRow>(
+    const sources = await reader.queryAll<FactSourceRow>(
       `SELECT fact_id, chapter_id, start_offset, end_offset, quote, quote_sha256
          FROM fact_sources WHERE world_id = ? ORDER BY fact_id, source_index`,
       [worldId],
@@ -750,14 +752,14 @@ export class SqliteWorldStore implements WorldStore {
     });
   }
 
-  async listEvents(worldId: string, branchId?: string): Promise<StoredEvent[]> {
-    const rows = await this.db.queryAll<EventRow>(
+  async listEvents(worldId: string, branchId?: string,reader:Pick<SqliteTransaction,'queryAll'>=this.db): Promise<StoredEvent[]> {
+    const rows = await reader.queryAll<EventRow>(
       `SELECT event_id, title, summary, world_time_order, narrative_chapter_id,
               valid_from, valid_to, status
          FROM canon_events WHERE world_id = ? ORDER BY COALESCE(world_time_order, 999999)`,
       [worldId],
     );
-    const dependencies = await this.db.queryAll<DependencyRow>(
+    const dependencies = await reader.queryAll<DependencyRow>(
       'SELECT event_id, depends_on_event_id FROM event_dependencies WHERE world_id = ?',
       [worldId],
     );
@@ -770,7 +772,7 @@ export class SqliteWorldStore implements WorldStore {
     // Branch divergence overlay: statuses for THIS branch sit on top of the
     // shared canon; the shared canon_events rows are never rewritten.
     const overrides = branchId
-      ? await this.db.queryAll<{ event_id: string; status: string }>(
+      ? await reader.queryAll<{ event_id: string; status: string }>(
         'SELECT event_id, status FROM branch_canon_overrides WHERE world_id = ? AND branch_id = ?',
         [worldId, branchId],
       )
@@ -993,7 +995,7 @@ export class SqliteWorldStore implements WorldStore {
              AND u.input_hash = ? AND u.status = 'running'
              AND r.source_snapshot_hash = ? AND r.fencing_token = ?
              AND r.lease_owner IS NOT NULL AND r.lease_expires_at > ?
-             AND r.status IN ('running','paused_user','stopped_user') AND s.status = 'active'
+             AND r.status IN ('running','paused_user','stopped_user','paused_system') AND s.status = 'active'
              AND r.source_snapshot_hash = s.raw_sha256 || ':' || s.normalized_tree_hash`,
           [guard.runId, input.worldId, guard.unitId, guard.inputHash,
             guard.sourceSnapshotHash, guard.fencingToken, input.updatedAt],
@@ -1122,8 +1124,10 @@ export class SqliteWorldStore implements WorldStore {
     sections: readonly BookSection[];
     validationJson: string;
     createdAt: string;
+    assertCurrent?: (tx: SqliteTransaction) => Promise<void>;
   }): Promise<void> {
     await this.db.transaction(async tx => {
+      await input.assertCurrent?.(tx);
       const existing = await tx.queryOne<SqliteRow>(
         'SELECT status FROM world_packages WHERE world_id = ? AND revision = ?',
         [input.manifest.worldId, input.manifest.revision],
@@ -1202,6 +1206,7 @@ export class SqliteWorldStore implements WorldStore {
     validationJson: string;
     createdAt: string;
     canon?: WorldCanonSnapshot;
+    afterWrite?(tx: SqliteTransaction): Promise<void>;
   }): Promise<void> {
     await this.db.transaction(async tx => {
       const existing = await tx.queryOne<SqliteRow>('SELECT world_id FROM worlds WHERE world_id = ?', [input.world.worldId]);
@@ -1246,6 +1251,7 @@ export class SqliteWorldStore implements WorldStore {
             section.title, JSON.stringify(section.entryIds), section.position],
         );
       }
+      await input.afterWrite?.(tx);
     });
   }
 
@@ -1287,21 +1293,22 @@ export class SqliteWorldStore implements WorldStore {
   async getWorldPackage(
     worldId: string,
     revision: number,
+    reader:Pick<SqliteTransaction,'queryOne'|'queryAll'>=this.db,
   ): Promise<{ manifest: WorldPackageManifest; entries: ContentEntry[]; sections: BookSection[] } | null> {
-    const row = await this.db.queryOne<SqliteRow>(
+    const row = await reader.queryOne<SqliteRow>(
       `SELECT revision, schema_version, source_sha256, ruleset_id, ruleset_version,
               mapping_version, status, content_hash, build_scope_json
          FROM world_packages WHERE world_id = ? AND revision = ?`,
       [worldId, revision],
     );
     if (!row) return null;
-    const entryRows = await this.db.queryAll<SqliteRow>(
+    const entryRows = await reader.queryAll<SqliteRow>(
       `SELECT entry_id, kind, definition_json, provenance_json, field_provenance_json,
               visibility, dependency_ids_json, revision
          FROM package_entries WHERE world_id = ? AND revision = ? ORDER BY entry_id`,
       [worldId, revision],
     );
-    const sectionRows = await this.db.queryAll<SqliteRow>(
+    const sectionRows = await reader.queryAll<SqliteRow>(
       `SELECT book, section_key, title, entry_ids_json, position
          FROM book_sections WHERE world_id = ? AND revision = ? ORDER BY book, position`,
       [worldId, revision],
@@ -1354,8 +1361,8 @@ export class SqliteWorldStore implements WorldStore {
 
   /** Loads one append-only branch delta. The caller must check that the
    * selected content manifest references it and verify its content hash. */
-  async getProgressiveDeltaPackage(deltaId: string): Promise<ProgressiveDeltaPackage | null> {
-    const row = await this.db.queryOne<SqliteRow>(
+  async getProgressiveDeltaPackage(deltaId: string,reader:Pick<SqliteTransaction,'queryOne'>=this.db): Promise<ProgressiveDeltaPackage | null> {
+    const row = await reader.queryOne<SqliteRow>(
       `SELECT status, content_hash, package_json FROM progressive_world_deltas WHERE delta_id = ?`,
       [deltaId],
     );
@@ -1503,7 +1510,7 @@ export class SqliteWorldStore implements WorldStore {
     return matched;
   }
 
-  async listReviewIssues(worldId: string, status: 'open' | 'resolved' | 'waived' | 'all' = 'open'): Promise<Array<{
+  async listReviewIssues(worldId: string, status: 'open' | 'resolved' | 'waived' | 'all' = 'open',reader:Pick<SqliteTransaction,'queryAll'>=this.db): Promise<Array<{
     issueId: string;
     kind: string;
     severity: string;
@@ -1511,11 +1518,11 @@ export class SqliteWorldStore implements WorldStore {
     status: string;
   }>> {
     const rows = status === 'all'
-      ? await this.db.queryAll<SqliteRow>(
+      ? await reader.queryAll<SqliteRow>(
         'SELECT issue_id, kind, severity, detail_json, status FROM review_issues WHERE world_id = ? ORDER BY created_at',
         [worldId],
       )
-      : await this.db.queryAll<SqliteRow>(
+      : await reader.queryAll<SqliteRow>(
         'SELECT issue_id, kind, severity, detail_json, status FROM review_issues WHERE world_id = ? AND status = ? ORDER BY created_at',
         [worldId, status],
       );

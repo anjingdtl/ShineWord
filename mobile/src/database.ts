@@ -1,3 +1,19 @@
+import { nativeSha256 } from './nativeCrypto';
+import { SourceCatalogAdapter } from '../../src/application/sourceIndex/sourceCatalog';
+import { PersistentSourceSearchService } from '../../src/application/sourceIndex/persistentSourceSearch';
+import { SqliteSourceIndexStore } from '../../src/infra/sqlite/sqliteSourceIndexStore';
+import { ProjectStyleService } from '../../src/application/writerStyle/projectStyleService';
+import { SqliteWriterStyleStore } from '../../src/infra/sqlite/sqliteWriterStyleStore';
+import { SqliteSchedulerResourceStore } from '../../src/infra/sqlite/sqliteSchedulerResourceStore';
+import { configureSchedulerPersistence } from './llmScheduler';
+import { SqliteSegmentPlanStore } from '../../src/infra/sqlite/sqliteSegmentPlanStore';
+import { SqliteSegmentExecutionConfigStore } from '../../src/infra/sqlite/sqliteSegmentExecutionConfigStore';
+import { SqliteSegmentArtifactStore } from '../../src/infra/sqlite/sqliteSegmentArtifactStore';
+import { SegmentPublicationService } from '../../src/application/segmentPublication/service';
+import { SqliteBuildRunStore } from '../../src/infra/sqlite/sqliteBuildRunStore';
+import { ExistingBuildExecutor } from '../../src/application/segmentBuild/existingBuildExecutor';
+import { SegmentBuildService } from '../../src/application/segmentBuild/segmentBuildService';
+import { SqliteOpeningSurveyStore } from '../../src/infra/sqlite/sqliteOpeningSurveyStore';
 import SQLite from 'react-native-sqlite-storage';
 import { BUILTIN_MIGRATIONS } from '../../src/infra/sqlite/builtinMigrations';
 import { applySqliteMigrations } from '../../src/infra/sqlite/migrations';
@@ -30,6 +46,17 @@ export interface MobileDatabaseRuntime {
   episodic: SqliteEpisodicStore;
   sqliteCapabilities: { fts5: boolean };
   progressiveTurnContext: ProgressiveTurnContextService;
+  sourceCatalog: SourceCatalogAdapter;
+  sourceIndex: PersistentSourceSearchService;
+  sourceIndexStore: SqliteSourceIndexStore;
+  writerStyleStore: SqliteWriterStyleStore;
+  projectStyle: ProjectStyleService;
+  segmentPlans: SqliteSegmentPlanStore;
+  segmentConfigs: SqliteSegmentExecutionConfigStore;
+  segmentArtifacts: SqliteSegmentArtifactStore;
+  segmentPublication: SegmentPublicationService;
+  segments: SegmentBuildService;
+  openingSurveys: SqliteOpeningSurveyStore;
 }
 
 let singleton: Promise<MobileDatabaseRuntime> | null = null;
@@ -46,7 +73,23 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   const fts5 = await probeFts5(db);
   const worldStore = new SqliteWorldStore(db);
   const sourceStore = new SqliteSourceStore(db);
-  const sourceSearch = new LocalSourceSearchService(sourceStore, worldStore);
+  const sourceCatalog = new SourceCatalogAdapter(sourceStore, worldStore, nativeSha256);
+  const sourceIndexStore = new SqliteSourceIndexStore(db, { maxPages: 4096 });
+  const sourceIndex = new PersistentSourceSearchService(sourceCatalog, sourceStore, worldStore, sourceIndexStore, nativeSha256);
+  const sourceSearch = new LocalSourceSearchService(sourceStore, worldStore, sourceIndex);
+  const writerStyleStore = new SqliteWriterStyleStore(db);
+  const projectStyle = new ProjectStyleService({ store: writerStyleStore, hash: nativeSha256 });
+  const segmentPlans = new SqliteSegmentPlanStore(db);
+  const segmentConfigs = new SqliteSegmentExecutionConfigStore(db, nativeSha256);
+  const segmentArtifacts = new SqliteSegmentArtifactStore(db, nativeSha256.sha256Hex);
+  const segmentPublication = new SegmentPublicationService({ store: segmentArtifacts, worldStore, sourceCatalog, sha256Hex: nativeSha256.sha256Hex });
+  const runs = new SqliteBuildRunStore(db);
+  const executor = new ExistingBuildExecutor({ sources: sourceStore, worlds: worldStore, runs, catalog: sourceCatalog,
+    config: (worldId, fingerprint) => segmentConfigs.get(worldId, fingerprint), sha256Hex: async input => nativeSha256.sha256Hex(input),
+    control: async (runId, command) => { await runs.requestRunControl(runId, command, new Date().toISOString()); } });
+  const segments = new SegmentBuildService({ store: segmentPlans, catalog: sourceCatalog, executor,
+    artifacts: segmentPublication, branchContent: segmentPublication, sha256Hex: nativeSha256.sha256Hex });
+  configureSchedulerPersistence(new SqliteSchedulerResourceStore(db));
   const progressiveTurnContext = new ProgressiveTurnContextService(
     sourceStore,
     sourceSearch,
@@ -63,6 +106,8 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     );
   }
 
+  await projectStyle.recoverAllInterruptedAnalyses();
+
   // Phase 2: no implicit demo campaign. Every game is an explicit campaign
   // with a locked world package; existing demo-main data stays readable
   // through its campaign but is never auto-created or auto-selected.
@@ -78,6 +123,9 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     episodic: new SqliteEpisodicStore(db),
     sqliteCapabilities: { fts5 },
     progressiveTurnContext,
+    sourceCatalog, sourceIndex, sourceIndexStore, writerStyleStore, projectStyle,
+    segmentPlans, segmentConfigs, segmentArtifacts, segmentPublication, segments,
+    openingSurveys: new SqliteOpeningSurveyStore(db),
   };
 }
 

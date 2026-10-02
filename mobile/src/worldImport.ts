@@ -28,7 +28,7 @@ import { governWorldBuildRequest } from '../../src/application/worldBuild/llmReq
 import { LedgeredProvider } from '../../src/application/llm/requestLedger';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
-import { GlobalRateScheduler } from '../../src/application/worldBuild/rateScheduler';
+import { schedulerForProfile } from './llmScheduler';
 import { hasPlayableOpening } from '../../src/application/worldPackage/openingRecovery';
 
 /**
@@ -257,7 +257,9 @@ async function toLibraryEntry(
   const packages = await worldStore.listWorldPackages(world.worldId);
   const published = packages.filter(item => item.status === 'published');
   const packageRevision = published.reduce((max, item) => Math.max(max, item.revision), 0);
-  const openingReady = packageRevision > 0 && await hasPlayableOpening(worldStore, world.worldId, packageRevision);
+  let openingReady = packageRevision > 0 && await hasPlayableOpening(worldStore, world.worldId, packageRevision);
+  const runtime = await getDatabaseRuntime();
+  if (runtime.segmentPlans && await runtime.segmentPlans.getPlan(world.worldId)) openingReady = openingReady && (await runtime.segmentArtifacts.listArtifacts(world.worldId)).some(a => a.basePackage.revision === packageRevision);
   const issues = await worldStore.listReviewIssues(world.worldId, 'open');
   return {
     worldId: world.worldId,
@@ -320,11 +322,7 @@ export async function buildWorldOnDevice(
     modelProfileFingerprint,
     frozenReserveTokensByRequestKind: frozen.reasoningReservePolicy.reserves,
   };
-  const scheduler = new GlobalRateScheduler({
-    rpm: frozen.rpm,
-    tpm: frozen.tpm,
-    maxConcurrent: 1,
-  });
+  const scheduler = schedulerForProfile(frozenProfile);
   const provider = new RateScheduledProvider(new LedgeredProvider(new OpenAICompatibleProvider(
     frozenProfile,
     new KeychainSecretStore(),

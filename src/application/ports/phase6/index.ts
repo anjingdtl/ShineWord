@@ -30,6 +30,7 @@ export interface BuildExecutorPortV1 {
 export type BuildLeasePortV1 = Pick<BuildRunStore, 'acquireLease' | 'renewLease' | 'releaseLease'>;
 export interface ContentBindingV1 extends ContentDependencyBinding {
   artifactIds: readonly string[];
+  artifactManifestHash?: string;
 }
 export interface AdoptionReceiptV1 {
   status: 'adopted' | 'pending' | 'rejected';

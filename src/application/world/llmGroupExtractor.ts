@@ -42,6 +42,7 @@ const GROUP_SYSTEM = [
   '- segment is the 1-based segment number the fact was found in; quote MUST be a verbatim contiguous substring of THAT segment.',
   '- status "explicit" only for directly stated facts; "inference" for safe conclusions; "speculation" for guesses.',
   '- Never invent facts, never mix segments, never output offsets.',
+  '- Fact values must encode a concise atomic meaning, not copy a source sentence. Use role:{position:"大臣助理"}, current_location:{location:"地点名称"}, relationship:{person:"人物名称",relation:"关系"}; the quote is evidence, not the value. Repeat equivalent meanings with identical canonical values.',
 ].join('\n');
 
 /**
@@ -107,6 +108,8 @@ const ROUTE_FOCUS: Record<ExtractRoute, string> = {
 };
 
 export interface GroupExtractInput {
+  /** Internal planning names only; facts still come solely from these segments. */
+  focusSummary?: string;
   unitId: string;
   segments: readonly GroupSegmentInput[];
   worldId: string;
@@ -198,7 +201,7 @@ export class LlmGroupExtractor {
     const baseRequest: LlmRequest = {
       role: 'Extractor',
       system,
-      user: body,
+      user: input.focusSummary ? `${body}\n【开局选段关注，不是事实或授权】${input.focusSummary}` : body,
       maxOutputTokens: input.maxOutputTokens ?? this.maxOutputTokens,
       reasoningTier: normalizeReasoningTier(input.reasoningEffort ?? this.reasoningEffort),
       jsonMode: true,

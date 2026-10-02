@@ -16,9 +16,10 @@ import type {
 import { publishWorldPackage } from './publish';
 import { sourceRangesCoverWholeText } from './preparationStatus';
 import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
-import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION,
+import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION, factCoveredByRanges,
   type IncrementalMappingOptions, type SelectedCanon } from '../incrementalMapping/canonSelection';
 import { validatePackage } from './validate';
+import type { SqliteTransaction } from '../ports/sqlite';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -67,6 +68,7 @@ export interface BuildPackageInput {
   incrementalMapping?: IncrementalMappingOptions;
   /** Run generation/input/lease/source/project guard supplied by execution owner. */
   assertCurrent?(): Promise<void>;
+  assertCurrentTx?(tx: SqliteTransaction): Promise<void>;
   createdAt: string;
   /** Mobile builds must publish a world that can actually create a campaign. */
   requirePlayableOpening?: boolean;
@@ -976,7 +978,7 @@ async function requestMappingProposals(
             * (work.recovery ? 2 : 1),
           ...(work.recovery ? { reserveMultiplier: 1.5 } : {}),
           jsonMode: true,
-          logicalRequestId: `world-mapping:${input.runId ?? input.worldId}:${exactJobId}`,
+          logicalRequestId: `world-mapping:${input.incrementalMapping ? input.worldId : input.runId ?? input.worldId}:${exactJobId}`,
         });
         if (input.signal?.aborted) throw new Error('World package mapping canceled.');
         raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
@@ -1135,19 +1137,21 @@ export function buildSections(entries: readonly ContentEntry[]): BookSection[] {
 /** Preserve evidenced novel places even when the mapper proposes no scenes. */
 async function compileCanonScenes(
   store: SqliteWorldStore, entities: readonly StoredEntity[], facts: StoredFact[], createdAt: string,
+  assertCurrent?: (tx: SqliteTransaction) => Promise<void>,
 ): Promise<ContentEntry[]> {
   const entries: ContentEntry[] = [];
   for (const entity of entities.filter(candidate => candidate.type === 'location')) {
+    const names = [entity.name, ...entity.aliases].filter(name => Array.from(name).length >= 2);
     let evidence = facts.find(fact => fact.subjectEntityId === entity.entityId
       && fact.status !== 'speculation' && fact.status !== 'conflict' && fact.sources.length > 0);
     if (!evidence) {
       const mention = facts.find(fact => fact.status !== 'speculation' && fact.status !== 'conflict'
-        && fact.sources.some(span => span.quote.includes(entity.name)));
+        && fact.sources.some(span => names.some(name => span.quote.includes(name))));
       if (!mention) continue;
       evidence = { ...mention, factId: `fact-${entity.entityId}-location-mention`, subjectEntityId: entity.entityId,
         predicate: 'named_location', value: { name: entity.name }, status: 'explicit', confidence: 1,
-        sources: mention.sources.filter(span => span.quote.includes(entity.name)) };
-      await store.saveFact(evidence, createdAt);
+        sources: mention.sources.filter(span => names.some(name => span.quote.includes(name))) };
+      await store.saveFact(evidence, createdAt, assertCurrent);
       facts.push(evidence);
     }
     entries.push({
@@ -1213,6 +1217,15 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     worldStore.listEvents(worldId),
     worldStore.listEntities(worldId),
   ]);
+  // A mentioned location may have no subject fact even though another actor's
+  // verified quote explicitly names it. Project ONLY that existing evidence
+  // before closure selection; otherwise selection rejects a usable location.
+  if (input.incrementalMapping) {
+    const eligible = allFacts.filter(f => factCoveredByRanges(f, input.incrementalMapping!));
+    await input.assertCurrent?.();
+    await compileCanonScenes(worldStore, allEntities, eligible, input.createdAt, input.assertCurrentTx);
+    for (const fact of eligible) if (!allFacts.some(f => f.factId === fact.factId)) allFacts.push(fact);
+  }
   const selection: SelectedCanon = input.incrementalMapping
     ? selectCanonSubset({ facts: allFacts, events: allEvents, entities: allEntities, options: input.incrementalMapping })
     : { facts: [...allFacts], events: [...allEvents], entities: [...allEntities], affectedEntryIds: [], diagnostics: [] };
@@ -1248,7 +1261,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       stageRanges.some(range => span.endOffset > range.startCodePoint && span.startOffset < range.endCodePoint));
   };
   const scopedFacts = selection.facts.filter(factInRange);
-  const canonScenes = await compileCanonScenes(worldStore, entities, scopedFacts, input.createdAt);
+  const canonScenes = await compileCanonScenes(worldStore, entities, scopedFacts, input.createdAt, input.assertCurrentTx);
   const firstAnchor = events.filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
     .sort((a, b) => a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
   if (input.requirePlayableOpening && !canonScenes.some(scene => isEntryVisibleAtAnchor(scene, scopedFacts, firstAnchor))) {
@@ -1391,6 +1404,43 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     entries.push(item.entry);
   }
 
+  if (input.incrementalMapping) {
+    const values = (value: unknown): string[] => typeof value === 'string' ? [value]
+      : Array.isArray(value) ? value.flatMap(values) : value && typeof value === 'object' ? Object.values(value).flatMap(values) : [];
+    // Link only mapped, canon-supported characters with a proved location.
+    // The generic guard never becomes an opening interaction substitute.
+    for (const scene of entries.filter(e => e.kind === 'scene')) {
+      const definition = scene.definition as { locationId: string; actors: string[] };
+      const location = entities.find(e => e.type === 'location' && (e.entityId === definition.locationId || e.name === definition.locationId));
+      if (!location) continue;
+      const linked = actorTemplates.filter(template => {
+        const name = (template.entry.definition as { name?: string }).name;
+        const character = entities.find(e => e.type === 'character' && e.name === name);
+        return character && scopedFacts.some(f => f.subjectEntityId === character.entityId
+          && (values(f.value).some(v => v === location.entityId || v === location.name)
+            || f.sources.some(span => span.quote.includes(location.name) && span.quote.includes(character.name))));
+      }).map(t => t.entry.entryId).slice(0, 5);
+      definition.actors = linked;
+      scene.dependencyIds = [...new Set([...scene.dependencyIds, ...linked])];
+    }
+  }
+
+  if (input.incrementalMapping) {
+    // A selected fact that the mapper does not project remains readable as
+    // an exact structured canon citation, never as invented generic lore.
+    const represented = new Set(entries.flatMap(e => [...e.provenance.sourceFactIds,
+      ...Object.values(e.fieldProvenance ?? {}).flatMap(p => [...p.sourceFactIds])]));
+    for (const fact of mappableFacts) if (!represented.has(fact.factId)) {
+      const subject = entities.find(e => e.entityId === fact.subjectEntityId);
+      if (!subject) continue;
+      entries.push(makeEntry({ entryId: `lore-canon-${fact.factId}`, kind: 'lore',
+        provenance: { kind: fact.status === 'explicit' ? 'explicit' : 'inferred', sourceFactIds: [fact.factId],
+          rationale: '直接投影经过原文核验的结构化事实；没有增加原著信息。' },
+        definition: { name: subject.name, title: `${subject.name} · ${fact.predicate}`,
+          text: `${subject.name}：${fact.predicate} ${JSON.stringify(fact.value)}` } }));
+    }
+  }
+
   // GM-facing review summary: conflict facts and open issues, always attached.
   const openIssues = await worldStore.listReviewIssues(worldId, 'open');
   const summaryParts = [
@@ -1404,7 +1454,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     entryId: 'lore-review-summary',
     kind: 'lore',
     provenance: {
-      kind: 'inferred',
+      kind: input.incrementalMapping ? 'design_fill' : 'inferred',
       sourceFactIds: conflictFacts.map(fact => fact.factId),
       rationale: '审核摘要：由本地冲突检测与审核队列状态生成。',
     },
@@ -1471,6 +1521,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       designFillEntries: entries.filter(entry => entry.provenance.kind === 'design_fill').length,
     },
     onValidated: () => progress('validated', '审查与结构校验通过，正在写入世界包'),
+    assertCurrent: input.assertCurrentTx,
   });
   progress('published', '全量精编三宝书已通过发布校验');
   return { ...draft, manifest: result.manifest };

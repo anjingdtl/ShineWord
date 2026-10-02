@@ -17,6 +17,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
+import { getSegmentReadiness } from '../../segmentRuntime';
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
@@ -243,6 +244,8 @@ export function OpeningScreen(): React.JSX.Element {
       const characterSkills = quickLoadout && !quickAdvancedOpen ? recommended.initialSkills : chosenSkills;
       const campaignId = `camp-${Date.now().toString(36)}`;
       const runtime = await getDatabaseRuntime();
+      const certification = await getSegmentReadiness(worldId);
+      if (certification && !certification.availableArtifacts.length) throw new Error('开局资料尚未通过证据与行动依赖验证，请查看项目构建状态。');
       await createCampaign({
         db: runtime.db,
         worldStore: runtime.worldStore,

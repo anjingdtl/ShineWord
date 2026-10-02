@@ -1,5 +1,6 @@
 import type { DifficultyBand, RollGrade } from '../rules/types';
 import type { ContentDependencyBinding } from '../content/types';
+import type { EffectiveStyleSnapshotV1 } from '../style/types';
 
 export const TURN_STATES = [
   'Draft',
@@ -55,6 +56,8 @@ export interface ActionContract {
   /** Optional on pre-progressive contracts; when present it is frozen into
    * actionContractHash and names every immutable package used this turn. */
   contentDependency?: ContentDependencyBinding;
+  /** Recoverable expression projection frozen before any turn request. */
+  styleSnapshot?: EffectiveStyleSnapshotV1;
   actorId: string;
   actionType: string;
   /** Required for locally compiled ability contracts; planner cannot author effects. */

@@ -24,6 +24,7 @@ import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
 import { pickTextRef } from '../../fileBridge';
 import { deriveProjectStatus, listProjectBuildSummaries, summarizeProjectBuild, PROJECT_STATUS_LABEL, type ProjectBuildSummary } from '../../projectLibrary';
 import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
+import { getSegmentReadiness } from '../../segmentRuntime';
 import { getWorldEntry } from '../../worldImport';
 import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
 import { useAppSession } from '../state/AppSessionContext';
@@ -50,6 +51,7 @@ export function ProjectHubScreen(): React.JSX.Element {
   const route = useRoute<ProjectHubRoute>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { worldId, title } = route.params;
+  const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof getSegmentReadiness>>>(null);
   const [tasks, setTasks] = useState<BuildTaskView[]>([]);
   const [perf, setPerf] = useState<BuildTaskPerfStats | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -73,6 +75,7 @@ export function ProjectHubScreen(): React.JSX.Element {
       ]);
       setBuildSummary(summaries.get(worldId)!);
       setTasks(openTasks);
+      setReadiness(await getSegmentReadiness(worldId));
       setEntry(worldEntry);
       const runId = openTasks[0]?.runId ?? null;
       setPerf(runId ? await listBuildTaskPerfStats(runId) : null);
@@ -237,6 +240,11 @@ export function ProjectHubScreen(): React.JSX.Element {
           </View>
         </Card>
 
+        {readiness ? <Card>
+          <Text style={typeStyle(theme, theme.type.body)}>已就绪资料：{readiness.availableArtifacts.length} 段 · 正在准备：{readiness.segments.filter(s => ['queued','extracting','mapping','validating'].includes(s.status)).length} 段</Text>
+          {readiness.pauseReason ? <Text style={typeStyle(theme, theme.type.small)}>整理已暂停，已就绪内容可继续使用。</Text> : null}
+          {readiness.diagnostics.length ? <Text style={typeStyle(theme, theme.type.small)}>部分资料需要处理，可在构建任务与审查中查看原因。</Text> : null}
+        </Card> : null}
         <View>
           <SectionHeader
             title="构建任务"
@@ -317,6 +325,7 @@ export function ProjectHubScreen(): React.JSX.Element {
 
         <View>
           <SectionHeader title="项目概览" tone="base" />
+          <Button label="叙述风格" onPress={() => navigation.navigate('WriterStyle', { worldId, title })} />
           <View style={[styles.actions, { gap: theme.space.sm, flexWrap: 'wrap' }]}>
             <Button label="资料" variant="secondary" onPress={() => openWorldTab('overview')} />
             <Button label="三宝书" variant="secondary" onPress={() => openWorldTab('books')} />

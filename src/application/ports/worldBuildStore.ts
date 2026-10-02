@@ -151,4 +151,6 @@ export interface BuildRunStore {
    * clears them. 'resume' clears the pause flag.
    */
   requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume', now: string): Promise<void>;
+  /** System intent must not overwrite an explicit user pause/stop or a terminal result. */
+  requestSystemPause?(runId: string, reason: string, now: string): Promise<boolean>;
 }

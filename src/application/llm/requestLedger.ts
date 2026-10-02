@@ -26,7 +26,9 @@ export function classifyLlmFailure(error: unknown): LlmFailureClass {
       return 'reasoning_only';
     }
     if (last?.errorCategory === 'timeout') return 'timeout_unknown';
-    if (last?.errorCategory === 'network') return 'network_connect';
+    if (last?.errorCategory === 'network') {
+      return last.dispatchState === 'not_sent' ? 'network_connect' : 'network_unknown';
+    }
     if (last?.errorCategory === 'invalid_response') {
       if (last.completionState === 'content_filter') return 'content_filter';
       if (last.completionState === 'length') return 'length';
@@ -125,6 +127,7 @@ export class LedgeredProvider implements LlmProvider {
     const attempt = await this.store.beginAttempt(
       {
         logicalRequestId: meta.logicalRequestId,
+        allowOutcomeUnknownReplay: this.options.allowOutcomeUnknownReplay,
         requestKind: meta.requestKind,
         campaignId: meta.campaignId ?? null,
         branchId: meta.branchId ?? null,
@@ -157,9 +160,14 @@ export class LedgeredProvider implements LlmProvider {
       await this.store.updateAttempt(attempt.attemptId, patch);
       return response;
     } catch (error) {
+      const failureClass = classifyLlmFailure(error);
       await this.store.updateAttempt(attempt.attemptId, {
-        status: 'failed',
-        failureClass: classifyLlmFailure(error),
+        // A timeout or unclassified disconnect says nothing about whether
+        // the server completed and billed. Only explicit not-sent transport
+        // evidence permits a network retry without player acknowledgement.
+        status: failureClass === 'timeout_unknown' || failureClass === 'network_unknown' || failureClass === 'unknown'
+          ? 'outcome_unknown' : 'failed',
+        failureClass,
         errorCode: error instanceof Error ? error.name : 'unknown',
         httpStatus: lastHttpStatus(error),
         ...failedUsagePatch(error),

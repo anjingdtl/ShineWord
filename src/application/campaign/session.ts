@@ -1,8 +1,10 @@
+import { SqliteInteractionOperationJournal } from './interactionOrchestrator';
 import { RejectionSamplingRandomSource } from '../../domain/rules/random';
 import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
 import type { LlmProvider } from '../llm/types';
 import { LedgeredProvider } from '../llm/requestLedger';
+import { RateScheduledProvider } from '../llm/scheduledProvider';
 import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
 import type { LlmRequestLedgerStore } from '../ports/llmLedger';
 import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
@@ -68,6 +70,7 @@ import {
 } from '../../domain/characters/card';
 import type {
   AbilityDefinition,
+  BookSection,
   BranchContentManifest,
   ContentEntry,
   LoreDefinition,
@@ -102,6 +105,12 @@ export interface SessionDeps {
   narratives: SqliteNarrativeStore;
   progressiveTurnContext?: ProgressiveTurnContextService;
   sourceStore?: SourceStore;
+  projectStyle?: import('../ports/phase6').ProjectStylePortV1;
+  /** Composition-root resource signal; does not alter rule authority. */
+  onForegroundActivity?(busy: boolean): void;
+  segmentContent?: {
+    loadEffectiveCatalog(input: { campaignId: string; branchId: string; binding?: import('../../domain/content/segmentArtifact').SegmentContentBindingV1 }): Promise<{ entries: ContentEntry[]; sections: BookSection[] }>;
+  };
   /** Durable physical-request ledger (infrastructure plan M2); optional so
    * pure-domain tests can omit it, but production always provides it. */
   llmLedger?: LlmRequestLedgerStore;
@@ -148,6 +157,7 @@ export interface PlayTurnOptions {
   /** Explicit replay target (recovery flows); defaults to head+1. */
   turnIdOverride?: string;
   onProgress?: (phase: 'planning' | 'rolling' | 'narrating' | 'committing') => void;
+  coordinationFence?: { campaignId: string; fenceToken: number };
 }
 
 /**
@@ -176,7 +186,9 @@ export class CampaignSession {
   ) {
     this.encounters = new EncounterService(deps);
     this.provider = deps.llmLedger
-      ? new LedgeredProvider(provider, deps.llmLedger, {
+      ? provider instanceof RateScheduledProvider ? provider.withLedger(deps.llmLedger, {
+          modelProfileFingerprint: llmModelProfileFingerprint(profile),
+        }) : new LedgeredProvider(provider, deps.llmLedger, {
         modelProfileFingerprint: llmModelProfileFingerprint(profile),
       })
       : provider;
@@ -401,7 +413,7 @@ export class CampaignSession {
       return { reason: '目标不是当前可招募的在场人物。' };
     }
     const anchor = await this.campaignAnchor(campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId, state });
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     const entry = entries.find(item => item.kind === 'actor_template' && item.entryId === actorCard.templateId);
     const leader = cards.find(card => card.controller === 'player');
@@ -453,7 +465,7 @@ export class CampaignSession {
     if (!state) throw new Error(`Unknown branch: ${branchId}.`);
     const cards = await this.loadAllCards(branchId);
     const anchor = await this.campaignAnchor(campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId, state });
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     const leader = cards.find(card => card.controller === 'player');
     if (!leader) return [];
@@ -479,7 +491,7 @@ export class CampaignSession {
     if (!state) throw new Error(`Unknown branch: ${branchId}.`);
     const cards = await this.loadAllCards(branchId);
     const anchor = await this.campaignAnchor(campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId, state });
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     const leader = cards.find(card => card.controller === 'player');
     const leaderState = leader ? state.actors[leader.actorId] : undefined;
@@ -532,7 +544,7 @@ export class CampaignSession {
     const entry = qualification.entry;
     const definition = entry.definition as import('../../domain/content/types').ActorTemplateDefinition;
     const world = await this.campaignAnchor(options.campaignId);
-    const pkgEntries = await this.loadPackageEntries(world.worldId, world.packageRevision);
+    const pkgEntries = await this.loadPackageEntries(world.worldId, world.packageRevision, { campaignId: options.campaignId, state });
     const worldFacts = await this.deps.worldStore.listFacts(world.worldId);
     const itemOwners = { ...state.itemOwners };
     const itemSources = { ...(state.itemSources ?? {}) };
@@ -662,7 +674,7 @@ export class CampaignSession {
     // Existing companion cards are not NPC candidates; re-entry uses the
     // original recruitment relationship and the same locked template policy.
     const anchor = await this.campaignAnchor(options.campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId: options.campaignId, state });
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     const template = entries.find(item => item.kind === 'actor_template' && item.entryId === card.templateId);
     const leader = cards.find(item => item.controller === 'player');
@@ -729,7 +741,7 @@ export class CampaignSession {
     } else {
       const anchor = await this.campaignAnchor(options.campaignId);
       const facts = await this.deps.worldStore.listFacts(anchor.worldId);
-      const scenes = (await this.loadPackageEntries(anchor.worldId, anchor.packageRevision))
+      const scenes = (await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId: options.campaignId, state }))
         .filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
           && isEntryVisibleAtAnchor(entry, facts, anchor.worldTimeOrder))
         .map(entry => entry.definition as SceneDefinition);
@@ -742,7 +754,7 @@ export class CampaignSession {
       if (!communicationPath) throw new Error('信号通信要求同区或相邻区域，且场景定义中有明确出口。');
     }
     const anchor = await this.campaignAnchor(options.campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId: options.campaignId, state });
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     const targetEntry = entries.find(item => item.entryId === options.entryId);
     if (!targetEntry || targetEntry.visibility === 'gm' || !isEntryVisibleAtAnchor(targetEntry, facts, anchor.worldTimeOrder)) {
@@ -826,7 +838,7 @@ export class CampaignSession {
       getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
       sha256Hex: this.deps.hashProvider.sha256Hex,
     });
-    const entries = [...base.entries, ...deltas.flatMap(delta => delta.entries)];
+    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision, { campaignId: options.campaignId, state });
     const byId = new Map(entries.map(entry => [entry.entryId, entry]));
     const source = this.deps.sourceStore
       ? await this.deps.sourceStore.findActiveByRawHash(base.manifest.sourceSha256)
@@ -922,7 +934,7 @@ export class CampaignSession {
       }
     }
     const anchor = await this.campaignAnchor(options.campaignId);
-    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision);
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId: options.campaignId, state });
     const item = entries.find(entry => entry.entryId === options.itemId);
     const facts = await this.deps.worldStore.listFacts(anchor.worldId);
     if (!item || item.kind !== 'item' || item.visibility !== 'public'
@@ -949,6 +961,7 @@ export class CampaignSession {
   private async loadPackageEntries(
     worldId: string,
     packageRevision: number,
+    branch?: { campaignId: string; state: GameStateSnapshot },
   ): Promise<ContentEntry[]> {
     const pkg = await this.deps.worldStore.getWorldPackage(worldId, packageRevision);
     if (!pkg) {
@@ -957,7 +970,22 @@ export class CampaignSession {
           'The campaign cannot continue without its dependency.',
       );
     }
-    return pkg.entries;
+    if (!branch) return pkg.entries;
+    if (branch.state.segmentContentBinding) {
+      if (!this.deps.segmentContent) throw new Error('Segment content owner is unavailable for the adopted branch.');
+      return (await this.deps.segmentContent.loadEffectiveCatalog({
+        campaignId: branch.campaignId, branchId: branch.state.branchId, binding: branch.state.segmentContentBinding,
+      })).entries;
+    }
+    if (!branch.state.contentManifest) return pkg.entries;
+    const deltas = await loadBranchDeltaEntries({
+      manifest: branch.state.contentManifest, worldId, branchId: branch.state.branchId,
+      stateVersion: branch.state.stateVersion, baseRevision: packageRevision,
+      baseContentHash: pkg.manifest.contentHash,
+      getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
+      sha256Hex: this.deps.hashProvider.sha256Hex,
+    });
+    return [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
   }
 
   private async assertNoActiveEncounter(branchId: string): Promise<void> {
@@ -1049,6 +1077,7 @@ export class CampaignSession {
     goal: string;
     plannerCards: readonly ActorCard[];
     recentHistory: ReadonlyArray<{ turnId: string; publicSummary: string; narrativeText: string | null; stateVersion?: number }>;
+    styleText?: string;
   }): Promise<{
     plannerText: string;
     plannerWireOutputTokens: number;
@@ -1181,7 +1210,7 @@ export class CampaignSession {
       candidates: narratorCandidates,
       capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
-      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
       reasoningPolicy,
     });
 
@@ -1203,7 +1232,7 @@ export class CampaignSession {
       requestKind: 'narrator', branchId: input.branchId, stateVersion: input.stateVersion,
       candidates: narratorCandidates, capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
-      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
+      estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
       reasoningPolicy: recoveryPolicy,
     });
     const plannerReasoningRecovery = !plannerRecoveryPlan.context.legacyFallback
@@ -1576,11 +1605,19 @@ export class CampaignSession {
    * achieved (see domain/progression/growth.ts).
    */
   async playTurn(options: PlayTurnOptions): Promise<PlayTurnResult> {
+    this.deps.onForegroundActivity?.(true);
     this.deps.progressiveTurnContext?.setForegroundBusy(true);
     try {
-      return await this.playTurnInForeground(options);
+      const available = await this.deps.db.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='interaction_operations'");
+      if (!available) return await this.playTurnInForeground(options);
+      const state = await this.deps.turns.getState(options.branchId);
+      if (!state) throw new Error('Unknown branch.');
+      const turnId = options.turnIdOverride ?? `turn-${String(state.stateVersion+1).padStart(4,'0')}`;
+      return await new SqliteInteractionOperationJournal(this.deps.db).guardTurn({ ...options, turnId,
+        expectedStateVersion: state.stateVersion }, fence => this.playTurnInForeground({ ...options, coordinationFence: fence }));
     } finally {
       this.deps.progressiveTurnContext?.setForegroundBusy(false);
+      this.deps.onForegroundActivity?.(false);
     }
   }
 
@@ -1624,7 +1661,9 @@ export class CampaignSession {
           sha256Hex: this.deps.hashProvider.sha256Hex,
         })
       : [];
-    const allEntries = [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)];
+    const allEntries = this.deps.segmentContent && summary.state.segmentContentBinding
+      ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding })).entries
+      : [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)];
     if (new Set(allEntries.map(entry => entry.entryId)).size !== allEntries.length) {
       throw new Error('The active branch content manifest contains conflicting immutable entry ids.');
     }
@@ -1716,7 +1755,7 @@ export class CampaignSession {
               .slice(0, 3)
               .map(passage => `${passage.chapterId} [${passage.startCodePoint},${passage.endCodePoint}): ${passage.text}`)
               .join('\n')}\n以上仅为已整理资料引用的原文片段；没有提供的情节仍属未知。`;
-            if (this.deps.sourceStore && contentManifest) {
+            if (this.deps.sourceStore && contentManifest && !summary.state.segmentContentBinding) {
               const excerptDelta = await publishSourceEvidenceExcerptDelta({
                 db: this.deps.db,
                 worldStore: this.deps.worldStore,
@@ -1751,6 +1790,17 @@ export class CampaignSession {
     // Turn-context pipeline (infrastructure plan M5): parts + story memory
     // V2 + episodic recall + source evidence -> elastic allocation against
     // the model's REAL capabilities -> frozen planner/narrator contexts.
+    const stagedStyleTurn = await this.deps.turns.getStagedTurn(options.branchId, turnId);
+    let styleSnapshot: import('../../domain/style/types').EffectiveStyleSnapshotV1 | undefined;
+    if (stagedStyleTurn) {
+      styleSnapshot = (JSON.parse(stagedStyleTurn.actionContractJson) as ActionContract).styleSnapshot;
+    } else if (this.deps.projectStyle) {
+      styleSnapshot = await this.deps.projectStyle.freezeEffectiveStyle({
+        projectId: summary.worldId, branchId: options.branchId, turnId, sceneKind: 'exploration',
+        participantIds: plannerCards.slice(0, 5).map(card => card.actorId),
+        tokenAllowance: Math.max(0, Math.min(600, Math.floor((this.turnCapabilities().contextWindowTokens ?? 12000) * 0.025))),
+      });
+    }
     const turnBundle = await this.buildTurnContextBundle({
       branchId: options.branchId,
       stateVersion: summary.state.stateVersion,
@@ -1760,6 +1810,7 @@ export class CampaignSession {
       goal: summary.goal,
       plannerCards,
       recentHistory,
+      styleText: styleSnapshot?.compiledText,
     });
     const plannerWorldContext = turnBundle.plannerText;
     this.lastTurnContexts = {
@@ -1790,11 +1841,13 @@ export class CampaignSession {
         reasoningPolicyVersion: turnBundle.reasoningPolicyVersion,
         narratorWorldContext: turnBundle.narratorText,
         narratorWireOutputTokens: turnBundle.narratorWireOutputTokens,
+        styleSnapshot,
+        coordinationFence: options.coordinationFence,
         onReasoningRecovery: (role, context) => {
           if (role === 'planner') this.lastTurnContexts.planner = context;
           else this.lastTurnContexts.narrator = context;
         },
-        ...(contentManifest ? { expectedContentDependency: contentDependencyBinding(contentManifest) } : {}),
+        ...(contentManifest ? { expectedContentDependency: summary.state.segmentContentBinding ?? contentDependencyBinding(contentManifest) } : {}),
         hashProvider: this.deps.hashProvider,
         random: this.deps.random,
         actingCard: playerCard,
@@ -1804,6 +1857,7 @@ export class CampaignSession {
         scenes,
         constraints,
         updateCommittedState: (nextState, contract, grade) => {
+          if (contract.styleSnapshot) nextState.styleSnapshot = contract.styleSnapshot;
           const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
           return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
         },
@@ -2050,7 +2104,7 @@ export class CampaignSession {
     }
 
     // --- Real condition queries (never UI booleans) ---
-    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision);
+    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision, { campaignId: options.campaignId, state });
     const { catalog } = packageIndexes(entries);
     const definition = catalog[storedSkillKey] ?? catalog[options.skillId];
     // hasSource: ordinary-tier skills are self-trainable through practice
@@ -2438,7 +2492,9 @@ export class CampaignSession {
       getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
       sha256Hex: this.deps.hashProvider.sha256Hex,
     });
-    const entries = [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
+    const entries = this.deps.segmentContent && summary.state.segmentContentBinding
+      ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
+      : [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
     const anchorRow = await this.deps.db.queryOne<{ anchor_json: string }>(
       'SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [campaignId],
     );

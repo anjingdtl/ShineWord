@@ -4,7 +4,7 @@ import { RejectionSamplingRandomSource } from '../../src/domain/rules/random';
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
-import { schedulerForProfile } from './llmScheduler';
+import { schedulerForProfile, setSchedulerActivity } from './llmScheduler';
 import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
 import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
@@ -64,6 +64,9 @@ export async function createSession(
       narratives: runtime.narratives,
       progressiveTurnContext: runtime.progressiveTurnContext,
       sourceStore: runtime.sourceStore,
+      projectStyle: runtime.projectStyle,
+      segmentContent: runtime.segmentPublication,
+      onForegroundActivity: playing => setSchedulerActivity({ playing }),
       llmLedger: runtime.llmLedger,
       storyMemory: { store: runtime.storyMemory },
       episodic: { store: runtime.episodic },
@@ -279,6 +282,7 @@ export async function exportCampaignSave(
 ): Promise<{ save: SaveFile; json: string }> {
   const runtime = await getDatabaseRuntime();
   const result = await exportSave({
+    projectStyleArchive: runtime.projectStyle,
     db: runtime.db,
     sha256Hex: nativeSha256.sha256Hex,
     campaignId,
@@ -298,6 +302,7 @@ export async function importCampaignSave(json: string): Promise<{ campaignId: st
   const campaignId = `camp-${Date.now().toString(36)}`;
   const branchId = `${campaignId}-main`;
   await restoreSave({
+    projectStyleArchive: runtime.projectStyle,
     db: runtime.db,
     save,
     sha256Hex: nativeSha256.sha256Hex,
@@ -440,7 +445,7 @@ export async function exportPortableWorldPackage(worldId: string): Promise<{
   const pkg = await worldStore.getWorldPackage(worldId, revision);
   if (!pkg) throw new Error(`Published package r${revision} is missing.`);
   const canon = await exportPortableCanon(worldStore, pkg.manifest, pkg.entries, nativeSha256.sha256Hex);
-  const bytes = await encodeWorldPackageArchive({ title: world.title, ...pkg, canon }, nativeSha256.sha256Hex);
+  const bytes = await encodeWorldPackageArchive({ title: world.title, ...pkg, canon, segmentArtifacts: await runtime.segmentArtifacts.listArtifacts(worldId), projectStyle: (await runtime.projectStyle.exportProjectStyle(worldId)) ?? undefined }, nativeSha256.sha256Hex);
   return { bytes, title: world.title, revision };
 }
 
@@ -456,6 +461,7 @@ export async function importPortableWorldPackageFile(archive: Uint8Array): Promi
   let worldId = `world-import-${timestamp}`;
   while (await worldStore.getWorld(worldId)) worldId = `world-import-${timestamp}-${++suffix}`;
   const imported = await importPortableWorldPackage({
+    projectStyleArchive: runtime.projectStyle,
     worldStore,
     sha256Hex: nativeSha256.sha256Hex,
     archive,
@@ -546,6 +552,12 @@ export async function lookupProgressiveBookSource(input: {
     ...base.entries.map(entry => entry.entryId),
     ...activeDeltas.flatMap(delta => delta.entries.map(entry => entry.entryId)),
   ]);
+  if (summary.state.segmentContentBinding) {
+    const effective = await runtime.segmentPublication.loadEffectiveCatalog({
+      campaignId: input.campaignId, branchId: input.branchId, binding: summary.state.segmentContentBinding,
+    });
+    for (const entry of effective.entries) existingEntryIds.add(entry.entryId);
+  }
   const publication = await publishUserRequestedSourceLookupDelta({
     db: runtime.db,
     worldStore: runtime.worldStore,
@@ -559,6 +571,7 @@ export async function lookupProgressiveBookSource(input: {
     book: input.book,
     passages: lookup.passages,
     existingEntryIds,
+    rebaseLegacyOverlay: (tx, manifests) => runtime.segmentPublication.rebaseLegacyOverlay(tx, manifests),
     createdAt: new Date().toISOString(),
     signal: input.signal,
   });
@@ -636,8 +649,11 @@ export async function getWorldBookProjection(input: {
       getDelta: deltaId => runtime.worldStore.getProgressiveDeltaPackage(deltaId),
       sha256Hex: nativeSha256.sha256Hex,
     });
-    entries.push(...deltas.flatMap(delta => delta.entries));
-    for (const delta of deltas) {
+    if (summary.state.segmentContentBinding) {
+      const effective = await runtime.segmentPublication.loadEffectiveCatalog({ campaignId: input.campaignId, branchId: input.branchId, binding: summary.state.segmentContentBinding });
+      entries = effective.entries; sections = effective.sections.map(section => ({ ...section, entryIds: [...section.entryIds] }));
+    } else entries.push(...deltas.flatMap(delta => delta.entries));
+    for (const delta of summary.state.segmentContentBinding ? [] : deltas) {
       for (const section of delta.sections) {
         const current = sections.find(item => item.book === section.book && item.sectionKey === section.sectionKey);
         if (!current) sections.push({ ...section, entryIds: [...section.entryIds] });

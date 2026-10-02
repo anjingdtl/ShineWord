@@ -13,6 +13,10 @@ const TOKEN = /^[a-zA-Z0-9._:-]{1,256}$/;
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const hash = (v: unknown): v is string => typeof v === 'string' && HASH.test(v);
 const id = (v: unknown): v is string => typeof v === 'string' && TOKEN.test(v);
+// Existing production mapping fingerprints contain '#' and provider model
+// names can contain '/'. They are bounded version strings, not resource IDs.
+const versionFingerprint = (v:unknown):v is string => typeof v==='string'&&v.length>0&&v.length<=256
+  &&v.trim()===v&&!/[\u0000-\u001f\u007f]/.test(v);
 const natural = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0;
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === 'string');
 function provenance(v: unknown): v is Provenance {
@@ -49,7 +53,7 @@ export function isSegmentArtifactV1(v: unknown): v is SegmentArtifactV1 {
     || !isSourceSetBindingV1(v.sourceBinding) || v.sourceBinding.members.length > LIMITS.ranges
     || !hash(v.canonSnapshotHash) || !hash(v.contentHash) || !isRecord(v.basePackage)
     || !natural(v.basePackage.revision) || Number(v.basePackage.revision) < 1 || !hash(v.basePackage.contentHash)
-    || !isRecord(v.ruleset) || !id(v.ruleset.id) || !id(v.ruleset.version) || !id(v.mappingVersion)
+    || !isRecord(v.ruleset) || !id(v.ruleset.id) || !id(v.ruleset.version) || !versionFingerprint(v.mappingVersion)
     || !Array.isArray(v.coverage) || !v.coverage.length || v.coverage.length > LIMITS.ranges
     || !v.coverage.every(isSourceRangeV1) || v.coverage.reduce((n,r) => n + r.endCp - r.startCp,0) > LIMITS.codePoints
     || !Array.isArray(v.entries) || !v.entries.length || v.entries.length > LIMITS.entries || !v.entries.every(entry)
@@ -112,7 +116,8 @@ export async function parseSegmentArtifact(json: string, sha256Hex: Sha256HexPro
 }
 export function isSegmentContentBindingV1(v: unknown): v is SegmentContentBindingV1 {
   return isRecord(v) && hash(v.manifestHash) && natural(v.contentVersion) && id(v.branchId) && natural(v.stateVersion)
-    && natural(v.basePackageRevision) && Number(v.basePackageRevision) > 0 && strings(v.deltaIds) && v.deltaIds.every(id)
+    && natural(v.basePackageRevision) && Number(v.basePackageRevision) > 0 && strings(v.deltaIds) && v.deltaIds.length<=512&&v.deltaIds.every(id)
+    && new Set(v.deltaIds).size===v.deltaIds.length
     && strings(v.artifactIds) && v.artifactIds.length <= 512 && v.artifactIds.every(id)
     && new Set(v.artifactIds).size === v.artifactIds.length
     && (v.artifactIds.length === 0 ? v.artifactManifestHash === undefined || hash(v.artifactManifestHash) : hash(v.artifactManifestHash));

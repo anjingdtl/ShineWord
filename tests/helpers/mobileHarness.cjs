@@ -77,8 +77,8 @@ const sha = {
   sha256BytesHex(bytes) { return crypto.createHash('sha256').update(bytes).digest('hex'); },
 };
 
-async function createMobileHarness({ bytes, coordinator, transport, secrets, serviceStart = async () => false, nativeControl } = {}) {
-  const db = new DatabaseSync(':memory:');
+async function createMobileHarness({ bytes, dbPath, coordinator, transport, secrets, serviceStart = async () => false, nativeControl } = {}) {
+  const db = new DatabaseSync(dbPath ?? ':memory:');
   const adapter = new NodeSqliteAdapter(db);
   await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
   const runtime = { db: adapter, worldStore: new SqliteWorldStore(adapter), llmLedger: new SqliteLlmLedgerStore(adapter) };

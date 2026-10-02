@@ -32,6 +32,7 @@ async function harness(){
   CREATE TABLE snapshots(branch_id TEXT,state_version INTEGER,snapshot_json TEXT,PRIMARY KEY(branch_id,state_version));
   CREATE TABLE branch_content_manifests(branch_id TEXT,state_version INTEGER,content_version INTEGER,manifest_hash TEXT,manifest_json TEXT,created_at TEXT);
   CREATE TABLE interaction_operations(operation_id TEXT,branch_id TEXT,status TEXT);`);
+  await db.execute('CREATE TABLE turns(branch_id TEXT,status TEXT)');
   await db.execute(phase6ArtifactSchema);await db.execute("INSERT INTO worlds VALUES ('w')");
   const baseHash=await hash('base'),treeHash=await hash('normalized');const base={manifest:{worldId:'w',revision:1,schemaVersion:'world-package-3',
     sourceSha256:await hash('raw'),ruleset:{id:'r',version:'1'},mappingVersion:'mapping-1',contentHash:baseHash,status:'published'},

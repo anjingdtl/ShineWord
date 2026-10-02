@@ -1,3 +1,6 @@
+import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
+import { assertArtifactNoSecrets, verifySegmentArtifact } from '../segmentPublication/protocol';
+import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
 import type { BookSection, BranchContentManifest, ContentEntry, ProgressiveDeltaPackage, WorldPackageManifest } from '../../domain/content/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { WorldRecord } from '../ports/worldStore';
@@ -8,15 +11,17 @@ import { isBranchContentManifestStructure, isProgressiveDeltaPackageStructure,
   verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
 import { insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 import { validatePortableCanon, type PortableCanon } from './portableCanon';
+import { validatePortableProjectStyle, type PortableProjectStyleV1, type ProjectStyleArchivePortV1 } from './phase6Bundle';
 
 const ARCHIVE_SCHEMA = 'shineword-world-archive-1';
 const CONTENT_ARCHIVE_SCHEMA = 'shineword-world-archive-2';
 const CANON_ARCHIVE_SCHEMA = 'shineword-world-archive-3';
+const PHASE6_ARCHIVE_SCHEMA = 'shineword-world-archive-4';
 const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 15 * 1024 * 1024;
 
 export interface PortableWorldPackage {
-  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA | typeof CANON_ARCHIVE_SCHEMA;
+  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA | typeof CANON_ARCHIVE_SCHEMA | typeof PHASE6_ARCHIVE_SCHEMA;
   title: string;
   manifest: WorldPackageManifest;
   entries: ContentEntry[];
@@ -29,6 +34,8 @@ export interface PortableWorldPackage {
   contentHashBasisRevision?: number;
   /** Evidence, entities and timeline required to open and play an imported world. */
   canon?: PortableCanon;
+  segmentArtifacts?: SegmentArtifactV1[];
+  projectStyle?: PortableProjectStyleV1;
   /** Optional branch-bound delta bundle. Base-package import alone cannot
    * activate it; use importProgressiveBranchContentArchive for a matching branch. */
   branchContent?: {
@@ -47,6 +54,7 @@ export async function encodeWorldPackageArchive(
   sha256Hex: Sha256HexProvider['sha256Hex'],
 ): Promise<Uint8Array> {
   validatePortableInput(input);
+  assertArtifactNoSecrets(input);
   const contentHashBasisRevision = await findContentHashBasisRevision(
     input.manifest,
     input.entries,
@@ -57,10 +65,16 @@ export async function encodeWorldPackageArchive(
     throw new Error('World package content hash does not match its manifest.');
   }
   if (input.branchContent) await validateBranchContent(input.branchContent, input.manifest, sha256Hex);
-  if (input.canon) await validatePortableCanon(input.canon, input.manifest, input.entries, sha256Hex);
+  if (input.segmentArtifacts) await validateArtifactArchive(input.segmentArtifacts, input.manifest, sha256Hex);
+  if (input.projectStyle && !await validatePortableProjectStyle(input.projectStyle, input.manifest.worldId, sha256Hex)) throw new Error('Invalid portable project style.');
+  const phase6 = input.segmentArtifacts !== undefined || input.projectStyle !== undefined;
+  if (phase6 && !input.canon) throw new Error('Phase6 archives require self-contained canon records.');
+  if (input.canon) await validatePortableCanon(input.canon, input.manifest,
+    [...input.entries, ...(input.segmentArtifacts ?? []).flatMap(a => [...a.entries])], sha256Hex);
   const payload = utf8Encode(JSON.stringify({
     ...input,
-    schemaVersion: input.canon ? CANON_ARCHIVE_SCHEMA : input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
+    ...(phase6 ? { segmentArtifacts: input.segmentArtifacts ?? [] } : {}),
+    schemaVersion: phase6 ? PHASE6_ARCHIVE_SCHEMA : input.canon ? CANON_ARCHIVE_SCHEMA : input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
     contentHashBasisRevision,
   }));
   if (payload.length > MAX_PACKAGE_JSON_BYTES) throw new Error('World package payload exceeds the portable archive limit.');
@@ -121,8 +135,9 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive payload must be a JSON object.');
   }
   const bundle = parsed as Partial<PortableWorldPackage>;
+  assertArtifactNoSecrets(parsed);
   if (bundle.schemaVersion !== ARCHIVE_SCHEMA && bundle.schemaVersion !== CONTENT_ARCHIVE_SCHEMA
-    && bundle.schemaVersion !== CANON_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
+    && bundle.schemaVersion !== CANON_ARCHIVE_SCHEMA && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
   if (typeof bundle.title !== 'string' || !bundle.title.trim() || bundle.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
@@ -130,9 +145,17 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive is missing its manifest, entries or book sections.');
   }
   validatePortableInput({ title: bundle.title, manifest: bundle.manifest, entries: bundle.entries, sections: bundle.sections });
-  if (bundle.schemaVersion === CANON_ARCHIVE_SCHEMA) {
+  if (bundle.segmentArtifacts && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Segment artifacts require archive v4.');
+  if (bundle.projectStyle !== undefined && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Project style settings require archive v4.');
+  if (bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA) {
+    if (!Array.isArray(bundle.segmentArtifacts)) throw new Error('Archive v4 requires a segment artifact list.');
+    await validateArtifactArchive(bundle.segmentArtifacts, bundle.manifest, sha256Hex);
+    if (bundle.projectStyle !== undefined && !await validatePortableProjectStyle(bundle.projectStyle, bundle.manifest.worldId, sha256Hex)) throw new Error('Invalid portable project style.');
+  }
+  if (bundle.schemaVersion === CANON_ARCHIVE_SCHEMA || bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA) {
     if (!bundle.canon) throw new Error('World archive v3 is missing its canon records.');
-    await validatePortableCanon(bundle.canon, bundle.manifest, bundle.entries, sha256Hex);
+    await validatePortableCanon(bundle.canon, bundle.manifest,
+      [...bundle.entries, ...(bundle.segmentArtifacts ?? []).flatMap(a => [...a.entries])], sha256Hex);
     if (bundle.branchContent) await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
   } else if (bundle.canon) {
     throw new Error('Canon records require world archive v3.');
@@ -165,6 +188,8 @@ export async function decodeWorldPackageArchive(
     sections: bundle.sections,
     contentHashBasisRevision: verifiedBasis,
     ...(bundle.canon ? { canon: bundle.canon } : {}),
+    ...(bundle.segmentArtifacts ? { segmentArtifacts: bundle.segmentArtifacts } : {}),
+    ...(bundle.projectStyle ? { projectStyle: bundle.projectStyle } : {}),
     ...(bundle.branchContent ? { branchContent: bundle.branchContent } : {}),
   };
 }
@@ -175,12 +200,15 @@ export async function importPortableWorldPackage(input: {
   archive: Uint8Array;
   newWorldId: string;
   createdAt: string;
+  projectStyleArchive?: ProjectStyleArchivePortV1;
 }): Promise<{ worldId: string; title: string; revision: number; contentHash: string }> {
   if (!input.newWorldId.trim() || input.newWorldId.length > 120) throw new Error('New world id is invalid.');
   const bundle = await decodeWorldPackageArchive(input.archive, input.sha256Hex);
+  if (bundle.projectStyle && !input.projectStyleArchive) throw new Error('Project style restoration requires its M8 owner port.');
   if (bundle.branchContent) {
     throw new Error('This archive contains branch-bound deltas. Import its base package, then attach the delta bundle to its matching campaign branch.');
   }
+  const targetWorldId = bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA ? bundle.manifest.worldId : input.newWorldId;
   // Keep the published revision, entry revisions and content hash intact.
   // Campaign saves lock this immutable package version, and portable import
   // must not silently turn rN into a different local r1 package.
@@ -189,11 +217,11 @@ export async function importPortableWorldPackage(input: {
   if (!report.ok) throw new Error(`World package validation failed:\n- ${report.errors.join('\n- ')}`);
   const manifest: WorldPackageManifest = {
     ...bundle.manifest,
-    worldId: input.newWorldId,
+    worldId: targetWorldId,
     status: 'published',
   };
   const world: WorldRecord = {
-    worldId: input.newWorldId,
+    worldId: targetWorldId,
     title: bundle.title,
     sourceSha256: bundle.manifest.sourceSha256,
     sourceBytes: 0,
@@ -209,6 +237,11 @@ export async function importPortableWorldPackage(input: {
     entries,
     sections: bundle.sections,
     canon: bundle.canon,
+    afterWrite: bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA ? async tx => {
+      const store = new SqliteSegmentArtifactStore(input.worldStore.database, input.sha256Hex);
+      for (const artifact of bundle.segmentArtifacts ?? []) await store.insertArtifact(tx, artifact);
+      if (bundle.projectStyle) await input.projectStyleArchive!.restoreProjectStyle(tx, targetWorldId, bundle.projectStyle);
+    } : undefined,
     validationJson: JSON.stringify({
       errors: report.errors,
       warnings: report.warnings,
@@ -224,7 +257,7 @@ export async function importPortableWorldPackage(input: {
     createdAt: input.createdAt,
   });
   return {
-    worldId: input.newWorldId,
+    worldId: targetWorldId,
     title: bundle.title,
     revision: manifest.revision,
     contentHash: manifest.contentHash,
@@ -559,4 +592,17 @@ function utf8Decode(bytes: Uint8Array): string {
     }
   }
   return result;
+}
+
+async function validateArtifactArchive(artifacts: readonly SegmentArtifactV1[], base: WorldPackageManifest, sha256Hex: Sha256HexProvider['sha256Hex']): Promise<void> {
+  if (!Array.isArray(artifacts) || artifacts.length > 512) throw new Error('Invalid artifact archive size.');
+  const ids = new Map<string, string>();
+  for (const artifact of artifacts) {
+    if (!await verifySegmentArtifact(artifact, sha256Hex) || artifact.worldId !== base.worldId
+      || artifact.basePackage.revision !== base.revision || artifact.basePackage.contentHash !== base.contentHash
+      || ids.has(artifact.artifactId)) throw new Error('Invalid immutable artifact archive.');
+    ids.set(artifact.artifactId, artifact.contentHash);
+  }
+  for (const artifact of artifacts) for (const ref of artifact.dependencies)
+    if (ids.get(ref.artifactId) !== ref.contentHash) throw new Error('Incomplete artifact archive dependency closure.');
 }

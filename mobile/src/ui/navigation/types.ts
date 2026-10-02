@@ -20,6 +20,7 @@ export type RootStackParamList = {
     campaignId?: string;
     branchId?: string;
   };
+  WriterStyle: { worldId: string; title: string };
   /** Per-world detail with sub-tabs (资料 / 三宝书 / 审查 / 世界包). */
   WorldDetail: {
     worldId: string;

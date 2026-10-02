@@ -509,4 +509,10 @@ export class SqliteBuildRunStore implements BuildRunStore {
       [now, runId],
     );
   }
+  async requestSystemPause(runId: string, reason: string, now: string): Promise<boolean> {
+    return (await this.db.execute(`UPDATE world_build_runs SET pause_requested=1,status='paused_system',
+      last_error_code='system_pause',last_error_message=?,updated_at=? WHERE run_id=?
+      AND status IN ('queued','running','waiting_network','waiting_unlock','failed_retryable')
+      AND pause_requested=0 AND cancel_requested=0`, [reason,now,runId])) === 1;
+  }
 }

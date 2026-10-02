@@ -19,6 +19,7 @@ import { typeStyle } from '../components/typography';
 import { LibraryScreen } from '../screens/LibraryScreen';
 import { CampaignsScreen } from '../screens/CampaignsScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
+import { WriterStyleScreen } from '../screens/WriterStyleScreen';
 import { ProjectHubScreen } from '../screens/ProjectHubScreen';
 import { WorldDetailScreen } from '../screens/WorldDetailScreen';
 import { OpeningScreen } from '../screens/OpeningScreen';
@@ -94,6 +95,7 @@ export function AppNavigator(): React.JSX.Element {
           contentStyle: { backgroundColor: theme.bg.base },
         }}>
         <RootStack.Screen name="Tabs" component={TabsNavigator} />
+        <RootStack.Screen name="WriterStyle" component={WriterStyleScreen} />
         <RootStack.Screen name="ProjectHub" component={ProjectHubScreen} />
         <RootStack.Screen name="WorldDetail" component={WorldDetailScreen} />
         <RootStack.Screen name="Opening" component={OpeningScreen} />

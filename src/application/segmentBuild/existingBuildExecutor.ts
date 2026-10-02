@@ -60,7 +60,8 @@ export class ExistingBuildExecutor implements BuildExecutorPortV1 {
     const units=await this.deps.runs.listUnits(runId);
     const retryAt=units.map(u=>u.retryAt).filter((v):v is string=>v!==null).sort()[0]??null;
     return {runId,phase:run.phase,status:run.status,completedUnits:run.unitsDone,failedUnits:run.unitsFailed,totalUnits:run.unitsTotal,
-      requestOutcome:run.lastErrorCode?.includes('outcome_unknown')?'outcome_unknown':run.status==='completed'?'known':'none',
+      requestOutcome:run.lastErrorCode?.includes('outcome_unknown') || units.some(u => u.errorCode?.includes('outcome_unknown'))
+        ?'outcome_unknown':run.status==='completed'?'known':'none',
       lastErrorCode:run.lastErrorCode,retryAt,fencingToken:run.fencingToken};
   }
 }

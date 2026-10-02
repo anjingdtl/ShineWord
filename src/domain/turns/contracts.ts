@@ -1,3 +1,4 @@
+import { isEffectiveStyleSnapshotV1 } from '../style/validation';
 import { DIFFICULTY_BANDS, ROLL_GRADES } from '../rules/types';
 import type { ActionContract, EffectOperation, OutcomeClause } from './types';
 
@@ -148,6 +149,7 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
   if (!Number.isInteger(contract.expectedStateVersion) || contract.expectedStateVersion < 0) {
     errors.push('expectedStateVersion must be a non-negative integer.');
   }
+  if (contract.styleSnapshot !== undefined && (!isEffectiveStyleSnapshotV1(contract.styleSnapshot) || contract.styleSnapshot.turnId !== contract.turnId)) errors.push('styleSnapshot must be valid and bind the contract branch/turn.');
   if (contract.contentDependency !== undefined) {
     const dependency = contract.contentDependency;
     if (!dependency || !nonEmpty(dependency.manifestHash) || !/^[a-f0-9]{64}$/i.test(dependency.manifestHash)) {
@@ -163,6 +165,12 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
     if (!Array.isArray(dependency.deltaIds) || dependency.deltaIds.length > 512 ||
         dependency.deltaIds.some(id => !nonEmpty(id)) || new Set(dependency.deltaIds).size !== dependency.deltaIds.length) {
       errors.push('contentDependency.deltaIds must contain unique package ids.');
+    }
+    if (dependency.artifactIds !== undefined && (!Array.isArray(dependency.artifactIds)
+      || dependency.artifactIds.length > 512 || dependency.artifactIds.some(id => !nonEmpty(id))
+      || new Set(dependency.artifactIds).size !== dependency.artifactIds.length
+      || typeof dependency.artifactManifestHash !== 'string' || !/^[a-f0-9]{64}$/i.test(dependency.artifactManifestHash))) {
+      errors.push('contentDependency artifacts must have unique ids and a frozen manifest hash.');
     }
   }
   if (!nonEmpty(contract.actorId)) errors.push('actorId is required.');

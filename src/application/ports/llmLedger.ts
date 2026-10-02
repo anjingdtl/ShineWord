@@ -22,6 +22,7 @@ export type LlmAttemptStatus =
 
 export type LlmFailureClass =
   | 'network_connect'
+  | 'network_unknown'
   | 'timeout_unknown'
   | 'http_rate_limit'
   | 'http_server'
@@ -69,6 +70,8 @@ export interface LlmRequestAttemptRecord {
 }
 
 export interface NewLlmRequestAttempt {
+  /** Explicit operator replay only; never inferred from elapsed time. */
+  allowOutcomeUnknownReplay?: boolean;
   logicalRequestId: string;
   requestKind: string;
   campaignId?: string | null;

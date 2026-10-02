@@ -131,6 +131,9 @@ export interface ContentDependencyBinding {
   stateVersion: number;
   basePackageRevision: number;
   deltaIds: readonly string[];
+  /** Additive world artifacts; absent on all historical contracts. */
+  artifactIds?: readonly string[];
+  artifactManifestHash?: string;
 }
 
 export interface ContentEntry {

@@ -191,9 +191,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
 
   constructor(private readonly db: SqliteDatabase) {}
 
-  private async hasProjectionTables(): Promise<boolean> {
+  private async hasProjectionTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
     if (this.projectionTablesAvailable === null) {
-      const row = await this.db.queryOne<{ n: number }>(
+      const row = await reader.queryOne<{ n: number }>(
         `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('actor_skills', 'relationships', 'actor_cards', 'party_members')`,
       );
       this.projectionTablesAvailable = (row?.n ?? 0) === 4;
@@ -201,9 +201,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     return this.projectionTablesAvailable;
   }
 
-  private async hasEncounterTables(): Promise<boolean> {
+  private async hasEncounterTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
     if (this.encounterTablesAvailable === null) {
-      const row = await this.db.queryOne<{ n: number }>(
+      const row = await reader.queryOne<{ n: number }>(
         `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('encounters', 'encounter_actors')`,
       );
       this.encounterTablesAvailable = (row?.n ?? 0) === 2;
@@ -211,9 +211,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     return this.encounterTablesAvailable;
   }
 
-  private async hasKnowledgeTables(): Promise<boolean> {
+  private async hasKnowledgeTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
     if (this.knowledgeTablesAvailable === null) {
-      const row = await this.db.queryOne<{ n: number }>(
+      const row = await reader.queryOne<{ n: number }>(
         `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('branch_knowledge', 'quest_states', 'quest_reward_ledger')`,
       );
       this.knowledgeTablesAvailable = (row?.n ?? 0) === 3;
@@ -221,9 +221,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     return this.knowledgeTablesAvailable;
   }
 
-  private async hasContentManifestTables(): Promise<boolean> {
+  private async hasContentManifestTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
     if (this.contentManifestTablesAvailable === null) {
-      this.contentManifestTablesAvailable = await hasBranchContentManifestTable(this.db);
+      this.contentManifestTablesAvailable = await hasBranchContentManifestTable(reader);
     }
     return this.contentManifestTablesAvailable;
   }
@@ -531,7 +531,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         [branchId, rel.relId, rel.fromActorId, rel.toActorId, rel.stance, rel.closeness, rel.updatedTurnId, stateVersion],
       );
     }
-    if (await this.hasProjectionTables()) {
+    if (await this.hasProjectionTables(tx)) {
       for (const actorId of settlement.partyDeletes ?? []) {
         await tx.execute('DELETE FROM party_members WHERE branch_id = ? AND actor_id = ?', [branchId, actorId]);
       }
@@ -551,7 +551,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // Card projections (training/equipment changes) land in the same
     // transaction so the snapshot stamped below is consistent with the card
     // table (P2 acceptance A02/A03).
-    if (await this.hasProjectionTables()) {
+    if (await this.hasProjectionTables(tx)) {
       for (const actorId of settlement.cardDeletes ?? []) {
         await tx.execute('DELETE FROM actor_cards WHERE branch_id = ? AND actor_id = ?', [branchId, actorId]);
       }
@@ -640,7 +640,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     if (snapshotPayload?.questProgress) state.questProgress = snapshotPayload.questProgress;
     if (snapshotPayload?.questRewards) state.questRewards = snapshotPayload.questRewards;
     if (snapshotPayload?.contentManifest) state.contentManifest = snapshotPayload.contentManifest;
-    if (await this.hasContentManifestTables()) {
+    if (snapshotPayload?.segmentContentBinding) state.segmentContentBinding = snapshotPayload.segmentContentBinding;
+    if (snapshotPayload?.styleSnapshot) state.styleSnapshot = snapshotPayload.styleSnapshot;
+    if (await this.hasContentManifestTables(db)) {
       const manifest = await readBranchContentManifest(db, branchId, branch.state_version);
       if (manifest) state.contentManifest = manifest;
     }
@@ -672,10 +674,10 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // Older P2 snapshots predate authoritative encounter history. Hydrate the
     // current head from its live projection for recovery; historical forks
     // still refuse incomplete encounter snapshots in forkBranch.
-    if (!state.encounters && await this.hasEncounterTables()) {
+    if (!state.encounters && await this.hasEncounterTables(db)) {
       state.encounters = await this.readEncounterSnapshots(db, branchId);
     }
-    const projectionsAvailable = await this.hasProjectionTables();
+    const projectionsAvailable = await this.hasProjectionTables(db);
     if (projectionsAvailable && !state.cards) {
       const cardRows = await db.queryAll<{ actor_id: string; card_json: string }>(
         'SELECT actor_id, card_json FROM actor_cards WHERE branch_id = ? ORDER BY actor_id',
@@ -695,7 +697,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // (card-driven roll specs, historical forks) see one consistent state.
     // Legacy DBs without the game tables keep working (P2-0: old mode stays
     // readable), they just carry no skill/relationship projections.
-    if (await this.hasProjectionTables()) {
+    if (await this.hasProjectionTables(db)) {
       const skillRows = await db.queryAll<SqliteRow>(
         'SELECT actor_id, skill_id, rank, practice_points, awarded_turns_json FROM actor_skills WHERE branch_id = ? ORDER BY actor_id, skill_id',
         [branchId],
@@ -831,6 +833,24 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     expectedStateVersion: number,
     committedAt: string,
   ): Promise<void> {
+    // Adoption can change a snapshot without advancing its game version. A
+    // lifecycle action captured before that boundary must retry, rather than
+    // replacing adopted content with its stale clone.
+    if (state.segmentContentBinding) {
+      const binding = state.segmentContentBinding;
+      if (binding.branchId !== state.branchId || binding.stateVersion !== expectedStateVersion
+        || binding.manifestHash !== state.contentManifest?.manifestHash) {
+        throw new Error('Atomic commit segment binding is not bound to the expected branch snapshot.');
+      }
+    }
+    const oldSnapshot = await tx.queryOne<{ snapshot_json: string }>(
+      'SELECT snapshot_json FROM snapshots WHERE branch_id = ? AND state_version = ?',
+      [state.branchId, expectedStateVersion],
+    );
+    const oldBinding = oldSnapshot ? (JSON.parse(oldSnapshot.snapshot_json) as GameStateSnapshot).segmentContentBinding : undefined;
+    if (JSON.stringify(oldBinding) !== JSON.stringify(state.segmentContentBinding)) {
+      throw new Error('Atomic commit segment content changed while the action was being prepared.');
+    }
     await tx.execute(
       'UPDATE branches SET state_version = ? WHERE branch_id = ? AND state_version = ?',
       [state.stateVersion, state.branchId, expectedStateVersion],
@@ -868,11 +888,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       );
     }
 
-    if (state.encounters && await this.hasEncounterTables()) {
+    if (state.encounters && await this.hasEncounterTables(tx)) {
       await replaceEncounterSnapshots(tx, state.branchId, state.encounters);
     }
 
-    if (state.contentManifest && await this.hasContentManifestTables()) {
+    if (state.contentManifest && await this.hasContentManifestTables(tx)) {
       if (state.contentManifest.branchId !== state.branchId || state.contentManifest.stateVersion !== expectedStateVersion) {
         throw new Error('Atomic commit content manifest is not bound to the expected branch snapshot.');
       }
@@ -880,8 +900,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       await insertBranchContentManifest(tx, nextManifest, committedAt);
       state.contentManifest = nextManifest;
     }
+    if (state.segmentContentBinding) state.segmentContentBinding = {
+      ...state.segmentContentBinding, branchId: state.branchId, stateVersion: state.stateVersion,
+    };
 
-    if (await this.hasKnowledgeTables()) {
+    if (await this.hasKnowledgeTables(tx)) {
       await tx.execute('DELETE FROM branch_knowledge WHERE branch_id = ?', [state.branchId]);
       for (const discovery of state.discoveries ?? []) {
         await tx.execute(
@@ -920,7 +943,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // source branch's current rows. Legacy DBs without projection tables keep
     // the pre-Phase-2 snapshot shape (historyComplete=false on fork).
     let snapshotPayload: GameStateSnapshot = state;
-    if (await this.hasProjectionTables()) {
+    if (await this.hasProjectionTables(tx)) {
       const skillRows = await tx.queryAll<SqliteRow>(
         'SELECT actor_id, skill_id, rank, practice_points, awarded_turns_json FROM actor_skills WHERE branch_id = ? ORDER BY actor_id, skill_id',
         [state.branchId],

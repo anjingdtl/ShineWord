@@ -33,7 +33,9 @@ export async function getPlayUiProjection(
 ): Promise<PlayUiProjection> {
   const session = await createReadOnlySession();
   const summary = await session.getSummary(campaignId, branchId);
-  const entries = await loadEntries(summary.worldId, summary.packageRevision);
+  const entries = summary.state.segmentContentBinding
+    ? (await (await getDatabaseRuntime()).segmentPublication.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
+    : await loadEntries(summary.worldId, summary.packageRevision);
   return buildPlayUiProjection({
     campaignId,
     branchId,
@@ -68,7 +70,9 @@ export async function getNpcPublicProjection(
   );
   if (!row) return null;
   const actor = JSON.parse(row.card_json) as ActorCard;
-  const entries = await loadEntries(summary.worldId, summary.packageRevision);
+  const entries = summary.state.segmentContentBinding
+    ? (await (await getDatabaseRuntime()).segmentPublication.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
+    : await loadEntries(summary.worldId, summary.packageRevision);
   const playerCard = summary.cards.find(card => card.controller === 'player') ?? null;
   return buildNpcPublicProjection({
     actor,

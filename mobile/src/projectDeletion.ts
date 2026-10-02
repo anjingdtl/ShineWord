@@ -9,6 +9,7 @@
  * does the transactional deletion service run.
  */
 import { getDatabaseRuntime } from './database';
+import { cancelQueuedWorldRequests } from './llmScheduler';
 import { cancelRun } from './sourceImport';
 import {
   deleteProject,
@@ -56,6 +57,9 @@ async function sleep(ms: number): Promise<void> {
  * wait times out - the LLM request in flight must never lose its database.
  */
 export async function stopAndDeleteProject(worldId: string): Promise<ProjectDeletionResult> {
+  const runtime = await getDatabaseRuntime();
+  if (runtime.segments && await runtime.segmentPlans.getPlan(worldId)) await runtime.segments.setPause(worldId, 'user');
+  cancelQueuedWorldRequests(worldId);
   const active = await findActiveProjectRuns(worldId);
   if (active.length === 0) {
     return deleteProjectNow(worldId);
