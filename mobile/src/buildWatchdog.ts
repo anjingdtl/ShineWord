@@ -138,6 +138,16 @@ export async function startBuildWithWatchdog(
   const baseline = await readExecutionBaseline(runId);
   if (!baseline) throw new Error(`Unknown run ${runId}.`);
   if (isInactive(baseline)) return 'inactive';
+  // Repair canon ids that predate the ASCII slug rule (L4): they otherwise
+  // surface inside segment artifacts and the publication guard must reject
+  // them. Idempotent; worlds without legacy non-conforming ids rename nothing.
+  try {
+    const runtime = await getDatabaseRuntime();
+    await runtime.worldStore.normalizeNonconformingCanonIds();
+  } catch (repairError) {
+    // A failed repair never blocks the build; the validator still guards.
+    console.warn('canon id normalization skipped', repairError);
+  }
   const watchdogStartAt = Date.now();
   const serviceStarted = await startBuildService(runId);
   if (!serviceStarted) {

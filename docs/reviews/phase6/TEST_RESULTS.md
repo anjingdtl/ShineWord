@@ -169,4 +169,14 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 | 设备：L3 场景（part2 映射在途暂停→force-stop→继续） | done 检查点复用发布，0 新模型调用 | 修复后路径；part3 场景暴露 L4（invalid_artifact_structure）另记 |
 | 设备：合成 429 | 单请求无重试风暴，草稿保留，故障解除后续试成功 | 转发器注入，证明协议不证明任意供应商 |
 | 设备：发送后断连→unknown 审批 | outcome_unknown + 转发器证据（未到上游）→ 显式批准 → 同逻辑ID #a2 成功、#a1 保留 | planner:camp-muskcyow-main:turn-0008，无自动重发 |
-| 未验 | 真机/API24/Android15-16、锁屏、双runner、构建中删除/切API设备路径、L4 根因 | 保留开放，不伪称通过 |
+| 未验 | 真机/API24/Android15-16、锁屏、双runner、构建中删除/切API设备路径、L4 设备端复现回归 | 保留开放，不伪称通过 |
+
+## L4 修复轮（2026-10-04，本地开发机）
+
+| 命令/场景 | 退出码/结果 | 证据与边界 |
+|---|---|---|
+| verify:core（slug 转义合同 + 存量修复通道 + 双入口接线后） | 0；**796/796**（原 792 + 新增 4） | `tests/canon-id-normalization.test.cjs`：TOKEN 合同与确定性/历史 ASCII 身份保持；存量修复含全部 canon 侧引用重写、FK check 0、幂等第二跑 0/0/0；CJK 派生工件通过守卫、原始 CJK id 仍被拒；修复产物==新派生 id（含混合标点键） |
+| root/mobile typecheck、verify:version、git diff --check | 均 0 | mobile 初版 `import('./runtime')` 符号错误已改为既有静态导入 |
+| resident-build-p4 T5 | 通过 | 期望值改为 `entityIdFor` 生产推导 + TOKEN 断言；合同变更后 `ent-w-p4-陈青云` → `ent-w-p4-u9648u9752u4e91` |
+| 独立复审（全量 diff，只读） | approve-with-nits | GLOB 语义、PRAGMA/事务顺序、FK 引用覆盖（对照 builtinMigrations 全部迁移）、重放同态逐项验证；应修 4 项（headless runner 绕行、超长 id 幂等兜底、静默吞错加 warn、fact_sources 补 world 作用域）已全部吸收 |
+| 设备：part3 原始路径回归 | 未执行 | 追加第三部→段发布解除阻断的设备证据待补，完成前 L4 不算验收关闭 |

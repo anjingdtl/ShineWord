@@ -18,7 +18,7 @@ const { SqliteSourceStore } = require('../dist/infra/sqlite/sqliteSourceStore');
 const { SqliteBuildRunStore } = require('../dist/infra/sqlite/sqliteBuildRunStore');
 const { SqliteWorldStore } = require('../dist/infra/sqlite/sqliteWorldStore');
 const { importTxtSourceStreaming } = require('../dist/application/import/streamingTxtImport');
-const { applyExtraction, ruleMappingIdFor } = require('../dist/application/world/extraction');
+const { applyExtraction, entityIdFor, ruleMappingIdFor } = require('../dist/application/world/extraction');
 const {
   createExtractionRun,
   executeRun,
@@ -219,7 +219,11 @@ test('T5 ruleMappings land through the production extract->commit path with hone
     const mappings = await worldStore.listRuleMappings('w-p4');
     assert.equal(mappings.length, 1, `expected 1 verified mapping, got ${JSON.stringify(mappings.map(m => m.mappingId))}`);
     const mapping = mappings[0];
-    assert.equal(mapping.targetEntityId, 'ent-w-p4-陈青云');
+    // CJK entity keys now escape per codepoint so ids stay inside the
+    // segment-artifact TOKEN charset (L4).
+    const expectedTarget = entityIdFor('w-p4', '陈青云');
+    assert.match(expectedTarget, /^[a-zA-Z0-9._:-]{1,256}$/);
+    assert.equal(mapping.targetEntityId, expectedTarget);
     assert.equal(mapping.mappingKind, 'skill');
     assert.equal(mapping.status, 'active');
     assert.equal(mapping.rulesetVersion, '0.2.0');

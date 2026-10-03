@@ -68,8 +68,32 @@ export interface ResolvedExtraction {
   rejected: ExtractionValidationIssue[];
 }
 
+/**
+ * Deterministic ASCII escape for id fragments: characters outside the
+ * protocol id charset (segment-artifact TOKEN: [a-zA-Z0-9._:-]) become their
+ * lowercase codepoint in `uXXXX` form, so a model-supplied Chinese entity key
+ * yields a stable, guard-conforming id instead of one the publication
+ * validator must reject. Same input always maps to the same output.
+ */
+export function sanitizeTokenFragment(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    if (/[a-zA-Z0-9._:-]/.test(ch)) out += ch;
+    else out += `u${ch.codePointAt(0)!.toString(16).padStart(4, '0')}`;
+  }
+  return out;
+}
+
 function slug(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
+  // Slugs feed entity/event/mapping ids, which later surface inside segment
+  // artifacts; the artifact protocol's id charset is ASCII-only, so CJK keys
+  // escape via codepoints instead of passing through raw. The pre-escape
+  // normalization stays byte-identical to the historical rule so non-CJK keys
+  // keep their legacy ids on replay, and the escaped form of a CJK key equals
+  // what normalizeNonconformingCanonIds() computes when repairing legacy rows
+  // (both escape the same legacy characters with sanitizeTokenFragment).
+  const legacy = key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
+  return sanitizeTokenFragment(legacy);
 }
 
 /**

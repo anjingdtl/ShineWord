@@ -116,6 +116,15 @@ export async function worldBuildRunner(data: { runId?: string }): Promise<void> 
       );
       return;
     }
+    // Same legacy-id repair as the watchdog path: after process death the
+    // service redelivers straight into this runner with no JS watchdog in the
+    // loop, so unrepaired canon ids must not reach publication from here
+    // either (L4). Idempotent; failure never blocks the run.
+    try {
+      await runtime.worldStore.normalizeNonconformingCanonIds();
+    } catch (repairError) {
+      console.warn('canon id normalization skipped', repairError);
+    }
     await runExtraction(runId, profile, () => {
       // Render the same persisted stage-aware work counters as the task card.
       void runStore.getRun(runId).then(snapshot => {

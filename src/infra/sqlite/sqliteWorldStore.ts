@@ -23,6 +23,7 @@ import type {
   WorldCanonSnapshot,
 } from '../../application/ports/worldStore';
 import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
+import { sanitizeTokenFragment } from '../../application/world/extraction';
 
 interface WorldRow extends SqliteRow {
   world_id: string;
@@ -201,6 +202,99 @@ export class SqliteWorldStore implements WorldStore {
   constructor(private readonly db: SqliteDatabase) {}
   /** Shared archive composition uses the existing connection. */
   get database(): SqliteDatabase { return this.db; }
+
+  /**
+   * Repair pass for canon ids that predate the ASCII slug rule: extraction
+   * runs whose model-supplied entity keys contained non-ASCII characters
+   * produced entity/fact/mapping ids outside the segment-artifact TOKEN
+   * charset, which the publication validator must reject (L4). Renames each
+   * non-conforming id deterministically via codepoint escaping and rewrites
+   * every canon-side reference in one FK-controlled transaction. Idempotent:
+   * sanitized ids conform, so subsequent runs rename nothing. Published
+   * artifacts, saves and branch history only ever reference conforming ids
+   * and are untouched. Event ids are deliberately out of scope: they never
+   * surface as artifact TOKENs, so legacy raw-CJK event ids cannot block
+   * publication.
+   */
+  async normalizeNonconformingCanonIds(): Promise<{ entities: number; facts: number; mappings: number }> {
+    const NONCONFORMING = `'*[^a-zA-Z0-9._:-]*'`;
+    const entities = await this.db.queryAll<{ world_id: string; entity_id: string }>(
+      `SELECT world_id, entity_id FROM entities WHERE entity_id GLOB ${NONCONFORMING}`);
+    const facts = await this.db.queryAll<{ world_id: string; fact_id: string }>(
+      `SELECT world_id, fact_id FROM canon_facts WHERE fact_id GLOB ${NONCONFORMING}`);
+    const mappings = await this.db.queryAll<{ world_id: string; mapping_id: string }>(
+      `SELECT world_id, mapping_id FROM world_rule_mappings WHERE mapping_id GLOB ${NONCONFORMING}`);
+    if (!entities.length && !facts.length && !mappings.length) return { entities: 0, facts: 0, mappings: 0 };
+
+    // sanitizeTokenFragment escapes per codepoint, so two distinct non-conforming
+    // ids cannot converge; the counter only guards the theoretical collision of
+    // an escaped form with a pre-existing literal id. Escaping can inflate a
+    // pathologically long legacy id past the 256-char TOKEN bound; those fold
+    // onto a deterministic truncate-and-hash tail so the repair still yields a
+    // conforming, idempotent id (fresh derivation for such keys stays
+    // guard-rejected either way - fail-closed, never corrupting).
+    const TOKEN_ID = /^[a-zA-Z0-9._:-]{1,256}$/;
+    const fnv1aHex = (value: string): string => {
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      return hash.toString(16).padStart(8, '0');
+    };
+    const claimed = new Set<string>();
+    const claim = async (worldId: string, table: 'entities' | 'canon_facts' | 'world_rule_mappings', column: string, oldId: string): Promise<string> => {
+      let desired = sanitizeTokenFragment(oldId);
+      if (!TOKEN_ID.test(desired)) desired = `${desired.slice(0, 247)}-${fnv1aHex(desired)}`;
+      let candidate = desired, n = 2;
+      while (claimed.has(`${worldId}\u0000${candidate}`)
+        || await this.db.queryOne(`SELECT 1 FROM ${table} WHERE world_id = ? AND ${column} = ?`, [worldId, candidate]) !== null) {
+        candidate = `${desired}-${n++}`;
+      }
+      claimed.add(`${worldId}\u0000${candidate}`);
+      return candidate;
+    };
+    const entityRenames = new Map<string, string>();
+    for (const row of entities) entityRenames.set(`${row.world_id}\u0000${row.entity_id}`,
+      await claim(row.world_id, 'entities', 'entity_id', row.entity_id));
+    const factRenames = new Map<string, string>();
+    for (const row of facts) factRenames.set(`${row.world_id}\u0000${row.fact_id}`,
+      await claim(row.world_id, 'canon_facts', 'fact_id', row.fact_id));
+    const mappingRenames = new Map<string, string>();
+    for (const row of mappings) mappingRenames.set(`${row.world_id}\u0000${row.mapping_id}`,
+      await claim(row.world_id, 'world_rule_mappings', 'mapping_id', row.mapping_id));
+
+    // Id renames touch FK-parent columns; run with FK enforcement off (the
+    // documented rebuild procedure) and verify integrity before committing.
+    await this.db.execute('PRAGMA foreign_keys = OFF');
+    try {
+      await this.db.transaction(async tx => {
+        for (const [key, newId] of entityRenames) {
+          const [worldId, oldId] = key.split('\u0000');
+          await tx.execute('UPDATE entities SET entity_id = ? WHERE world_id = ? AND entity_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE entity_aliases SET entity_id = ? WHERE world_id = ? AND entity_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE canon_facts SET subject_entity_id = ? WHERE world_id = ? AND subject_entity_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE world_rule_mappings SET target_entity_id = ? WHERE world_id = ? AND target_entity_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE source_index_aliases SET entity_id = ? WHERE world_id = ? AND entity_id = ?', [newId, worldId, oldId]);
+        }
+        for (const [key, newId] of factRenames) {
+          const [worldId, oldId] = key.split('\u0000');
+          await tx.execute('UPDATE canon_facts SET fact_id = ? WHERE world_id = ? AND fact_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE fact_sources SET fact_id = ? WHERE world_id = ? AND fact_id = ?', [newId, worldId, oldId]);
+          await tx.execute('UPDATE knowledge_records SET fact_id = ? WHERE world_id = ? AND fact_id = ?', [newId, worldId, oldId]);
+        }
+        for (const [key, newId] of mappingRenames) {
+          const [worldId, oldId] = key.split('\u0000');
+          await tx.execute('UPDATE world_rule_mappings SET mapping_id = ? WHERE world_id = ? AND mapping_id = ?', [newId, worldId, oldId]);
+        }
+        const violations = await tx.queryAll('PRAGMA foreign_key_check');
+        if (violations.length > 0) throw new Error('canon id normalization would violate foreign key integrity.');
+      });
+    } finally {
+      await this.db.execute('PRAGMA foreign_keys = ON');
+    }
+    return { entities: entityRenames.size, facts: factRenames.size, mappings: mappingRenames.size };
+  }
 
   async createWorld(record: WorldRecord): Promise<void> {
     // INSERT OR REPLACE would DELETE the existing row and cascade-wipe every

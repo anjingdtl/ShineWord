@@ -75,13 +75,14 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 | L1 | 首启表单选预设后编辑模型名会静默脱离预设并清空能力字段，保存"无上下文窗口"配置，导入小说时才以英文治理错误阻断 | `529497e`：模型名精确回输预设自动重新附带（不覆盖用户已填值）；导入侧治理/预算报错映射为可操作中文 |
 | L2 | 依赖恢复路径提交的回合完成后故事面板不刷新（乐观合并行 `{...item}` 保留旧条目、并发 refresh 无序、回前台不重读） | `f9d6a72`：合并改写新视图、refresh 按启动序号串行化、回前台刷新一次 |
 | L3 | 映射请求在途时用户暂停，已到手且账本已结算的响应在 done 检查点写入前被丢弃，恢复时整批重发重复计费（与抽取路径自身合同相反） | `ccfe68e`：在手响应先落内容寻址检查点，暂停/租约检查移至批次边界；两条回归测试分别钉住 signal 暂停与 stale fence（旧代码失败、新代码通过） |
+| L4 | 追加第三部后段发布被 M5 以 `invalid_artifact_structure` 确定性阻断。根因：CJK 实体键经 `slug()` 原样进入 entity/fact/mapping id（如 `ent-…-边陲镇`），这些 id 进入段工件后违反协议 TOKEN 字符集 `[a-zA-Z0-9._:-]`，结构守卫必然拒绝 | 本轮（见下）：`slug` 改为 `sanitizeTokenFragment(历史算法输出)`（非 CJK 键 id 逐字节不变，保护重放身份；CJK 键转义结果与存量修复逐字符同构）；新增 `normalizeNonconformingCanonIds()` 存量修复通道（FK 校验事务内重写全部 canon 侧引用，幂等）；watchdog 与 headless runner 双入口在构建前调用 |
 
 三笔修复均通过独立复审（approve / approve-with-nits，意见已吸收），最终门禁 `verify:core` 792/792、root/mobile 严格类型、`verify:version`、`git diff --check`、独立 Debug 构建全部通过；L1/L2 在设备上按原始复现路径验证，L3 由真实 SQLite 协议级测试钉住（设备端 part2 映射暂停→冷重启→继续时 0 重复调用发布）。
 
-### 未关闭缺陷（准确记录，未修复）
+### 未关闭缺陷（准确记录）
 
-- **L4**：追加第三部（novel-utf8-part3，同书 160000..240000 rawCP 转码）后，段发布被本地 M5 校验以 `invalid_artifact_structure` 确定性阻断（`segment_publication_diagnostics` 两行同错误码；无待审项、无自动恢复、继续构建在本地循环失败）。疑似 `isSegmentArtifactV1` 结构守卫内引文计数/依赖不变量失败；相关映射 proposal 中出现以 `fact-ent-*` 合成实体事实作为 evidenceFactIds 的模式待查。第二部（2 成员）追加闭环正常，缺陷仅在 3 成员路径复现。复现步骤、设备 DB 快照与诊断行保留在本地 scratch；part3 运行已正常停止、数据保留。
-- part3 恢复时观察到一次映射重发（#26 与 #25 输入差 1 字符→batchHash 漂移→缓存未命中）。L3 修复覆盖的"在手丢弃"场景已被协议测试钉住；该 1 字符漂移的成因未定谳，与 L4 一并待查。
+- **L4（代码级已修复，设备复现验证待做）**：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集（见上表）。修复已过全量门禁与独立复审（approve-with-nits，应修项已吸收：headless runner 绕行、超长 id 幂等加固、修复失败日志、fact_sources 作用域）；设备端按 part3 原始复现路径回归（追加第三部→段发布解除阻断）尚未执行，执行前不宣称 L4 验收关闭。
+- part3 恢复时观察到一次映射重发（#26 与 #25 输入差 1 字符→batchHash 漂移→缓存未命中）。L3 修复覆盖的“在手丢弃”场景已被协议测试钉住；该 1 字符漂移的成因未定谳，待查。
 
 ### 本轮新增设备证据（API37.1 WHPX 模拟器，正常 UI 驱动）
 
@@ -92,7 +93,22 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 5. 故障：合成 429（单请求、无重试风暴、草稿保留、恢复后续试成功）；发送后断连→`outcome_unknown` 精确审批流（转发器证据确认未到上游后显式批准→同逻辑 ID #a2 重试成功、#a1 unknown 行保留、回合正常提交）。
 6. 风格三模式往返（跟随原著→悬疑预设→自定义→回原著），回原著后已学基调恢复，0 新分析调用；存档导出（525KB save7）→回退分叉（v5 新分支、主线 v6 保留）→存档导入为独立新战役 camp-musqch8m，全程 0 新模型调用。
 
-未验（本轮明确保留）：真机/API24/Android15-16、锁屏 Keychain waiting_unlock、双 runner、构建中删除/切 API 设备路径、三题材人工内容评分、L4 根因与修复、90 秒统计样本量。
+未验（本轮明确保留）：真机/API24/Android15-16、锁屏 Keychain waiting_unlock、双 runner、构建中删除/切 API 设备路径、三题材人工内容评分、L4 设备端复现回归、90 秒统计样本量。
+
+## L4 修复轮（2026-10-04，本地开发机）
+
+根因链：模型返回的中文实体键经 `slug()`（旧规则保留 `\u4e00-\u9fa5` 原样）进入 entity/fact/mapping id → 这些 id 以 entryId/zoneId/sourceFactIds/targetEntityId 等形式进入段工件 → 工件协议守卫 `TOKEN = ^[a-zA-Z0-9._:-]{1,256}$`（`segmentPublication/protocol.ts`）结构性拒绝 → `invalid_artifact_structure`。第二部能闭环是因为该段恰好无 CJK 键实体进入工件；第三部命中即确定性阻断。
+
+修复（实现→独立复审→吸收→全量门禁）：
+
+1. `src/application/world/extraction.ts`：新增 `sanitizeTokenFragment()`（逐码点 ASCII 转义，`uXXXX` 形式）；`slug()` 重写为 `sanitizeTokenFragment(历史算法输出)`。合同要点：非 CJK 键的 id 与历史规则逐字节一致（存量世界重放不产生重复实体）；CJK 键的转义结果与存量修复通道对旧 id 的转义逐字符同构（修复后的世界重放派生同一 id）。自审发现并纠正了初版逐字符重写在两类场景（非 CJK 标点键、CJK+标点混合键）破坏重放一致性的缺陷，新增回归测试钉住"修复产物 == 新派生 id"不变量。
+2. `src/infra/sqlite/sqliteWorldStore.ts`：新增 `normalizeNonconformingCanonIds()`——GLOB 选出三张表中的不合规 id，转义重命名并在单事务内重写全部 canon 侧引用（entity_aliases、canon_facts.subject_entity_id、world_rule_mappings.target_entity_id、source_index_aliases、fact_sources、knowledge_records），事务前 `PRAGMA foreign_keys=OFF`、事务内 `foreign_key_check` 验证后提交；幂等；超长转义 id 以确定性截断+FNV-1a 尾缀兜底保持合规与幂等。事件 id 有意不在范围（不进工件 TOKEN，无法阻断发布）。
+3. `mobile/src/buildWatchdog.ts` 与 `mobile/src/buildRunner.ts`：构建启动前调用修复通道（watchdog 主路径 + headless 重投递路径双入口，后者为复审发现的绕行缺口）；修复失败仅告警不阻断，守卫仍然兜底。
+4. 测试：`tests/canon-id-normalization.test.cjs` 4 条（TOKEN 合同与确定性、存量修复含引用重写与幂等、CJK 派生工件通过守卫而原始 CJK id 仍被拒、修复/派生一致性与非 CJK 历史身份）；`resident-build-p4.test.cjs` 期望值改为按生产函数推导并钉住 ASCII 合同。
+
+独立复审结论 approve-with-nits：GLOB 语义、PRAGMA/事务顺序、FK 引用覆盖（对照全部迁移）、重放一致性同态均被逐项验证；4 项应修（headless 绕行、超长 id 幂等、静默吞错、fact_sources 作用域）已全部吸收，事件 id 不对称以注释定谳。
+
+门禁：`verify:core` **796/796**（原 792 + 4 新增）、root/mobile 严格类型 0、`verify:version` 0、`git diff --check` 0。设备端 part3 原始路径回归（追加第三部→发布解除阻断）待做，完成前不宣称 L4 关闭。
 
 ## 用户指定的本地资源
 

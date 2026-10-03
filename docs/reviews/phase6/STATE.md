@@ -45,5 +45,6 @@
 - 故障：合成 429 无重试风暴草稿保留；发送后断连→outcome_unknown 精确审批（证据核对后显式批准、同逻辑 ID 重试、unknown 行保留）。
 - 90 秒开局：新增独立冷样本 B（UTF-8 前 80k 新项目，导入点击→可玩 74.5s，零人工干预）；连同样本 A 共 n=2 冷样本，均为单设备非统计。
 - QA 转发器 35 attempt（33 HTTP200 + 合成 429 + 发送后断连），input 276,411 / output 43,372（cached 37,376）；与 App 唯一 M6 账本逐条一致。
-- 未关闭缺陷 L4：追加第三部后段发布被 invalid_artifact_structure 确定性阻断（3 成员路径；2 成员正常）。诊断、复现步骤与设备 DB 快照保留本地 scratch；part3 运行正常停止、数据保留。另记录 part3 恢复时一次 batchHash 1 字符漂移导致的映射重发（成因未定谳）。
+- L4 代码级修复完成（2026-10-04）：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集；`slug` 改为对历史算法输出整体转义（非 CJK 键 id 逐字节不变），新增 `normalizeNonconformingCanonIds()` 存量修复通道并在 watchdog 与 headless runner 双入口构建前调用。独立复审 approve-with-nits、应修项全部吸收；门禁 verify:core 796/796（+4 新回归）、root/mobile 类型/version/diff 全 0。设备端 part3 原始路径回归待做，完成前不宣称关闭。
+- 未关闭：part3 恢复时一次 batchHash 1 字符漂移导致的映射重发（成因未定谳）；以及下条未验清单。
 - 未验：真机/API24/Android15-16、锁屏、双 runner、构建中删除/切 API 设备路径、三题材人工评分、L4 根因。
