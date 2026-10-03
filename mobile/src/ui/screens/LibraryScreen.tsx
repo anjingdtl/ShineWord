@@ -132,7 +132,13 @@ export function LibraryScreen(): React.JSX.Element {
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       setImportMessage(null);
-      setError(detail.slice(0, 300));
+      // Capability-source governance failures read as opaque English from the
+      // domain layer; point the user at the exact profile fields to fix.
+      setError(
+        /contextWindow is unknown|contextWindow must be a positive integer|maxOutputTokens must be a positive integer|model budget leaves (less than|no room)/.test(detail)
+          ? '当前 API 配置的模型能力声明不足（上下文窗口/最大输出 Token），无法开始构建。请到「我的」选择模型预设，或展开高级模型设置调大这两项后保存，再重新导入。'
+          : detail.slice(0, 300),
+      );
     } finally {
       setBusy(false);
     }
