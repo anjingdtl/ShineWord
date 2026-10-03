@@ -1488,27 +1488,41 @@ export class SqliteWorldStore implements WorldStore {
     severity: 'blocking' | 'major' | 'minor';
     detailJson: string;
     createdAt: string;
-  }): Promise<void> {
-    // Only a deliberate human decision on identical content is reusable.
-    // Programmatic retirement never creates a policy, and changed evidence
-    // or severity reopens the issue. Fact conflicts always require evidence.
-    const policy = input.kind === 'canon_conflict' ? null : await this.db.queryOne<SqliteRow>(
-      `SELECT resolution, resolved_at FROM review_resolution_policies
-       WHERE world_id = ? AND kind = ? AND severity = ? AND detail_json = ?`,
-      [input.worldId, input.kind, input.severity, reviewDetailKey(input.detailJson)],
-    );
-    await this.db.execute(
-      `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at, resolved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(world_id, issue_id) DO UPDATE SET
-         kind = excluded.kind,
-         severity = excluded.severity,
-         detail_json = excluded.detail_json,
-         status = excluded.status,
-         resolved_at = excluded.resolved_at`,
-      [input.worldId, input.issueId, input.kind, input.severity, input.detailJson,
-        policy ? String(policy.resolution) : 'open', input.createdAt, policy ? String(policy.resolved_at) : null],
-    );
+    canonConflictFactIds?: readonly string[];
+  }, assertCurrent?: (tx: SqliteTransaction) => Promise<void>): Promise<void> {
+    await this.db.transaction(async tx => {
+      await assertCurrent?.(tx);
+      if (input.canonConflictFactIds) {
+        const ids = [...new Set(input.canonConflictFactIds)];
+        if (input.kind !== 'canon_conflict' || !ids.length || ids.some(id => typeof id !== 'string' || !id)) throw new Error('invalid_canon_review');
+        for (let offset = 0; offset < ids.length; offset += 200) {
+          const batch = ids.slice(offset, offset + 200);
+          const current = await tx.queryAll<{ fact_id: string }>(`SELECT fact_id FROM canon_facts
+            WHERE world_id = ? AND status = 'conflict' AND fact_id IN (${batch.map(() => '?').join(',')})`, [input.worldId, ...batch]);
+          if (current.length !== batch.length) throw new Error('canon_conflict_changed');
+        }
+      }
+      // Only a deliberate human decision on identical content is reusable.
+      // Programmatic retirement never creates a policy, and changed evidence
+      // or severity reopens the issue. Fact conflicts always require evidence.
+      const policy = input.kind === 'canon_conflict' ? null : await tx.queryOne<SqliteRow>(
+        `SELECT resolution, resolved_at FROM review_resolution_policies
+         WHERE world_id = ? AND kind = ? AND severity = ? AND detail_json = ?`,
+        [input.worldId, input.kind, input.severity, reviewDetailKey(input.detailJson)],
+      );
+      await tx.execute(
+        `INSERT INTO review_issues (world_id, issue_id, kind, severity, detail_json, status, created_at, resolved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(world_id, issue_id) DO UPDATE SET
+           kind = excluded.kind,
+           severity = excluded.severity,
+           detail_json = excluded.detail_json,
+           status = excluded.status,
+           resolved_at = excluded.resolved_at`,
+        [input.worldId, input.issueId, input.kind, input.severity, input.detailJson,
+          policy ? String(policy.resolution) : 'open', input.createdAt, policy ? String(policy.resolved_at) : null],
+      );
+    });
   }
 
   /**

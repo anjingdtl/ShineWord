@@ -43,6 +43,7 @@ export function LibraryScreen(): React.JSX.Element {
   const { profile, error, setError } = useAppSession();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [projects, setProjects] = useState<ProjectStatusProjection[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,8 +60,8 @@ export function LibraryScreen(): React.JSX.Element {
     full: () => profile ? refreshLibraryFull(profile) : Promise.resolve([]),
     fast: refreshProjectBuildStatusFast,
     getProjects: () => projectsRef.current,
-    apply: next => { projectsRef.current = next; setProjects(next); },
-    onError: e => setError(e instanceof Error ? e.message : String(e)),
+    apply: next => { projectsRef.current = next; setProjects(next); setProjectsLoaded(true); },
+    onError: e => { setError(e instanceof Error ? e.message : String(e)); setProjectsLoaded(true); },
   }), [profile, setError]);
   const refresh = refreshController.refreshFull;
 
@@ -219,8 +220,9 @@ export function LibraryScreen(): React.JSX.Element {
         {notice ? <StatusBanner tone="success" message={notice} /> : null}
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
         {importMessage ? <StatusBanner tone="info" message={importMessage} /> : null}
+        {!projectsLoaded && projects.length === 0 ? <StatusBanner tone="info" message="正在读取项目…" /> : null}
 
-        {projects.length === 0 && !busy ? (
+        {projectsLoaded && projects.length === 0 && !busy && !error ? (
           <EmptyState
             title="还没有项目"
             description="导入一本小说开始创建互动世界"

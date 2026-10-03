@@ -1264,15 +1264,16 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   }
   const selection: SelectedCanon = input.incrementalMapping
     ? selectCanonSubset({ facts: allFacts, events: allEvents, entities: allEntities, options: input.incrementalMapping })
-    : { facts: [...allFacts], events: [...allEvents], entities: [...allEntities], affectedEntryIds: [], diagnostics: [] };
-  if (selection.diagnostics.length > 0) throw new Error(`开局/增量依赖门禁未通过：${selection.diagnostics.join('；')}`);
+    : { facts: [...allFacts], events: [...allEvents], entities: [...allEntities], affectedEntryIds: [], blockingConflictFactIds: [], diagnostics: [] };
   const events = selection.events;
   const entities = selection.entities;
   // World-wide deterministic preflight, BEFORE scene validation or any paid
   // mapping. A stage prefix must not waive conflicts elsewhere in this world.
   // Old paths retain the world-wide blocker. Scoped paths may exclude a
   // proved unrelated later conflict, while publication still checks review.
-  const conflictFacts = (input.incrementalMapping ? selection.facts : allFacts).filter(fact => fact.status === 'conflict');
+  const conflictFacts = input.incrementalMapping
+    ? allFacts.filter(fact => selection.blockingConflictFactIds.includes(fact.factId))
+    : allFacts.filter(fact => fact.status === 'conflict');
   if (conflictFacts.length > 0) {
     await worldStore.saveReviewIssue({
       worldId,
@@ -1281,9 +1282,11 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       severity: 'blocking',
       detailJson: JSON.stringify({ factIds: conflictFacts.map(fact => fact.factId), count: conflictFacts.length }),
       createdAt: input.createdAt,
-    });
+      canonConflictFactIds: conflictFacts.map(fact => fact.factId),
+    }, input.assertCurrentTx);
     throw new Error('Canon blocking conflict：存在冲突事实，未请求模型映射、未发布世界包。已抽取资料保留，请在审查中解决冲突后重试。');
   }
+  if (selection.diagnostics.length > 0) throw new Error(`开局/增量依赖门禁未通过：${selection.diagnostics.join('；')}`);
   // Only retire this world-wide blocker once the actual condition is gone.
   await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
   // Stage scoping (unified P3): a stage package maps only facts whose

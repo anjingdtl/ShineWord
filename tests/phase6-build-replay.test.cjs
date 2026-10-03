@@ -156,6 +156,17 @@ test('approval rejects foreign units, worlds, turn requests and overlapping iden
     assert.equal((await h.ledger.listAttempts(h.logical))[0].replayApprovedAt,null);
   } finally {h.db.close()}
 });
+test('approval refuses altered displayed request kind, timestamp and wire budget before any acknowledgement',async()=>{
+  const h=await setup();try {
+    const snapshot=await h.ledger.readBuildReplay(h.id);
+    for(const patch of [{requestKind:'world_mapping'},{startedAt:snapshot.attempts[0].startedAt+1},
+      {wireOutputTokens:(snapshot.attempts[0].wireOutputTokens??0)+1}]) {
+      await assert.rejects(h.ledger.acknowledgeBuildReplay({...snapshot,attempts:[{...snapshot.attempts[0],...patch}]}),/请求信息已更新/);
+      assert.equal((await h.ledger.listAttempts(h.logical))[0].replayApprovedAt,null);
+    }
+    assert.equal(h.calls(),1);
+  }finally{h.db.close()}
+});
 test('approval fences stale controls/source/model, live leases, sent work and deletion without reviving data',async()=>{
   const h=await setup();try {
     const snapshot=await h.ledger.readBuildReplay(h.id);

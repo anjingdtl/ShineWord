@@ -26,6 +26,7 @@ export interface SelectedCanon {
   entities: StoredEntity[];
   events: StoredEvent[];
   affectedEntryIds: string[];
+  blockingConflictFactIds: string[];
   diagnostics: string[];
 }
 
@@ -177,8 +178,9 @@ export function selectCanonSubset(input: {
   const facts = good.filter(f => chosenFacts.has(f.factId));
   if (options.kind === 'opening' && facts.length < PLAYABILITY_MIN_FACTS) diagnostics.push(`Canon 事实不足（${facts.length}/${PLAYABILITY_MIN_FACTS}）`);
   const selectedSubjects = new Set(facts.map(f => f.subjectEntityId));
-  for (const conflict of eligible.filter(f => f.status === 'conflict')) if (selectedSubjects.has(conflict.subjectEntityId)
-    || requirements?.requiredFactIds.includes(conflict.factId)) diagnostics.push(`依赖闭包存在冲突事实：${conflict.factId}`);
+  const blockingConflictFactIds = eligible.filter(f => f.status === 'conflict' && (selectedSubjects.has(f.subjectEntityId)
+    || requirements?.requiredFactIds.includes(f.factId))).map(f => f.factId);
+  for (const id of blockingConflictFactIds) diagnostics.push(`依赖闭包存在冲突事实：${id}`);
   // Required actions must refer to existing, closed content. Missing actions
   // are blockers, never replaced by a fabricated generic action.
   const entriesById = new Map((options.previousEntries ?? []).map(e => [e.entryId, e]));
@@ -191,7 +193,7 @@ export function selectCanonSubset(input: {
   for (const id of requirements?.requiredEntryIds ?? []) inspectEntry(id);
   return { facts, entities: input.entities.filter(e => chosenEntities.has(e.entityId)),
     events: input.events.filter(e => chosenEvents.has(e.eventId)), affectedEntryIds: [...affectedEntries],
-    diagnostics: [...new Set(diagnostics)] };
+    blockingConflictFactIds, diagnostics: [...new Set(diagnostics)] };
 }
 
 /** Preserve immutable old definitions; emit a new revision for affected IDs. */

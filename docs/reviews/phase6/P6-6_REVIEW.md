@@ -42,3 +42,9 @@
 - 最终全量首次779中778通过、旧拆批恢复1失败：原子prepare覆盖pending split检查点，造成父批重复请求。修复为同一事务保留兼容done以及有结果的pending检查点；原断言不改，旧包/增量/恢复37项定向exit0（5.949秒），779全量和包含该修复的APK再次重跑。
 
 - 拆批兼容修复后779/779全量exit0，无skip/todo，63.816秒。Android构建审查发现插件默认仅扫描mobile root，核心修复可能错误UP-TO-DATE复用bundle；app/build.gradle显式加入仓库src为bundle task输入，普通dev-server路径不变，最终APK重新打包。
+
+- 原生逐attempt确认实际通过：取消后仍显示同1请求，审批前普通resume/API入口隐藏；正常Alert确认后冷DB run全字段完全一致、unknown/null用量保留，新增审批时间且attempt仍1、QA计数仍5。单独继续后实际GLM HTTP200 39.881秒、5065in/2982out，无缓存输入；本地发布仍继续验证。原生观察又发现resume触发refresh早于控制写入，stopped快照关闭轮询；M9改为先await既有resumeRun再启动/refresh，冷书库加载前显示真实读取状态。移动类型exit0，待空闲时重建/端上复测。诊断性运行中裸DB复制出现索引页不一致，不计数据库损坏结论，最终必须冷停完整性核对。
+
+- 实际Native第一抽取结束：28canon facts/24entities、冷DBintegrity ok/FK0；闭包涉及1身份conflict，质量门禁拒绝发布，0mapper/0artifact。错误曾误为package_finalize_failed/failed_retryable且review列表为空，自动恢复仅重跑本地finalization，未再次请求模型。新增SelectedCanon.blockingConflictFactIds，闭包冲突走既有canon_conflict阻断/逐事实审查协议；不降低20事实或来源闭包门禁。审查写入在既有WorldStore事务中校验fence与当前conflict IDs，迟到已解决事实不能重开阻断。
+- 既有ReviewPanel的unverified决定保留事实/原文/审计，但不用于映射。当前真实模型冲突值把公开王子身份与现代经历混在同一单值谓词，而现代经历引用只提供姓名片段；准备在正常界面转待核实，不能离线改库或批量waive。工程测试验证review阻断、零付费调用、unverified不出现在发布条目和事务回滚。
+- 追加核对审批快照的展示kind/time/wire budget与账本逐项一致，伪造展示信息不审批。46项定向通过；全量严格类型首次因noUncheckedIndexedAccess指出snapshot显示项可能undefined，改为显式runtime guard后重跑全部门禁，未用类型断言绕过。

@@ -224,8 +224,12 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
       if (['completed', 'canceled', 'failed_terminal'].includes(run.status)) throw new Error('此构建任务已结束。');
       const attempts = await this.buildAttempts(tx, run.run_id, run.world_id);
       if (attempts.some(a => a.status === 'prepared' || a.status === 'sent')) throw new Error('仍有模型请求正在发送，请稍后核对。');
-      for (const id of snapshot.attemptIds) {
-        if (!attempts.some(a => a.attempt_id === id && a.status === 'outcome_unknown')) throw new Error('这条请求不属于当前构建。');
+      for (const [i, id] of snapshot.attemptIds.entries()) {
+        const attempt = attempts.find(a => a.attempt_id === id && a.status === 'outcome_unknown');
+        if (!attempt) throw new Error('这条请求不属于当前构建。');
+        const displayed = snapshot.attempts[i];
+        if (!displayed || displayed.requestKind !== attempt.request_kind || displayed.startedAt !== attempt.started_at
+          || displayed.wireOutputTokens !== attempt.wire_output_tokens) throw new Error('请求信息已更新，请重新核对。');
       }
       const approvedAt = Date.now();
       for (const id of snapshot.attemptIds) await tx.execute(

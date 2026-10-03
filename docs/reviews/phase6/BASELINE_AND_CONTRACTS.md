@@ -49,3 +49,5 @@ ImportTime、BuildTTFP、UserTTFP、FirstNarrativeTime、RequiredBuildWait、Bac
 真实原生断连复测发现：M6账本正确保留unknown，但M3/M7按run错误码推断结局会误投影为queued，M9缺构建请求的逐attempt确认。补充`LlmBuildRecoveryPort`与`LlmReplayApprovalPort`：既有SqliteLlmLedgerStore为唯一审批写入所有者；读取真实账本、精确关联run/unit及世界共享映射job，确认只更新展示的unknown attempt的replay_approved_at，保留原结局/用量，不启动请求或清除暂停。事务校验项目/run、fencing、控制状态、活租约与prepared/sent。回合审批迁入同一账本所有者，原回合状态版本/分支校验保留。无新schema/账本/租约。后续出现的新unknown需新的明确确认。
 
 映射关联补充：M4在既有run.plan_state_json的强类型RunPlanState.mappingRequestIds中、持当前租约与fencing登记准确logical request；改写规划状态和重规划保留关联。M6通过关联读取共享映射账本，不把世界内任意映射unknown投影到所有run。已完成开局仍ready；项目批量查询仅未知记录。已有world_jobs在发送前登记pending检查点身份，提案/发布/事实门禁不变。无JSON1/新schema依赖，无请求/用量/租约复制。
+
+最终M0决议追加：M4 SelectedCanon.blockingConflictFactIds为显式闭包冲突身份，M4世界审查所有者事务核对真实conflict行/租约fence，沿用canon_conflict及既有逐事实决定；M6审批除ID归属，还核对展示种类/时间/wire预算，不接收篡改的确认内容。无schema/存档版本变化。

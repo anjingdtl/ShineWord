@@ -20,7 +20,7 @@ import {
   type BuildTaskPerfStats,
   type BuildTaskView,
 } from '../../buildTasks';
-import { importNovelPartToProject, pauseRun, cancelRun, useCurrentApiForRun } from '../../sourceImport';
+import { importNovelPartToProject, pauseRun, cancelRun, resumeRun, useCurrentApiForRun } from '../../sourceImport';
 import { recoverBuildTasks, startOrResumeBuild } from '../../buildWatchdog';
 import { pickTextRef } from '../../fileBridge';
 import { deriveProjectStatus, listProjectBuildSummaries, summarizeProjectBuild, PROJECT_STATUS_LABEL, type ProjectBuildSummary } from '../../projectLibrary';
@@ -139,7 +139,10 @@ export function ProjectHubScreen(): React.JSX.Element {
     setTaskBusy(true);
     try {
       const effectiveRunId = currentApi ? await useCurrentApiForRun(runId, profile) : runId;
-      void startOrResumeBuild(effectiveRunId, profile, { resume: true })
+      // Persist explicit resume before refreshing. Otherwise an initial
+      // stopped snapshot disables polling for the entire resumed request.
+      await resumeRun(effectiveRunId);
+      void startOrResumeBuild(effectiveRunId, profile)
         .then(refresh)
         .catch(e => setError(e instanceof Error ? e.message : String(e)));
       await refresh();

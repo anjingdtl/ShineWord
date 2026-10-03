@@ -56,6 +56,22 @@
 | P6-6 | 最初追加APK遗漏Gradle环境 | 1，wrapper direct网络拒绝 | phase6-build-replay-final-apk.log，恢复已配置代理/cache/JDK/SDK；不是业务编译错误 |
 | P6-6 | 请求恢复standalone构建（后续Root修复前） | 0，BUILD SUCCESSFUL，2m23s | phase6-recovery-final-apk.log，之后发现Gradle仅跟踪mobile源码，增加root引擎bundle输入并重建，不能当最终APK |
 
+| P6-6 | 最终core输入完整standalone Debug构建 | 0，BUILD SUCCESSFUL，1m34s | phase6-final-core-inputs-apk.log，createBundleDebugJsAndAssets实际执行；107006711bytes，SHA256 9a1e20acb67b0bc6f39da8698ca6ffaf277a4d33ad2e818205b0c6ab16f881c5，bundle5406816bytes；非设备性能 |
+| P6-6 | 最后UI措辞mobile typecheck / version / diff | 0 / 0 / 0 | phase6-recovery-final-mobile/version.log，60000/0.6.0 |
+
+| P6-6 | 请求恢复head bb7065a实际Core CI | success；779/779，30.368秒测试 | [37104816451](https://github.com/anjingdtl/ShineWord/actions/runs/37104816451)，0fail/skipped/todo、version60000/0.6.0；精确head bb7065aac63bd04886eb3196e92c90de1f13f665 |
+| P6-6 | 新APK原生保留数据升级 | 0，Success，60000/0.6.0 | recovery-final-install.log与package.txt，lastUpdateTime2026-10-03 07:00:38；升级中UI首次50秒超时保留，不能计新版UI通过 |
+
+| P6-6 | 请求恢复head bb7065a实际Android CI | success；6m5s，Gradle5m13s | [37104816437](https://github.com/anjingdtl/ShineWord/actions/runs/37104816437)，移动类型检查及Debug构建通过 |
+| P6-6 | Native逐attempt审批与冷停恢复 | 通过；integrity ok，0自动发送，停止run全部字段不变 | native-approved-replay-cold.sqlite及native-replay-ui-results；取消后重开同1attempt，ordinary resume/API入口隐藏，正常Alert审批后unknown/null用量保留，replay_approved_at写入，attempt数1、QA计数5不增；模型构建须另点继续 |
+
+| P6-6 | Scoped canon冲突/展示审批/旧包/投影定向 | 0；46/46 | phase6-final-canon-review-tests.log，7.894秒；canonical冲突阻断+审查+零mapper+unverified排除、review事务fence回滚 |
+| P6-6 | 追加严格类型首次 | 2，TS18048 | phase6-final-native-review-core.log；snapshot显示项可能undefined，修复为显式runtime guard，未用断言/关闭严格检查 |
+| P6-6 | 最新 npm run verify:core | 0；781/781，无skip/todo | phase6-final-native-review-fixed-core.log，93.198秒；与APK/软件VM并行，非设备性能 |
+| P6-6 | 最新mobile typecheck / version / diff | 0 / 0 / 0 | phase6-final-native-review-fixed-mobile/version.log，60000/0.6.0，root严格typecheck由verify:core实际执行通过 |
+| P6-6 | 最新Standalone Debug APK | 0，BUILD SUCCESSFUL，2m19s | phase6-final-native-review-fixed-apk.log；107004131bytes，SHA256 5b67a1bc31fab1a9475bf0fb4f52eca97518cddc4d055faa6f8a6a9f6bb9ab08；真实bundle重建，尚须设备复测 |
+| P6-6 | 第一Native真实抽取/质量门禁 | 抽取完成，冲突阻断，0artifact | QA6 HTTP200/39.881秒/5065in/2982out/cached0，28facts/24entities；冷DB integrity ok/FK0；不能将抽取成功等同开局发布，也不能称设备90秒达标 |
+
 后续按实际命令、退出码、场景和未验范围追加。小说全文、凭据、未脱敏请求和构建产物不入库。
 
 

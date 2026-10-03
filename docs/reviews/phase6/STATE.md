@@ -12,9 +12,12 @@
 ## 当前复测与下一步（持续更新）
 
 1. 原生规划7/8已经解除：最新冷DB实际1 unit/8 ranges、连续0..6400CP，完整身份保留。私有转发第5attempt漏配代理直连被拒，账本network_unknown且零自动重发；前4为已知HTTP200。项目已正常停止、空闲App冷停，自有QEMU33397暂停仅为避免构建资源竞争。
-2. 新M6 typed恢复/审批、M3/M7实际账本、M9正常逐attempt Alert及单独继续、M4映射关联、回合审批唯一所有者已实现。独立审查复现的旧协议恢复、租约CAS、done检查点覆盖三个缺口均修复。32定向与旧包/拆批37定向exit0、root/mobile类型/version/diff exit0；首轮779中拆批1失败已修复，最终779/779全量exit0（63.816秒）。APK审查补root共享引擎输入，最终standalone构建session84871正在执行。
+2. 新M6 typed恢复/审批、M3/M7实际账本、M9正常逐attempt Alert及单独继续、M4映射关联、回合审批唯一所有者已实现。独立审查复现的旧协议恢复、租约CAS、done检查点覆盖三个缺口均修复。32定向与旧包/拆批37定向exit0、root/mobile类型/version/diff exit0；首轮779中拆批1失败已修复，最终779/779全量exit0（63.816秒）。APK审查补root共享引擎输入，最终standalone构建exit0、1m34s、实际重新bundle，107006711bytes/SHA9a1e20acb67b0bc6f39da8698ca6ffaf277a4d33ad2e818205b0c6ab16f881c5，正在保留数据install-r。
 3. build environment必须使用GRADLE_USER_HOME=/workspace/toolchains/gradle、JAVA_HOME=/workspace/toolchains/jdk17、ANDROID_HOME=/workspace/toolchains/android-sdk；遗漏产生wrapper直连拒绝，不是代码构建失败。私有forwarder重启必须NODE_USE_ENV_PROXY=1 NODE_USE_SYSTEM_CA=1。
-4. 新APK保留数据升级后：正常UI取消/确认准确第5unknown；确认不得发送或清暂停/unknown，冷DB核对exact replay_approved_at。只在正常UI明确单独继续后允许新调用；保留5个计数、总上限16，后续unknown仍立即停车。不得离线改库审批/清库/重置未知。继续真实TXT发布、开局、至少两个后段/采用、连续游玩、暂停恢复、风格与save7。
-5. 本次源码未commit，现PR head仍4cdaace且两项实际CI成功。完成可执行复测/修复后提交清晰追加commit、非force推送、核对最终head实际CI；文档/PR同步最新证据，停止私有forwarder并清理ADB reverse（无在途时）。
+4. 新APK保留数据升级已Success。正常UI取消后重开同第5unknown，再明确确认；冷DB证明run所有字段完全不变，1attempt/unknown/null用量保留，only replay_approved_at新增，0自动发送。只在正常UI明确单独继续后允许新调用；保留5个计数、总上限16，后续unknown仍立即停车。不得离线改库审批/清库/重置未知。继续真实TXT发布、开局、至少两个后段/采用、连续游玩、暂停恢复、风格与save7。
+5. 本次修复提交bb7065aac63bd04886eb3196e92c90de1f13f665已非force推送；实际Core CI37104816451（779/779）和Android CI37104816437均success，前head两项成功。完成可执行复测/修复后提交清晰追加commit、非force推送、核对最终head实际CI；文档/PR同步最新证据，停止私有forwarder并清理ADB reverse（无在途时）。
 
 检查命令：npm run verify:core、npm run typecheck、npm run typecheck --prefix mobile、npm run verify:version、git diff --check、npm run apk:debug --prefix mobile。小说、凭据、未脱敏请求、DB、截图和APK不入仓库。已通过的检查只有新改动/失败才重跑。
+
+
+最新Native复测（2026-10-03约07:25 UTC后）：第6QA attempt真实HTTP200、39.881秒、5065in/2982out/cached0；28facts/24entities、冷DBintegrity ok/FK0。首发布被1真实身份冲突阻断（未降低门禁）。实际ReviewDiagnostic保留，旧代码误package_finalize_failed无review入口；现SelectedCanon显式冲突IDs+既有canon_conflict审查、fenced/current-row审查事务已实现。M9先await resume控制后refresh恢复轮询，冷书库未完成查询显示读取状态。M6审批展示字段核对新负例。46定向exit0；严格type发现displayed可能undefined已显式guard修复，最终781全量session90886、mobile/version/diff session93932、新root输入完整standalone APK session9528在执行。现安装APK仍bb7065a/9a1e...，原生App已正常空闲force-stop，QEMU33397继续运行避免长暂停ANR，无在途模型，私有forwarder新session10133保留6计数（5已知HTTP200、旧第5unknown显式审批）。新APK完成后保留数据install-r，自动本地缓存finalize应出现canon_conflict/查看审查；正常UI逐事实将引用不足的现代身份转待核实，然后单独继续，27合格事实仍须20/人物/地点/事件/行动/引用闭包，不能离线修库/吞冲突。之后继续Native开局、两次后段/采用、连续游玩、暂停恢复与含段binding存档；文件picker用观测DPAD焦点，滚动受TCG影响尝试长手势/观测键盘焦点，不盲目点击。新增修复尚未commit，前headbb7065a实际Core779/Android均green，最终必须再提交/推送/检查新headCI。测试文档和PR仍须统一最终真实范围，不能宣称稳定90秒或整阶段全部验收。

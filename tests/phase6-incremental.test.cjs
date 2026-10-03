@@ -221,7 +221,25 @@ test('90s opening locally compiles evidenced action closure with zero mapper cal
     assert.ok(draft.entries.some(e=>e.kind==='lore' && e.provenance.sourceFactIds.includes('f-0')));
     assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
     const bad={...data.facts[0],factId:'conflict',value:{location:'别处'},status:'conflict'};await h.worldStore.saveFact(bad,now());
-    await assert.rejects(buildPackageDraftFromCanon(input),/冲突/);assert.equal(calls,0);
+    await assert.rejects(buildPackageDraftFromCanon(input),/Canon blocking conflict/);assert.equal(calls,0);
+    const issue=(await h.worldStore.listReviewIssues('w','open')).find(i=>i.issueId==='canon-conflict');
+    assert.equal(issue.kind,'canon_conflict');assert.equal(issue.severity,'blocking');assert.deepEqual(JSON.parse(issue.detailJson).factIds,['conflict']);
+    await assert.rejects(h.worldStore.resolveReviewIssue('w','canon-conflict','waived'),/逐条核对/);
+    await h.worldStore.resolveCanonFactConflict('w','conflict','unverified');
+    const recovered=await buildPackageDraftFromCanon(input);assert.equal(calls,0);assert.equal(recovered.selection.facts.length,24);
+    assert.ok(!recovered.entries.some(e=>e.provenance.sourceFactIds.includes('conflict')),'unverified evidence never becomes playable content');
+  }finally{h.db.close()}
+});
+test('review writer rolls back guard side effects and creates no blocker after a fence rejection',async()=>{
+  const h=await setup();try {
+    await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
+    await assert.rejects(h.worldStore.saveReviewIssue({worldId:'w',issueId:'canon-conflict',kind:'canon_conflict',severity:'blocking',detailJson:'{"factIds":["conflict"]}',createdAt:now()},
+      async tx=>{await tx.execute('UPDATE worlds SET title=? WHERE world_id=?',['late change','w']);throw Error('synthetic_fence_lost')}),/synthetic_fence_lost/);
+    assert.equal((await h.worldStore.getWorld('w')).title,'测试');
+    assert.equal((await h.worldStore.listReviewIssues('w','open')).length,0);
+    await assert.rejects(h.worldStore.saveReviewIssue({worldId:'w',issueId:'canon-conflict',kind:'canon_conflict',severity:'blocking',detailJson:'{"factIds":["already-resolved"]}',createdAt:now(),canonConflictFactIds:['already-resolved']}),/canon_conflict_changed/);
+    assert.equal((await h.worldStore.listReviewIssues('w','open')).length,0,'stale resolved facts cannot reopen a blocking review');
+    assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
   }finally{h.db.close()}
 });
 
