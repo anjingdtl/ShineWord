@@ -51,3 +51,11 @@ Native首次后续采用v2：binding1→2，v0/v1历史snapshot、2正文/2风�
 来源投影修复全量verify:core已exit0：789/789、130811.769ms；mobile严格TS/version/diff均0。Debug正在真实root bundle构建；最新main再次核对仍5103397。
 
 新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。
+
+已commit/push c8672841b7bb0240985cf9b2fc0d6d71ce43c0e2；实际Core CI37126959080 success，789/789、29590.983ms；Android CI37126959212仍运行。实际正常WorldDetail创建战役触发QA17目标建议HTTP200/2.792s/235in41out；唯一opening_goal ledger1成功，low/1024 reasoning reserve/2224 wire真实metadata；返回再重开正常缓存0新增HTTP，旧QA8没有补造账本。
+
+独立复审发现isRunExtractionComplete需排除拆批/重规划保留的canceled父审计行，已修复并补真实store两路径恢复测试；全量/Debug重跑。c867284 APK已preserve-data升级，Native第二段可继续进行；最终APK将包含有效单元修复并再次install-r冷恢复验证。
+
+独立复审已确认无剩余阻断。额外JSON对象键序误冲突已改规范化比较，新split/replan fixture的子输入hash改为各自唯一（先前触发真实DB约束，未削弱约束）；首次790扩展全量另有既有120ms心跳时间测试在TCG/构建竞争下失败，日志保留，最终全量重跑中。中间APK主动停止，最终完整bundle重建中；c867284实际两项CI均success，但这不替代新增恢复修复的最终head验证。
+
+最终复审修复所有本地门禁exit0：790/790，146327.166ms；独立root/mobile严格TS、version/diff0；完整Debug3m51s、107011415bytes、SHA256 15469a83d8e210b4333cbf9abf0fd9e92306f76903d0a8daf0762b82ae5cd272。将按c867284为非force基线提交/推送恢复审查修复，并安装该最终包继续原生闭环。

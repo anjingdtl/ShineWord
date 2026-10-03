@@ -5,8 +5,11 @@ export function isRunExtractionComplete(
   run: Pick<BuildRunRecord, 'unitsDone' | 'unitsTotal'>,
   units: readonly Pick<BuildUnitRecord, 'status'>[],
 ): boolean {
+  // Replanning/splitting retains canceled parents for audit while removing
+  // them from unitsTotal. Only effective work belongs in this completion gate.
+  const effective = units.filter(unit => unit.status !== 'canceled');
   return run.unitsTotal > 0 && run.unitsDone === run.unitsTotal
-    && units.length === run.unitsTotal && units.every(unit => unit.status === 'completed');
+    && effective.length === run.unitsTotal && effective.every(unit => unit.status === 'completed');
 }
 
 /** Count committed extraction units plus mapping, review/validation and publication.

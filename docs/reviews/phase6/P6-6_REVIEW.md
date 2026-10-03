@@ -75,3 +75,9 @@ OpeningGoalGovernance补齐world/不可变包hash+revision/anchor/profile/plan i
 审查同时修复两个潜在问题：草稿revision恒0导致异定义被错误合并，现对skill/constraint/lore、actor和item分别核对定义，冲突进入审查；相同定义才合并证据且保持已有inferred。地点编译保留inference类型。bootstrap来源合并改为核对当前全部unit completed、数量与unitsDone/Total一致，历史unitsFailed保持为真实失败尝试计数，不再误排除已恢复成果。定向33/33 exit0，包含实时/缓存结果一致、原raw缓存整行不变、混合和跨批推断、相同revision异定义、已恢复历史失败和fencing负例；原M5伪装明示、缺失/冲突引用和作用域负例继续拒绝。全量和APK正在验证，原生缓存恢复尚待新APK正常UI复测。
 
 新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。
+
+
+独立复审c867284发现新恢复判定回归：自适应拆批/重规划保留canceled父行，但这些行已从unitsTotal移除。全量行数判断会把已完成的有效子单元误判未完成。修复为过滤canceled审计行再比较有效数量与各单元completed，同时仍要求unitsDone=unitsTotal>0。新增真实SqliteBuildRunStore两种replace事务测试，验证父行保留、半完成拒绝、全部子完成通过、计数不符拒绝；重跑全量和真实root bundle APK，不沿用789旧结果作为最终门禁。
+
+
+复审还发现JSON.stringify对仅键顺序不同的嵌套actor attributes误报冲突；三处定义比较统一采用既有canonicalStringify，并加入同定义不同键序跨批缓存回放测试。独立只读复审最终确认：新provenance位于旧不可变内容合并之前、raw/checkpoint身份保持、M5事务内事实/审查二次核验不变，未发现剩余阻断问题。

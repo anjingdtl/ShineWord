@@ -855,7 +855,8 @@ async function requestMappingProposals(
       return;
     }
     const mergedFactIds = new Set([...existing.provenance.sourceFactIds, ...entry.provenance.sourceFactIds]);
-    const sameDefinition = JSON.stringify(existing.definition) === JSON.stringify(entry.definition);
+    const sameDefinition = canonicalStringify(existing.definition as CanonicalJson)
+      === canonicalStringify(entry.definition as CanonicalJson);
     if (sameDefinition) {
       existing.provenance = {
         ...existing.provenance,
@@ -1054,7 +1055,8 @@ async function requestMappingProposals(
         templatesById.set(cleaned.entryId, cleaned);
         actorTemplates.push(cleaned);
       } else {
-        if (JSON.stringify(existing.entry.definition) !== JSON.stringify(cleaned.entry.definition)) {
+        if (canonicalStringify(existing.entry.definition as CanonicalJson)
+          !== canonicalStringify(cleaned.entry.definition as CanonicalJson)) {
           rejectEntry(ctx, 'conflict', cleaned.entryId, ['later batch redefined actor template with a different definition']);
           continue;
         }
@@ -1072,7 +1074,8 @@ async function requestMappingProposals(
         itemsById.set(cleaned.entry.entryId, cleaned);
         items.push(cleaned);
       } else {
-        if (JSON.stringify(existing.entry.definition) !== JSON.stringify(cleaned.entry.definition)) {
+        if (canonicalStringify(existing.entry.definition as CanonicalJson)
+          !== canonicalStringify(cleaned.entry.definition as CanonicalJson)) {
           rejectEntry(ctx, 'conflict', cleaned.entry.entryId, ['later batch redefined item with a different definition']);
           continue;
         }

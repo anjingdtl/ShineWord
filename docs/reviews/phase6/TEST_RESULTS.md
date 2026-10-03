@@ -128,3 +128,15 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 | 新草稿来源投影：npm run verify:version / git diff --check | 0 / 0 | V0.6.0/60000/schema31/save7不变；仅buildTime随APK变化 | 2026-10-03实际执行 |
 
 新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。
+
+
+| c867284实际Core CI37126959080 | 0/success | 789/789、29590.983ms | phase6-ci-provenance-core.log |
+| c867284实际Android CI37126959212 | 0/success | mobile严格类型及Gradle4m26s | phase6-ci-provenance-android.log |
+| effective-units首次扩展全量回归 | 1 | 790总/788过/2失败：新增测试子输入hash复制父值触发唯一约束（fixture已修正）；既有120ms G0心跳计时在构建/TCG竞争下失效，保留日志，最终需复测 | phase6-effective-units-full.log |
+| effective-units中间APK构建 | 1（主动停止） | 独立复审发现对象键序误冲突，停止中间构建并使用canonicalStringify后重新完整bundle；不把中间包计最终候选 | phase6-effective-units-apk.log |
+
+
+| 最终复审修复：npm run verify:core | 0 | 790/790、146327.166ms；G0原90ms TTL测试未改且通过，split/replan及canonical键序全部通过 | phase6-final-review-core.log |
+| 最终复审修复：npm run typecheck / npm run typecheck --prefix mobile | 0 / 0 | 两严格TS实际各执行，未跳过门禁 | phase6-final-review-root-type.log / phase6-final-review-mobile-type.log |
+| 最终复审修复：npm run verify:version / git diff --check | 0 / 0 | V0.6.0/60000、schema31/save7不变 | 实际执行 |
+| 最终复审修复：standalone Debug | 0 | Gradle3m51s，root源码完整bundle重建；107011415bytes，SHA256 15469a83d8e210b4333cbf9abf0fd9e92306f76903d0a8daf0762b82ae5cd272 | phase6-final-review-apk.log |

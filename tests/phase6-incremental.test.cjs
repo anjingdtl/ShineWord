@@ -118,7 +118,8 @@ test('cross-batch identical definitions union inference honestly; differing same
         provider:{async complete(){const later=++calls===2;const common={id:'shared',name:'合成条目',provenanceKind:'explicit',evidenceFactIds:[later?'f-800':'f-0']};
           const description=incompatible&&later?'不同定义':'相同定义';
           return {text:JSON.stringify({skills:[{...common,attribute:'knowledge',description}],constraints:[],
-            lore:[{...common,text:description}],actorTemplates:[{...common,hp:8,defense:2,description}],
+            lore:[{...common,text:description}],actorTemplates:[{...common,hp:8,defense:2,description,
+              attributes:later?{agility:2,knowledge:1}:{knowledge:1,agility:2}}],
             items:[{...common,description}]})};}}};
       const first=await buildPackageDraftFromCanon(input);
       const raw=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping' ORDER BY job_id").all();
@@ -153,6 +154,33 @@ test('recovered extraction uses current fenced units, not historical failure att
     assert.equal(await h.runStore.completeUnit({unitId:unit.unitId,fencingToken:token+1,status:'completed',now:now()}),false);
     assert.equal((await h.runStore.getRun('retry-count')).unitsDone,1);
   }finally{h.db.close()}
+});
+
+test('split and calibrated replanning retain canceled audit rows without blocking completed effective work',async()=>{
+  const {isRunExtractionComplete}=load('application/worldBuild/buildProgress');
+  for(const mode of ['split','replan']){
+    const h=await setup();try{
+      const runId=`effective-${mode}`;
+      await createExtractionRun({...h,sha256Hex:sha,now},{runId,worldId:'w',sourceId:'src',modelFingerprint:'m',title:'合成测试',extractorVersion:'e',scope:{startCp:0,endCp:100}});
+      const [parent]=await h.runStore.listUnits(runId);
+      const token=await h.runStore.acquireLease(runId,'owner',30000,now());
+      const children=[0,1].map(i=>({...parent,unitId:`${parent.unitId}-${i}`,inputHash:sha(`${parent.inputHash}-${i}`),unitIndex:i+1,status:'queued',attempts:0}));
+      const replaced=mode==='split'
+        ? await h.runStore.replaceUnitWithChildren({unitId:parent.unitId,fencingToken:token,children,now:now()})
+        : await h.runStore.replaceUnclaimedUnits({runId,fencingToken:token,units:children,now:now()});
+      assert.equal(replaced,true);assert.equal((await h.runStore.getRun(runId)).unitsTotal,2);
+      const check=async()=>isRunExtractionComplete(await h.runStore.getRun(runId),await h.runStore.listUnits(runId));
+      assert.equal(await check(),false);
+      await h.runStore.completeUnit({unitId:children[0].unitId,fencingToken:token,status:'completed',now:now()});
+      assert.equal(await check(),false,'one unfinished child cannot be hidden by a canceled parent');
+      await h.runStore.completeUnit({unitId:children[1].unitId,fencingToken:token,status:'completed',now:now()});
+      assert.equal(await check(),true);
+      const units=await h.runStore.listUnits(runId);
+      assert.equal(units.length,3);assert.equal(units.find(u=>u.unitId===parent.unitId).status,'canceled');
+      assert.equal(isRunExtractionComplete({...await h.runStore.getRun(runId),unitsDone:1},units),false);
+      assert.equal(isRunExtractionComplete({...await h.runStore.getRun(runId),unitsTotal:3},units),false);
+    }finally{h.db.close()}
+  }
 });
 
 test('M4 opening maps bounded real facts and entity/event reference closure; retains 20-fact gate', () => {
