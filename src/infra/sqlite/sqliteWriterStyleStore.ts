@@ -1,7 +1,7 @@
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import type { ProjectStyleBindingRecord, SourceStyleAnalysisRecord, SourceStyleProfile, WriterStyleStore } from '../../application/writerStyle/ports';
 import type { EffectiveStyleSnapshotV1, StyleSemanticV1 } from '../../domain/style/types';
-import { validateStyleOverrides, validateStyleSemantic, validateStyleSnapshot } from '../../domain/style/validation';
+import { validateStyleOverrides, validateStyleSemantic, validateStyleSnapshot, validateSourceStyleBaseline } from '../../domain/style/validation';
 import { estimateTokens } from '../../application/context/tokenEstimate';
 
 interface JsonRow extends SqliteRow { value: string }
@@ -12,6 +12,7 @@ interface AnalysisRow extends SqliteRow {
 function readBinding(value: string): ProjectStyleBindingRecord {
   const binding = JSON.parse(value) as ProjectStyleBindingRecord;
   validateStyleSemantic(binding.baseline); validateStyleSemantic(binding.semantic); validateStyleOverrides(binding.overrides);
+  if (binding.sourceBaseline !== undefined) validateSourceStyleBaseline(binding.sourceBaseline);
   if (!Number.isSafeInteger(binding.revision) || binding.revision < 1
     || !['source', 'preset', 'custom'].includes(binding.mode)
     || !['pending', 'running', 'ready', 'failed', 'suggestion'].includes(binding.analysisStatus)
@@ -47,6 +48,7 @@ export class SqliteWriterStyleStore implements WriterStyleStore {
   }
   async initializeBinding(binding: ProjectStyleBindingRecord): Promise<ProjectStyleBindingRecord> {
     validateStyleSemantic(binding.baseline); validateStyleOverrides(binding.overrides);
+    if (binding.sourceBaseline !== undefined) validateSourceStyleBaseline(binding.sourceBaseline);
     await this.db.execute('INSERT OR IGNORE INTO project_writer_style_bindings (project_id, style_version, revision, binding_json) VALUES (?, ?, ?, ?)',
       [binding.projectId, binding.styleVersion, binding.revision, JSON.stringify(binding)]);
     const stored = await this.getBinding(binding.projectId);
@@ -55,6 +57,7 @@ export class SqliteWriterStyleStore implements WriterStyleStore {
   }
   async initializeImportedBinding(tx: SqliteTransaction, binding: ProjectStyleBindingRecord): Promise<ProjectStyleBindingRecord> {
     validateStyleSemantic(binding.baseline); validateStyleSemantic(binding.semantic); validateStyleOverrides(binding.overrides);
+    if (binding.sourceBaseline !== undefined) validateSourceStyleBaseline(binding.sourceBaseline);
     await tx.execute('INSERT OR IGNORE INTO project_writer_style_bindings (project_id, style_version, revision, binding_json) VALUES (?, ?, ?, ?)',
       [binding.projectId, binding.styleVersion, binding.revision, JSON.stringify(binding)]);
     const row = await tx.queryOne<JsonRow>('SELECT binding_json AS value FROM project_writer_style_bindings WHERE project_id = ?', [binding.projectId]);
@@ -63,6 +66,7 @@ export class SqliteWriterStyleStore implements WriterStyleStore {
   }
   async compareAndSetBinding(binding: ProjectStyleBindingRecord, expectedVersion: string): Promise<boolean> {
     validateStyleSemantic(binding.baseline); validateStyleSemantic(binding.semantic); validateStyleOverrides(binding.overrides);
+    if (binding.sourceBaseline !== undefined) validateSourceStyleBaseline(binding.sourceBaseline);
     return (await this.db.execute('UPDATE project_writer_style_bindings SET style_version = ?, revision = ?, binding_json = ? WHERE project_id = ? AND style_version = ? AND revision = ?',
       [binding.styleVersion, binding.revision, JSON.stringify(binding), binding.projectId, expectedVersion, binding.revision - 1])) === 1;
   }

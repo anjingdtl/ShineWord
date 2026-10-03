@@ -6,7 +6,7 @@ import { verifyEffectiveStyleSnapshotHash } from '../writerStyle/projectStyleSer
 import type { ProjectStyleBindingRecord } from '../writerStyle/ports';
 import type { SqliteTransaction } from '../ports/sqlite';
 import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
-import { validateStyleId, validateStyleOverrides, validateStyleSemantic } from '../../domain/style/validation';
+import { validateStyleId, validateStyleOverrides, validateStyleSemantic, validateSourceStyleBaseline } from '../../domain/style/validation';
 import { resolveStyleSemantic } from '../writerStyle/compiler';
 
 /** M8 owns restoring this binding. Profiles and unfinished paid analyses are
@@ -34,7 +34,7 @@ export async function validatePortableProjectStyle(value: unknown, projectId: st
       || !style.binding || typeof style.binding !== 'object' || Array.isArray(style.binding)) return false;
     const b = style.binding;
     if (Object.keys(b).some(key => !['projectId', 'mode', 'styleId', 'styleVersion', 'sourceProfileVersion',
-      'userOverrideVersion', 'semantic', 'overrides', 'analysisStatus', 'revision', 'baseline'].includes(key))
+      'userOverrideVersion', 'semantic', 'overrides', 'analysisStatus', 'revision', 'baseline', 'sourceBaseline'].includes(key))
       || b.projectId !== projectId || !['source', 'preset', 'custom'].includes(b.mode)
       || !['pending', 'running', 'ready', 'failed', 'suggestion'].includes(b.analysisStatus)
       || !Number.isSafeInteger(b.revision) || b.revision < 1
@@ -42,6 +42,7 @@ export async function validatePortableProjectStyle(value: unknown, projectId: st
     validateStyleId(b.projectId); validateStyleId(b.styleId); validateStyleId(b.styleVersion);
     if (b.sourceProfileVersion !== null) validateStyleId(b.sourceProfileVersion);
     validateStyleSemantic(b.baseline); validateStyleSemantic(b.semantic); validateStyleOverrides(b.overrides);
+    if (b.sourceBaseline !== undefined) validateSourceStyleBaseline(b.sourceBaseline);
     if (canonicalStringify(b.semantic as unknown as CanonicalJson) !== canonicalStringify(resolveStyleSemantic(b.baseline, b.overrides) as unknown as CanonicalJson)) return false;
     return await computePortableProjectStyleHash(b, sha256Hex) === style.contentHash;
   } catch { return false; }

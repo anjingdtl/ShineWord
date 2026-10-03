@@ -26,3 +26,6 @@ jobs:
 
       - name: Verify deterministic core
         run: npm run verify:core
+
+      - name: Verify product version
+        run: npm run verify:version

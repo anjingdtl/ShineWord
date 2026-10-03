@@ -51,7 +51,7 @@ export function WriterStyleScreen(): React.JSX.Element {
     void refresh(true).catch(e => setError(e instanceof Error ? e.message : String(e)));
   }, [refresh]));
   const baseline: StyleSemanticV1 = mode === 'preset' ? getWriterStylePreset(presetId).semantic
-    : mode === 'source' && view?.mode !== 'source' ? suggestions[0]?.semantic ?? { ...DEFAULT_STYLE }
+    : mode === 'source' && view?.mode !== 'source' ? view?.sourceSemantic ?? suggestions[0]?.semantic ?? { ...DEFAULT_STYLE }
       : view?.semantic ?? { ...DEFAULT_STYLE };
   const effective = { ...baseline, ...overrides };
   function edit(field: keyof StyleSemanticV1, value: string) {

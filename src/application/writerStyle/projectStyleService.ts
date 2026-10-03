@@ -34,8 +34,13 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const bindingVersion = (binding: Pick<ProjectStyleBindingRecord, 'projectId' | 'revision' | 'mode' | 'baseline' | 'overrides'>): string =>
   `style-${binding.revision}-${stableFingerprint(binding)}`;
 const toView = (record: ProjectStyleBindingRecord): ProjectStyleViewV1 => {
-  const { baseline: _baseline, revision: _revision, ...view } = record; return clone(view);
+  const { baseline: _baseline, revision: _revision, sourceBaseline: _source, ...view } = record;
+  const source = rememberedSource(record);
+  return clone({ ...view, ...(source ? { sourceSemantic: source.semantic } : {}) });
 };
+const rememberedSource = (record: ProjectStyleBindingRecord): ProjectStyleBindingRecord['sourceBaseline'] =>
+  record.sourceBaseline ?? (record.mode === 'source' && record.sourceProfileVersion
+    ? { styleId: record.styleId, profileVersion: record.sourceProfileVersion, semantic: record.baseline } : undefined);
 
 /** Owns project binding/profile/snapshot writes; never touches facts or branch state. */
 export class ProjectStyleService implements ProjectStylePortV1 {
@@ -56,9 +61,16 @@ export class ProjectStyleService implements ProjectStylePortV1 {
   }
   async getProjectStyle(projectId: string): Promise<ProjectStyleViewV1> { return toView(await this.binding(projectId)); }
   async exportProjectStyle(projectId: string): Promise<PortableProjectStyleV1 | null> {
-    const binding = await this.options.store.getBinding(projectId);
-    return binding ? { schemaVersion: 'shineword-project-style-1', binding: clone(binding),
-      contentHash: await computePortableProjectStyleHash(binding, this.options.hash.sha256Hex.bind(this.options.hash)) } : null;
+    const saved = await this.options.store.getBinding(projectId);
+    if (!saved) return null;
+    let source = rememberedSource(saved);
+    if (!source) {
+      const profile = (await this.options.store.listProfiles(projectId))[0];
+      if (profile) source = { styleId: profile.profileId, profileVersion: profile.profileVersion, semantic: profile.semantic };
+    }
+    const binding = { ...saved, ...(source ? { sourceBaseline: clone(source) } : {}) };
+    return { schemaVersion: 'shineword-project-style-1', binding: clone(binding),
+      contentHash: await computePortableProjectStyleHash(binding, this.options.hash.sha256Hex.bind(this.options.hash)) };
   }
   async restoreProjectStyle(tx: SqliteTransaction, targetProjectId: string, style: PortableProjectStyleV1): Promise<void> {
     validateStyleId(targetProjectId);
@@ -79,6 +91,7 @@ export class ProjectStyleService implements ProjectStylePortV1 {
     const current = await this.binding(input.projectId);
     if (current.styleVersion !== input.expectedVersion) throw new StyleVersionConflictError(current.styleVersion);
     let baseline = current.baseline, styleId = current.styleId, sourceProfileVersion = current.sourceProfileVersion;
+    let sourceBaseline = rememberedSource(current);
     if (input.mode === 'preset') {
       const selected = getWriterStylePreset(input.presetId ?? '');
       baseline = await this.options.store.putAsset({ assetId: selected.id, assetVersion: selected.version, semantic: selected.semantic });
@@ -88,14 +101,16 @@ export class ProjectStyleService implements ProjectStylePortV1 {
       styleId = `custom:${current.projectId}`; sourceProfileVersion = null;
     } else if (current.mode !== 'source') {
       const profiles = await this.options.store.listProfiles(input.projectId);
-      // Source mode selects the earliest learned baseline. Later profiles are
-      // suggestions until the user explicitly adopts them.
+      // Keep the last selected source baseline across mode switches/imports.
+      // Without one, use the earliest learned profile; later ones are suggestions.
       const profile = profiles[0];
-      baseline = profile?.semantic ?? clone(DEFAULT_STYLE);
-      styleId = profile?.profileId ?? `${DEFAULT_STYLE_ID}@${DEFAULT_STYLE_ASSET_VERSION}`;
-      sourceProfileVersion = profile?.profileVersion ?? null;
+      sourceBaseline ??= profile ? { styleId: profile.profileId, profileVersion: profile.profileVersion, semantic: profile.semantic } : undefined;
+      baseline = sourceBaseline?.semantic ?? clone(DEFAULT_STYLE);
+      styleId = sourceBaseline?.styleId ?? `${DEFAULT_STYLE_ID}@${DEFAULT_STYLE_ASSET_VERSION}`;
+      sourceProfileVersion = sourceBaseline?.profileVersion ?? null;
     }
     const next: ProjectStyleBindingRecord = { ...current, mode: input.mode, styleId, sourceProfileVersion,
+      ...(sourceBaseline ? { sourceBaseline: clone(sourceBaseline) } : {}),
       baseline: clone(baseline), overrides: clone(input.overrides), semantic: resolveStyleSemantic(baseline, input.overrides),
       userOverrideVersion: current.userOverrideVersion + 1, revision: current.revision + 1,
       analysisStatus: input.mode === 'source' ? (sourceProfileVersion ? 'ready' : 'pending') : current.analysisStatus,
@@ -218,6 +233,7 @@ export class ProjectStyleService implements ProjectStylePortV1 {
       if (current.sourceProfileVersion === profile.profileVersion && current.analysisStatus === status) return status;
       const baseline = use ? profile.semantic : current.baseline;
       const next: ProjectStyleBindingRecord = { ...current,
+        ...(use ? { sourceBaseline: { styleId: profile.profileId, profileVersion: profile.profileVersion, semantic: clone(profile.semantic) } } : {}),
         baseline: clone(baseline), semantic: resolveStyleSemantic(baseline, current.overrides),
         sourceProfileVersion: use ? profile.profileVersion : current.sourceProfileVersion,
         styleId: use ? profile.profileId : current.styleId, analysisStatus: status, revision: current.revision + 1 };
@@ -236,6 +252,7 @@ export class ProjectStyleService implements ProjectStylePortV1 {
     const profile = (await this.options.store.listProfiles(input.projectId)).find(item => item.profileVersion === input.profileVersion);
     if (!profile) throw new Error('unknown_style_profile');
     const next: ProjectStyleBindingRecord = { ...current, mode: 'source', baseline: clone(profile.semantic),
+      sourceBaseline: { styleId: profile.profileId, profileVersion: profile.profileVersion, semantic: clone(profile.semantic) },
       semantic: resolveStyleSemantic(profile.semantic, current.overrides), styleId: profile.profileId,
       sourceProfileVersion: profile.profileVersion, analysisStatus: 'ready', revision: current.revision + 1 };
     next.styleVersion = bindingVersion(next);

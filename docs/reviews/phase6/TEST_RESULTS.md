@@ -32,3 +32,21 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说 UT
 | P6-5 | npm run typecheck --prefix mobile / git diff --check | 0 / 0 | phase6-p5-complete-mobile.log；定向 knowledge 集成 9/9 |
 | P6-5 | 真实第一后段补建与采用 | 完成，74.368 秒 | MEASUREMENTS.json；抽取1次+映射2次；第二次仅抽取，映射请求上限阻断，未算通过 |
 | P6-5 | 真实风格独立分析 | ready，13.507 秒 | 之前 prohibitions 字符串失败保留；仅提示词闭合说明修复，解析门禁不变 |
+
+| P6-6 | npm run verify:core | 0；761/761 | phase6-final-core.log；0 failed/skipped/todo，版本0.6.0下全量 |
+| P6-6 | npm run typecheck | 0 | phase6-final-typecheck.log |
+| P6-6 | npm run typecheck --prefix mobile | 0 | phase6-final-mobile.log；UI文案最后修复后再检见phase6-final-mobile-after-copy.log |
+| P6-6 | npm run verify:version / git diff --check | 0 / 0 | 0.6.0 / versionCode60000，全部元数据同步 |
+| P6-6 | npm run apk:debug --prefix mobile | 0；BUILD SUCCESSFUL | phase6-final-apk-after-copy.log，最后native/JS包2m8s；JDK17/SDK36/NDK27/Gradle9.3.1；102.01MiB，独立bundle，非真机性能数据 |
+
+真实模型付费口径：私有验收数据库账本25条succeeded / 1条outcome_unknown，input120012 / output48257 / reasoning1406（reasoning包含在output内，不再相加）。初始直接连接探测不在这些数据库内，不能把这个总计当服务商账单总额。第二后段unknown为sent后私有transport请求上限在fetch前抛错，按生产保护保守保留，未自动重发。
+
+最终真实测量元数据见 MEASUREMENTS.json，逐项验收见 ACCEPTANCE_MATRIX.md。BuildTTFP从source-active至已验证成果：42.859秒；9.142秒导入单列；52.046秒从harness导入开始至成果，**不是Android UserTTFP或稳定90秒保证**。没有同质量旧/新对照、P50/P95样本集或独立人工标注，不宣称相对提速30%/等待降低50%等指标已经达标。
+
+| P6-6 | learned-source基线修复后的style/campaign/save定向 | 0；28/28 | phase6-final-style-archive.log；两次归档、source→custom→preset→source、零新分析请求、重hash越权拒绝 |
+| P6-6 | npm run verify:core（最终基线修复后） | 0；762/762 | phase6-final-762-core.log，0 failed/skipped/todo |
+| P6-6 | 最终 npm run apk:debug --prefix mobile | 0；BUILD SUCCESSFUL | phase6-final-style-apk.log；3m19s（含软件模拟器资源竞争）；102.02MiB，独立bundle；不能当设备性能 |
+
+| P6-6 | npm run typecheck / npm run typecheck --prefix mobile（最后编辑后） | 0 / 0 | phase6-final-last-typecheck.log / phase6-final-last-mobile.log |
+| P6-6 | API30最终APK install-r / dumpsys | 0，Success，60000/0.6.0 | final-style-install.log；系统服务启动初期首次失败不隐藏，重试通过 |
+| P6-6 | API30 UI与完整设备旅程 | 未完成，系统ANR阻断 | DEVICE_RESULTS：system/SystemUI/dialer事件证据、恢复尝试，不能称App流程通过 |

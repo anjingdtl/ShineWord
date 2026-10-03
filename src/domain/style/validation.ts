@@ -1,4 +1,4 @@
-import type { EffectiveStyleSnapshotV1, StyleOverridesV1, StyleSemanticV1 } from './types';
+import type { EffectiveStyleSnapshotV1, StyleOverridesV1, StyleSemanticV1, SourceStyleBaselineV1 } from './types';
 import { STYLE_EXPRESSION_BOUNDARY } from './defaults';
 
 export const STYLE_FIELDS = [
@@ -51,6 +51,14 @@ export function validateStyleOverrides(value: unknown): asserts value is StyleOv
 export function validateStyleSemantic(value: unknown): asserts value is StyleSemanticV1 {
   validateStyleOverrides(value);
   if (STYLE_FIELDS.some(field => !(field in value))) throw new Error('incomplete_style_semantic');
+}
+
+/** Closed expression-only baseline retained across modes and archive hops. */
+export function validateSourceStyleBaseline(value: unknown): asserts value is SourceStyleBaselineV1 {
+  if (!record(value)) throw new Error('invalid_source_style_baseline');
+  const b = value as unknown as SourceStyleBaselineV1;
+  if (Object.keys(b).some(key => !['styleId','profileVersion','semantic'].includes(key))) throw new Error('invalid_source_style_baseline');
+  validateStyleId(b.styleId); validateStyleId(b.profileVersion); validateStyleSemantic(b.semantic);
 }
 
 /** Runtime gate for portable, self-contained historical snapshots. */

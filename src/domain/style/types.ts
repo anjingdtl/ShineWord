@@ -11,11 +11,16 @@ export interface StyleSemanticV1 {
   verbosity: 'concise' | 'standard' | 'rich'; recapPreference: string; actionPresentation: string;
 }
 export type StyleOverridesV1 = Partial<StyleSemanticV1>;
+export interface SourceStyleBaselineV1 {
+  styleId: string; profileVersion: string; semantic: StyleSemanticV1;
+}
 export interface ProjectStyleViewV1 {
   projectId: string; mode: StyleMode; styleId: string; styleVersion: string;
   sourceProfileVersion: string | null; userOverrideVersion: number;
   semantic: StyleSemanticV1; overrides: StyleOverridesV1;
   analysisStatus: 'pending' | 'running' | 'ready' | 'failed' | 'suggestion';
+  /** Expression-only preview for returning to the pinned learned source mode. */
+  sourceSemantic?: StyleSemanticV1;
 }
 export interface ProjectStyleEditV1 {
   projectId: string; expectedVersion: string; mode: StyleMode; presetId?: string;

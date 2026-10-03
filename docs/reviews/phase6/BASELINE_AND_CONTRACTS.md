@@ -37,3 +37,9 @@ ImportTime、BuildTTFP、UserTTFP、FirstNarrativeTime、RequiredBuildWait、Bac
 - 审查：旧范围缺 sourceId 不可直接转换；增部不能让旧缓存全部失效；单写入所有者；domain 不反向依赖 application/infra/mobile。
 - 修复：范围 guard 拒绝负值/小数/空哈希/未知来源，绑定拒绝重复成员/序号；intent 核验 planVersion/generation/来源快照。接口继承 indexed type 的 TS 错误修正为交叉类型。
 - 验证：合同测试覆盖旧范围拒绝、范围越界、源替换/移除/重编号、追加兼容和可替换 executor。详情见 TEST_RESULTS。
+
+## 最终集成补充（2026-10-03）
+
+实际配置 JDK17.0.20.1/Android SDK36、NDK27、Gradle9.3.1；schema最终31（29共享域，30旧粗读恢复，31普通回合interaction fence）。版本0.6.0/60000。最终来源/段/artifact协议、所有权、存档7与归档4说明见 COMPATIBILITY.md。
+
+用户后续授权提供GLM与一部小说并调整开局目标90秒；模型10%为上限，最终冻结opening-90s-3单次精准抽取+本地证据规则编译。保留所有质量门禁，不为达90秒放宽引用/冲突。测量将source-active至成果发布（BuildTTFP）与导入+发布分开；52.046秒为实际harness从开始导入到已验证成果的总时长，不包含Android开局表单人工交互，不能写成端上UserTTFP。n=1且服务端缓存热；原30%/50%/P95性能对照目标仍待同条件资源复测。

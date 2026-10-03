@@ -1,11 +1,12 @@
-import type { EffectiveStyleSnapshotV1, ProjectStyleViewV1, StyleSemanticV1 } from '../../domain/style/types';
+import type { EffectiveStyleSnapshotV1, ProjectStyleViewV1, StyleSemanticV1, SourceStyleBaselineV1 } from '../../domain/style/types';
 import type { SourceRangeV1 } from '../../domain/build/phase6';
 import type { SqliteTransaction } from '../ports/sqlite';
 
-export interface ProjectStyleBindingRecord extends ProjectStyleViewV1 {
+export interface ProjectStyleBindingRecord extends Omit<ProjectStyleViewV1, 'sourceSemantic'> {
   revision: number;
   /** Pinned baseline is kept separate from effective semantic and user edits. */
   baseline: StyleSemanticV1;
+  sourceBaseline?: SourceStyleBaselineV1;
 }
 export interface SourceStyleSample { range: SourceRangeV1; text: string }
 export interface SourceStyleProfile {

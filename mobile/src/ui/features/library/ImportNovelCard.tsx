@@ -2,10 +2,9 @@
  * ImportNovelCard — 书库 primary action: pick a TXT and start the unified
  * build, plus the portable world-package import (plan §7.2/§7.3).
  *
- * The two product build modes (unified P3): 循序构建 first builds the opening
- * stage (~30%, chapter-aligned) through the FULL quality pipeline and later
- * stages wait for narrative triggers; 完整构建 covers the whole book before
- * the world opens. No bounded-opening shortcut is offered for these worlds.
+ * Both modes publish a verified playable opening. Progressive mode builds
+ * later segments from action dependencies; full mode continues with bounded
+ * low-priority windows after the opening is ready.
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -47,8 +46,8 @@ export function ImportNovelCard(props: {
           </Text>
           <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>
             {props.mode === 'progressive'
-              ? '先完整构建前 30% 再开局，后续阶段由剧情触发'
-              : '全书构建完成并发布后开局'}
+              ? '开局资料验证通过即可游玩，后续按行动需要补建'
+              : '先发布可玩开局，再分段整理全书'}
           </Text>
         </View>
       </View>

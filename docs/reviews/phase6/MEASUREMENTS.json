@@ -6,7 +6,10 @@
     "model": "GLM-5.3-Flash",
     "reasoningTier": "low",
     "concurrency": 2,
-    "physicalAndroidDevice": false
+    "physicalAndroidDevice": false,
+    "nodeVersion": "24.19.0",
+    "configuredContextWindowTokens": 1000000,
+    "configuredMaxOutputTokens": 16000
   },
   "source": {
     "rawSha256": "7f45fe0b11ea30eca95f5a736232dd4c466a57c0f2cc9f67530e432015ecc6f4",
@@ -42,7 +45,9 @@
         },
         "finishReason": "stop"
       }
-    ]
+    ],
+    "measurementBoundary": "Import start through validated opening artifact; excludes Android form/user interaction",
+    "buildTTFPObservedMs": 42859
   },
   "followup": {
     "localCache": "reuse existing extracted opening",
@@ -225,5 +230,15 @@
     "Provider caching, output variability and earlier negative samples remain material",
     "No real device or human content/style scoring",
     "Mock/synthetic faults prove protocol behavior only"
-  ]
+  ],
+  "observedLedgerTotalsAcrossPrivateAcceptanceDatabases": {
+    "succeededAttempts": 25,
+    "outcomeUnknownAttempts": 1,
+    "inputTokens": 120012,
+    "outputTokens": 48257,
+    "reasoningTokens": 1406,
+    "reasoningIncludedInOutput": true,
+    "directEarlyConnectionProbesExcluded": true,
+    "note": "The unknown row was marked sent before the private transport request cap rejected before fetch; it remains conservatively unknown and was not automatically retried."
+  }
 }
