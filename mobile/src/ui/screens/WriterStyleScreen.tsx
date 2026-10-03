@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { ProjectStyleViewV1, StyleMode, StyleOverridesV1, StyleSemanticV1 } from '../../../../src/domain/style/types';
@@ -92,7 +92,7 @@ export function WriterStyleScreen(): React.JSX.Element {
   ];
   return <ScreenShell bottom>
     <Header title="叙述风格" subtitle={title} onBack={() => navigation.goBack()} />
-    <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
         {error ? <StatusBanner tone="error" message={error} action={<Button variant="chip" label="重新读取" disabled={busy} onPress={() => void refresh(true).catch(e => setError(String(e)))} />} /> : null}
         {message ? <StatusBanner tone="success" message={message} /> : null}

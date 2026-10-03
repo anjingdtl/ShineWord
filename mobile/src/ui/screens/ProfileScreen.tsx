@@ -10,7 +10,7 @@
  * of a header, as required by plan §9.2.
  */
 import React from 'react';
-import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Header } from '../components/Header';
@@ -39,7 +39,7 @@ export function ProfileScreen(): React.JSX.Element {
         // and is not registered in release builds (plan §6.5).
         onTitleLongPress={__DEV__ ? () => navigation.navigate('ThemeGallery') : undefined}
       />
-      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
         <ThemeSkinCard />
         <ProfileFormCard form={form} submitLabel="保存" onSaved={() => undefined} />
         <AboutCard />
@@ -54,7 +54,7 @@ export function FirstRunScreen(): React.JSX.Element {
   const form = useProfileForm();
   return (
     <ScreenShell>
-      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.xl }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.xl }}>
         <View style={[styles.hero, { paddingTop: theme.space.xxl, gap: theme.space.md }]}>
           <BrandLockup />
           <Text style={[typeStyle(theme, theme.type.heading), { color: theme.text.primary }]}>

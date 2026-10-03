@@ -11,7 +11,7 @@
  * No `legacyStyles` import remains.
  */
 import React, { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
@@ -364,7 +364,7 @@ export function OpeningScreen(): React.JSX.Element {
         />
       </View>
 
-      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
         {setup && setup.locations.length === 0 ? (

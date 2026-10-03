@@ -26,7 +26,7 @@ P6-1/P6-2 基础定向验证（2026-10-02）：`npm run build:core` 退出 0；`
 | P6-4 | NPC物品与发现投影修复后的 campaign/segments/runtime | 0；23/23 | phase6-p4-final-targets.log；本地commit，不在后台写人物 |
 | P6-4 | npm run typecheck --prefix mobile / git diff --check | 0 / 0 | phase6-p4-mobile.log |
 
-P6-5 探索中的真实样本（非性能完整验收）：用户授权小说 UTF-8，7,178,905 字节，3,460,333 规范化码点、1504 章；GLM-5.3-Flash、low、同一 Linux 主机。全新本地项目一次定向抽取，导入 9.142 秒、抽取及发布 42.859 秒、TTFP 52.046 秒，29 facts / 6 events / 1 artifact；1 次真实 HTTP200，provider usage 5064 input / 2995 output / 8059 total，cached input 5056。服务端缓存为热，不能称全冷样本或真机数据。负例以及已有响应本地修复后的成功分别记录，不能合并为稳定成功率。
+P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原始字节为GBK（native GB18030解码），7,178,905 字节，3,460,333 规范化码点、1504 章；GLM-5.3-Flash、low、同一 Linux 主机。全新本地项目一次定向抽取，导入 9.142 秒、抽取及发布 42.859 秒、TTFP 52.046 秒，29 facts / 6 events / 1 artifact；1 次真实 HTTP200，provider usage 5064 input / 2995 output / 8059 total，cached input 5056。服务端缓存为热，不能称全冷样本或真机数据。负例以及已有响应本地修复后的成功分别记录，不能合并为稳定成功率。
 
 | P6-5 | npm run verify:core（最终内容接线后） | 0；761/761 | phase6-p5-complete-core.log；包括证据确认→段知识→下一动作NPC载入、旧全量回归，无 skipped/todo |
 | P6-5 | npm run typecheck --prefix mobile / git diff --check | 0 / 0 | phase6-p5-complete-mobile.log；定向 knowledge 集成 9/9 |
@@ -50,3 +50,16 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说 UT
 | P6-6 | npm run typecheck / npm run typecheck --prefix mobile（最后编辑后） | 0 / 0 | phase6-final-last-typecheck.log / phase6-final-last-mobile.log |
 | P6-6 | API30最终APK install-r / dumpsys | 0，Success，60000/0.6.0 | final-style-install.log；系统服务启动初期首次失败不隐藏，重试通过 |
 | P6-6 | API30 UI与完整设备旅程 | 未完成，系统ANR阻断 | DEVICE_RESULTS：system/SystemUI/dialer事件证据、恢复尝试，不能称App流程通过 |
+
+
+| P6-6 | 第二后段单attempt显式恢复、真实映射与采用 | 0，32.069秒，1次HTTP200 | second-followup-recovery-results：29739 input / 2595 output（reasoning47包含在output），3成果采用，stateVersion 0→0；53事实与3次抽取attempt均未增加；原unknown和审批时间保留 |
+| P6-6 | PR #10实际Core CI，代码head717fd68 | success；762/762 | [37083488005](https://github.com/anjingdtl/ShineWord/actions/runs/37083488005)，deterministic-core 51秒，0 fail/skipped/todo |
+| P6-6 | PR #10实际Android CI，代码head717fd68 | success；BUILD SUCCESSFUL | [37083487998](https://github.com/anjingdtl/ShineWord/actions/runs/37083487998)，android-debug job 5m28s，Gradle 4m32s；无编译失败 |
+
+追加真实调用后，8个私有验收库逐库汇总为26 succeeded / 1 outcome_unknown，149751 input / 50852 output / 1453 reasoning（包含于output）。原未知记录不是删除或改判成功：私有脚本第六次请求在fetch前被上限拒绝，核对源码、5条HTTP结果和唯一目标attempt后，仅登记该attempt显式replay审批，追加映射1次通过。此恢复不放开任何新的未知结局，未再抽取，未重复全书构建。早期连接探测仍排除于账本总计。
+
+
+| P6-6 | Android重复键盘避让修复后的全量/类型/版本/diff | 0；762/762，0 skipped/todo；类型/版本/差异0 | phase6-final-keyboard-core.log、root-typecheck/mobile/version；设备首次tone点击focused=true，输入calm-direct后仍focused=true，完整字段位于keyboard上方 |
+| P6-6 | 键盘修复最终standalone Debug构建/升级 | 0；BUILD SUCCESSFUL / install-r Success | phase6-final-keyboard-apk.log（2m56s），final-keyboard-install.log；106974675 bytes，SHA256 4a6a88cea82daf0d2d1adc914cb987049ddaada4b7667f2f9710829b4a5a4693；保留userdata |
+
+编码复核纠正：授权小说完整字节strict GBK解码成功，UTF-8 strict失败；Android imported_sources.encoding=gbk/status=active，byte_length=7178905/code_point_count=3460333。原文档UTF-8标注错误已纠正，不改变此前真实API的hash/坐标/Token/耗时证据。
