@@ -999,7 +999,10 @@ async function requestMappingProposals(
           jsonMode: true,
           logicalRequestId: `world-mapping:${input.incrementalMapping ? input.worldId : input.runId ?? input.worldId}:${exactJobId}`,
         });
-        if (input.signal?.aborted) throw new Error('World package mapping canceled.');
+        // A user pause waits for this paid request's checkpoint, exactly like
+        // the extraction units: the response is settled in the ledger already,
+        // dropping it here would re-bill the same batch on resume. The pause
+        // itself is honored at the batch boundary checks below.
         raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
       }
       const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
@@ -1027,11 +1030,17 @@ async function requestMappingProposals(
     completedBatches += 1;
     usagePerBatch.push(response.usage ?? null);
 
-    await input.assertCurrent?.();
+    // Fencing/pause moved AFTER the batch checkpoint write: an in-hand,
+    // ledger-settled response must reach its content-addressed done cache
+    // before a pause or lease change can stop the loop (extraction units
+    // follow the same contract). The checks below stop the NEXT batch.
     const ctx: CleanContext = { knownFactIds: input.incrementalMapping
       ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [] };
     // WorldMapper V2 (plan P4): evidence-verified rule mappings land through
     // the store's idempotent path; rejects surface in the review queue.
+    // These writes are deliberately unfenced against pause: ruleMappingId is
+    // content-derived, so a completed paid batch persists the same rows a
+    // non-paused run would, and resume replays them instead of re-paying.
     if (Array.isArray(raw.ruleMappings)) {
       for (const candidate of raw.ruleMappings) {
         const mapping = cleanRuleMapping(candidate, ctx, entityNameIndex, input.worldId);
@@ -1109,6 +1118,11 @@ async function requestMappingProposals(
       createdAt: doneJob?.createdAt ?? input.createdAt,
       updatedAt: input.createdAt,
     }, input.createdAt);
+
+    // Batch boundary: with the checkpoint persisted, honor pause/cancel and
+    // lease/fence staleness so nothing completed is discarded or re-billed.
+    await input.assertCurrent?.();
+    if (input.signal?.aborted) throw new Error('World package mapping canceled.');
   }
 
   return {

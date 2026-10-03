@@ -403,3 +403,51 @@ test('completed nested location checkpoint repairs locally with exact quote vali
   assert.equal((await h.worldStore.getJob('w','job-extract-request-cached')).attempts,1);
  }finally{h.db.close()}
 });
+
+test('user pause landing mid-flight mapping keeps the settled batch checkpoint; resume replays cache without a repeat paid call',async()=>{
+ const h=await setup();try{
+  const data=canon(20);await saveCanon(h,data);
+  const evidence={provenanceKind:'explicit',evidenceFactIds:['f-0','f-2']};
+  const proposal={skills:[{id:'s',name:'合成技能',attribute:'knowledge',...evidence}],
+   constraints:[],lore:[{id:'l',name:'合成资料',text:'已发布描述',...evidence}],actorTemplates:[],items:[]};
+  let calls=0;let signalArrived;const inFlight=new Promise(r=>signalArrived=r);
+  const signal={aborted:false};
+  const input={worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'mapper-pause',
+   createdAt:now(),incrementalMapping:options(),signal,
+   provider:{async complete(){calls++;signalArrived();await new Promise(r=>setTimeout(r,25));return {text:JSON.stringify(proposal),usage:{outputTokens:50}}}}};
+  const attempt=buildPackageDraftFromCanon(input);
+  await inFlight;signal.aborted=true;
+  await assert.rejects(attempt,/canceled/);
+  const job=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping'").get();
+  assert.ok(job,'mapping job row exists');
+  assert.equal(job.status,'done','a fully received, ledger-settled response must reach its done cache before the pause');
+  assert.ok(JSON.parse(job.result_json).proposal);
+  const resumed=await buildPackageDraftFromCanon({...input,runId:'pause-resume',signal:{aborted:false},
+   provider:{async complete(){throw Error('must_not_repeat_paid_mapping')}}});
+  assert.equal(calls,1,'resume replays the done cache; exactly one paid mapping call across pause/resume');
+  assert.ok(resumed.entries.length>0);
+ }finally{h.db.close()}
+});
+
+test('stale fence landing mid-flight mapping keeps the settled batch checkpoint; resume replays cache',async()=>{
+ const h=await setup();try{
+  const data=canon(20);await saveCanon(h,data);
+  const evidence={provenanceKind:'explicit',evidenceFactIds:['f-0','f-2']};
+  const proposal={skills:[],constraints:[],lore:[{id:'l',name:'合成资料',text:'已发布描述',...evidence}],actorTemplates:[],items:[]};
+  let calls=0;let signalArrived;const inFlight=new Promise(r=>signalArrived=r);
+  const input={worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'mapper-stale',
+   createdAt:now(),incrementalMapping:options(),
+   assertCurrent:async()=>{if(stale)throw Error('stale_segment_execution');},
+   provider:{async complete(){calls++;signalArrived();await new Promise(r=>setTimeout(r,25));return {text:JSON.stringify(proposal),usage:{outputTokens:50}}}}};
+  let stale=false;
+  const attempt=buildPackageDraftFromCanon(input);
+  await inFlight;stale=true;
+  await assert.rejects(attempt,/stale_segment_execution/);
+  const job=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping'").get();
+  assert.equal(job.status,'done','the lease check runs at the batch boundary, after the checkpoint write');
+  assert.ok(JSON.parse(job.result_json).proposal);
+  const resumed=await buildPackageDraftFromCanon({...input,runId:'stale-resume',assertCurrent:async()=>{},
+   provider:{async complete(){throw Error('must_not_repeat_paid_mapping');}}});
+  assert.equal(calls,1);assert.ok(resumed.entries.length>0);
+ }finally{h.db.close()}
+});
