@@ -1,24 +1,20 @@
 # 第六阶段持续建设状态
 
-- 工作仓库 `/workspace/ShineWord`，分支 `feat/phase6-progressive-build-and-writer-style`。基线 `51033973445825f01b730b7e62eec0a3352414e1` 已包含方案；基于最新 main，不回退、不 reset/clean/force push。
-- 唯一集成负责人 M0 root。阶段提交：P6-0 `fdf4612`；P6-1 `a60093a`；P6-2 `6614585`；P6-3 `a71beb4`；P6-4 `16231fe`；P6-5 `f053c1b`；P6-6 `717fd68`。
-- 当前阶段：P6-6代码717fd68已推送，PR https://github.com/anjingdtl/ShineWord/pull/10 open/mergeable，Core762/762与Android Debug实际CI均success。模拟器已恢复书库/授权TXT active/真实世界包导入/风格模式保存/本地开局。发现键盘adjustResize叠加padding导致首次焦点丢失，修复三屏已提交fc6c475并推送；Core762/762与Android Debug的新head CI均success，新APK安装通过，首次风格/模型端点编辑保持focus，自定义calm-direct保存通过；工作区仅自己的证据文档。
-- M1～M9 已生产接线，复用既有事实库、stage coordinator、ledger、lease/host；合同、数据所有者、迁移和协议说明见 BASELINE_AND_CONTRACTS.md 与各阶段 REVIEW。
-- 最新开局决议：冻结 opening-90s-3，一次精准抽取，小说输入≤模型上下文10%且≤6400码点，同时受总输入/输出/推理预算约束。真实证据本地编译基础行动规则，数值默认 rule_mapping；20事实/人物/地点/事件/行动/引用/冲突门禁不降低。旧冻结配置仍可恢复。
-- P6-5 修复：兼容已发布事实只用于必要依赖闭包；变化映射不重投影历史lore；嵌套条目ID随不可变新版本正确重映射；已采用段的证据确认接入玩家知识；下一动作fenced本地commit载入NPC；有界原生hash批次和读缓存减少长篇导入bridge往返。
-- 真实资源：仅用户提供小说与GLM测试凭据。新本地项目TTFP52.046秒，29事实/6事件/1成果，1次HTTP200，服务端缓存热，最终策略n=1不能宣称稳定90秒。第一后段74.368秒完成发布/采用；第二后段原映射触及私有测试上限：核对源码与5条HTTP结果证明第六次fetch未执行后，仅审批该attempt，1次新增真实映射32.069秒完成并采用；3 artifacts，53事实/3抽取attempt未增加，unknown历史与审批时间保留、无自动重发。更早修复样本两次真实回合成功。风格真实分析ready13.507秒；三模式本地快照通过。无人工评分/真机/同条件性能对照。
-- Android：JDK17/SDK36/NDK27已配置，最终Debug构建通过，旧Debug安装通过；无KVM，API36软件启动失败，API30 TCG启动/首配/书库通过。长篇旧导入hash阶段缓慢，新增批hash需最终APK重测。模拟器已重启，userdata保留。私有真实世界归档已合法导出，用于本地UI流程验证，不代表端上真实模型链路。
-- 凭据、小说、响应、SQLite、APK仅留私有scratch/dist，不入库。付费测试仅限授权样本、有界请求；unknown不自动重发。证据计数/时长仅收脱敏MEASUREMENTS.json。
-- 剩余可执行：键盘修复重建/首次编辑/保存已通过；设备本地风格编辑/开局/休息/存档/冷恢复，累计最多16次真实端上模型请求（私有loopback QA forwarder，真Key不传设备）；更新DEVICE/TEST/FINAL/STATE、提交非破坏推送PR，复核新head实际CI。真机/统计性能/人工质量仍未验。
-- 命令：npm run verify:core；npm run typecheck；npm run typecheck --prefix mobile；npm run verify:version；git diff --check；JAVA_HOME=/workspace/toolchains/jdk17 ANDROID_HOME=/workspace/toolchains/android-sdk GRADLE_USER_HOME=/workspace/toolchains/gradle npm run apk:debug --prefix mobile。
-- 交付边界：仅PR，不合并main、不打tag、不发布Release。工程通过不等于内容/风格/设备/性能全验收通过，外部未验列出复测步骤。
+- 仓库 `/workspace/ShineWord`，任务分支 `feat/phase6-progressive-build-and-writer-style`，main 基线含方案提交 `51033973445825f01b730b7e62eec0a3352414e1`。唯一集成负责人 root，M0～M9 已接入生产路径。
+- 阶段提交：P6-0 `fdf4612`、P6-1 `a60093a`、P6-2 `6614585`、P6-3 `a71beb4`、P6-4 `16231fe`、P6-5 `f053c1b`、P6-6 `717fd68`；键盘修复 `fc6c475`；范围身份/准备恢复修复 `4cdaaceb87e79da07ebae4881a85c96ccd88596d`。没有 reset/clean/force push，没有合并/tag/Release。
+- 当前阶段：P6-6 最终端上复测和交付记录。PR https://github.com/anjingdtl/ShineWord/pull/10 open/mergeable，最新代码已推送；实际 Core CI 37099516040 success（766/766、版本一致），Android CI 37099515993 success（移动类型检查与Debug构建）。旧 head 两项 CI 均通过。
+- 最新本地门禁：verify:core 766/766、root/mobile typecheck、verify:version、diff check、standalone Debug 全部 exit0。最新 APK 106974099 bytes，SHA256 `2e8bd3a1a83a6a1a00b7e3c681a1031362c3f9218fd006aa6ff9ab1021607619`；已 install-r 保留数据。命令日志 phase6-scoped-final-*.log 在私有 scratch。
+- 已完成真实资源：授权 GBK 长篇全量导入；Linux 新本地项目合格成果52.046秒（热缓存n=1），两个后段各发布/采用、3成果、复用53事实与抽取；独立风格分析。不能称稳定90秒或设备性能达标。
+- 已完成 API30 正常 UI：全长GBK source active；真实世界包导入；三种风格/自定义编辑；本地开局；两连续真实GLM回合；短休、回退分叉、save7导出/正常导入、冷停 DB integrity/FK/正文与冻结风格完全一致；错误 JSON/ZIP 小说入口已拒绝。
+- 已解除规划阻断、仍须完整链路：正确 UTF8 TXT source `src-947164f49fe41d01-murtgya9` 已 active（76178CP/35章/74chunks），旧 APK 切边批规划7/8门禁失败，0新增模型请求。新 APK 显式复制 SourceChunk 完整身份/分离异步，未放宽覆盖断言；Node/移动编译回归通过，原生新规划8/8已冷DB验证，完整发布/回合补建复测继续。失败诊断现在持久化且有显式准备重试，暂停/unknown/删除保护有事务故障测试。
+- 外部未验：真机与Android15/16/API24、独立人工内容/风格标注、同质量统计性能对照。详见 ACCEPTANCE_MATRIX/DEVICE_RESULTS，不以工程通过关闭未验场景。
 
-临时执行状态：API30 QEMU PID23247已SIGCONT运行，App/数据保留，新APK SHA4a6a88ce...安装通过；核心/类型/版本/APK新门禁均exit0。PR head fc6c475ae3b2205d8e90bcc769f6e14e6f718e78；Core run37086252161与Android run37086252100均success。QA forwarder session21599仍运行，port18765 adb reverse，累计严格最多16个实际GLM请求（前4个两回合已成功，保留计数），凭据只在私有host，设备dummy。当前profile通过正常UI改为QA localhost endpoint；完成后停止forwarder、移除reverse，并明确设备QA配置限制。世界真实归档2 artifacts，1本地campaign；custom tone calm-direct已保存，连续两回合真实模型通过、短休推进30分钟；正常save7导出/导入新campaign、冷停SQLite完整性/FK/正文和冻结风格一致、main v3/fork v2保留已通过；首次目标UTF8选择误返回own save7 JSON，raw SHA acbe.../68504bytes/9fallback章，批计划5/6门禁阻断且0上游请求；不能计为小说导入通过。正在纠正SAF键盘焦点再选实际UTF8 TXT，保留失败快照，不放宽规划覆盖断言。授权文件确认为GBK，原full原生source active/1504章/3260chunks；同小说UTF8前部80k rawCP转码样本已推Download，native批hash待测。
+## 当前复测与下一步（持续更新）
 
-当前追加修复（尚未commit）：正常SAF已确认TXT keyboard focus实际文件并导入947164f49fe41d0149d27cf2d1c6fbac366431d721c7e40d3269346523a7c2f9/234276bytes，encoding=utf-8/source active/76178CP/35章/74chunks。旧APK原生依然出现Analysis batch plan lost chunks7/8，0新增上游；失败SQLite私有native-real-utf8-preparation-failure.sqlite完整保留。TS/移动Babel/terser在Node8/8可行，不能称Hermes根因已定位。修复coordinator三个窄范围路径：分开read/hash，显式复制完整SourceChunk身份；增加有限missing-ID诊断；M3准备失败持久化execution_prepare_failed、冷投影保留、显式retryPreparation，暂停/unknown/删除保护；sourceImport重导入和ProjectHub重试生产接线，TXT-only pickTextRef阻止JSON/ZIP误导入。20定向回归（scoped hash/getter identity+segments恢复/暂停/unknown/删除）exit0；新全量/类型/版本/APK在运行，日志phase6-scoped-final-*.log。自己的QEMU PID23247 SIGSTOP减少构建竞争，App已force-stop且无在途HTTP；不得把该暂停算Android生命周期验收。构建后SIGCONT、install-r，新APK重新导入已active实际UTF8 TXT（必须KEY20一次observe Save焦点，再KEY20observe TXT焦点，再KEY66；touchTitle不更新DocsUI键盘焦点，禁止盲目20/19组合），缓存导入→批规划8/8→真实开局/暂停恢复/补建/采用仍待验证；如果失败新Error列missing IDs继续修复，不能结束或宣称原生构建通过。host forwarder PID30859/session21599仍运行,max16/已成功4；保留所有计数，unknown停止。PR头仍fc6c475，新修复未推/未CI。
+1. 原生规划7/8已经解除：最新冷DB实际1 unit/8 ranges、连续0..6400CP，完整身份保留。私有转发第5attempt漏配代理直连被拒，账本network_unknown且零自动重发；前4为已知HTTP200。项目已正常停止、空闲App冷停，自有QEMU33397暂停仅为避免构建资源竞争。
+2. 新M6 typed恢复/审批、M3/M7实际账本、M9正常逐attempt Alert及单独继续、M4映射关联、回合审批唯一所有者已实现。独立审查复现的旧协议恢复、租约CAS、done检查点覆盖三个缺口均修复。32定向与旧包/拆批37定向exit0、root/mobile类型/version/diff exit0；首轮779中拆批1失败已修复，最终779/779全量exit0（63.816秒）。APK审查补root共享引擎输入，最终standalone构建session84871正在执行。
+3. build environment必须使用GRADLE_USER_HOME=/workspace/toolchains/gradle、JAVA_HOME=/workspace/toolchains/jdk17、ANDROID_HOME=/workspace/toolchains/android-sdk；遗漏产生wrapper直连拒绝，不是代码构建失败。私有forwarder重启必须NODE_USE_ENV_PROXY=1 NODE_USE_SYSTEM_CA=1。
+4. 新APK保留数据升级后：正常UI取消/确认准确第5unknown；确认不得发送或清暂停/unknown，冷DB核对exact replay_approved_at。只在正常UI明确单独继续后允许新调用；保留5个计数、总上限16，后续unknown仍立即停车。不得离线改库审批/清库/重置未知。继续真实TXT发布、开局、至少两个后段/采用、连续游玩、暂停恢复、风格与save7。
+5. 本次源码未commit，现PR head仍4cdaace且两项实际CI成功。完成可执行复测/修复后提交清晰追加commit、非force推送、核对最终head实际CI；文档/PR同步最新证据，停止私有forwarder并清理ADB reverse（无在途时）。
 
-最新追加门禁：Core766/766、root/mobile typecheck、version、diff和standalone Debug已exit0；APK2m50s/106974099bytes/SHA2e8bd3a1a83a6a1a00b7e3c681a1031362c3f9218fd006aa6ff9ab1021607619，日志phase6-scoped-final-*.log；QEMU已CONT，install-r/newAPK已发起session8705。当前无新增实际API调用，forwarder4known/上限16，host session21599。原生7/8是否修复待正常界面重导入已active正确TXT（947...）；不能宣称已解决。SourceImport当前仍throw准备原Error，冷数据诊断已持久并Hub重试可见；没有新增preparationFailure返回字段。新代码变更未commit/未push/未新CI，旧PR头fc仍双CIgreen。
-
-当前设备动作：新APK2e8bd...升级成功，书库显示真实UTF8项目world-src-947164f49fe41d01-murtgya9以及误导入自身JSON测试项目world-src-acbe0a64844356d0-mursz5j9（保留失败证据、未删除userdata）；scoped-identity-guard-focus.xml已通过KEY20观测选中Save JSON，正在KEY66验证TXT-only错误在写库前拦截。下一步正常Library import→DocsUI KEY20观察Save再KEY20观察TXT，再KEY66，不touch标题、不盲目UP/DOWN组合。scope新身份修复预期1batch覆盖8chunks，仍待实际验证。私有forwarder max16计数4全部known，上游无新请求；QEMU正常运行。新版standaloneAPK/766核心/root-mobile类型/version/diff都exit0；代码尚未commit，PR仍fc旧头。
-
-会话恢复记录：用户继续消息后自有QEMU23247与私有forwarder已退出（QEMU为zombie），无在途模型请求，计数仍4/4 known。核对锁拥有者后仅停放自有AVD过期锁，保留全部userdata；以同API30软件配置重新启动，forwarder恢复原4条计数/上限16/unknown停车规则。候选APK2e8已安装，正确TXT重选尚未激活，仍需端上复测。
+检查命令：npm run verify:core、npm run typecheck、npm run typecheck --prefix mobile、npm run verify:version、git diff --check、npm run apk:debug --prefix mobile。小说、凭据、未脱敏请求、DB、截图和APK不入仓库。已通过的检查只有新改动/失败才重跑。

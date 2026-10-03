@@ -912,6 +912,24 @@ export class SqliteWorldStore implements WorldStore {
     await this.db.transaction(async tx => this.upsertJobTx(tx, job, updatedAt));
   }
 
+  async prepareMappingJob(job: WorldJobRecord, updatedAt: string): Promise<WorldJobRecord> {
+    if (job.kind !== 'rule_mapping' || job.status !== 'pending') throw new Error('Invalid mapping checkpoint.');
+    return this.db.transaction(async tx => {
+      const existing = await tx.queryOne<JobRow>('SELECT * FROM world_jobs WHERE world_id = ? AND job_id = ?', [job.worldId, job.jobId]);
+      if (existing && existing.content_hash === job.contentHash
+        && existing.extractor_version === job.extractorVersion && existing.model_fingerprint === job.modelFingerprint
+        && (existing.status === 'done' || existing.status === 'pending' && existing.result_json !== null)) {
+        // Pending split checkpoints are resumable work, not empty requests.
+        // Reusing them avoids losing completed child proposals after restart.
+        return this.jobFromRow(existing);
+      }
+      await this.upsertJobTx(tx, job, updatedAt);
+      const row = await tx.queryOne<JobRow>('SELECT * FROM world_jobs WHERE world_id = ? AND job_id = ?', [job.worldId, job.jobId]);
+      if (!row) throw new Error('Mapping checkpoint was not persisted.');
+      return this.jobFromRow(row);
+    });
+  }
+
   private async upsertJobTx(tx: SqliteTransaction, job: WorldJobRecord, updatedAt: string): Promise<void> {
     await tx.execute(
       `INSERT INTO world_jobs
@@ -927,7 +945,11 @@ export class SqliteWorldStore implements WorldStore {
          usage_json = excluded.usage_json,
          result_json = excluded.result_json,
          error = excluded.error,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at
+       WHERE NOT (world_jobs.kind = 'rule_mapping' AND world_jobs.status = 'done' AND excluded.status <> 'done'
+         AND world_jobs.content_hash IS excluded.content_hash
+         AND world_jobs.extractor_version IS excluded.extractor_version
+         AND world_jobs.model_fingerprint IS excluded.model_fingerprint)`,
       [
         job.worldId,
         job.jobId,

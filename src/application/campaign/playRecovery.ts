@@ -1,4 +1,5 @@
 import type { SqliteDatabase, SqliteTransaction } from '../ports/sqlite';
+import type { LlmReplayApprovalPort } from '../ports/llmLedger';
 
 export interface PlayRecovery {
   expectedStateVersion: number;
@@ -63,19 +64,7 @@ export async function clearPlayIntentDraft(db: SqliteDatabase, branchId: string,
 
 /** Approval is scoped to the exact attempt(s) shown to the player, never a global bypass. */
 export async function acknowledgePlayReplay(
-  db: SqliteDatabase, campaignId: string, branchId: string, expectedStateVersion: number, attemptIds: string[],
+  ledger: LlmReplayApprovalPort, campaignId: string, branchId: string, expectedStateVersion: number, attemptIds: string[],
 ): Promise<void> {
-  await db.transaction(async tx => {
-    const version = await branchVersion(tx, campaignId, branchId);
-    if (version !== expectedStateVersion) throw new Error('战役状态已经更新，请重新读取恢复信息。');
-    for (const attemptId of attemptIds) {
-      const row = await tx.queryOne<{ attempt_id: string }>(
-        `SELECT attempt_id FROM llm_request_attempts WHERE attempt_id = ? AND branch_id = ? AND state_version = ?
-          AND request_kind IN ('planner', 'narrator') AND status = 'outcome_unknown'`, [attemptId, branchId, version],
-      );
-      if (!row) throw new Error('这条请求不属于当前未完成的回合。');
-      await tx.execute('UPDATE llm_request_attempts SET replay_approved_at = COALESCE(replay_approved_at, ?) WHERE attempt_id = ?',
-        [Date.now(), attemptId]);
-    }
-  });
+  await ledger.acknowledgePlayReplay({ campaignId, branchId, expectedStateVersion, attemptIds });
 }

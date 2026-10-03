@@ -257,6 +257,8 @@ export interface WorldStore {
   }): Promise<void>;
 
   upsertJob(job: WorldJobRecord, updatedAt: string): Promise<void>;
+  /** Atomically retain a compatible completed mapping before dispatch. */
+  prepareMappingJob(job: WorldJobRecord, updatedAt: string): Promise<WorldJobRecord>;
   getJob(worldId: string, jobId: string): Promise<WorldJobRecord | null>;
   findReusableJob(
     worldId: string,

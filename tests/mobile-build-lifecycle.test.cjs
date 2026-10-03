@@ -24,6 +24,7 @@ const ts = require('typescript');
 
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 const { SqliteBuildRunStore } = require('../dist/infra/sqlite/sqliteBuildRunStore');
+const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
 
 class NodeSqliteAdapter {
   constructor(db) {
@@ -88,7 +89,7 @@ function loadMobileModule(relativePath, mocks = {}) {
 }
 
 function makeRuntime(adapter) {
-  return { db: adapter, worldStore: null };
+  return { db: adapter, worldStore: null, llmLedger: new SqliteLlmLedgerStore(adapter) };
 }
 
 function insertSource(db, sourceId, fileName) {

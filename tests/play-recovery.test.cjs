@@ -16,6 +16,21 @@ async function setup() {
   return { db, adapter, ledger: new SqliteLlmLedgerStore(adapter) };
 }
 
+test('play approval rejects an in-flight call and a contradictory campaign binding without clearing the old unknown',async()=>{
+  const {db,ledger}=await setup();try {
+    const meta={logicalRequestId:'narrator:b:turn-x',requestKind:'narrator',branchId:'b',stateVersion:13,modelProfileFingerprint:'fp'};
+    const old=await ledger.beginAttempt({...meta,campaignId:'wrong'},1);
+    await ledger.updateAttempt(old.attemptId,{status:'outcome_unknown'});
+    await assert.rejects(acknowledgePlayReplay(ledger,'c','b',13,[old.attemptId]),/不属于/);
+    const valid=await ledger.beginAttempt({...meta,logicalRequestId:'narrator:b:turn-y',campaignId:'c'},2);
+    await ledger.updateAttempt(valid.attemptId,{status:'outcome_unknown'});
+    const active=await ledger.beginAttempt({...meta,logicalRequestId:'planner:b:turn-y',requestKind:'planner'},3);
+    await ledger.updateAttempt(active.attemptId,{status:'sent'});
+    await assert.rejects(acknowledgePlayReplay(ledger,'c','b',13,[valid.attemptId]),/正在发送/);
+    assert.equal((await ledger.listAttempts(valid.logicalRequestId))[0].replayApprovedAt,null);
+  } finally {db.close()}
+});
+
 test('play recovery: durable draft survives reload, permits known-failure edits, and clears by version', async () => {
   const { db, adapter } = await setup();
   assert.equal(await savePlayIntentDraft(adapter,'c','b','original action'),13);
@@ -51,7 +66,7 @@ test('play recovery: acknowledged replay keeps unknown usage, dispatches once, a
   const request = {role:'Narrator',system:'s',user:'u',maxOutputTokens:10,ledger:meta};
   await assert.rejects(provider.complete(request),OutcomeUnknownReplayError);
   assert.equal(calls,0);
-  await acknowledgePlayReplay(adapter,'c','b',13,[attempt.attemptId]);
+  await acknowledgePlayReplay(ledger,'c','b',13,[attempt.attemptId]);
   assert.equal((await loadPlayRecovery(adapter,'c','b')),null);
   await provider.complete(request);
   const history = await ledger.listAttempts(meta.logicalRequestId);
@@ -75,10 +90,10 @@ test('play recovery: approval rejects other branches, campaign, kind, stale vers
   const foreign = await ledger.beginAttempt({logicalRequestId:'narrator:other:turn-0014',requestKind:'narrator',branchId:'other',stateVersion:13,modelProfileFingerprint:'fp'},2);
   const world = await ledger.beginAttempt({logicalRequestId:'world:b:unit',requestKind:'world_extract',branchId:'b',stateVersion:13,modelProfileFingerprint:'fp'},3);
   await recoverInterruptedAttempts(ledger);
-  await assert.rejects(acknowledgePlayReplay(adapter,'wrong','b',13,[a.attemptId]),/分支不存在/);
-  await assert.rejects(acknowledgePlayReplay(adapter,'c','b',12,[a.attemptId]),/状态已经更新/);
-  await assert.rejects(acknowledgePlayReplay(adapter,'c','b',13,[a.attemptId,foreign.attemptId]),/不属于/);
+  await assert.rejects(acknowledgePlayReplay(ledger,'wrong','b',13,[a.attemptId]),/分支不存在/);
+  await assert.rejects(acknowledgePlayReplay(ledger,'c','b',12,[a.attemptId]),/状态已经更新/);
+  await assert.rejects(acknowledgePlayReplay(ledger,'c','b',13,[a.attemptId,foreign.attemptId]),/不属于/);
   assert.equal((await ledger.listAttempts(a.logicalRequestId))[0].replayApprovedAt,null);
-  await assert.rejects(acknowledgePlayReplay(adapter,'c','b',13,[world.attemptId]),/不属于/);
+  await assert.rejects(acknowledgePlayReplay(ledger,'c','b',13,[world.attemptId]),/不属于/);
   db.close();
 });

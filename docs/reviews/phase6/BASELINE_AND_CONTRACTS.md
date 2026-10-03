@@ -43,3 +43,9 @@ ImportTime、BuildTTFP、UserTTFP、FirstNarrativeTime、RequiredBuildWait、Bac
 实际配置 JDK17.0.20.1/Android SDK36、NDK27、Gradle9.3.1；schema最终31（29共享域，30旧粗读恢复，31普通回合interaction fence）。版本0.6.0/60000。最终来源/段/artifact协议、所有权、存档7与归档4说明见 COMPATIBILITY.md。
 
 用户后续授权提供GLM与一部小说并调整开局目标90秒；模型10%为上限，最终冻结opening-90s-3单次精准抽取+本地证据规则编译。保留所有质量门禁，不为达90秒放宽引用/冲突。测量将source-active至成果发布（BuildTTFP）与导入+发布分开；52.046秒为实际harness从开始导入到已验证成果的总时长，不包含Android开局表单人工交互，不能写成端上UserTTFP。n=1且服务端缓存热；原30%/50%/P95性能对照目标仍待同条件资源复测。
+
+## 端上恢复追加合同（P6-6审查）
+
+真实原生断连复测发现：M6账本正确保留unknown，但M3/M7按run错误码推断结局会误投影为queued，M9缺构建请求的逐attempt确认。补充`LlmBuildRecoveryPort`与`LlmReplayApprovalPort`：既有SqliteLlmLedgerStore为唯一审批写入所有者；读取真实账本、精确关联run/unit及世界共享映射job，确认只更新展示的unknown attempt的replay_approved_at，保留原结局/用量，不启动请求或清除暂停。事务校验项目/run、fencing、控制状态、活租约与prepared/sent。回合审批迁入同一账本所有者，原回合状态版本/分支校验保留。无新schema/账本/租约。后续出现的新unknown需新的明确确认。
+
+映射关联补充：M4在既有run.plan_state_json的强类型RunPlanState.mappingRequestIds中、持当前租约与fencing登记准确logical request；改写规划状态和重规划保留关联。M6通过关联读取共享映射账本，不把世界内任意映射unknown投影到所有run。已完成开局仍ready；项目批量查询仅未知记录。已有world_jobs在发送前登记pending检查点身份，提案/发布/事实门禁不变。无JSON1/新schema依赖，无请求/用量/租约复制。

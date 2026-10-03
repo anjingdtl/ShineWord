@@ -35,6 +35,7 @@ export function BuildTaskCard(props: {
   onCancel: (runId: string) => void;
   onReview: () => void;
   onResumeCurrentApi: (runId: string) => void;
+  onConfirmReplay: () => void;
   busy: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
@@ -50,7 +51,8 @@ export function BuildTaskCard(props: {
   const pausing = isRunning && task.pauseRequested && !stopping;
   // Resume while running is allowed when the user wants to undo a just-made
   // pause request, or when no live lease protects another executor.
-  const canResume = !automaticRecovery && !['completed', 'canceled', 'failed_terminal'].includes(task.status)
+  const canResume = !automaticRecovery && !task.lastErrorCode?.includes('outcome_unknown')
+    && !['completed', 'canceled', 'failed_terminal'].includes(task.status)
     && (!isRunning || pausing || task.leaseHeld === false);
   const activityLine = taskActivityLine(task);
 
@@ -107,6 +109,8 @@ export function BuildTaskCard(props: {
         </Text>
       ) : null}
       <View style={[styles.actions, { gap: theme.space.sm, marginTop: theme.space.sm }]}>
+        {task.replayRecovery ? <Button label="确认请求重试" onPress={props.onConfirmReplay}
+          disabled={props.busy || task.leaseHeld} testID={`task-replay-${task.runId}`} /> : null}
         {task.openReviewIssues > 0 ? (
           <Button label={`查看审查${task.openReviewIssues > 0 ? `（${task.openReviewIssues}）` : ''}`}
             onPress={props.onReview} testID={`task-review-${task.runId}`} />

@@ -7,6 +7,16 @@ import type {
 } from '../../application/ports/worldBuildStore';
 import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
 import type { LlmPhysicalRequestMetric } from '../../application/llm/types';
+import { revivePlanState } from '../../application/worldBuild/runConfig';
+
+function retainMappingRequests(previous: string | null, next: string | null): string | null {
+  const old = revivePlanState(previous, { bodyTargetRatio: 0.30 });
+  if (!old.mappingRequestIds?.length) return next;
+  const state = revivePlanState(next, { bodyTargetRatio: 0.30 });
+  state.mappingRequestIds = [...new Set([...old.mappingRequestIds, ...(state.mappingRequestIds ?? [])])];
+  if (state.mappingRequestIds.length > 8192) throw new Error('mapping_request_checkpoint_limit');
+  return JSON.stringify(state);
+}
 
 interface RunRow extends SqliteRow {
   run_id: string;
@@ -224,65 +234,50 @@ export class SqliteBuildRunStore implements BuildRunStore {
 
   async acquireLease(runId: string, owner: string, ttlMs: number, now: string): Promise<number | null> {
     const expires = new Date(Date.parse(now) + ttlMs).toISOString();
-    await this.db.execute(
-      `UPDATE world_build_runs SET
-         lease_owner = ?, lease_expires_at = ?, fencing_token = fencing_token + 1,
-         heartbeat_at = ?, updated_at = ?,
-         status = 'running'
-       WHERE run_id = ?
-         AND status NOT IN ('failed_terminal', 'canceled', 'completed')
-         AND (lease_owner IS NULL OR lease_owner = ? OR lease_expires_at IS NULL OR lease_expires_at < ?)`,
-      [owner, expires, now, now, runId, owner, now],
-    );
-    // node:sqlite and the RN adapter report affected rows differently; re-read
-    // to decide ownership instead of relying on the write result shape.
-    const row = await this.db.queryOne<{ lease_owner: string | null; fencing_token: number }>(
-      'SELECT lease_owner, fencing_token FROM world_build_runs WHERE run_id = ?',
-      [runId],
-    );
-    return row && row.lease_owner === owner ? row.fencing_token : null;
+    return this.db.transaction(async tx => {
+      const changed = await tx.execute(
+        `UPDATE world_build_runs SET
+           lease_owner = ?, lease_expires_at = ?, fencing_token = fencing_token + 1,
+           heartbeat_at = ?, updated_at = ?,
+           status = 'running'
+         WHERE run_id = ?
+           AND status NOT IN ('failed_terminal', 'canceled', 'completed')
+           AND (lease_owner IS NULL OR lease_owner = ? OR lease_expires_at IS NULL OR lease_expires_at < ?)`,
+        [owner, expires, now, now, runId, owner, now],
+      );
+      if (!changed) return null;
+      const row = await tx.queryOne<{ lease_owner: string | null; fencing_token: number }>(
+        'SELECT lease_owner, fencing_token FROM world_build_runs WHERE run_id = ?',
+        [runId],
+      );
+      return row && row.lease_owner === owner ? row.fencing_token : null;
+    });
   }
 
   async renewLease(runId: string, owner: string, fencingToken: number, ttlMs: number, now: string): Promise<boolean> {
     const expires = new Date(Date.parse(now) + ttlMs).toISOString();
-    const row = await this.db.queryOne<{ lease_owner: string | null; fencing_token: number }>(
-      'SELECT lease_owner, fencing_token FROM world_build_runs WHERE run_id = ?',
-      [runId],
-    );
-    if (!row || row.lease_owner !== owner || row.fencing_token !== fencingToken) return false;
-    await this.db.execute(
-      'UPDATE world_build_runs SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE run_id = ?',
-      [expires, now, now, runId],
-    );
-    return true;
+    return (await this.db.execute(
+      `UPDATE world_build_runs SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ?
+       WHERE run_id = ? AND lease_owner = ? AND fencing_token = ? AND lease_expires_at > ?`,
+      [expires, now, now, runId, owner, fencingToken, now],
+    )) > 0;
   }
 
   async releaseLease(runId: string, owner: string, fencingToken: number, now: string): Promise<boolean> {
-    const row = await this.db.queryOne<{ lease_owner: string | null; fencing_token: number }>(
-      'SELECT lease_owner, fencing_token FROM world_build_runs WHERE run_id = ?',
-      [runId],
-    );
-    if (!row || row.lease_owner !== owner || row.fencing_token !== fencingToken) return false;
-    await this.db.execute(
+    return (await this.db.execute(
       `UPDATE world_build_runs SET lease_owner = NULL, lease_expires_at = NULL,
          status = CASE WHEN status = 'running' THEN 'queued' ELSE status END,
-         updated_at = ? WHERE run_id = ?`,
-      [now, runId],
-    );
-    return true;
+         updated_at = ? WHERE run_id = ? AND lease_owner = ? AND fencing_token = ?`,
+      [now, runId, owner, fencingToken],
+    )) > 0;
   }
 
   async heartbeat(runId: string, owner: string, now: string): Promise<boolean> {
-    const row = await this.db.queryOne<{ lease_owner: string | null }>(
-      'SELECT lease_owner FROM world_build_runs WHERE run_id = ?',
-      [runId],
-    );
-    if (!row || row.lease_owner !== owner) return false;
-    await this.db.execute(
-      'UPDATE world_build_runs SET heartbeat_at = ?, updated_at = ? WHERE run_id = ?',
-      [now, now, runId],
-    );
-    return true;
+    return (await this.db.execute(
+      `UPDATE world_build_runs SET heartbeat_at = ?, updated_at = ?
+       WHERE run_id = ? AND lease_owner = ? AND lease_expires_at > ?`,
+      [now, now, runId, owner, now],
+    )) > 0;
   }
 
   async setRunStatus(runId: string, status: BuildRunStatus, now: string, errorCode?: string | null, errorMessage?: string | null): Promise<void> {
@@ -418,8 +413,8 @@ export class SqliteBuildRunStore implements BuildRunStore {
         [input.unitId],
       );
       if (!unit) return false;
-      const run = await tx.queryOne<{ fencing_token: number }>(
-        'SELECT fencing_token FROM world_build_runs WHERE run_id = ?',
+      const run = await tx.queryOne<{ fencing_token: number; plan_state_json: string | null }>(
+        'SELECT fencing_token, plan_state_json FROM world_build_runs WHERE run_id = ?',
         [unit.run_id],
       );
       if (!run || run.fencing_token !== input.fencingToken) return false;
@@ -449,8 +444,8 @@ export class SqliteBuildRunStore implements BuildRunStore {
     now: string;
   }): Promise<boolean> {
     return this.db.transaction(async tx => {
-      const run = await tx.queryOne<{ fencing_token: number }>(
-        'SELECT fencing_token FROM world_build_runs WHERE run_id = ?',
+      const run = await tx.queryOne<{ fencing_token: number; plan_state_json: string | null }>(
+        'SELECT fencing_token, plan_state_json FROM world_build_runs WHERE run_id = ?',
         [input.runId],
       );
       if (!run || run.fencing_token !== input.fencingToken) return false;
@@ -478,7 +473,7 @@ export class SqliteBuildRunStore implements BuildRunStore {
       if (input.planStateJson !== undefined) {
         await tx.execute(
           'UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?',
-          [input.planStateJson, input.now, input.runId],
+          [retainMappingRequests(run.plan_state_json, input.planStateJson), input.now, input.runId],
         );
       }
       return true;
@@ -486,10 +481,29 @@ export class SqliteBuildRunStore implements BuildRunStore {
   }
 
   async setRunPlanState(runId: string, planStateJson: string, now: string): Promise<void> {
-    await this.db.execute(
-      'UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?',
-      [planStateJson, now, runId],
-    );
+    await this.db.transaction(async tx => {
+      const row = await tx.queryOne<{ plan_state_json: string | null }>('SELECT plan_state_json FROM world_build_runs WHERE run_id = ?', [runId]);
+      if (row) await tx.execute('UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?',
+        [retainMappingRequests(row.plan_state_json, planStateJson), now, runId]);
+    });
+  }
+
+  async recordMappingRequest(runId: string, logicalRequestId: string, fencingToken: number, now: string): Promise<void> {
+    if (!logicalRequestId.startsWith('world-mapping:') || logicalRequestId.length > 1024) throw new Error('invalid_mapping_request_identity');
+    await this.db.transaction(async tx => {
+      const row = await tx.queryOne<RunRow>(`SELECT r.* FROM world_build_runs r JOIN worlds w ON w.world_id = r.world_id WHERE r.run_id = ?`, [runId]);
+      if (!row || row.fencing_token !== fencingToken || !row.lease_owner || !row.lease_expires_at
+        || !Number.isFinite(Date.parse(row.lease_expires_at)) || Date.parse(row.lease_expires_at) <= Date.parse(now)
+        || row.pause_requested || row.cancel_requested || ['completed', 'canceled', 'failed_terminal'].includes(row.status)) {
+        throw new Error('mapping_request_fence_lost');
+      }
+      const state = revivePlanState(row.plan_state_json ?? null, { bodyTargetRatio: 0.30 });
+      const ids = new Set(state.mappingRequestIds ?? []);
+      ids.add(logicalRequestId);
+      if (ids.size > 8192) throw new Error('mapping_request_checkpoint_limit');
+      state.mappingRequestIds = [...ids];
+      await tx.execute('UPDATE world_build_runs SET plan_state_json = ?, updated_at = ? WHERE run_id = ?', [JSON.stringify(state), now, runId]);
+    });
   }
 
   async requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume', now: string): Promise<void> {

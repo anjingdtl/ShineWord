@@ -6,11 +6,13 @@ import { isBuildIntentV1 } from '../../domain/build/validation';
 import { createExtractionRun } from '../worldBuild/coordinator';
 import { worldBuildExtractorVersion } from '../world/llmExtractor';
 import type { FrozenRunConfig } from '../worldBuild/runConfig';
+import type { LlmBuildRecoveryPort } from '../ports/llmLedger';
 
 /** Adapter from a logical multi-source segment to the EXISTING fenced run/unit engine. */
 export class ExistingBuildExecutor implements BuildExecutorPortV1 {
   constructor(private readonly deps: {
     sources: SourceStore; worlds: WorldStore; runs: BuildRunStore; catalog: SourceCatalogPortV1;
+    ledger: Pick<LlmBuildRecoveryPort, 'readBuildRequestOutcome'>;
     config(worldId: string, fingerprint: string): Promise<FrozenRunConfig>;
     sha256Hex(input: string): Promise<string>;
     control?(runId: string, command: 'pause' | 'resume' | 'cancel'): Promise<void>;
@@ -59,9 +61,12 @@ export class ExistingBuildExecutor implements BuildExecutorPortV1 {
     if (!run) throw new Error('run_missing');
     const units=await this.deps.runs.listUnits(runId);
     const retryAt=units.map(u=>u.retryAt).filter((v):v is string=>v!==null).sort()[0]??null;
+    const ledgerOutcome = await this.deps.ledger.readBuildRequestOutcome(runId, run.worldId);
     return {runId,phase:run.phase,status:run.status,completedUnits:run.unitsDone,failedUnits:run.unitsFailed,totalUnits:run.unitsTotal,
-      requestOutcome:run.lastErrorCode?.includes('outcome_unknown') || units.some(u => u.errorCode?.includes('outcome_unknown'))
+      requestOutcome:ledgerOutcome !== 'none' ? ledgerOutcome : run.lastErrorCode?.includes('outcome_unknown') || units.some(u => u.errorCode?.includes('outcome_unknown'))
         ?'outcome_unknown':run.status==='completed'?'known':'none',
-      lastErrorCode:run.lastErrorCode,retryAt,fencingToken:run.fencingToken};
+      lastErrorCode:ledgerOutcome === 'outcome_unknown' ? 'outcome_unknown'
+        : ledgerOutcome === 'known' && run.lastErrorCode?.includes('outcome_unknown') ? null : run.lastErrorCode,
+      retryAt,fencingToken:run.fencingToken};
   }
 }

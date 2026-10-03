@@ -39,3 +39,6 @@ schema 28 来源 `UNIQUE(source_id)` 不改为跨世界共享。追加只对新�
 存档新版本 7 保存当前/历史完整 style snapshot 与内容 binding，读取 clean 6/5/4/3；世界归档版本 4 保存 canon/成果/来源映射和项目风格，旧版继续验证。双跳往返与失败原子回滚有数据库测试。无原文的导入归档仍可读取已导出内容，继续原文构建明确要求对应 TXT。索引、低优先未完成需求和调度缓存不冒充已导出原文；凭据递归禁键保持。
 
 原著表达基线随项目style绑定新增可选闭合sourceBaseline（styleId/profileVersion/semantic），归档hash覆盖它；旧style-1绑定无此字段仍可读取。保留最近选定的原著基线使preset/custom往返及归档后回到source不重新付费、不覆盖用户字段，不移植或伪造source analysis任务。view.sourceSemantic只是本地表达预览，不持久化为事实或新增知识。
+
+
+追加恢复合同使用既有schema31：RunPlanState新增可选且运行时校验的mappingRequestIds，旧plan缺字段仍读取；M4在活租约/fence内写入，replan合并保留。M6是build/play精确审批的唯一写入所有者；快照核对run/world/fence/来源/模型/控制及无在途请求，保留未知状态和费用诊断，审批不会恢复用户停止。旧registry/timeline按准确run/world及64位内容hash识别；旧world-shared映射按已知job-map hash协议仅适配未完成旧最终化任务，已完成开局与新登记run仍严格隔离。租约CAS与映射原子prepare使用原表/端口，无schema或存档版本变化。

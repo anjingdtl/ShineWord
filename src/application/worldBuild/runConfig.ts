@@ -252,6 +252,8 @@ export interface RunPlanState {
   plannerVersion?: 'plan-analysis-1';
   sourceRatio?: number;
   density?: number;
+  /** Exact shared mapping requests used by this run; M4 writes under its lease. */
+  mappingRequestIds?: readonly string[];
 }
 
 export function revivePlanState(json: string | null, defaults: { bodyTargetRatio: number }): RunPlanState {
@@ -269,6 +271,9 @@ export function revivePlanState(json: string | null, defaults: { bodyTargetRatio
         ? raw.sourceRatio
         : undefined,
       density: typeof raw.density === 'number' && raw.density > 0 ? raw.density : undefined,
+      mappingRequestIds: Array.isArray(raw.mappingRequestIds) && raw.mappingRequestIds.length <= 8192
+        && raw.mappingRequestIds.every(id => typeof id === 'string' && id.startsWith('world-mapping:') && id.length <= 1024)
+        ? [...new Set(raw.mappingRequestIds)] : undefined,
     };
   } catch {
     return { bodyTargetRatio: defaults.bodyTargetRatio, replanCount: 0 };

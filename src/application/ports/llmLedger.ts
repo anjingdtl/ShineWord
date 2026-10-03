@@ -11,6 +11,7 @@
  */
 
 import type { ReasoningTier } from '../llm/types';
+import type { BuildRunStatus } from './worldBuildStore';
 
 export type LlmAttemptStatus =
   | 'prepared'
@@ -113,4 +114,30 @@ export interface LlmRequestLedgerStore {
   }): Promise<number[]>;
   /** Attempt ids still in prepared/sent (interrupted dispatch candidates). */
   listInterruptedAttemptIds(): Promise<string[]>;
+}
+
+/** Exact, reviewable approval; recording it never dispatches or resumes work. */
+export interface BuildReplaySnapshotV1 {
+  runId: string;
+  worldId: string;
+  fencingToken: number;
+  status: BuildRunStatus;
+  sourceSnapshotHash: string;
+  modelFingerprint: string;
+  pauseRequested: boolean;
+  cancelRequested: boolean;
+  attemptIds: readonly string[];
+  attempts: ReadonlyArray<Pick<LlmRequestAttemptRecord, 'attemptId' | 'requestKind' | 'startedAt' | 'wireOutputTokens'>>;
+}
+
+export interface LlmBuildRecoveryPort {
+  readBuildUnknownRunIds(worldIds: readonly string[]): Promise<ReadonlySet<string>>;
+  readBuildRequestOutcome(runId: string, worldId: string): Promise<'none' | 'prepared' | 'sent' | 'known' | 'outcome_unknown'>;
+  readBuildReplay(runId: string): Promise<BuildReplaySnapshotV1 | null>;
+  acknowledgeBuildReplay(snapshot: BuildReplaySnapshotV1): Promise<void>;
+}
+
+export interface LlmReplayApprovalPort {
+  acknowledgePlayReplay(input: { campaignId: string; branchId: string; expectedStateVersion: number;
+    attemptIds: readonly string[] }): Promise<void>;
 }

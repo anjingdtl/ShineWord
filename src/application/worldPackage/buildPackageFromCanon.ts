@@ -941,7 +941,16 @@ async function requestMappingProposals(
       executionFingerprint, selectionVersion: input.incrementalMapping ? CANON_SELECTION_VERSION : 'legacy',
       dependencies: dependencyEntries }));
     const exactJobId = input.incrementalMapping ? `job-map-${input.worldId}-${batchHash}` : batchJobId;
-    const doneJob = await input.worldStore.getJob(input.worldId, exactJobId);
+    let doneJob = await input.worldStore.getJob(input.worldId, exactJobId);
+    // A different segment may finish this shared checkpoint after our read.
+    // The store atomically keeps done data and returns the current proposal.
+    if (doneJob?.status !== 'done' || doneJob.contentHash !== batchHash
+      || doneJob.extractorVersion !== `mapper-${input.mappingVersion}` || !doneJob.resultJson) doneJob = await input.worldStore.prepareMappingJob({
+      worldId: input.worldId, jobId: exactJobId, kind: 'rule_mapping', targetId: null,
+      status: 'pending', attempts: (doneJob?.attempts ?? 0) + 1,
+      contentHash: batchHash, extractorVersion: `mapper-${input.mappingVersion}`,
+      modelFingerprint: executionFingerprint, usageJson: null, resultJson: null, error: null,
+      createdAt: doneJob?.createdAt ?? input.createdAt, updatedAt: input.createdAt }, input.createdAt);
     const reusable = doneJob?.contentHash === batchHash
       && doneJob.extractorVersion === `mapper-${input.mappingVersion}`;
     const checkpoint = reusable && doneJob?.resultJson

@@ -1,10 +1,12 @@
 import type { BuildRunStore } from '../../src/application/ports/worldBuildStore';
 import type { ExecutionHostPortV1 } from '../../src/application/ports/phase6';
+import type { LlmBuildRecoveryPort } from '../../src/application/ports/llmLedger';
 
 /** OS execution adapter. It delegates all leases and checkpoints to the existing runner. */
 export class AndroidSegmentExecutionHost implements ExecutionHostPortV1 {
   constructor(private readonly deps: {
     runs: Pick<BuildRunStore, 'getRun' | 'setRunStatus' | 'listUnits' | 'requestSystemPause'>;
+    ledger: Pick<LlmBuildRecoveryPort, 'readBuildRequestOutcome'>;
     projectExists(worldId: string): Promise<boolean>;
     credentialsAvailable(runId: string): Promise<boolean>;
     launch(runId: string): Promise<void>;
@@ -57,6 +59,8 @@ export class AndroidSegmentExecutionHost implements ExecutionHostPortV1 {
   }
 
   private async hasUnknownOutcome(run: NonNullable<Awaited<ReturnType<BuildRunStore['getRun']>>>): Promise<boolean> {
+    const outcome = await this.deps.ledger.readBuildRequestOutcome(run.runId, run.worldId);
+    if (outcome !== 'none') return outcome === 'outcome_unknown';
     return Boolean(run.lastErrorCode?.includes('outcome_unknown'))
       || (await this.deps.runs.listUnits(run.runId)).some(unit => unit.status !== 'completed'
         && Boolean(unit.errorCode?.includes('outcome_unknown')));

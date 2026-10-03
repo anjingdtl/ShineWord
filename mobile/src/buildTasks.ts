@@ -16,6 +16,7 @@
 import { getDatabaseRuntime } from './database';
 import type { BuildRunRecord, BuildUnitRecord } from '../../src/application/ports/worldBuildStore';
 import type { SqliteRow } from '../../src/application/ports/sqlite';
+import type { BuildReplaySnapshotV1 } from '../../src/application/ports/llmLedger';
 export { taskOverallProgress } from '../../src/application/worldBuild/buildProgress';
 
 export interface BuildTaskView {
@@ -48,6 +49,7 @@ export interface BuildTaskView {
   leaseHeld: boolean;
   pauseRequested: boolean;
   cancelRequested: boolean;
+  replayRecovery: BuildReplaySnapshotV1 | null;
 }
 
 interface TaskRow extends SqliteRow {
@@ -127,7 +129,11 @@ async function queryOpenBuildTasks(worldId?: string, includeCompleted = false): 
     worldId ? [worldId] : [],
   );
   const now = Date.now();
-  return rows.map(row => {
+  return Promise.all(rows.map(async row => {
+    const outcome = await runtime.llmLedger.readBuildRequestOutcome(row.run_id, row.world_id);
+    const unknown = outcome === 'outcome_unknown';
+    const resolvedMarker = outcome === 'known' && Boolean(row.last_error_code?.includes('outcome_unknown'));
+    const replayRecovery = unknown ? await runtime.llmLedger.readBuildReplay(row.run_id) : null;
     const unitsTotal = row.units_total;
     // Live counters can never exceed the effective total: they are per-unit
     // states of exactly the units this run tracks.
@@ -138,7 +144,7 @@ async function queryOpenBuildTasks(worldId?: string, includeCompleted = false): 
       title: row.title ?? row.file_name ?? row.run_id,
       fileName: row.file_name,
       phase: row.phase as BuildRunRecord['phase'],
-      status: row.status as BuildRunRecord['status'],
+      status: unknown ? 'needs_review' as const : row.status as BuildRunRecord['status'],
       unitsDone: row.units_done,
       unitsTotal,
       unitsFailed: row.units_failed,
@@ -153,15 +159,20 @@ async function queryOpenBuildTasks(worldId?: string, includeCompleted = false): 
       lastActivityAt: row.last_activity_at && row.last_activity_at > row.updated_at
         ? row.last_activity_at
         : row.updated_at,
-      lastErrorCode: row.last_error_code,
-      lastErrorMessage: row.last_error_message,
+      lastErrorCode: unknown ? 'outcome_unknown' : resolvedMarker ? null : row.last_error_code,
+      lastErrorMessage: unknown ? '请先在 API 服务商核实上次请求的结果，再确认允许重试。' : resolvedMarker ? null : row.last_error_message,
       updatedAt: row.updated_at,
       leaseHeld: Boolean(row.lease_owner) && Boolean(row.lease_expires_at)
         && Date.parse(row.lease_expires_at as string) > now,
       pauseRequested: (row.pause_requested ?? 0) !== 0,
       cancelRequested: (row.cancel_requested ?? 0) !== 0,
+      replayRecovery,
     };
-  });
+  }));
+}
+
+export async function acknowledgeBuildReplay(snapshot: BuildReplaySnapshotV1): Promise<void> {
+  await (await getDatabaseRuntime()).llmLedger.acknowledgeBuildReplay(snapshot);
 }
 
 /** Failed/blocked units for one run - locating exactly what to retry. */

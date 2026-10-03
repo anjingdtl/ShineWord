@@ -108,11 +108,12 @@ type BuildRow = SqliteRow & {
   last_error_code: string | null;
 };
 
-/** One scoped local query; no task enrichment, providers, source text or sessions. */
+/** Local run projection enriched by the existing ledger port; no providers or source text. */
 export async function listProjectBuildSummaries(worldIds: readonly string[]): Promise<Map<string, ProjectBuildSummary>> {
   const grouped = new Map<string, ProjectRunStatus[]>();
   if (!worldIds.length) return new Map();
-  const { db } = await getDatabaseRuntime();
+  const { db, llmLedger } = await getDatabaseRuntime();
+  const unknownRunIds = await llmLedger.readBuildUnknownRunIds(worldIds);
   const now = new Date().toISOString();
   // Small IN batches also support old SQLite parameter limits.
   for (let offset = 0; offset < worldIds.length; offset += 200) {
@@ -127,13 +128,14 @@ export async function listProjectBuildSummaries(worldIds: readonly string[]): Pr
         GROUP BY r.run_id`, ids,
     );
     for (const row of rows) {
+      const unknown = unknownRunIds.has(row.run_id);
       const liveLease = Boolean(row.lease_owner && row.lease_expires_at && row.lease_expires_at > now);
-      const dynamic = ['running', 'queued', 'waiting_network', 'waiting_unlock', 'failed_retryable'].includes(row.status)
+      const dynamic = !unknown && ['running', 'queued', 'waiting_network', 'waiting_unlock', 'failed_retryable'].includes(row.status)
         || liveLease;
       const runs = grouped.get(row.world_id) ?? [];
-      runs.push({ runId: row.run_id, status: row.status, phase: row.phase,
+      runs.push({ runId: row.run_id, status: unknown ? 'needs_review' : row.status, phase: row.phase,
         done: row.units_done, total: row.units_total, failed: row.units_failed, dynamic, updatedAt: row.updated_at,
-        lastErrorCode: row.last_error_code });
+        lastErrorCode: unknown ? 'outcome_unknown' : row.last_error_code });
       grouped.set(row.world_id, runs);
     }
   }

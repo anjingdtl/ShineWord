@@ -30,7 +30,7 @@ export async function clearPlayIntentDraft(branchId: string, version: number) {
   return playRecovery.clearPlayIntentDraft((await getDatabaseRuntime()).db, branchId, version);
 }
 export async function acknowledgePlayReplay(campaignId: string, branchId: string, version: number, ids: string[]) {
-  return playRecovery.acknowledgePlayReplay((await getDatabaseRuntime()).db, campaignId, branchId, version, ids);
+  return playRecovery.acknowledgePlayReplay((await getDatabaseRuntime()).llmLedger, campaignId, branchId, version, ids);
 }
 
 export type { PlayTurnResult };

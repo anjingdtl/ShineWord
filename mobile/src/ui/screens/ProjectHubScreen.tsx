@@ -7,7 +7,7 @@
  * reused as-is. Project A's build never renders in Project B's hub.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -16,6 +16,7 @@ import {
   listBuildTaskPerfStats,
   listOpenBuildTasksForWorld,
   listBuildTasksForWorld,
+  acknowledgeBuildReplay,
   type BuildTaskPerfStats,
   type BuildTaskView,
 } from '../../buildTasks';
@@ -149,6 +150,25 @@ export function ProjectHubScreen(): React.JSX.Element {
     }
   }
 
+  function confirmRequestReplay(task: BuildTaskView) {
+    const snapshot = task.replayRecovery;
+    if (!snapshot || taskBusy) return;
+    const details = snapshot.attempts.map(a => {
+      const label = a.requestKind === 'world_extract' ? '事实抽取' : a.requestKind === 'world_mapping' ? '本项目共享映射'
+        : a.requestKind === 'registry' ? '人物与地点登记' : a.requestKind === 'timeline' ? '时间线整理' : '构建请求';
+      return `${label} · ${new Date(a.startedAt).toLocaleString()} · 输出预算 ${a.wireOutputTokens ?? '未知'} Token`;
+    }).join('\n');
+    Alert.alert('核实上次模型请求',
+      `请先在 API 服务商核实上次请求的结果和计费。允许重试可能产生重复计费。\n\n${details}\n\n仅确认以上 ${snapshot.attemptIds.length} 条尝试。确认后可另行继续构建；后续新的未知结果仍需核实。`, [
+        { text: '取消', style: 'cancel' },
+        { text: '已核实，允许重试', onPress: () => {
+          setTaskBusy(true);
+          void acknowledgeBuildReplay(snapshot).catch(e => setError(e instanceof Error ? e.message : String(e)))
+            .finally(() => { setTaskBusy(false); void refresh(); });
+        } },
+      ]);
+  }
+
   const playable = (entry?.packageRevision ?? 0) > 0 && entry?.openingReady === true;
   const projectStatus = PROJECT_STATUS_LABEL[deriveProjectStatus(entry ?? { packageRevision: 0 }, buildSummary)];
 
@@ -268,6 +288,7 @@ export function ProjectHubScreen(): React.JSX.Element {
                 task={task}
                 busy={taskBusy}
                 onReview={() => openWorldTab('review')}
+                onConfirmReplay={() => confirmRequestReplay(task)}
                 onResumeCurrentApi={runId => void resumeTask(runId, true)}
                 onResume={runId => void resumeTask(runId)}
                 onPause={runId => {

@@ -28,3 +28,17 @@
 - 旧APK正确TXT仍在范围裁剪后出现analysis plan7/8门禁失败；未发送模型、未降低覆盖/质量断言。Node TS与移动Babel/terser完整规划可行，不能把具体Hermes根因当作已证实。coordinator三处范围路径分离读取/哈希并显式保留chunkId/chapterId/chunkIndex；批规划失败增加有限missing-ID元数据诊断。
 - 准备失败发生在run创建前，之前仅UI错误而段仍planned。M3现在持久化execution_prepare_failed/failed_retryable，冷投影保留；显式本地retryPreparation遵守暂停/来源/删除/unknown约束。SourceImport重导入、ProjectHub真实重试入口只启动目标段，复用原M4 run幂等与lease，未建立第二执行账本。
 - 新增异步边缘/跨章/typed accessor记录的身份和精确hash回归，以及准备冷恢复、暂停/unknown、删除迟到错误负例；定向20/20与全量766/766退出0，无skip/todo。根/移动类型、版本/diff、standalone APK通过（2m50s，SHA2e8bd3a1a83a6a1a00b7e3c681a1031362c3f9218fd006aa6ff9ab1021607619，106974099bytes），install-r后的原生复测仍在进行，不提前宣称端上修复已通过。
+
+
+追加请求恢复与并发审查（2026-10-03）：
+
+- 正常原生重导入证实新规划为1 unit/8 ranges、连续0..6400CP，数据库integrity ok，原7/8阻断解除。第一次调用因私有QA转发器漏配云代理直连拒绝而产生network_unknown；未知账本保守保留，未自动重发，不称供应商故障或模型内容通过。
+- 发现构建任务仅按错误码投影未知结局，网络错误会显示可继续。新增M6强类型只读恢复/逐attempt审批端口；M3、M7、项目投影及切API/继续控制均读取实际既有账本。M9展示准确请求时间/种类/输出预算，确认只写replay_approved_at，不清unknown/用量或用户暂停，另一次明确继续才允许发送。回合审批也集中到同一M6所有者。
+- 共享映射以冻结租约/fence登记RunPlanState.mappingRequestIds，规划更新保留该集合；完成开局不因别段unknown锁定。兼容旧run范围映射、严格run/world/hash的registry/timeline；未登记关联的旧world-shared job-map hash仅在未完成旧最终化任务保守恢复，不猜坐标或创建账本身份。
+- 独立只读审查合成复现三个真实缺口：旧协议unknown未关联、renew/release读写间隙清除接管者租约、stale pending覆盖done映射。逐一修复并增加故障/竞态测试。租约获取事务返回实际token，续租/释放及heartbeat使用原子条件；已过期所有权不续租。既有M4检查点原子prepareMappingJob返回并保留兼容完成提案，stale pending不能清除成果/用量，无第二缓存、事实库或租约。
+- 32项定向协议/事务/故障测试exit0，包含跨run/world/kind、精确审批/后续未知、无请求发送、用户控制保留、切API、删除、共享缓存并发与旧协议恢复；root/mobile类型exit0。775全量为竞态修复前通过记录，修复后的779全量及新APK正在重检，最终结果由TEST_RESULTS记录。
+- 首次追加APK执行遗漏私有GRADLE_USER_HOME，wrapper direct网络拒绝exit1，未改业务源码或降低门禁。已恢复已配置Gradle代理/cache与JDK17/SDK环境重跑。
+
+- 最终全量首次779中778通过、旧拆批恢复1失败：原子prepare覆盖pending split检查点，造成父批重复请求。修复为同一事务保留兼容done以及有结果的pending检查点；原断言不改，旧包/增量/恢复37项定向exit0（5.949秒），779全量和包含该修复的APK再次重跑。
+
+- 拆批兼容修复后779/779全量exit0，无skip/todo，63.816秒。Android构建审查发现插件默认仅扫描mobile root，核心修复可能错误UP-TO-DATE复用bundle；app/build.gradle显式加入仓库src为bundle task输入，普通dev-server路径不变，最终APK重新打包。

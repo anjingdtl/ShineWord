@@ -84,10 +84,11 @@ async function assertSegmentExecution(tx: SqliteTransaction, intent: BuildIntent
   }
 }
 
-function governMappingRequest(
+async function governMappingRequest(
   request: { system: string; user: string; maxOutputTokens?: number; logicalRequestId?: string; reserveMultiplier?: number },
   complete: (request: LlmRequest) => Promise<LlmResponse>,
   governance: WorldBuildRequestGovernance,
+  execution: { fencingToken: number; leaseOwner: string | null },
 ): Promise<LlmResponse> {
   const baseRequest: LlmRequest = {
     role: 'WorldMapper',
@@ -96,10 +97,17 @@ function governMappingRequest(
     maxOutputTokens: request.maxOutputTokens ?? 6_000,
     jsonMode: true,
   };
+  const logicalRequestId = request.logicalRequestId ?? `world-mapping:${governance.runId}:${governance.worldId}`;
+  const runtime = await getDatabaseRuntime();
+  const runs = new SqliteBuildRunStore(runtime.db);
+  const run = await runs.getRun(governance.runId);
+  if (!run) throw new Error('project_deleted');
+  if (run.leaseOwner !== execution.leaseOwner) throw new Error('mapping_request_fence_lost');
+  await runs.recordMappingRequest(run.runId, logicalRequestId, execution.fencingToken, new Date().toISOString());
   return complete(governWorldBuildRequest({
     request: baseRequest,
     requestKind: 'world_mapping',
-    logicalRequestId: request.logicalRequestId ?? `world-mapping:${governance.runId}:${governance.worldId}`,
+    logicalRequestId,
     governance,
     reserveMultiplier: request.reserveMultiplier,
   }));
@@ -949,6 +957,16 @@ export async function requestSegmentRunControl(runId: string, command: 'pause' |
 function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Promise<void> {
   const previous = controlWrites.get(runId) ?? Promise.resolve();
   const write = previous.catch(() => undefined).then(async () => {
+    let approvedKnownOutcome = false;
+    if (kind === 'resume') {
+      const runtime = await getDatabaseRuntime();
+      const run = await new SqliteBuildRunStore(runtime.db).getRun(runId);
+      if (run) {
+        const outcome = await runtime.llmLedger.readBuildRequestOutcome(runId, run.worldId);
+        if (outcome === 'outcome_unknown') throw new Error('上次构建请求的扣费结果未知，请先确认该请求的重试。');
+        approvedKnownOutcome = outcome === 'known';
+      }
+    }
     const handled = await requestRunControl(runId, kind);
     if (!handled) {
       const runtime = await getDatabaseRuntime();
@@ -982,18 +1000,20 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
       await runtime.db.execute(
         `UPDATE world_build_units SET status = 'queued', retry_at = NULL, updated_at = ?
            WHERE run_id = ? AND status = 'needs_review'
-             AND error_code IN ('network', 'unknown', 'input_too_large', 'config')`,
-        [now, runId],
+             AND (error_code IN ('network', 'unknown', 'input_too_large', 'config')
+               OR (? = 1 AND instr(error_code, 'outcome_unknown') > 0))`,
+        [now, runId, approvedKnownOutcome ? 1 : 0],
       );
       await runtime.db.execute(
         `UPDATE world_build_runs SET status = 'queued', updated_at = ?
            WHERE run_id = ? AND status = 'needs_review'
              AND (last_error_code IS NULL OR last_error_code IN
-               ('network', 'unknown', 'input_too_large', 'config', 'mapping_failed', 'package_finalize_failed'))
+               ('network', 'unknown', 'input_too_large', 'config', 'mapping_failed', 'package_finalize_failed')
+               OR (? = 1 AND instr(last_error_code, 'outcome_unknown') > 0))
              AND NOT EXISTS (SELECT 1 FROM world_build_units u
                 WHERE u.run_id = world_build_runs.run_id AND u.status = 'needs_review'
                   AND u.error_code <> 'content_filter')`,
-        [now, runId],
+        [now, runId, approvedKnownOutcome ? 1 : 0],
       );
     }
     if (kind !== 'resume' && !activeRuns.has(runId)) {
@@ -1061,6 +1081,9 @@ export async function useCurrentApiForRun(runId: string, profile: ApiProfile): P
   const runtime = await getDatabaseRuntime();
   const runs=new SqliteBuildRunStore(runtime.db);
   const oldRun=await runs.getRun(runId);
+  if (oldRun && await runtime.llmLedger.readBuildRequestOutcome(runId, oldRun.worldId) === 'outcome_unknown') {
+    throw new Error('上次构建请求的扣费结果未知，请先确认该请求的重试。');
+  }
   const segment=await runtime.segmentPlans?.findSegmentByRunId(runId);
   if (segment && oldRun) {
     if (oldRun.leaseOwner && oldRun.leaseExpiresAt && oldRun.leaseExpiresAt > new Date().toISOString()) throw new Error('构建仍在执行，请先暂停后切换 API。');
@@ -1442,7 +1465,7 @@ async function runExtractionInternal(
             requirePlayableOpening: true,
             worldStore,
             provider: {
-              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
+              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance, run),
             },
             sha256Hex: nativeSha256.sha256Hex,
             worldId,
@@ -1509,7 +1532,7 @@ async function runExtractionInternal(
           const localOpening = openingBuild && intent.reason === 'bootstrap' && (runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION);
           const mappingVersion = localOpening ? 'opening-local-rules-1' : `mapper-1#${effectiveProfile.model}#${effectiveProfile.reasoningTier ?? 'low'}`;
           const input = { worldStore: runtime.worldStore,
-            provider: { complete: (request: Parameters<typeof governMappingRequest>[0]) => governMappingRequest(request, r => provider.complete(r), requestGovernance) },
+            provider: { complete: (request: Parameters<typeof governMappingRequest>[0]) => governMappingRequest(request, r => provider.complete(r), requestGovernance, run) },
             sha256Hex: nativeSha256.sha256Hex, worldId: run.worldId, runId: run.runId,
             sourceSha256: world.sourceSha256, mappingVersion, ...(localOpening ? { mappingMode: 'startup_local' as const } : {}), createdAt: new Date().toISOString(),
             executionConfigFingerprint: intent.executionConfigFingerprint, requirePlayableOpening: openingBuild,
@@ -1659,7 +1682,7 @@ async function runExtractionInternal(
             requirePlayableOpening: true,
             worldStore: runtime.worldStore,
             provider: {
-              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
+              complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance, run),
             },
             sha256Hex: nativeSha256.sha256Hex,
             worldId: run.worldId,
@@ -1718,7 +1741,7 @@ async function runExtractionInternal(
           worldStore: runtime.worldStore,
           resident: residentMapping,
           provider: {
-            complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance),
+            complete: request => governMappingRequest(request, request => provider.complete(request), requestGovernance, run),
           },
           sha256Hex: nativeSha256.sha256Hex,
           worldId: run.worldId,

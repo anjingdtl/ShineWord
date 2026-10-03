@@ -14,6 +14,7 @@ const ts = require('typescript');
 const { DatabaseSync } = require('node:sqlite');
 
 const root = path.resolve(__dirname, '..');
+const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
 const { BUILTIN_MIGRATIONS } = require(path.join(root, 'dist/infra/sqlite/builtinMigrations'));
 
 function loadMobileModule(relativePath, mocks = {}) {
@@ -110,7 +111,7 @@ test('PROJ-01 three worlds project into three isolated, sorted, searchable proje
   const db = setup();
   try {
     const adapter = new Adapter(db);
-    const fakeDatabase = { getDatabaseRuntime: async () => ({ db: adapter }) };
+    const fakeDatabase = { getDatabaseRuntime: async () => ({ db: adapter, llmLedger: new SqliteLlmLedgerStore(adapter) }) };
     const realBuildTasks = loadMobileModule('mobile/src/buildTasks.ts', { './database': fakeDatabase });
 
     // REAL per-world SQL: A's task never appears under B or C.
@@ -175,7 +176,7 @@ test('PROJ-01 three worlds project into three isolated, sorted, searchable proje
 
 function projectionFixture() {
   const db = setup();
-  const database = { getDatabaseRuntime: async () => ({ db: new Adapter(db) }) };
+  const database = { getDatabaseRuntime: async () => ({ db: new Adapter(db), llmLedger: new SqliteLlmLedgerStore(new Adapter(db)) }) };
   const worlds = ['a', 'b', 'c'].map(id => ({ worldId: `w-${id}`, title: `项目${id}`, sourceSha256: 'sha-1',
     updatedAt: NOW, packageRevision: 0, openingReady: false, openReviewIssues: 0 }));
   const library = loadMobileModule('mobile/src/projectLibrary.ts', {

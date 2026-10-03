@@ -145,6 +145,8 @@ export interface BuildRunStore {
   }): Promise<boolean>;
   /** Persist mutable planning state (body-target ladder, replan counters). */
   setRunPlanState(runId: string, planStateJson: string, now: string): Promise<void>;
+  /** Associates an exact shared mapping request without another ledger or lease. */
+  recordMappingRequest(runId: string, logicalRequestId: string, fencingToken: number, now: string): Promise<void>;
   /**
    * Cross-process control flags (unified build P4): the UI (or a
    * notification action) sets pause/cancel; the owning coordinator reads and

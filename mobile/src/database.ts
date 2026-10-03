@@ -84,7 +84,8 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   const segmentArtifacts = new SqliteSegmentArtifactStore(db, nativeSha256.sha256Hex);
   const segmentPublication = new SegmentPublicationService({ store: segmentArtifacts, worldStore, sourceCatalog, sha256Hex: nativeSha256.sha256Hex });
   const runs = new SqliteBuildRunStore(db);
-  const executor = new ExistingBuildExecutor({ sources: sourceStore, worlds: worldStore, runs, catalog: sourceCatalog,
+  const llmLedger = new SqliteLlmLedgerStore(db);
+  const executor = new ExistingBuildExecutor({ sources: sourceStore, worlds: worldStore, runs, catalog: sourceCatalog, ledger: llmLedger,
     config: (worldId, fingerprint) => segmentConfigs.get(worldId, fingerprint), sha256Hex: async input => nativeSha256.sha256Hex(input),
     control: async (runId, command) => { await runs.requestRunControl(runId, command, new Date().toISOString()); } });
   const segments = new SegmentBuildService({ store: segmentPlans, catalog: sourceCatalog, executor,
@@ -95,7 +96,6 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     sourceSearch,
     new ProgressiveBuildQueue(),
   );
-  const llmLedger = new SqliteLlmLedgerStore(db);
   // Cold-start recovery (infrastructure plan §53): attempts still marked
   // prepared/sent from a previous process become outcome_unknown; the
   // LedgeredProvider then refuses automatic replays of those requests.

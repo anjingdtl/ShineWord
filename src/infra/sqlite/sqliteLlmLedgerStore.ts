@@ -9,8 +9,13 @@ import type {
   LlmRequestAttemptRecord,
   LlmRequestLedgerStore,
   NewLlmRequestAttempt,
+  BuildReplaySnapshotV1,
+  LlmBuildRecoveryPort,
+  LlmReplayApprovalPort,
 } from '../../application/ports/llmLedger';
-import type { SqliteDatabase, SqliteRow } from '../../application/ports/sqlite';
+import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
+import type { BuildRunStatus } from '../../application/ports/worldBuildStore';
+import { revivePlanState } from '../../application/worldBuild/runConfig';
 
 interface AttemptRow extends SqliteRow {
   attempt_id: string;
@@ -80,8 +85,178 @@ const COLUMN_LIST = `attempt_id, logical_request_id, request_kind, campaign_id, 
   provider_request_id, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
   estimated_usage, started_at, finished_at, replay_approved_at`;
 
-export class SqliteLlmLedgerStore implements LlmRequestLedgerStore {
+// Extraction is linked to an exact unit, not a potentially overlapping run-id
+// prefix. Mapping jobs may be shared by compatible segments of this world.
+const BUILD_ATTEMPT_MATCH = `(
+  (a.request_kind = 'world_extract' AND EXISTS (
+    SELECT 1 FROM world_build_units u WHERE u.run_id = r.run_id
+    AND a.logical_request_id IN (
+      'world-extract:' || r.run_id || ':' || u.unit_id || ':all',
+      'world-extract:' || r.run_id || ':' || u.unit_id || ':characters',
+      'world-extract:' || r.run_id || ':' || u.unit_id || ':world')))
+  OR a.request_kind IN ('world_mapping', 'registry', 'timeline')
+)`;
+
+interface BuildAttemptRow extends AttemptRow {
+  recovery_run_id: string; run_plan_state_json: string | null; legacy_mapping_match: number;
+  recovery_run_status: string; recovery_run_phase: string; recovery_run_error: string | null;
+}
+const BUILD_ATTEMPT_COLUMNS = `${COLUMN_LIST.split(',').map(c => 'a.' + c.trim()).join(',')},
+  r.run_id AS recovery_run_id, r.plan_state_json AS run_plan_state_json,
+  r.status AS recovery_run_status, r.phase AS recovery_run_phase, r.last_error_code AS recovery_run_error,
+  CASE WHEN a.logical_request_id = 'world-mapping:' || r.run_id || ':' || r.world_id
+    OR EXISTS (SELECT 1 FROM world_jobs j WHERE j.world_id = r.world_id
+      AND a.logical_request_id = 'world-mapping:' || r.run_id || ':' || j.job_id)
+    THEN 1 ELSE 0 END AS legacy_mapping_match`;
+function belongsToBuild(row: BuildAttemptRow): boolean {
+  if (row.request_kind === 'world_extract') return true;
+  if (row.request_kind === 'registry' || row.request_kind === 'timeline') {
+    const prefix = `world-${row.request_kind}:${row.recovery_run_id}:${row.world_id}:`;
+    return row.logical_request_id.startsWith(prefix) && /^[a-f0-9]{64}$/.test(row.logical_request_id.slice(prefix.length));
+  }
+  const tracked = revivePlanState(row.run_plan_state_json, { bodyTargetRatio: 0.30 }).mappingRequestIds;
+  if (row.legacy_mapping_match === 1 || tracked?.includes(row.logical_request_id)) return true;
+  // Before mappingRequestIds existed, incremental mapping was already shared
+  // at world scope. Only an unfinished legacy finalization may recover its
+  // exact world/job-hash request. Completed openings and new tracked runs
+  // never inherit another segment's unknown request. No coordinates or new
+  // ledger identities are synthesized by this conservative compatibility path.
+  if (tracked !== undefined || ['completed', 'canceled', 'failed_terminal'].includes(row.recovery_run_status)) return false;
+  if (!['mapping', 'validating', 'publishing'].includes(row.recovery_run_phase)
+    && !/^(package_finalize_failed|mapping_.*|outcome_unknown)$/.test(row.recovery_run_error ?? '')) return false;
+  const prefix = `world-mapping:${row.world_id}:job-map-${row.world_id}-`;
+  return row.logical_request_id.startsWith(prefix) && /^[a-f0-9]{64}$/.test(row.logical_request_id.slice(prefix.length));
+}
+
+interface ReplayRunRow extends SqliteRow {
+  run_id: string; world_id: string; fencing_token: number; status: BuildRunStatus;
+  source_snapshot_hash: string; model_fingerprint: string;
+  pause_requested: number; cancel_requested: number;
+  lease_owner: string | null; lease_expires_at: string | null;
+}
+
+export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildRecoveryPort, LlmReplayApprovalPort {
   constructor(private readonly db: SqliteDatabase) {}
+
+  private async buildAttempts(tx: SqliteTransaction, runId: string, worldId: string): Promise<AttemptRow[]> {
+    const rows = await tx.queryAll<BuildAttemptRow>(`SELECT ${BUILD_ATTEMPT_COLUMNS}
+      FROM llm_request_attempts a JOIN world_build_runs r ON r.run_id = ? AND r.world_id = a.world_id
+      JOIN worlds w ON w.world_id = r.world_id
+      WHERE r.world_id = ? AND ${BUILD_ATTEMPT_MATCH} ORDER BY a.started_at, a.attempt_id`, [runId, worldId]);
+    return rows.filter(belongsToBuild);
+  }
+
+  async readBuildUnknownRunIds(worldIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const result = new Set<string>();
+    for (let offset = 0; offset < worldIds.length; offset += 200) {
+      const ids = worldIds.slice(offset, offset + 200);
+      const rows = await this.db.queryAll<BuildAttemptRow>(`SELECT ${BUILD_ATTEMPT_COLUMNS}
+        FROM llm_request_attempts a JOIN world_build_runs r ON r.world_id = a.world_id
+        JOIN worlds w ON w.world_id = r.world_id
+        WHERE r.world_id IN (${ids.map(() => '?').join(',')}) AND a.status = 'outcome_unknown'
+          AND a.replay_approved_at IS NULL AND ${BUILD_ATTEMPT_MATCH}`, ids);
+      for (const row of rows) if (belongsToBuild(row)) result.add(row.recovery_run_id);
+    }
+    return result;
+  }
+
+  private replayRun(tx: SqliteTransaction, runId: string): Promise<ReplayRunRow | null> {
+    return tx.queryOne<ReplayRunRow>(`SELECT r.run_id, r.world_id, r.fencing_token, r.status,
+      r.source_snapshot_hash, r.model_fingerprint, r.pause_requested, r.cancel_requested,
+      r.lease_owner, r.lease_expires_at FROM world_build_runs r JOIN worlds w ON w.world_id = r.world_id
+      WHERE r.run_id = ?`, [runId]);
+  }
+
+  async readBuildRequestOutcome(runId: string, worldId: string): ReturnType<LlmBuildRecoveryPort['readBuildRequestOutcome']> {
+    const rows = await this.buildAttempts(this.db, runId, worldId);
+    if (rows.some(a => a.status === 'outcome_unknown' && a.replay_approved_at == null)) return 'outcome_unknown';
+    if (rows.length) {
+      // An unrelated known request cannot clear an older untracked unit's
+      // unknown marker. Only its own retained, explicitly approved attempt can.
+      const legacy = await this.db.queryAll<{ unit_id: string; last_error_code: string | null }>(
+        `SELECT u.unit_id, r.last_error_code FROM world_build_runs r
+          LEFT JOIN world_build_units u ON u.run_id = r.run_id AND u.status <> 'completed'
+            AND instr(COALESCE(u.error_code, ''), 'outcome_unknown') > 0
+          WHERE r.run_id = ? AND r.world_id = ?`, [runId, worldId]);
+      const approved = rows.filter(a => a.status === 'outcome_unknown' && a.replay_approved_at != null);
+      if (legacy.some(u => u.unit_id && !approved.some(a =>
+        ['all', 'characters', 'world'].some(route => a.logical_request_id === `world-extract:${runId}:${u.unit_id}:${route}`)))
+        || legacy.some(u => u.last_error_code?.includes('outcome_unknown')) && !approved.length) return 'outcome_unknown';
+    }
+    if (rows.some(a => a.status === 'sent')) return 'sent';
+    if (rows.some(a => a.status === 'prepared')) return 'prepared';
+    return rows.length ? 'known' : 'none';
+  }
+
+  async readBuildReplay(runId: string): Promise<BuildReplaySnapshotV1 | null> {
+    const run = await this.replayRun(this.db, runId);
+    if (!run) return null;
+    const attempts = await this.buildAttempts(this.db, runId, run.world_id);
+    const unknown = attempts.filter(a => a.status === 'outcome_unknown' && a.replay_approved_at == null).slice(0, 128);
+    const ids = unknown.map(a => a.attempt_id);
+    if (!ids.length) return null;
+    return { runId, worldId: run.world_id, fencingToken: run.fencing_token, status: run.status,
+      sourceSnapshotHash: run.source_snapshot_hash, modelFingerprint: run.model_fingerprint,
+      pauseRequested: Boolean(run.pause_requested), cancelRequested: Boolean(run.cancel_requested), attemptIds: ids,
+      attempts: unknown.map(a => ({ attemptId: a.attempt_id, requestKind: a.request_kind,
+        startedAt: a.started_at, wireOutputTokens: a.wire_output_tokens })) };
+  }
+
+  async acknowledgeBuildReplay(snapshot: BuildReplaySnapshotV1): Promise<void> {
+    if (!snapshot || !Array.isArray(snapshot.attemptIds) || !snapshot.attemptIds.length || snapshot.attemptIds.length > 128
+      || snapshot.attemptIds.some(id => typeof id !== 'string' || !id) || new Set(snapshot.attemptIds).size !== snapshot.attemptIds.length
+      || !Array.isArray(snapshot.attempts) || snapshot.attempts.length !== snapshot.attemptIds.length
+      || snapshot.attempts.some((a, i) => a?.attemptId !== snapshot.attemptIds[i])) {
+      throw new Error('请选择本次展示的未知请求。');
+    }
+    await this.db.transaction(async tx => {
+      const run = await this.replayRun(tx, snapshot.runId);
+      if (!run || run.world_id !== snapshot.worldId) throw new Error('项目或构建任务已不存在。');
+      if (run.fencing_token !== snapshot.fencingToken || run.status !== snapshot.status
+        || run.source_snapshot_hash !== snapshot.sourceSnapshotHash || run.model_fingerprint !== snapshot.modelFingerprint
+        || Boolean(run.pause_requested) !== snapshot.pauseRequested || Boolean(run.cancel_requested) !== snapshot.cancelRequested) {
+        throw new Error('构建状态已更新，请重新核对请求。');
+      }
+      if (run.lease_owner && (!run.lease_expires_at || !Number.isFinite(Date.parse(run.lease_expires_at))
+        || Date.parse(run.lease_expires_at) > Date.now())) {
+        throw new Error('构建执行者尚未结束，请稍后核对请求。');
+      }
+      if (['completed', 'canceled', 'failed_terminal'].includes(run.status)) throw new Error('此构建任务已结束。');
+      const attempts = await this.buildAttempts(tx, run.run_id, run.world_id);
+      if (attempts.some(a => a.status === 'prepared' || a.status === 'sent')) throw new Error('仍有模型请求正在发送，请稍后核对。');
+      for (const id of snapshot.attemptIds) {
+        if (!attempts.some(a => a.attempt_id === id && a.status === 'outcome_unknown')) throw new Error('这条请求不属于当前构建。');
+      }
+      const approvedAt = Date.now();
+      for (const id of snapshot.attemptIds) await tx.execute(
+        `UPDATE llm_request_attempts SET replay_approved_at = COALESCE(replay_approved_at, ?)
+          WHERE attempt_id = ? AND status = 'outcome_unknown'`, [approvedAt, id]);
+    });
+  }
+
+  async acknowledgePlayReplay(input: Parameters<LlmReplayApprovalPort['acknowledgePlayReplay']>[0]): Promise<void> {
+    if (!Array.isArray(input.attemptIds) || !input.attemptIds.length || input.attemptIds.length > 128
+      || input.attemptIds.some(id => typeof id !== 'string' || !id)
+      || new Set(input.attemptIds).size !== input.attemptIds.length) throw new Error('请选择本次展示的未知请求。');
+    await this.db.transaction(async tx => {
+      const branch = await tx.queryOne<{ state_version: number }>(
+        'SELECT state_version FROM branches WHERE branch_id = ? AND campaign_id = ?', [input.branchId, input.campaignId]);
+      if (!branch) throw new Error('战役分支不存在。');
+      if (branch.state_version !== input.expectedStateVersion) throw new Error('战役状态已经更新，请重新读取恢复信息。');
+      const inFlight = await tx.queryOne(`SELECT attempt_id FROM llm_request_attempts WHERE branch_id = ?
+        AND state_version = ? AND request_kind IN ('planner', 'narrator') AND status IN ('prepared', 'sent')`,
+        [input.branchId, input.expectedStateVersion]);
+      if (inFlight) throw new Error('仍有回合请求正在发送，请稍后核对。');
+      for (const id of input.attemptIds) {
+        const attempt = await tx.queryOne('SELECT attempt_id FROM llm_request_attempts WHERE attempt_id = ? AND branch_id = ? AND (campaign_id IS NULL OR campaign_id = ?) AND state_version = ? AND request_kind IN (\'planner\', \'narrator\') AND status = \'outcome_unknown\'',
+          [id, input.branchId, input.campaignId, input.expectedStateVersion]);
+        if (!attempt) throw new Error('这条请求不属于当前未完成的回合。');
+      }
+      const approvedAt = Date.now();
+      for (const id of input.attemptIds) await tx.execute(
+        'UPDATE llm_request_attempts SET replay_approved_at = COALESCE(replay_approved_at, ?) WHERE attempt_id = ?', [approvedAt, id]);
+    });
+  }
 
   async beginAttempt(
     input: NewLlmRequestAttempt,

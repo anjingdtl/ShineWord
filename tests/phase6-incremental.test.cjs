@@ -162,9 +162,46 @@ test('M4 scoped mapper exact checkpoint covers frozen model configuration and no
     assert.equal((await h.worldStore.listWorldPackages('w')).length, 0);
     await buildPackageDraftFromCanon({ ...input, runId: 'different-run' });
     assert.equal(calls, 1, 'world-local exact mapping checkpoint reusable across segment/run identities');
+    const getJob=h.worldStore.getJob.bind(h.worldStore);let stale=true;
+    const saved=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping'").get();
+    h.worldStore.getJob=async(world,id)=>{if(stale && id===saved.job_id){stale=false;return null;}return getJob(world,id)};
+    await buildPackageDraftFromCanon({...input,runId:'stale-observer'});
+    assert.equal(calls,1,'atomic preparation returns a concurrently completed proposal rather than sending again');
+    assert.deepEqual(h.db.prepare('SELECT * FROM world_jobs WHERE job_id=?').get(saved.job_id),saved,'done payload and usage remain immutable to stale pending writes');
+    h.worldStore.getJob=getJob;
     await buildPackageDraftFromCanon({ ...input, incrementalMapping: options('opening', { executionConfigFingerprint: 'changed-reasoning-high' }) });
     assert.equal(calls, 2, 'frozen model/reasoning change invalidates exact proposal');
   } finally { h.db.close(); }
+});
+
+test('compatible done checkpoints retain proposal/usage through stale pending writes; changed configuration stays writable',async()=>{
+  const h=await setup();try {
+    await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
+    const done={worldId:'w',jobId:'shared',kind:'rule_mapping',targetId:null,status:'done',attempts:1,contentHash:'hash',extractorVersion:'mapper-1',modelFingerprint:'fp',usageJson:'{"output":40}',resultJson:'{"proposal":{"lore":[]}}',error:null,createdAt:now(),updatedAt:now()};
+    await h.worldStore.upsertJob(done,now());
+    const pending={...done,status:'pending',attempts:2,usageJson:null,resultJson:null};
+    await h.worldStore.upsertJob(pending,now());assert.deepEqual(await h.worldStore.getJob('w','shared'),done);
+    assert.deepEqual(await h.worldStore.prepareMappingJob(pending,now()),done);
+    const changed={...pending,contentHash:'changed'};
+    assert.equal((await h.worldStore.prepareMappingJob(changed,now())).status,'pending');
+    assert.equal((await h.worldStore.getJob('w','shared')).contentHash,'changed');
+  }finally{h.db.close()}
+});
+
+test('mapping interruption retains its exact existing checkpoint identity before any proposal or publication',async()=>{
+  const h=await setup();try {
+    await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
+    await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+    const data=canon(20);for(const e of data.entities)await h.worldStore.upsertEntity(e,now());
+    for(const f of data.facts)await h.worldStore.saveFact(f,now());for(const e of data.events)await h.worldStore.saveEvent(e,now());
+    let identity;
+    await assert.rejects(buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'mapper-test',createdAt:now(),requirePlayableOpening:true,incrementalMapping:options(),
+      provider:{async complete(request){identity=request.logicalRequestId.split(':').slice(2).join(':');
+        const job=await h.worldStore.getJob('w',identity);assert.equal(job.status,'pending');assert.equal(job.resultJson,null);
+        throw new Error('synthetic_sent_disconnect');}}}),/synthetic_sent_disconnect/);
+    assert.equal((await h.worldStore.getJob('w',identity)).status,'pending');
+    assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
+  } finally {h.db.close()}
 });
 
 test('90s opening locally compiles evidenced action closure with zero mapper calls and blocks insufficient/conflicting canon', async () => {

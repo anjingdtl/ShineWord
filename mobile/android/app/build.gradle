@@ -14,6 +14,15 @@ react {
     autolinkLibrariesWithApp()
 }
 
+// The shared engine lives outside the mobile project root. Include it in
+// Gradle's bundle inputs so a core-only fix cannot reuse an obsolete APK.
+tasks.withType(com.facebook.react.tasks.BundleHermesCTask).configureEach {
+    inputs.files(fileTree("../../../src") {
+        include "**/*.ts", "**/*.tsx", "**/*.js"
+    }).withPropertyName("shinewordCoreSources")
+      .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+}
+
 def releaseBuildRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.toLowerCase().contains("release")
 }

@@ -129,11 +129,7 @@ export function LibraryScreen(): React.JSX.Element {
         title: picked.name.replace(/\.txt$/i, ''),
       });
     } catch (e) {
-      const detail = e instanceof Error
-        ? `${e.message}\n${e.stack ?? ''}`
-        : typeof e === 'object' && e !== null
-          ? JSON.stringify(e)
-          : String(e);
+      const detail = e instanceof Error ? e.message : String(e);
       setImportMessage(null);
       setError(detail.slice(0, 300));
     } finally {

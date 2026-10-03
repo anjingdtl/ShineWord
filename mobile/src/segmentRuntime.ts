@@ -8,7 +8,7 @@ import { requestSegmentRunControl } from './sourceImport';
 export async function startSegmentRun(runId: string): Promise<void> {
   const runtime = await getDatabaseRuntime();
   const runs = new SqliteBuildRunStore(runtime.db);
-  const host = new AndroidSegmentExecutionHost({ runs,
+  const host = new AndroidSegmentExecutionHost({ runs, ledger: runtime.llmLedger,
     projectExists: async id => Boolean(await runtime.worldStore.getWorld(id)),
     credentialsAvailable: async id => { const run = await runs.getRun(id); const config = reviveRunConfig(run?.configJson ?? null);
       return Boolean(config && await new KeychainSecretStore().get(config.keyRef)); },
