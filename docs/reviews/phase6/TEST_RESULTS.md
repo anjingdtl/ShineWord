@@ -153,3 +153,20 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 最终测试记录保留全部失败、缓存和恢复步骤。云私有执行证据不可假定存在本地开发机；本地agent应按progress.md及交接提示重新记录当地环境与可执行结果。最终文档提交的Core CI结论在推送后检查并随交付提供；源码相同的Android CI使用上述main源码run，不能伪造文档head的运行。
 
 私有QA收尾：19次计数不变，确认0在途后停止唯一临时转发并移除ADB reverse18765；保留userdata及全部私有证据，qa-cleanup-results.json。
+
+## 本地接续轮（2026-10-03，Windows + emulator-5554 API37.1 WHPX）
+
+| 命令/场景 | 退出码/结果 | 证据与边界 |
+|---|---|---|
+| 本地基线 npm run verify:core | 0；790/790（9.0s） | 云端交付源码在本地复现通过 |
+| L1+L2 修复后 verify:core / root+mobile typecheck / version / diff | 0；791/791 及全部 0 | 529497e/f9d6a72，含 L2 回归场景设备复现 |
+| L3 修复定向（phase6-incremental 新增 2 用例） | 0；20/20 | 旧代码 18/1 失败、新代码全过（signal 暂停与 stale fence 两半） |
+| L3 修复后全量门禁 | 0；792/792；typecheck×2/version/diff 均 0；Debug 构建成功 | ccfe68e；APK SHA256 c5c0175b…（两次独立构建，install -r 保留数据） |
+| 独立复审（L1/L2/L3 三批 diff） | approve-with-nits → approve | 应修项（catch 序列守卫、正则扩展、注释、配套测试）已全部吸收 |
+| 设备：GBK 全量导入→开局→审查→两次补建采用 | 正常 UI 完成 | 引文逐字核验：巴罗高声夫@8645、赏赐20金龙@10838、四王子@10676、牧守一方@1017、二十年助理@11619、亚麻色长发@12830、新领主酬金@81260 全部命中原文 |
+| 设备：QA 账本对账 | 35 attempt：33×HTTP200 + 1×合成429 + 1×发送后断连；input 276,411/output 43,372/cached 37,376 | app llm_request_attempts 与转发器逐条一致；无绕行调用 |
+| 设备：90 秒开局样本 B | 导入点击→可玩 74.5s（导入 2.3s+冷抽取 56.2s cached=0+本地发布） | n=2 冷样本之一；样本 A 冷抽取 60.6s 含 1 次人工审查；单设备非统计 |
+| 设备：L3 场景（part2 映射在途暂停→force-stop→继续） | done 检查点复用发布，0 新模型调用 | 修复后路径；part3 场景暴露 L4（invalid_artifact_structure）另记 |
+| 设备：合成 429 | 单请求无重试风暴，草稿保留，故障解除后续试成功 | 转发器注入，证明协议不证明任意供应商 |
+| 设备：发送后断连→unknown 审批 | outcome_unknown + 转发器证据（未到上游）→ 显式批准 → 同逻辑ID #a2 成功、#a1 保留 | planner:camp-muskcyow-main:turn-0008，无自动重发 |
+| 未验 | 真机/API24/Android15-16、锁屏、双runner、构建中删除/切API设备路径、L4 根因 | 保留开放，不伪称通过 |
