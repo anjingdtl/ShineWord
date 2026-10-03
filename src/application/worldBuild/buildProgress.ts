@@ -1,4 +1,13 @@
-import type { BuildRunRecord } from '../ports/worldBuildStore';
+import type { BuildRunRecord, BuildUnitRecord } from '../ports/worldBuildStore';
+
+/** unitsFailed is a historical attempt counter, not unfinished extraction. */
+export function isRunExtractionComplete(
+  run: Pick<BuildRunRecord, 'unitsDone' | 'unitsTotal'>,
+  units: readonly Pick<BuildUnitRecord, 'status'>[],
+): boolean {
+  return run.unitsTotal > 0 && run.unitsDone === run.unitsTotal
+    && units.length === run.unitsTotal && units.every(unit => unit.status === 'completed');
+}
 
 /** Count committed extraction units plus mapping, review/validation and publication.
  * These are completed work steps, not elapsed-time estimates. */

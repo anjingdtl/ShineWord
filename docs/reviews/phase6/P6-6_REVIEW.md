@@ -64,3 +64,14 @@ OpeningGoalGovernance补齐world/不可变包hash+revision/anchor/profile/plan i
 独立只读审查合成复现，同一opening_goal未知后更换API导致2次物理调用、2条logicalID。修复将请求语义与profile/plan分离：logicalID使用world、已发布revision/hash、anchor和提示词；配置仅参与成功缓存key及既有M6 metadata。新增真实SQLite适配器测试跨endpoint/model/reasoning budget，物理调用1、唯一semantic logicalID、unknown和null用量保留，不自动批准重放。5/5定向通过；独立审查其余非probe生产调用未发现新预算/账本遗漏。无新表、无双层账本、无协议降级。
 
 稳定语义ID候选完整standalone Debug exit0，3m10s；107008739 bytes，SHA256 64b766bb3c5b6cccaf2478f8b9eb462439c029e3287a1bdc5976535d9a5b2f75。root源码bundle实际重建，不使用旧APK。
+
+原生后三事实逐条核对完成：安娜的女巫身份、罗兰的四王子身份、巴罗夫的助理职务，与已有较完整描述可并存，短引文确实支持待确认描述。使用正式逐事实“按补充事实保留”，不是批量豁免/离线改库；保留原范围/引用和canon_resolution审计。初始身份引用不足依然为speculation，不改原决定。后续缓存映射/发布/采用继续取证。
+
+分支采用核对中首次断言“全部snapshot字节不变”失败；逐字段核查仅当前live v2的segmentContentBinding由1→2成果，符合已冻结M0安全边界合同。v0/v1历史snapshot逐字节不变；v2其余游戏字段、2正文/2冻结风格/2turn/2interaction/2actor整行不变。改正证据口径并按旧状态与live投影分别断言，不将合法采用报告为历史正文改写，也不隐藏初轮过宽断言失败；最终cold仍需复核。
+
+
+原生第二后段 QA16 的映射 HTTP200（63.233s，32257in/5307out，思考15已含在out）后，M5 正确保存四条 inference_disguised_as_explicit 诊断并阻断。独立只读审查复现：18个新条目中四个root引用 inference 事实却标 explicit；数值字段 rule_mapping 正确，两缓存无未知事实、越界或cleaner拒绝。M4在跨批合并之后、与旧已发布条目合并之前，按权威事实状态将新草稿 explicit 降为 inferred；所有证据必须仍是已选有效事实。保留用户/原事实、raw proposal、hash、usage、mappingVersion、MAPPER_SYSTEM 和不可变旧条目；M5严格负例不变。这使兼容done缓存能零付费映射恢复，而不通过改提示词失效整个缓存。
+
+审查同时修复两个潜在问题：草稿revision恒0导致异定义被错误合并，现对skill/constraint/lore、actor和item分别核对定义，冲突进入审查；相同定义才合并证据且保持已有inferred。地点编译保留inference类型。bootstrap来源合并改为核对当前全部unit completed、数量与unitsDone/Total一致，历史unitsFailed保持为真实失败尝试计数，不再误排除已恢复成果。定向33/33 exit0，包含实时/缓存结果一致、原raw缓存整行不变、混合和跨批推断、相同revision异定义、已恢复历史失败和fencing负例；原M5伪装明示、缺失/冲突引用和作用域负例继续拒绝。全量和APK正在验证，原生缓存恢复尚待新APK正常UI复测。
+
+新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。

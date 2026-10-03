@@ -64,6 +64,97 @@ function options(kind = 'opening', extra = {}) { return { kind, ranges: [range],
 function entry(id, facts, deps = []) { return { entryId: id, kind: 'lore', revision: 1, provenance: { kind: 'explicit', sourceFactIds: facts, rationale: '测试证据' },
   visibility: 'public', dependencyIds: deps, definition: { name: id, title: id, text: '已发布描述' } }; }
 
+async function saveCanon(h, data) {
+  await h.worldStore.createWorld({ worldId:'w',title:'合成测试',sourceSha256:sha('source'),sourceBytes:1,
+    normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now() });
+  await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),
+    normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,
+    chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+  for (const e of data.entities) await h.worldStore.upsertEntity(e,now());
+  for (const f of data.facts) await h.worldStore.saveFact(f,now());
+  for (const e of data.events) await h.worldStore.saveEvent(e,now());
+}
+
+test('authoritative inference projects new draft roots and inferred places; exact done replay preserves raw cache and canon',async()=>{
+  const h=await setup();try{
+    const data=canon(20);data.facts[0].status='inference';data.facts[1].status='inference';
+    await saveCanon(h,data);
+    const evidence={provenanceKind:'explicit',evidenceFactIds:['f-0','f-2']};
+    const proposal={skills:[{id:'inferred',name:'合成技能',attribute:'knowledge',...evidence}],
+      constraints:[{id:'inferred',name:'合成约束',...evidence}],
+      lore:[{id:'inferred',name:'合成资料',text:'有据推断',...evidence},
+        {id:'already-inferred',name:'已有推断',text:'保持推断',provenanceKind:'inferred',evidenceFactIds:['f-2']},
+        {id:'rule',name:'规则',text:'规则值',provenanceKind:'rule_mapping',evidenceFactIds:['f-0']}],
+      actorTemplates:[{id:'inferred',name:'林辰',hp:8,defense:2,...evidence}],
+      items:[{id:'inferred',name:'合成物品',...evidence}]};
+    let calls=0;
+    const input={worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'mapper-test',
+      createdAt:now(),incrementalMapping:options(),provider:{async complete(){calls++;return {text:JSON.stringify(proposal),usage:{outputTokens:50}}}}};
+    const first=await buildPackageDraftFromCanon(input);
+    const cache=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping'").all();
+    const facts=await h.worldStore.listFacts('w');
+    const replay=await buildPackageDraftFromCanon({...input,runId:'cold-recovery',provider:{async complete(){throw Error('must_not_repeat_paid_mapping')}}});
+    assert.equal(calls,1);assert.deepEqual(replay.entries,first.entries);
+    assert.deepEqual(h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping'").all(),cache);
+    assert.deepEqual(await h.worldStore.listFacts('w'),facts);
+    assert.equal(JSON.parse(cache[0].result_json).proposal.actorTemplates[0].provenanceKind,'explicit','raw result retains the model mistake');
+    for(const id of ['skill-inferred','constraint-inferred','lore-inferred','npc-inferred','item-inferred','scene-place'])
+      assert.equal(replay.entries.find(e=>e.entryId===id).provenance.kind,'inferred',id);
+    const actor=replay.entries.find(e=>e.entryId==='npc-inferred');
+    for(const p of Object.values(actor.fieldProvenance))assert.equal(p.kind,'rule_mapping');
+    assert.equal(replay.entries.find(e=>e.entryId==='lore-already-inferred').provenance.kind,'inferred');
+    assert.equal(replay.entries.find(e=>e.entryId==='lore-rule').provenance.kind,'rule_mapping');
+    assert.equal(replay.entries.find(e=>e.entryId==='common-guard-template').provenance.kind,'design_fill');
+    assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
+  }finally{h.db.close()}
+});
+
+test('cross-batch identical definitions union inference honestly; differing same-revision definitions require review',async()=>{
+  for(const incompatible of [false,true]){
+    const h=await setup();try{
+      const data=canon(801);data.facts[800].status='inference';await saveCanon(h,data);
+      let calls=0;
+      const input={worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'mapper-test',createdAt:now(),
+        provider:{async complete(){const later=++calls===2;const common={id:'shared',name:'合成条目',provenanceKind:'explicit',evidenceFactIds:[later?'f-800':'f-0']};
+          const description=incompatible&&later?'不同定义':'相同定义';
+          return {text:JSON.stringify({skills:[{...common,attribute:'knowledge',description}],constraints:[],
+            lore:[{...common,text:description}],actorTemplates:[{...common,hp:8,defense:2,description}],
+            items:[{...common,description}]})};}}};
+      const first=await buildPackageDraftFromCanon(input);
+      const raw=h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping' ORDER BY job_id").all();
+      const replay=await buildPackageDraftFromCanon({...input,provider:{async complete(){throw Error('must_reuse_batches')}}});
+      assert.equal(calls,2);assert.deepEqual(replay.entries,first.entries);
+      assert.deepEqual(h.db.prepare("SELECT * FROM world_jobs WHERE kind='rule_mapping' ORDER BY job_id").all(),raw);
+      for(const id of ['skill-shared','lore-shared','npc-shared','item-shared']){
+        const p=replay.entries.find(e=>e.entryId===id).provenance;
+        assert.deepEqual(p.sourceFactIds,incompatible?['f-0']:['f-0','f-800']);
+        assert.equal(p.kind,incompatible?'explicit':'inferred');
+      }
+      const reviews=await h.worldStore.listReviewIssues('w','open');
+      assert.equal(reviews.filter(r=>r.issueId.startsWith('invalid-proposal-conflict-')).length,incompatible?4:0);
+    }finally{h.db.close()}
+  }
+});
+
+test('recovered extraction uses current fenced units, not historical failure attempts',async()=>{
+  const h=await setup();try{
+    const {isRunExtractionComplete}=load('application/worldBuild/buildProgress');
+    await createExtractionRun({...h,sha256Hex:sha,now}, {runId:'retry-count',worldId:'w',sourceId:'src',modelFingerprint:'m',title:'合成测试',extractorVersion:'e',scope:{startCp:0,endCp:100}});
+    const [unit]=await h.runStore.listUnits('retry-count');
+    const token=await h.runStore.acquireLease('retry-count','owner',30000,now());
+    await h.runStore.completeUnit({unitId:unit.unitId,fencingToken:token,status:'failed_retryable',now:now()});
+    assert.equal(isRunExtractionComplete(await h.runStore.getRun('retry-count'),await h.runStore.listUnits('retry-count')),false);
+    await h.runStore.completeUnit({unitId:unit.unitId,fencingToken:token,status:'completed',now:now()});
+    const recovered=await h.runStore.getRun('retry-count');assert.equal(recovered.unitsFailed,1);
+    const units=await h.runStore.listUnits('retry-count');assert.equal(isRunExtractionComplete(recovered,units),true);
+    assert.equal(isRunExtractionComplete(recovered,[]),false);
+    assert.equal(isRunExtractionComplete(recovered,[{status:'needs_review'}]),false);
+    assert.equal(isRunExtractionComplete({...recovered,unitsTotal:0,unitsDone:0},[]),false);
+    assert.equal(await h.runStore.completeUnit({unitId:unit.unitId,fencingToken:token+1,status:'completed',now:now()}),false);
+    assert.equal((await h.runStore.getRun('retry-count')).unitsDone,1);
+  }finally{h.db.close()}
+});
+
 test('M4 opening maps bounded real facts and entity/event reference closure; retains 20-fact gate', () => {
   const input = canon();
   const selected = selectCanonSubset({ ...input, options: options() });

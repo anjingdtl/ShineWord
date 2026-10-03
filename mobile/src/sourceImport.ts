@@ -16,6 +16,7 @@ import { LlmGroupExtractor } from '../../src/application/world/llmGroupExtractor
 import { buildBookRegistry, registrySummaryFor } from '../../src/application/world/bookRegistry';
 import { runTimelinePass } from '../../src/application/world/timelinePass';
 import { replayCompletedLocationAdapter } from '../../src/application/worldBuild/replayLocationAdapter';
+import { isRunExtractionComplete } from '../../src/application/worldBuild/buildProgress';
 import { remapEntryReferences } from '../../src/application/worldPackage/remapEntryReferences';
 import { sourceIdForChapter } from '../../src/application/incrementalMapping/canonSelection';
 import { rangeCovered } from '../../src/application/segmentPublication/protocol';
@@ -1526,7 +1527,9 @@ async function runExtractionInternal(
           if (openingBuild) for (const segment of await runtime.segmentPlans.listSegments(run.worldId)) {
             if (segment.intent.reason !== 'bootstrap' || segment.intent.segmentId === intent.segmentId || !segment.runIds.length) continue;
             const linked = await Promise.all(segment.runIds.map(id => runStore.getRun(id)));
-            if (linked.every(r => r && r.unitsDone === r.unitsTotal && r.unitsFailed === 0)) ranges.push(...segment.intent.ranges);
+            const complete = await Promise.all(linked.map(async r => r !== null
+              && isRunExtractionComplete(r, await runStore.listUnits(r.runId))));
+            if (complete.every(Boolean)) ranges.push(...segment.intent.ranges);
           }
           const provider = makeProvider();
           const localOpening = openingBuild && intent.reason === 'bootstrap' && (runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION);

@@ -856,9 +856,11 @@ async function requestMappingProposals(
     }
     const mergedFactIds = new Set([...existing.provenance.sourceFactIds, ...entry.provenance.sourceFactIds]);
     const sameDefinition = JSON.stringify(existing.definition) === JSON.stringify(entry.definition);
-    if (sameDefinition || existing.revision === entry.revision) {
+    if (sameDefinition) {
       existing.provenance = {
         ...existing.provenance,
+        ...(existing.provenance.kind === 'explicit' && entry.provenance.kind === 'inferred'
+          ? { kind: 'inferred' as const } : {}),
         sourceFactIds: [...mergedFactIds],
       };
       return;
@@ -1052,8 +1054,14 @@ async function requestMappingProposals(
         templatesById.set(cleaned.entryId, cleaned);
         actorTemplates.push(cleaned);
       } else {
+        if (JSON.stringify(existing.entry.definition) !== JSON.stringify(cleaned.entry.definition)) {
+          rejectEntry(ctx, 'conflict', cleaned.entryId, ['later batch redefined actor template with a different definition']);
+          continue;
+        }
         const merged = new Set([...existing.entry.provenance.sourceFactIds, ...cleaned.entry.provenance.sourceFactIds]);
-        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged] };
+        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged],
+          ...(existing.entry.provenance.kind === 'explicit' && cleaned.entry.provenance.kind === 'inferred'
+            ? { kind: 'inferred' as const } : {}) };
       }
     }
     for (const candidate of Array.isArray(raw.items) ? raw.items : []) {
@@ -1064,8 +1072,14 @@ async function requestMappingProposals(
         itemsById.set(cleaned.entry.entryId, cleaned);
         items.push(cleaned);
       } else {
+        if (JSON.stringify(existing.entry.definition) !== JSON.stringify(cleaned.entry.definition)) {
+          rejectEntry(ctx, 'conflict', cleaned.entry.entryId, ['later batch redefined item with a different definition']);
+          continue;
+        }
         const merged = new Set([...existing.entry.provenance.sourceFactIds, ...cleaned.entry.provenance.sourceFactIds]);
-        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged] };
+        existing.entry.provenance = { ...existing.entry.provenance, sourceFactIds: [...merged],
+          ...(existing.entry.provenance.kind === 'explicit' && cleaned.entry.provenance.kind === 'inferred'
+            ? { kind: 'inferred' as const } : {}) };
       }
     }
     mappedFactCount += batch.length;
@@ -1172,7 +1186,7 @@ async function compileCanonScenes(
     }
     entries.push({
       entryId: `scene-${entity.entityId}`, kind: 'scene', revision: 0,
-      provenance: { kind: 'explicit', sourceFactIds: [evidence.factId], rationale: '由原著已核验的地点证据保留可选择场景。' },
+      provenance: { kind: evidence.status === 'inference' ? 'inferred' : 'explicit', sourceFactIds: [evidence.factId], rationale: '由原著已核验的地点证据保留可选择场景。' },
       fieldProvenance: { zones: { kind: 'design_fill', sourceFactIds: [], rationale: '规则集提供可操作区域，不补造原著情节。' } },
       visibility: 'public', dependencyIds: [],
       definition: { name: entity.name, description: `原著资料中已出现的地点：${entity.name}。`, locationId: entity.name,
@@ -1521,6 +1535,26 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       title: '本包审核状态',
       text: summaryParts.join(''),
     },
+  }));
+
+  // Canon owns evidence status. Project only NEW draft metadata, after batch
+  // unions and before merging immutable published entries. Keep exact raw
+  // checkpoints/prompts unchanged so a compatible paid result can recover
+  // locally. This never upgrades evidence or excuses missing/conflicting facts;
+  // the independent M5 validator still checks every citation and its scope.
+  const factById = new Map(scopedFacts.map(fact => [fact.factId, fact]));
+  const projectProvenance = (provenance: Provenance): Provenance =>
+    provenance.kind === 'explicit'
+      && provenance.sourceFactIds.every(id => {
+        const fact = factById.get(id);
+        return fact !== undefined && (fact.status === 'explicit' || fact.status === 'inference');
+      })
+      && provenance.sourceFactIds.some(id => factById.get(id)?.status === 'inference')
+      ? { ...provenance, kind: 'inferred' } : provenance;
+  entries = entries.map(entry => ({ ...entry,
+    provenance: projectProvenance(entry.provenance),
+    fieldProvenance: Object.fromEntries(Object.entries(entry.fieldProvenance)
+      .map(([field, provenance]) => [field, projectProvenance(provenance)])),
   }));
 
   if (input.incrementalMapping?.kind === 'incremental') {

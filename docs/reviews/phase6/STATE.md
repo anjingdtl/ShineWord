@@ -33,3 +33,21 @@ P6-6：继续实际TXT构建完整旅程和最终交付记录。
 最终语义ID修复后本地verify:core exit0，786/786（119273.318ms），root严格type已包含；mobile typecheck/version/diff exit0。完整Debug尚在构建，工程提交后实际CI继续核对。
 
 稳定语义ID候选完整standalone Debug exit0，3m10s；107008739 bytes，SHA256 64b766bb3c5b6cccaf2478f8b9eb462439c029e3287a1bdc5976535d9a5b2f75。root源码bundle实际重建，不使用旧APK。
+
+新增工程修复已commit/push：98fe88282a9434510e6b61a5a94fbfe5114c996d（稳定语义开局建议、统一kernel/ledger/cache/cancel）；实际Core CI37123405204 success，786/786、20553.359ms；Android CI37123405202 in_progress。最终64b766候选保留数据install-r Success，正常Library已恢复；Native后三事实审查继续。
+
+98fe882的Android实际CI37123405202 success，Gradle3m43s；两项CI均已成功。原生三条互补事实审查完成第一条，另外两条继续正常UI处理。
+
+Native三互补事实审查已完成、队列0；第一后段QA15真实映射成功25.915s，正常暂停稳定paused_user/validating。冷停 integrity ok/FK0，映射success/token已入唯一账本，4canon_resolution审计，租约清空。重启后验证暂停保持及缓存恢复，再继续第二后段；私有总15QAattempt，0新unknown。
+
+冷启动后的正常Hub明确仍“已暂停/整理已暂停”，QA15计数不增；已单独正常继续第一后段，验证done检查点零重复映射。第二段仍待显式继续，两个ready后采用/存档闭环继续。
+
+Native第一后段已在cold restart后的显式继续完成不可变发布，Hub2ready/4-of-4 completed，QA仍15，映射检查点复用未重发。现在先正常进入已有camp-mus4u8cl完成第一次采用/本地短休快照，再第二后段继续构建与独立第二次采用。
+
+Native首次后续采用v2：binding1→2，v0/v1历史snapshot、2正文/2风格/2turn/2interaction/2actor整行不变，当前live v2只改segmentContentBinding（符合安全边界合同）；首次误将live也视为全部不可改snapshot的诊断断言失败，已核查修正。正常短休30min到v3，QA15不增；第二段显式继续与独立采用/完整save7继续。
+
+第二后段QA16真实映射63.233s成功，但四个root推断标为explicit被M5正确阻断。独立审查后实现新草稿权威provenance投影（不改原facts/raw done/cache hash/prompt/version/旧发布），并修复相同revision异定义吞并和已恢复历史失败影响bootstrap范围合并。定向33/33通过；verify:core/mobile type/Debug正在运行。下一步：正常UI新APK继续第二后段，复用done缓存零付费映射，第二次采用、真实3binding存档、goals唯一账本和最终报告/CI。QA目前16 attempts，没有新增unknown。
+
+来源投影修复全量verify:core已exit0：789/789、130811.769ms；mobile严格TS/version/diff均0。Debug正在真实root bundle构建；最新main再次核对仍5103397。
+
+新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。
