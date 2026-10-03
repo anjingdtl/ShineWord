@@ -35,3 +35,15 @@
 检查命令：`npm run verify:core`、`npm run typecheck`、`npm run typecheck --prefix mobile`、`npm run verify:version`、`git diff --check`、`npm run apk:debug --prefix mobile`。JDK17/SDK36/GRADLE_USER_HOME=/workspace/toolchains/gradle。原文、凭据、未脱敏请求、SQLite、截图、APK仅在私有scratch，不入仓库。
 
 收尾清理：最终空闲冷核验后，私有QA转发已停止，ADB reverse18765已移除；19次计数与unknown证据、模拟器userdata保留，0在途请求。没有删除项目或清空用户数据。
+
+## 本地接续轮状态（2026-10-03，本地开发机）
+
+分支 `feat/phase6-local-remaining-acceptance`（基于 main@5c14633）。本地环境 Windows + emulator-5554（API37.1 WHPX），本地基线与云端交付一致（790/790）。
+
+- 修复三笔并独立复审后提交：L1 预设脱离陷阱 `529497e`、L2 故事面板刷新 `f9d6a72`、L3 映射暂停丢弃已结算响应 `ccfe68e`（含两条回归测试，旧代码失败/新代码通过）。最终本地门禁 verify:core 792/792、root/mobile 严格类型、version、diff、独立 Debug 构建全部通过。
+- 设备旅程（API37.1，正常 UI）：全量 GBK 导入→开局（冷抽取 60.6s）→两轮正式逐事实审查→8 真实回合（含检定失败）→支线/停留（0 新段）→两次补建/安全边界采用（3 artifacts）→风格三模式往返→存档导出/分叉/导入独立战役→追加第二部闭环（第 4 段发布）。
+- 故障：合成 429 无重试风暴草稿保留；发送后断连→outcome_unknown 精确审批（证据核对后显式批准、同逻辑 ID 重试、unknown 行保留）。
+- 90 秒开局：新增独立冷样本 B（UTF-8 前 80k 新项目，导入点击→可玩 74.5s，零人工干预）；连同样本 A 共 n=2 冷样本，均为单设备非统计。
+- QA 转发器 35 attempt（33 HTTP200 + 合成 429 + 发送后断连），input 276,411 / output 43,372（cached 37,376）；与 App 唯一 M6 账本逐条一致。
+- 未关闭缺陷 L4：追加第三部后段发布被 invalid_artifact_structure 确定性阻断（3 成员路径；2 成员正常）。诊断、复现步骤与设备 DB 快照保留本地 scratch；part3 运行正常停止、数据保留。另记录 part3 恢复时一次 batchHash 1 字符漂移导致的映射重发（成因未定谳）。
+- 未验：真机/API24/Android15-16、锁屏、双 runner、构建中删除/切 API 设备路径、三题材人工评分、L4 根因。

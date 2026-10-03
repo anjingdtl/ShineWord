@@ -148,6 +148,17 @@ export function useProfileForm(): ProfileFormState {
         setContextWindowTokens('');
         setMaxOutputTokens('');
       }
+      return;
+    }
+    // Re-typing a preset's exact model name re-adopts that preset's declared
+    // capabilities — but never over values the user already declared, so a
+    // manual edit of the model field no longer silently leaves a capability-less
+    // profile that only fails later at world-build governance.
+    const exact = MODEL_PRESETS.find(item => item.model === value.trim());
+    if (exact && !contextWindowTokens.trim() && !maxOutputTokens.trim()) {
+      setPresetId(exact.id);
+      setContextWindowTokens(exact.profile.capabilities.contextWindow?.toString() ?? '');
+      setMaxOutputTokens(exact.profile.capabilities.maxOutputTokens?.toString() ?? '');
     }
   }
 

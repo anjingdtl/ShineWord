@@ -112,6 +112,7 @@ export function usePlayController(): PlayController {
   const [rejoinOptions, setRejoinOptions] = useState<PlayController['rejoinOptions']>([]);
   const actionInFlight = useRef(false);
   const autoNpcRunning = useRef(false);
+  const refreshSeq = useRef(0);
   const foreground = useRef(AppState.currentState === 'active');
   const [foregroundEpoch, setForegroundEpoch] = useState(0);
 
@@ -124,6 +125,10 @@ export function usePlayController(): PlayController {
   }, []);
 
   const refresh = useCallback(async () => {
+    // Overlapping refreshes (mount, submit, recovery interval) read at
+    // different commit points; a stale read landing last would clobber the
+    // fresh one. Serialize: only the newest-started refresh may apply state.
+    const seq = ++refreshSeq.current;
     try {
       const [nextProjection, history, nextSceneEncounters, pending] = await Promise.all([
         getPlayUiProjection(campaignId, branchId),
@@ -131,12 +136,14 @@ export function usePlayController(): PlayController {
         createReadOnlySession().then(session => session.getCurrentSceneEncounterOptions(campaignId, branchId)),
         loadPlayRecovery(campaignId, branchId),
       ]);
+      if (seq !== refreshSeq.current) return;
       setProjection(nextProjection);
       setTurns(history);
       setSceneEncounterOptions(nextSceneEncounters);
       setRecovery(pending);
       if (pending?.intent && !actionInFlight.current) setIntent(previous => previous || pending.intent);
     } catch (e) {
+      if (seq !== refreshSeq.current) return;
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [campaignId, branchId]);
@@ -144,6 +151,13 @@ export function usePlayController(): PlayController {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Returning to the foreground can coincide with a turn that finished in the
+  // background (recovery/service completion); re-read the feed then too.
+  useEffect(() => {
+    if (foregroundEpoch > 0) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [foregroundEpoch]);
 
   // Between-turn stage maintenance (unified P3): every committed turn ends at
   // a safe boundary, so pending stage packages activate here and the next
@@ -403,7 +417,7 @@ export function usePlayController(): PlayController {
       // resumed turn never duplicates (plan §18.3).
       setTurns(previous =>
         previous.some(item => item.turnId === turnView.turnId)
-          ? previous.map(item => (item.turnId === turnView.turnId ? { ...item } : item))
+          ? previous.map(item => (item.turnId === turnView.turnId ? { ...turnView } : item))
           : [...previous, turnView],
       );
       setNotice(null);

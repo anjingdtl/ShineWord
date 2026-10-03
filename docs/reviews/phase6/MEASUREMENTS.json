@@ -1237,5 +1237,63 @@
       }
     },
     "finalEvidenceCIContract": "This closeout changes documentation only. Core Verify runs on final main push; Android Verify is path-filtered, so unchanged production source is covered by successful main source run37129047814. Final Core result is checked after publishing and supplied in delivery."
+  },
+  "androidNativeLocal": {
+    "kind": "local_windows_host_API371_WHPX_emulator_normal_UI_via_private_forwarder",
+    "date": "2026-10-03",
+    "physicalDevice": false,
+    "apiLevel": "37.1 (Medium_Phone AVD, x86_64 + WHPX)",
+    "sourceNovelSha256": "7f45fe0b11ea30eca95f5a736232dd4c466a57c0f2cc9f67530e432015ecc6f4",
+    "utf8Part1FixtureSha256": "947164f49fe41d0149d27cf2d1c6fbac366431d721c7e40d3269346523a7c2f9",
+    "model": "glm-5.3-flash",
+    "reasoningTier": "low",
+    "qaAttempts": {
+      "total": 35,
+      "http200": 33,
+      "synthetic429": 1,
+      "socketDropAfterSend": 1,
+      "inputTokens": 276411,
+      "outputTokens": 43372,
+      "cachedInputTokens": 37376
+    },
+    "openingSamples": [
+      {
+        "sample": "A",
+        "fixture": "full GBK 7.18MB",
+        "extractionDurationMs": 60565,
+        "providerCache": "cold(cached_tokens=0)",
+        "conflictReviews": 1,
+        "humanIntervention": true,
+        "note": "含1轮人工逐事实审查，机械抽取60.6s"
+      },
+      {
+        "sample": "B",
+        "fixture": "utf8 front-80k-rawCP",
+        "importMs": 2323,
+        "extractionDurationMs": 56168,
+        "providerCache": "cold(cached_tokens=0)",
+        "importToPlayableMs": 74513,
+        "humanIntervention": false,
+        "note": "导入点击至可玩74.5s，零人工干预"
+      }
+    ],
+    "sampleSize": 2,
+    "limits": "两个冷缓存样本、单台模拟器；非统计结论、非真机、不构成稳定90秒承诺",
+    "realTurns": 8,
+    "faultTests": {
+      "synthetic429": "single request, no retry storm, draft retained, resubmit ok",
+      "socketDrop": "outcome_unknown precise approval after forwarder evidence; same-logical-id replay a2 succeeded; a1 retained"
+    },
+    "fixes": [
+      "529497e preset capability re-adopt + localized governance errors",
+      "f9d6a72 narrative feed freshness",
+      "ccfe68e mapping pause checkpoint before honor"
+    ],
+    "openDefects": [
+      {
+        "id": "L4",
+        "summary": "3rd appended member segment publication blocked by invalid_artifact_structure (isSegmentArtifactV1 invariant); 2-member append works; diagnostics+repro preserved, run stopped, data retained"
+      }
+    ]
   }
 }
