@@ -81,3 +81,8 @@ OpeningGoalGovernance补齐world/不可变包hash+revision/anchor/profile/plan i
 
 
 复审还发现JSON.stringify对仅键顺序不同的嵌套actor attributes误报冲突；三处定义比较统一采用既有canonicalStringify，并加入同定义不同键序跨批缓存回放测试。独立只读复审最终确认：新provenance位于旧不可变内容合并之前、raw/checkpoint身份保持、M5事务内事实/审查二次核验不变，未发现剩余阻断问题。
+
+
+最终复测：本地790/790、独立root/mobile严格TS、version/diff、standalone Debug全部0；源码37149b4的PR与用户授权main实际两项CI全部success。最后源码APK保留数据升级，第二后段从done raw mapping在M7正常冷启动自动恢复，0重复付费；最终冷DB验证旧两artifact与两mapping整行不变。两次分支采用合法更新live binding，已冻结历史和正文/风格保持；正常短休到v4。三成果save7正常导出/导入创建独立branch，5history/4turns/2正文/2行动风格精确保留，仅branch身份按合同重绑定，integrity ok/FK0。首次过宽的“全部live snapshot不变”断言失败保留，未改生产门禁。
+
+后续两个未来P2候选真实抽取后因新canon冲突阻断，已正常停止并保存diagnostic；不作为第三/第四个后段发布通过，已有3成果可用。真实资源内容/设备/统计验收仍按矩阵未验栏开放。用户新增授权main和要求本地接续，因此根目录progress.md及LOCAL_AGENT_HANDOFF.md记录确切提交、本地路径、剩余条件与复测步骤；不将工程通过改写为完整A01～A18通过。

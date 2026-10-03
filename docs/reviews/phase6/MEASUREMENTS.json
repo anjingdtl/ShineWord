@@ -1,6 +1,6 @@
 {
   "measurementVersion": "phase6-observed-1",
-  "date": "2026-10-02",
+  "date": "2026-10-03",
   "environment": {
     "kind": "Linux Node host using production Android adapters through native I/O test harness",
     "model": "GLM-5.3-Flash",
@@ -15,7 +15,9 @@
     "rawSha256": "7f45fe0b11ea30eca95f5a736232dd4c466a57c0f2cc9f67530e432015ecc6f4",
     "bytes": 7178905,
     "normalizedCodePoints": 3460333,
-    "chapters": 1504
+    "chapters": 1504,
+    "originalByteEncoding": "GBK-compatible (strict whole-file GBK decode successful; native/harness GB18030 fallback)",
+    "rawDecodedCodePointsBeforeNormalization": 3663447
   },
   "opening": {
     "localCache": "new project",
@@ -162,8 +164,58 @@
         "finishReason": "stop"
       }
     ],
-    "finalArtifacts": 2,
-    "note": "Second followup extracted but mapping hit the private test request cap before HTTP. It did not publish a new artifact; adopted count 2 includes opening and first followup."
+    "note": "Before explicit recovery the second followup extracted but did not publish after the private request cap; after the audited single-attempt recovery both followups published and all three artifacts were adopted, with no repeated extraction.",
+    "explicitSecondRecovery": {
+      "kind": "real_api_linux_host_explicit_single_attempt_recovery",
+      "maxAdditionalRequests": 2,
+      "requests": [
+        {
+          "number": 1,
+          "httpStatus": 200,
+          "durationMs": 31631,
+          "usage": {
+            "completion_tokens": 2595,
+            "completion_tokens_details": {
+              "reasoning_tokens": 47
+            },
+            "prompt_tokens": 29739,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 32334
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "mapping": {
+        "elapsedMs": 32069,
+        "status": "completed",
+        "lastErrorCode": null
+      },
+      "adoption": {
+        "status": "adopted",
+        "artifactCount": 3,
+        "adoptedArtifactCount": 3,
+        "stateVersionBefore": 0,
+        "stateVersionAfter": 0
+      },
+      "reuse": {
+        "factsBefore": 53,
+        "factsAfter": 53,
+        "extractionAttemptsBefore": 3,
+        "extractionAttemptsAfter": 3
+      },
+      "unknownHistory": [
+        {
+          "status": "outcome_unknown",
+          "replay_approved_at": 1790989324458
+        }
+      ],
+      "date": "2026-10-03",
+      "replayReason": "Explicit operator replay limited to the original single attempt after inspecting private transport source and all five returned HTTP outcomes: the sixth attempt was rejected before fetch. Unknown history retained; no automatic replay."
+    },
+    "artifactsBeforeExplicitRecovery": 2,
+    "finalArtifacts": 3
   },
   "style": {
     "firstAttempt": {
@@ -232,13 +284,958 @@
     "Mock/synthetic faults prove protocol behavior only"
   ],
   "observedLedgerTotalsAcrossPrivateAcceptanceDatabases": {
-    "succeededAttempts": 25,
+    "succeededAttempts": 26,
     "outcomeUnknownAttempts": 1,
-    "inputTokens": 120012,
-    "outputTokens": 48257,
-    "reasoningTokens": 1406,
+    "inputTokens": 149751,
+    "outputTokens": 50852,
+    "reasoningTokens": 1453,
     "reasoningIncludedInOutput": true,
     "directEarlyConnectionProbesExcluded": true,
-    "note": "The unknown row was marked sent before the private transport request cap rejected before fetch; it remains conservatively unknown and was not automatically retried."
+    "note": "One unknown row remains with explicit replay approval timestamp after source/log evidence showed rejection before fetch. Single bounded recovery mapping succeeded; no extraction replay and no automatic retry of an unknown outcome."
+  },
+  "engineeringCI": {
+    "pullRequest": "https://github.com/anjingdtl/ShineWord/pull/10",
+    "codeHead": "37149b45d948422ac99ce3e6c097f933fb929fb9",
+    "core": {
+      "runId": 37127895769,
+      "conclusion": "success",
+      "testsPassed": 790,
+      "durationMs": 24319.736542
+    },
+    "android": {
+      "runId": 37127895770,
+      "conclusion": "success",
+      "gradleBuildSeconds": 297,
+      "mobileTypecheckExitCode": 0
+    }
+  },
+  "androidNative": {
+    "kind": "actual_API30_native_fetch_via_private_loopback_QA_forwarder",
+    "date": "2026-10-03",
+    "physicalDevice": false,
+    "apiLevel": 30,
+    "acceleration": "TCG/no KVM",
+    "credentialOnDevice": false,
+    "requests": [
+      {
+        "number": 1,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 4035,
+        "outputBudget": 6048,
+        "startedAt": 1790992545459,
+        "outcome": "known",
+        "durationMs": 2722,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 96,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1546,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 1642
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 2,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 1815,
+        "outputBudget": 9024,
+        "startedAt": 1790992551723,
+        "outcome": "known",
+        "durationMs": 7667,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 272,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 577,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 849
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 3,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 4659,
+        "outputBudget": 6048,
+        "startedAt": 1790992977631,
+        "outcome": "known",
+        "durationMs": 3506,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 129,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1965,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2094
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 4,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 2527,
+        "outputBudget": 9024,
+        "startedAt": 1790992987620,
+        "outcome": "known",
+        "durationMs": 8726,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 285,
+          "completion_tokens_details": {
+            "reasoning_tokens": 17
+          },
+          "prompt_tokens": 1054,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 1339
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 5,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 9208,
+        "outputBudget": 10096,
+        "startedAt": 1791005575065,
+        "outcome": "unknown",
+        "durationMs": 109,
+        "errorClass": "TypeError",
+        "replayReviewedAt": 1791011259635,
+        "nativeAttemptId": "world-extract:phase6-seg-d0866259a695d87c40d66e17e0cf5ce46142526ae32c8a455cd3c7f103186f5d-g1-r0:phase6-seg-d0866259a695d87c40d66e17e0cf5ce46142526ae32c8a455cd3c7f103186f5d-g1-r0-g0001:all#a1",
+        "replayApprovedAt": 1791011210209,
+        "reviewEvidence": "Normal Native exact-attempt approval; cloud proxy omitted, direct ECONNREFUSED reproduced, proxy/system-CA HEAD401; unknown preserved, no added attempt, stopped run unchanged; resume remains separate."
+      },
+      {
+        "number": 6,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 9208,
+        "outputBudget": 10096,
+        "startedAt": 1791011572928,
+        "outcome": "known",
+        "durationMs": 39881,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 2982,
+          "completion_tokens_details": {
+            "reasoning_tokens": 13
+          },
+          "prompt_tokens": 5065,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 8047
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 7,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 3012,
+        "outputBudget": 2560,
+        "startedAt": 1791015907284,
+        "outcome": "known",
+        "durationMs": 13207,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 460,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1713,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2173
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 8,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 336,
+        "outputBudget": 1200,
+        "startedAt": 1791016099193,
+        "outcome": "known",
+        "durationMs": 1970,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 29,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 233,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 262
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 9,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 5875,
+        "outputBudget": 10096,
+        "startedAt": 1791016533248,
+        "outcome": "known",
+        "durationMs": 15632,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 1083,
+          "completion_tokens_details": {
+            "reasoning_tokens": 9
+          },
+          "prompt_tokens": 2835,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 3918
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 10,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 6098,
+        "outputBudget": 10096,
+        "startedAt": 1791016566547,
+        "outcome": "known",
+        "durationMs": 32843,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 2479,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 2875,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 5354
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 11,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 3853,
+        "outputBudget": 6048,
+        "startedAt": 1791016737881,
+        "outcome": "known",
+        "durationMs": 2878,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 113,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1499,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 1612
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 12,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 2120,
+        "outputBudget": 9024,
+        "startedAt": 1791016745258,
+        "outcome": "known",
+        "durationMs": 4451,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 135,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 587,
+          "prompt_tokens_details": {
+            "cached_tokens": 64
+          },
+          "total_tokens": 722
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 13,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 4243,
+        "outputBudget": 6048,
+        "startedAt": 1791017070406,
+        "outcome": "known",
+        "durationMs": 2708,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 91,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 1776,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 1867
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 14,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 2516,
+        "outputBudget": 9024,
+        "startedAt": 1791017077724,
+        "outcome": "known",
+        "durationMs": 5616,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 173,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 869,
+          "prompt_tokens_details": {
+            "cached_tokens": 64
+          },
+          "total_tokens": 1042
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 15,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 64685,
+        "outputBudget": 10096,
+        "startedAt": 1791031639043,
+        "outcome": "known",
+        "durationMs": 25915,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 2130,
+          "completion_tokens_details": {
+            "reasoning_tokens": 47
+          },
+          "prompt_tokens": 23665,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 25795
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 16,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 88067,
+        "outputBudget": 10096,
+        "startedAt": 1791033313832,
+        "outcome": "known",
+        "durationMs": 63233,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 5307,
+          "completion_tokens_details": {
+            "reasoning_tokens": 15
+          },
+          "prompt_tokens": 32257,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 37564
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 17,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 341,
+        "outputBudget": 2224,
+        "startedAt": 1791034800090,
+        "outcome": "known",
+        "durationMs": 2792,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 41,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 235,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 276
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 18,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 6107,
+        "outputBudget": 10096,
+        "startedAt": 1791036463286,
+        "outcome": "known",
+        "durationMs": 29918,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 2218,
+          "completion_tokens_details": {
+            "reasoning_tokens": 12
+          },
+          "prompt_tokens": 2840,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 5058
+        },
+        "finishReason": "stop"
+      },
+      {
+        "number": 19,
+        "model": "glm-5.3-flash",
+        "inputCharacters": 6121,
+        "outputBudget": 10096,
+        "startedAt": 1791036510133,
+        "outcome": "known",
+        "durationMs": 33575,
+        "httpStatus": 200,
+        "usage": {
+          "completion_tokens": 2628,
+          "completion_tokens_details": {
+            "reasoning_tokens": 9
+          },
+          "prompt_tokens": 2955,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 5583
+        },
+        "finishReason": "stop"
+      }
+    ],
+    "completedModelTurns": 2,
+    "shortRestMinutesAdvanced": 30,
+    "exportedSave": {
+      "schema": "shineword-save-7",
+      "bytes": 68504,
+      "sha256": "acbe0a64844356d004fd45605eb7e9556fbd38c3e10ada3e60d7984b637024e2",
+      "stateVersion": 3,
+      "clockMinutes": 40,
+      "historicalSnapshots": 4,
+      "turns": 3,
+      "styleMode": "custom",
+      "overrideTone": "calm-direct",
+      "learnedSourceBaseline": true,
+      "frozenStyleSnapshot": true
+    },
+    "initialQAGuardFailure": "known local model-case rejection before upstream dispatch; fixed only in private test forwarder",
+    "notAndroidTTFP": true,
+    "saveRecovery": {
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "restoredStateVersion": 3,
+      "restoredClockMinutes": 40,
+      "frozenStyleExactlyPreserved": true,
+      "narrativesExactlyPreserved": true,
+      "narrativeCount": 2,
+      "originalMainState": 3,
+      "forkState": 2,
+      "modelOperationsCompleted": 2,
+      "nativeRequestLedger": {
+        "succeeded": 4,
+        "failedKnownLocalGuard": 1,
+        "inputTokens": 5142,
+        "outputTokens": 782
+      }
+    },
+    "coldLibraryRecovered": true,
+    "actualUTF8Source": {
+      "rawSha256": "947164f49fe41d0149d27cf2d1c6fbac366431d721c7e40d3269346523a7c2f9",
+      "bytes": 234276,
+      "normalizedCodePoints": 76178,
+      "chapters": 35,
+      "chunks": 74,
+      "encoding": "utf-8",
+      "status": "active",
+      "sample": "same authorized GBK novel front 80000 raw code points transcoded locally",
+      "preFixFailure": "actual native batch planning 7/8; zero upstream calls, no publication",
+      "misSelectedOwnSaveBeforeCorrectSelection": {
+        "rawSha256": "acbe0a64844356d004fd45605eb7e9556fbd38c3e10ada3e60d7984b637024e2",
+        "bytes": 68504,
+        "invalidForNovelAcceptance": true,
+        "preparationFailed": "5/6",
+        "upstreamRequests": 0
+      },
+      "afterExplicitScopedIdentityFix": "native verified: 1 unit / 8 complete source ranges, source-local cp0..6400; retained source/chapter/chunk identities; cold integrity ok"
+    },
+    "maxTotalQAAttempts": 20,
+    "progressiveTwoTurnJourney": {
+      "kind": "native_real_two_turns_during_two_P2_extractions_host_process_exit_recovery",
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "stateVersion": 2,
+      "completedInteractions": 2,
+      "plannerNarratorSucceeded": 4,
+      "newUnknownAttempts": 0,
+      "backgroundRanges": [
+        [
+          6400,
+          9600
+        ],
+        [
+          9600,
+          12800
+        ]
+      ],
+      "followupExtractionHTTP": 2,
+      "followupReviewPending": 3,
+      "availableArtifactsBeforeReview": 1,
+      "upstreamRequestsKnownAfterResponse": 13,
+      "qaAttempts": 14,
+      "hostExitCause": "not proven; both long exec sessions disappeared, memory.events oom_kill=0; not attributed to app",
+      "novelAndCredentialUnchanged": true,
+      "actualOperationWallTimeMs": [
+        217928,
+        66995
+      ],
+      "timingInterpretation": "first operation overlaps two P2 extraction HTTP requests, but P0 HTTP calls are sent after those responses; TCG local preparation and persistence occupy most operation time. Different device/provider clock domains; no 2-second queue or real-phone latency conclusion."
+    },
+    "latestCandidateAPK": {
+      "sourceHead": "37149b45d948422ac99ce3e6c097f933fb929fb9",
+      "bytes": 107011415,
+      "sha256": "15469a83d8e210b4333cbf9abf0fd9e92306f76903d0a8daf0762b82ae5cd272",
+      "buildExitCode": 0,
+      "gradleBuildSeconds": 231,
+      "installExitCode": 0,
+      "installResult": "Success; retained userdata"
+    },
+    "memorySnapshotAfterReview": {
+      "kind": "actual dumpsys meminfo one snapshot",
+      "flow": "normal per-fact review of three complementary canon descriptions; stable screen; before resuming mapping",
+      "apiLevel": 30,
+      "variant": "standalone debug",
+      "samples": 1,
+      "acceleration": "TCG no KVM",
+      "totalPssKb": 170134,
+      "totalRssKb": 287360,
+      "javaHeapPssKb": 23120,
+      "nativeHeapPssKb": 42324,
+      "views": 299,
+      "activities": 1,
+      "swapKb": 0,
+      "artifact": "private scratch semantic-review-meminfo.txt",
+      "limits": "not peak memory, leak proof, real-phone performance, or statistical comparison"
+    },
+    "normalUserPauseAndColdResume": {
+      "kind": "native_normal_pause_after_known_mapping_and_idle_cold_restart",
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "run": {
+        "status": "paused_user",
+        "phase": "validating",
+        "lease_owner": null,
+        "lease_expires_at": null,
+        "pause_requested": 0
+      },
+      "mappingSuccessfulAttempts": 1,
+      "mappingTokenUsage": {
+        "input": 23665,
+        "output": 2130,
+        "reasoning": 47,
+        "reasoningIncludedInOutput": true
+      },
+      "canonConflictsRemaining": 0,
+      "resolvedPerFactAudits": 4,
+      "completedExtractionReused": true,
+      "totalQARequestsAtPause": 15,
+      "newUnknown": 0,
+      "remoteRequestNotCancelled": true,
+      "sentProcessKillTest": false,
+      "coldRestartStillPaused": "normal Project Hub native-paused-cold-hub shows 已暂停 and 整理已暂停; no automatic model call (QA count 15)",
+      "completedMappingCheckpoint": [
+        {
+          "jobId": "job-map-world-src-947164f49fe41d01-murtgya9-5082fb101b7146700951d06a004055c3f912955ee7fdb1544cfef2e6687159fc",
+          "status": "done",
+          "resultBytes": 5021,
+          "resultSha256": "02b708bfc9505432c28e391a6efad40582feb94e9e192370a28e01874769b68e"
+        }
+      ],
+      "resumeResult": "Normal Hub completed/4-of-4, total2ready, QA remains15; subsequent first safe adoption is measured separately below."
+    },
+    "normalFirstSubsequentAdoption": {
+      "kind": "native_first_subsequent_safe_adoption",
+      "snapshotType": "active diagnostic; confirm again with idle cold copy",
+      "branchId": "camp-mus4u8cl-main",
+      "stateVersion": 2,
+      "adoptedArtifacts": 2,
+      "unchangedRows": {
+        "turns": 2,
+        "roll_records": 0,
+        "interaction_operations": 2,
+        "actor_states": 2,
+        "turn_narratives": 2,
+        "writer_style_snapshots": 2,
+        "historicalSnapshotsBeforeLiveVersion": 2
+      },
+      "totalQARequests": 15,
+      "zeroAdditionalMappingAfterColdResume": true,
+      "liveSnapshotOnlyChangedFields": [
+        "segmentContentBinding"
+      ],
+      "liveStateVersionUnchanged": true,
+      "normalShortRestAfterAdoption": "completed; advances30minutes; stateVersion3 (active diagnostic)",
+      "coldConfirmation": {
+        "database": "native-before-provenance-upgrade-cold.sqlite",
+        "integrity": "ok",
+        "foreignKeyViolations": 0,
+        "branchStateVersion": 3,
+        "liveAdoptedArtifacts": 2,
+        "v0AndV1ExactlyRetained": true,
+        "frozenNarrativesAndStyleExactlyRetained": true
+      }
+    },
+    "openingGoalGovernance": {
+      "kind": "Native-governed-opening-goal-metadata",
+      "apkCodeHead": "98fe88282a9434510e6b61a5a94fbfe5114c996d",
+      "attempts": [
+        {
+          "attempt_id": "opening-goal:world-src-947164f49fe41d01-murtgya9:42ebe05870d0b06f04eafd6451b01be86bf2a3258b8ba1fe3aa0fed2b9829c4b#a1",
+          "logical_request_id": "opening-goal:world-src-947164f49fe41d01-murtgya9:42ebe05870d0b06f04eafd6451b01be86bf2a3258b8ba1fe3aa0fed2b9829c4b",
+          "request_kind": "opening_goal",
+          "campaign_id": null,
+          "branch_id": null,
+          "world_id": "world-src-947164f49fe41d01-murtgya9",
+          "state_version": null,
+          "model_profile_fingerprint": "7316f6f5",
+          "attempt_no": 1,
+          "status": "succeeded",
+          "failure_class": null,
+          "error_code": null,
+          "http_status": null,
+          "provider_request_id": "202610032140005274694257094c64",
+          "input_tokens": 235,
+          "output_tokens": 41,
+          "reasoning_tokens": 0,
+          "cached_input_tokens": 0,
+          "estimated_usage": 0,
+          "started_at": 1791034797223,
+          "finished_at": 1791034802196,
+          "reasoning_tier": "low",
+          "reasoning_reserve_tokens": 1024,
+          "reasoning_policy_version": "reasoning-policy-1",
+          "wire_output_tokens": 2224,
+          "replay_approved_at": null
+        }
+      ],
+      "historicalQA8NotBackfilled": true,
+      "coldIntegrityPending": false,
+      "sameProcessNormalBackAndReopen": {
+        "uiTree": "native-governed-opening-cache.xml",
+        "qaAttemptsBefore": 17,
+        "qaAttemptsAfter": 17,
+        "extraPhysicalRequests": 0
+      },
+      "coldIntegrity": "ok",
+      "coldForeignKeyViolations": 0,
+      "coldUniqueGovernedAttempt": [
+        {
+          "attempt_id": "opening-goal:world-src-947164f49fe41d01-murtgya9:42ebe05870d0b06f04eafd6451b01be86bf2a3258b8ba1fe3aa0fed2b9829c4b#a1",
+          "logical_request_id": "opening-goal:world-src-947164f49fe41d01-murtgya9:42ebe05870d0b06f04eafd6451b01be86bf2a3258b8ba1fe3aa0fed2b9829c4b",
+          "request_kind": "opening_goal",
+          "campaign_id": null,
+          "branch_id": null,
+          "world_id": "world-src-947164f49fe41d01-murtgya9",
+          "state_version": null,
+          "model_profile_fingerprint": "7316f6f5",
+          "attempt_no": 1,
+          "status": "succeeded",
+          "failure_class": null,
+          "error_code": null,
+          "http_status": null,
+          "provider_request_id": "202610032140005274694257094c64",
+          "input_tokens": 235,
+          "output_tokens": 41,
+          "reasoning_tokens": 0,
+          "cached_input_tokens": 0,
+          "estimated_usage": 0,
+          "started_at": 1791034797223,
+          "finished_at": 1791034802196,
+          "reasoning_tier": "low",
+          "reasoning_reserve_tokens": 1024,
+          "reasoning_policy_version": "reasoning-policy-1",
+          "wire_output_tokens": 2224,
+          "replay_approved_at": null
+        }
+      ]
+    },
+    "secondFollowupCachedRecovery": {
+      "kind": "native_second_followup_cached_recovery",
+      "sourceHead": "37149b45d948422ac99ce3e6c097f933fb929fb9",
+      "snapshot": "active diagnostic; final idle cold confirmation pending",
+      "availableArtifacts": 3,
+      "totalQAAttempts": 17,
+      "extraPaidMappingAfterProvenanceFix": 0,
+      "rawMappingRowsExactlyUnchanged": true,
+      "oldArtifactsExactlyUnchanged": true,
+      "recoveryTrigger": "normal upgraded-app cold launch M7 recovered known failed validation from compatible done cache",
+      "coldConfirmation": {
+        "database": "native-three-artifact-final-cold.sqlite",
+        "integrity": "ok",
+        "foreignKeyViolations": 0,
+        "oldArtifactRowsExactlyRetained": true,
+        "rawMappingRowsExactlyRetained": 2,
+        "historicalSnapshotsAndOriginalFrozenRowsExactlyRetained": true,
+        "currentBranchStateVersion": 4,
+        "currentAdoptedArtifacts": 3
+      }
+    },
+    "secondSubsequentAdoption": {
+      "kind": "native_second_subsequent_adoption",
+      "snapshot": "active diagnostic; final idle cold confirmation pending",
+      "branchId": "camp-mus4u8cl-main",
+      "stateVersion": 3,
+      "adoptedArtifacts": 3,
+      "liveSnapshotOnlyChangedFields": [
+        "segmentContentBinding"
+      ],
+      "historicalSnapshotsExactlyRetained": [
+        0,
+        1,
+        2
+      ],
+      "unchangedRows": {
+        "turns": 3,
+        "interaction_operations": 2,
+        "turn_narratives": 2,
+        "writer_style_snapshots": 2
+      },
+      "qaAttempts": 17,
+      "adoptionItselfUsesNoProvider": true,
+      "subsequentMaintenancePrefetch": {
+        "qaRequests": [
+          18,
+          19
+        ],
+        "context": "After this safe adoption the near domain advanced; M3 admitted two new bounded P2 extraction candidates, separate from adopting immutable content. Both are now HTTP200 known."
+      },
+      "coldConfirmation": {
+        "database": "native-three-artifact-final-cold.sqlite",
+        "integrity": "ok",
+        "foreignKeyViolations": 0,
+        "oldArtifactRowsExactlyRetained": true,
+        "rawMappingRowsExactlyRetained": 2,
+        "historicalSnapshotsAndOriginalFrozenRowsExactlyRetained": true,
+        "currentBranchStateVersion": 4,
+        "currentAdoptedArtifacts": 3
+      }
+    },
+    "normalStopOfLaterBuffers": {
+      "kind": "normal_stop_of_two_speculative_buffers",
+      "runs": [
+        {
+          "run_id": "phase6-seg-d0866259a695d87c40d66e17e0cf5ce46142526ae32c8a455cd3c7f103186f5d-g1-r0",
+          "status": "completed",
+          "phase": "publishing",
+          "units_done": 1,
+          "units_total": 1,
+          "lease_owner": null,
+          "last_error_code": null
+        },
+        {
+          "run_id": "phase6-seg-b189fa0a87e6be3d1caa342738633d128b78d3f0d65cf7d13c9cf60f84afdbd4-g1-r0",
+          "status": "completed",
+          "phase": "publishing",
+          "units_done": 1,
+          "units_total": 1,
+          "lease_owner": null,
+          "last_error_code": null
+        },
+        {
+          "run_id": "phase6-seg-c2fe3a016122ad06dd77b3f8cefdcf2a136781943ec06bde9aa1b1e5b966823e-g1-r0",
+          "status": "completed",
+          "phase": "publishing",
+          "units_done": 1,
+          "units_total": 1,
+          "lease_owner": null,
+          "last_error_code": null
+        },
+        {
+          "run_id": "phase6-seg-5612967648fbbaa25bd0452e4d09c7d4669bacc60034864b36983566259fdad8-g1-r0",
+          "status": "stopped_user",
+          "phase": "mapping",
+          "units_done": 1,
+          "units_total": 1,
+          "lease_owner": null,
+          "last_error_code": "canon_conflict"
+        },
+        {
+          "run_id": "phase6-seg-f662f3573e28d874d6a7888dceb749d42c58269a7cf16c2a7f6134e52324245d-g1-r0",
+          "status": "stopped_user",
+          "phase": "mapping",
+          "units_done": 1,
+          "units_total": 1,
+          "lease_owner": null,
+          "last_error_code": "canon_conflict"
+        }
+      ],
+      "qaAttempts": 19,
+      "currentReadyArtifacts": 3,
+      "normalUserStopPreservesRunAndCheckpoints": true,
+      "note": "Two new extraction responses are known; later speculative source conflicts remain reviewable. They are outside the tested initial and two adopted segments."
+    },
+    "threeArtifactSaveRecovery": {
+      "kind": "normal_native_save7_three_artifacts_export_import_and_idle_cold_verification",
+      "sourceHead": "37149b45d948422ac99ce3e6c097f933fb929fb9",
+      "integrity": "ok",
+      "foreignKeyViolations": 0,
+      "originalCampaignId": "camp-mus4u8cl",
+      "restoredCampaignId": "camp-musi82oj",
+      "restoredBranchId": "camp-musi82oj-main",
+      "schema": "shineword-save-7",
+      "saveBytes": 349607,
+      "saveSha256": "db2b8b7a2ebaaea05b5233631dbbb2c54afdb0d3384894a76a0ed721ab07aee5",
+      "stateVersion": 4,
+      "clockMinutes": 70,
+      "artifacts": 3,
+      "historicalSnapshots": 5,
+      "turns": 4,
+      "narrativesExactlyPreserved": 2,
+      "frozenActionStyleSnapshotsExactlyPreserved": 2,
+      "restoredSnapshotChangesOnlyBranchIdentity": true,
+      "immutableArtifactRowsRetained": true,
+      "rawMappingWholeRowsExactlyRetained": 2,
+      "originalFrozenRowsRetained": true,
+      "historicalApprovedUnknownRetained": true,
+      "newProviderCallsDuringSaveImport": 0,
+      "totalQAAttempts": 19,
+      "sentOrQueuedRequests": 0,
+      "note": "Current manifest/binding and historical branch ids rebind to the new independent campaign; hashes, certified artifact contents, action contracts and frozen style remain unchanged. Original v3 from second adoption also remains frozen after normal short rest to v4.",
+      "uiEvidence": [
+        "native-three-artifact-exported.xml",
+        "native-three-save-import-result.xml"
+      ]
+    },
+    "qaCleanup": {
+      "qaAttempts": 19,
+      "inflight": 0,
+      "privateForwarderStopped": true,
+      "adbReverse18765Removed": true,
+      "userdataPreserved": true
+    }
+  },
+  "buildReplayNative": {
+    "sourcePlanningVerified": {
+      "units": 1,
+      "ranges": 8,
+      "startCp": 0,
+      "endCp": 6400,
+      "integrity": "ok"
+    },
+    "opaqueNetworkFailure": {
+      "qaAttemptNumber": 5,
+      "knownUpstreamRequestsBefore": 4,
+      "cause": "private QA forwarder omitted cloud environment proxy; reproduced direct ECONNREFUSED",
+      "providerFailureClaim": false
+    },
+    "recovery": {
+      "cancelDialogReopenedSameAttempt": true,
+      "beforeApprovalOrdinaryResumeHidden": true,
+      "afterApprovalRunUnchanged": true,
+      "attemptCount": 1,
+      "unknownRetained": true,
+      "usageUnknownRetained": true,
+      "replayApprovedAt": 1791011210209,
+      "forwarderAttemptsStill": 5,
+      "deviceProfileConcurrency": 3,
+      "deviceConfiguredContext": 1048576,
+      "deviceContentOutput": 6000,
+      "deviceModelOutputCeiling": 131072
+    },
+    "apk": {
+      "bytes": 107006711,
+      "sha256": "9a1e20acb67b0bc6f39da8698ca6ffaf277a4d33ad2e818205b0c6ab16f881c5",
+      "codeHead": "bb7065aac63bd04886eb3196e92c90de1f13f665",
+      "nativePublishComplete": false
+    },
+    "firstExtraction": {
+      "qaAttempt": 6,
+      "httpStatus": 200,
+      "durationMs": 39881,
+      "inputTokens": 5065,
+      "outputTokens": 2982,
+      "reasoningTokensIncludedInOutput": 13,
+      "cachedInputTokens": 0,
+      "facts": 28,
+      "entities": 24,
+      "initialArtifactCount": 0,
+      "result": "one actual identity conflict blocked publication; normal UI made insufficient citation unverified, audit and evidence retained; unchanged playability gate; cached resume under test"
+    },
+    "latestInstalledAPK": {
+      "bytes": 107004131,
+      "sha256": "5b67a1bc31fab1a9475bf0fb4f52eca97518cddc4d055faa6f8a6a9f6bb9ab08",
+      "codeHead": "ee09cb4e014850ccec2ac9d4164275c111feac2c",
+      "dataPreserved": true,
+      "nativePublishComplete": true
+    },
+    "cachedPublicationAfterNormalReview": {
+      "kind": "actual_native_cached_opening_publication_after_normal_review",
+      "integrity": "ok",
+      "foreignKeyErrors": 0,
+      "worldId": "world-src-947164f49fe41d01-murtgya9",
+      "artifactId": "segment-artifact-e3d8c84092a1ec580a8213e3a7ff2769875403d2350a559860395687da0d8409",
+      "entries": 45,
+      "citations": 117,
+      "facts": 28,
+      "speculation": 1,
+      "rawFactAndSourcesRetained": true,
+      "speculationNotCited": true,
+      "extractAttempts": 2,
+      "knownExtractionResponses": 1,
+      "unknownExtractionRetained": 1,
+      "additionalExtractionCallsAfterReview": 0,
+      "styleAdditionalRequests": 1,
+      "unchangedGateMinimumFacts": 20,
+      "result": "ready; run completed; no unresolved review"
+    }
+  },
+  "delivery": {
+    "initialScope": "PR to main without unilateral merge",
+    "latestExplicitUserAuthorization": "2026-10-03 commit and push main",
+    "mainCodeHead": "37149b45d948422ac99ce3e6c097f933fb929fb9",
+    "priorMain": "51033973445825f01b730b7e62eec0a3352414e1",
+    "forcePush": false,
+    "gitHubPullRequest": 10,
+    "pullRequestState": "closed, merged by authorized fast-forward",
+    "finalEvidenceCommitPending": false,
+    "mainSourceCI": {
+      "core": {
+        "runId": 37129047811,
+        "conclusion": "success",
+        "testsPassed": 790,
+        "durationMs": 30663.543032
+      },
+      "android": {
+        "runId": 37129047814,
+        "conclusion": "success",
+        "gradleBuildSeconds": 320,
+        "mobileTypecheckExitCode": 0
+      }
+    },
+    "finalEvidenceCIContract": "This closeout changes documentation only. Core Verify runs on final main push; Android Verify is path-filtered, so unchanged production source is covered by successful main source run37129047814. Final Core result is checked after publishing and supplied in delivery."
   }
 }

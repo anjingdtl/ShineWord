@@ -102,26 +102,21 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 
 编码复核纠正：授权小说完整字节strict GBK解码成功，UTF-8 strict失败；Android imported_sources.encoding=gbk/status=active，byte_length=7178905/code_point_count=3460333。原文档UTF-8标注错误已纠正，不改变此前真实API的hash/坐标/Token/耗时证据。
 
+
+| 阶段/场景 | 命令/退出码 | 结果/场景 | 证据与边界 |
+|---|---|---|---|
 | 2026-10-03：跨API未知结果审查修复 | build:core + node --test tests/phase6-opening-goal-governance.test.cjs | 0，5/5，302.103ms | 相同语义先unknown，再换端点/模型/推理预算，真实SQLite仅1物理调用和1logicalID，unknown/null usage/未审批保留；不借成功缓存掩盖未知 |
 | 2026-10-03：稳定语义ID最终全量 | npm run verify:core | 0，786/786、119273.318ms，0fail/skip/todo | phase6-final-semantic-core.log；root严格typecheck包含，未删除/绕过测试 |
 | 2026-10-03：稳定语义ID移动与版本 | npm run typecheck --prefix mobile；npm run verify:version；git diff --check | 各0 | phase6-final-semantic-mobile.log、phase6-final-semantic-version.log |
 | 2026-10-03：稳定语义ID独立Debug | JAVA_HOME=JDK17 ANDROID_HOME=SDK36 GRADLE_USER_HOME=toolchains/gradle npm run apk:debug --prefix mobile | 0，BUILD SUCCESSFUL 3m10s | phase6-final-semantic-apk.log；107008739bytes，SHA256 64b766bb3c5b6cccaf2478f8b9eb462439c029e3287a1bdc5976535d9a5b2f75，root源码bundle已重建 |
-
 | P6-6 | 开局建议治理head98fe882实际Core CI | success，786/786，20.553秒 | [37123405204](https://github.com/anjingdtl/ShineWord/actions/runs/37123405204)，0fail/skip/todo，版本一致 |
 | P6-6 | 语义ID候选安装与冷启动 | install-r Success，正常Library恢复 | phase6-final-semantic-install.log、semantic-final-library-projects；保留userdata，无应用JS/Java新异常日志证据 |
-
 | P6-6 | 开局建议治理head98fe882实际Android CI | success，BUILD SUCCESSFUL 3m43s | [37123405202](https://github.com/anjingdtl/ShineWord/actions/runs/37123405202)，移动类型及完整Debug通过 |
-
 | P6-6 | Native映射后正常暂停与空闲冷停 | paused_user/validating；integrity ok/FK0 | native-user-paused-cold.sqlite；known mapping QA15 HTTP200/25.915s/23665in2130out，租约清空；三互补冲突resolved审计+初始speculation审计共4，0conflict，不强杀在途请求 |
-
 | P6-6 | Native第一后段冷重启/显式继续/缓存发布 | 2ready，后段4/4 completed，0新模型调用 | native-paused-cold-hub + native-first-followup-ready-check；暂停未自动撤销，done映射检查点复用，QA计数仍15；分支采用继续单独验证 |
-
 | P6-6 | Native第一次后续采用/短休 | v2 binding1→2，正常短休30min到v3，0上游 | native-first-adopt-later-active/rest-active诊断：2turn、2interaction、2actor、2正文、2风格整行不变；v0/v1历史snapshot不变，live v2只更新segmentContentBinding。首次要求live snapshot全部字节不变的过宽断言失败，核对后改正范围，最终cold复核另列 |
-
 | P6-6 | 第二Native后段真实映射 | HTTP200/63.233s、32257in/5307out/cached0 | QA16，reason15包含output，finish stop；正在本地验证/发布，HTTP成功不等于成果已ready |
 | P6-6 | Native连续两回合与后台时间线复核 | 两操作completed，217928ms/66995ms | 第一操作08:35:36开始，与P2请求9/10重叠；P0请求11/12在两P2 HTTP响应之后发送。无KVM本地准备/持久化耗时大，不能宣称P0实际HTTP与P2并发、P95≤2秒或真机体验 |
-
-
 | 2026-10-03 新草稿来源投影：build:core + incremental/artifacts/publication-safety | 0 | 33/33，实时与done缓存一致、raw/cache/事实不变、跨批推断、异定义审查、已恢复失败历史计数、M5严格伪装/缺失/冲突负例 | phase6-provenance-build.log / phase6-provenance-targeted.log |
 | 新草稿来源投影：npm run verify:core | 0 | 789/789，130811.769ms；包含root严格typecheck | phase6-provenance-full.log |
 | 新草稿来源投影：npm run typecheck --prefix mobile | 0 | mobile严格TS | phase6-provenance-mobile-type.log |
@@ -130,13 +125,31 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 新草稿来源投影standalone Debug exit0，Gradle3m31s；APK 107011275 bytes，SHA256 5890c8160c4a837d889634e9e9c06f360a6ee3f56fb8a7c89c1a5cd2508ec641；包含本次root源码真实bundle。
 
 
+
+| 阶段/场景 | 命令/退出码 | 结果/场景 | 证据与边界 |
+|---|---|---|---|
 | c867284实际Core CI37126959080 | 0/success | 789/789、29590.983ms | phase6-ci-provenance-core.log |
 | c867284实际Android CI37126959212 | 0/success | mobile严格类型及Gradle4m26s | phase6-ci-provenance-android.log |
 | effective-units首次扩展全量回归 | 1 | 790总/788过/2失败：新增测试子输入hash复制父值触发唯一约束（fixture已修正）；既有120ms G0心跳计时在构建/TCG竞争下失效，保留日志，最终需复测 | phase6-effective-units-full.log |
 | effective-units中间APK构建 | 1（主动停止） | 独立复审发现对象键序误冲突，停止中间构建并使用canonicalStringify后重新完整bundle；不把中间包计最终候选 | phase6-effective-units-apk.log |
-
-
 | 最终复审修复：npm run verify:core | 0 | 790/790、146327.166ms；G0原90ms TTL测试未改且通过，split/replan及canonical键序全部通过 | phase6-final-review-core.log |
 | 最终复审修复：npm run typecheck / npm run typecheck --prefix mobile | 0 / 0 | 两严格TS实际各执行，未跳过门禁 | phase6-final-review-root-type.log / phase6-final-review-mobile-type.log |
 | 最终复审修复：npm run verify:version / git diff --check | 0 / 0 | V0.6.0/60000、schema31/save7不变 | 实际执行 |
 | 最终复审修复：standalone Debug | 0 | Gradle3m51s，root源码完整bundle重建；107011415bytes，SHA256 15469a83d8e210b4333cbf9abf0fd9e92306f76903d0a8daf0762b82ae5cd272 | phase6-final-review-apk.log |
+
+
+| 场景 | 命令/退出码 | 实际结果 | 证据与边界 |
+|---|---|---|---|
+| 最终源码37149b4 PR实际CI | Core/Android success | Core790/790、24319.737ms；Android移动严格类型0/Gradle4m57s | [37127895769](https://github.com/anjingdtl/ShineWord/actions/runs/37127895769)、[37127895770](https://github.com/anjingdtl/ShineWord/actions/runs/37127895770) |
+| 用户授权安全快进main | ancestry/ref/checks核对，force:false，成功 | main5103397→37149b4；完整提交历史保留，PR10自动merged；无tag/Release | authorized-main-published.json私有审计；GitHub实际main ref/PR核对 |
+| 最终生产源码main Core CI | success/0 | 790/790、30663.543ms，0fail/skipped/todo | [37129047811](https://github.com/anjingdtl/ShineWord/actions/runs/37129047811)，phase6-ci-main-core.log |
+| 最终生产源码main Android CI | success/0 | mobile严格typecheck0；Debug BUILD SUCCESSFUL 5m20s | [37129047814](https://github.com/anjingdtl/ShineWord/actions/runs/37129047814)，phase6-ci-main-android.log |
+| 最终APK原生缓存恢复/两次采用 | 正常UI和空闲cold SQLite核验0 | 第三artifact ready、binding1→2→3；M7已完成mapping0重复付费，历史冻结整行保持 | native-second-recovery/adoption结果与native-three-artifact-final-cold.sqlite；QA18/19后续维护是独立新抽取，不伪称整个Play路径0HTTP |
+| 实际opening_goal治理 | 正常UI+冷DB核对0 | QA17 HTTP200/2.792s，唯一M6账本；返回再重开0HTTP，历史QA8不补造 | native-governed-goals-results.json；235in41out，low/1024reserve/2224wire |
+| 未来两段真实冲突/正常停止 | 正常UI/最终cold核对0 | 两抽取HTTP200但canon冲突阻断；stopped_user/lease null，保留diagnostic和done，未发布 | native-buffer-stop-results.json；对应内容审查仍未验，不能把HTTP200算成果通过 |
+| 正常三成果save7导出/导入 | SAF UI成功；verify-three-save.py exit0 | 新独立campaign v4/clock70、3artifact/5history/4turns、2正文/2行动冻结风格精确保留；branch身份合法重绑定；旧两个mapping整行不变 | native-three-artifact-save-results.json/cold.sqlite；349607bytes/SHA db2b8b7a2ebaaea05b5233631dbbb2c54afdb0d3384894a76a0ed721ab07aee5，integrity ok/FK0，0新模型请求 |
+| 最终证据文档版本/格式检查 | npm run verify:version；git diff --check，各0 | V0.6.0/60000，JSON元数据可解析；源码无新增改动 | 仅文档不重复APK/模型构建；最终main Core push另实际核对，Android路径过滤不触发 |
+
+最终测试记录保留全部失败、缓存和恢复步骤。云私有执行证据不可假定存在本地开发机；本地agent应按progress.md及交接提示重新记录当地环境与可执行结果。最终文档提交的Core CI结论在推送后检查并随交付提供；源码相同的Android CI使用上述main源码run，不能伪造文档head的运行。
+
+私有QA收尾：19次计数不变，确认0在途后停止唯一临时转发并移除ADB reverse18765；保留userdata及全部私有证据，qa-cleanup-results.json。

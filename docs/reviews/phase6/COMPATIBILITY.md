@@ -49,3 +49,6 @@ Scoped canon冲突复用既有canon_conflict审查类型：M4从同一可用范�
 
 
 原生映射来源标记修复：只校正本次新草稿的 provenance，不改已发布不可变条目或原fact status。所有raw done checkpoint、hash、模型配置、usage和请求账本保持原样；不改变mapper系统提示或版本，兼容结果可以通过新cleaning在本地重投影。unitsFailed仍为历史次数，当前抽取完成以完整unit集合及各自completed状态证明。schema31/save7和API契约版本不变。
+
+
+最终原生save7兼容实测：同一已验证世界依赖存在时，3artifact/v4/5历史snapshot/4turns经正常SAF导出/导入创建独立campaign；全部snapshot仅重绑定branch身份，manifest/artifact hash、2正文/2冻结行动风格保持。原branch、历史、两raw mapping及旧artifact整行未改，冷DB integrity ok/FK0，0新请求。此证据不代替新设备缺依赖归档或旧真实用户库迁移验收。新完成判定过滤已取消审计父行并保留历史失败次数，无schema/save版本变化。
