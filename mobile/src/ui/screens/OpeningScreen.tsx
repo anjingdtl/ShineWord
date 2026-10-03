@@ -21,6 +21,7 @@ import { getSegmentReadiness } from '../../segmentRuntime';
 import { createCampaign } from '../../../../src/application/campaign/createCampaign';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
+import { nativeSha256 } from '../../nativeCrypto';
 import { findLocalOpeningSource } from '../../../../src/application/worldPackage/openingRecovery';
 import { importNovelForOpeningStreaming } from '../../sourceImport';
 import { startOrResumeBuild } from '../../buildWatchdog';
@@ -112,6 +113,7 @@ export function OpeningScreen(): React.JSX.Element {
     const anchorOrder = setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.worldTimeOrder;
     if (anchorOrder === undefined) return;
     let cancelled = false;
+    const queueController = new AbortController();
     (async () => {
       try {
         const session = await createSession(profile, await buildProvider(profile));
@@ -123,19 +125,27 @@ export function OpeningScreen(): React.JSX.Element {
         // Product ask 2026-10-01 #3: two AI-proposed goals over the world
         // package for the chosen anchor; the third option is the player's
         // own words. Pure enhancement - failures resolve to no suggestions.
+        const runtime = await getDatabaseRuntime();
+        const revision = anchored.packageRevision;
+        const published = revision === null ? null : await runtime.worldStore.getWorldPackage(worldId, revision);
+        if (cancelled || !published || published.manifest.status !== 'published') return;
         const goals = await suggestOpeningGoals(await buildProvider(profile), {
           worldTitle: title,
           anchorTitle: setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.title ?? '开局时刻',
           locationName: anchored.locations[0],
           characterNames: anchored.canonCharacters.slice(0, 6).map(character => character.name),
           playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
+        }, { worldId, packageRevision: published.manifest.revision, packageContentHash: published.manifest.contentHash,
+          anchorEventId, profile, sha256Hex: nativeSha256.sha256Hex,
+          queueSignal: queueController.signal,
+          isCurrent: async () => !cancelled && Boolean(await runtime.worldStore.getWorld(worldId)),
         });
         if (!cancelled) setGoalSuggestions(goals);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; queueController.abort(); };
     // The selected anchor controls which time-bounded facts can enter the opening projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldId, anchorEventId, profile]);

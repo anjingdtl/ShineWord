@@ -42,3 +42,7 @@ schema 28 来源 `UNIQUE(source_id)` 不改为跨世界共享。追加只对新�
 
 
 追加恢复合同使用既有schema31：RunPlanState新增可选且运行时校验的mappingRequestIds，旧plan缺字段仍读取；M4在活租约/fence内写入，replan合并保留。M6是build/play精确审批的唯一写入所有者；快照核对run/world/fence/来源/模型/控制及无在途请求，保留未知状态和费用诊断，审批不会恢复用户停止。旧registry/timeline按准确run/world及64位内容hash识别；旧world-shared映射按已知job-map hash协议仅适配未完成旧最终化任务，已完成开局与新登记run仍严格隔离。租约CAS与映射原子prepare使用原表/端口，无schema或存档版本变化。
+
+Scoped canon冲突复用既有canon_conflict审查类型：M4从同一可用范围返回blockingConflictFactIds，M4所有者在活fence内核对当前conflict行并事务保存review。已解决的旧ID不能重新打开阻断；普通批量豁免不能清除canon冲突。逐事实unverified保留原文/审计并转speculation，映射排除它，20事实与引用闭包门禁不变。M9只调用端口，不直接改事实。
+
+开局目标建议经runtime现有RateScheduledProvider.withLedger复用唯一M6账本，并通过现有预算内核/推理策略/P1队列。生产逻辑ID按已发布世界/锚点/输入语义稳定，不因切API、模型或预算绕过outcome_unknown；配置指纹保留在metadata和有界成功缓存中。旧可选建议调用API继续兼容；没有迁移、新账本或存档字段。历史QA8旧未治理调用如实记录，不补造历史账本。

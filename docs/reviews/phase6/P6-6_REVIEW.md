@@ -48,3 +48,19 @@
 - 实际Native第一抽取结束：28canon facts/24entities、冷DBintegrity ok/FK0；闭包涉及1身份conflict，质量门禁拒绝发布，0mapper/0artifact。错误曾误为package_finalize_failed/failed_retryable且review列表为空，自动恢复仅重跑本地finalization，未再次请求模型。新增SelectedCanon.blockingConflictFactIds，闭包冲突走既有canon_conflict阻断/逐事实审查协议；不降低20事实或来源闭包门禁。审查写入在既有WorldStore事务中校验fence与当前conflict IDs，迟到已解决事实不能重开阻断。
 - 既有ReviewPanel的unverified决定保留事实/原文/审计，但不用于映射。当前真实模型冲突值把公开王子身份与现代经历混在同一单值谓词，而现代经历引用只提供姓名片段；准备在正常界面转待核实，不能离线改库或批量waive。工程测试验证review阻断、零付费调用、unverified不出现在发布条目和事务回滚。
 - 追加核对审批快照的展示kind/time/wire budget与账本逐项一致，伪造展示信息不审批。46项定向通过；全量严格类型首次因noUncheckedIndexedAccess指出snapshot显示项可能undefined，改为显式runtime guard后重跑全部门禁，未用类型断言绕过。
+
+## 真实请求对账追加审查：开局目标建议
+
+实际QA8目标建议HTTP200，却没有对应账本；旧OpeningScreen只调用scheduled provider，未传ledger metadata，也未冻结预算/推理计划。保留这一旧真实负例（233in/29out/1.970秒），不事后伪造历史attempt。
+
+OpeningGoalGovernance补齐world/不可变包hash+revision/anchor/profile/plan identity；统一kernel分配内容/思考预算、P1、单物理请求和M6账本；M0 runtime.buildProvider在同一scheduler内部withLedger装配，CampaignSession识别既有包裹避免双重登记。既有失败退回手写目标，不阻塞开局；unknown保留且同逻辑ID重开不发。32项有界goal-only内存缓存共享在途请求/已知建议，错误与空结果不缓存；队列取消和项目存在检查阻止过期UI结果，已发送不假定撤销计费。
+
+4新协议/事务测试验证跨provider并发共享、成功缓存防外部修改、真实SQLite unknown/null用量、低预算/未知能力/错误hash/删除/取消、不同包/锚点隔离。定向34/34、全量785/785、mobile/version/diff、standalone APK均exit0。第一次strict mobile hash接口sync/async不匹配已按共享Sha256语义修复。独立只读最终审查与原生修复版复测继续；构建期间不再改源。
+
+原生第二旅程：TXT成果创建新campaign，两个连续真实回合成功，两个近期P2抽取也已完成。宿主长exec退出后保留userdata重启，冷DB integrity ok/FK0、两interaction completed/v2/4成功attempt，0新unknown；未能证明宿主退出原因，也不归咎App。两个后段被3真实事实冲突阻断，保留审查门禁并逐条核对后再继续。
+
+## 跨API未知结果复发审查
+
+独立只读审查合成复现，同一opening_goal未知后更换API导致2次物理调用、2条logicalID。修复将请求语义与profile/plan分离：logicalID使用world、已发布revision/hash、anchor和提示词；配置仅参与成功缓存key及既有M6 metadata。新增真实SQLite适配器测试跨endpoint/model/reasoning budget，物理调用1、唯一semantic logicalID、unknown和null用量保留，不自动批准重放。5/5定向通过；独立审查其余非probe生产调用未发现新预算/账本遗漏。无新表、无双层账本、无协议降级。
+
+稳定语义ID候选完整standalone Debug exit0，3m10s；107008739 bytes，SHA256 64b766bb3c5b6cccaf2478f8b9eb462439c029e3287a1bdc5976535d9a5b2f75。root源码bundle实际重建，不使用旧APK。

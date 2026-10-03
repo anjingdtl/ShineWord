@@ -47,7 +47,6 @@
 | P6-6 | 追加修复standalone Debug | 0，BUILD SUCCESSFUL，2m50秒 | phase6-scoped-final-apk.log；106974099bytes，SHA256 2e8bd3a1a83a6a1a00b7e3c681a1031362c3f9218fd006aa6ff9ab1021607619；正确TXT旧包原生7/8失覆盖负例保留，端上复测另列 |
 | P6-6 | 范围/准备恢复head 4cdaace实际Core CI | success；766/766，44秒 | [37099516040](https://github.com/anjingdtl/ShineWord/actions/runs/37099516040)，版本一致门禁通过 |
 | P6-6 | 范围/准备恢复head 4cdaace实际Android CI | success；5m28s | [37099515993](https://github.com/anjingdtl/ShineWord/actions/runs/37099515993)，移动类型检查及Debug构建通过 |
-
 | P6-6 | 精确构建恢复/实际账本投影定向 | 0；32/32 | phase6-recovery-race-tests.log，跨域/foreign IDs、CAS takeover、旧registry/timeline/world shared协议、共享done缓存与API切换阻断 |
 | P6-6 | 请求恢复修复首轮全量 | 1；778/779 | phase6-recovery-final-core.log，旧pending split恢复1失败，保留原断言并修复prepare事务缓存保留 |
 | P6-6 | 拆批兼容修复定向 | 0；37/37 | phase6-recovery-split-tests.log，5.949秒，旧包构建/精确恢复/增量映射 |
@@ -55,22 +54,31 @@
 | P6-6 | 恢复修复 root typecheck / mobile typecheck | 0 / 0 | phase6-recovery-race-typecheck/mobile.log；最后UI措辞mobile复查另列 |
 | P6-6 | 最初追加APK遗漏Gradle环境 | 1，wrapper direct网络拒绝 | phase6-build-replay-final-apk.log，恢复已配置代理/cache/JDK/SDK；不是业务编译错误 |
 | P6-6 | 请求恢复standalone构建（后续Root修复前） | 0，BUILD SUCCESSFUL，2m23s | phase6-recovery-final-apk.log，之后发现Gradle仅跟踪mobile源码，增加root引擎bundle输入并重建，不能当最终APK |
-
 | P6-6 | 最终core输入完整standalone Debug构建 | 0，BUILD SUCCESSFUL，1m34s | phase6-final-core-inputs-apk.log，createBundleDebugJsAndAssets实际执行；107006711bytes，SHA256 9a1e20acb67b0bc6f39da8698ca6ffaf277a4d33ad2e818205b0c6ab16f881c5，bundle5406816bytes；非设备性能 |
 | P6-6 | 最后UI措辞mobile typecheck / version / diff | 0 / 0 / 0 | phase6-recovery-final-mobile/version.log，60000/0.6.0 |
-
 | P6-6 | 请求恢复head bb7065a实际Core CI | success；779/779，30.368秒测试 | [37104816451](https://github.com/anjingdtl/ShineWord/actions/runs/37104816451)，0fail/skipped/todo、version60000/0.6.0；精确head bb7065aac63bd04886eb3196e92c90de1f13f665 |
 | P6-6 | 新APK原生保留数据升级 | 0，Success，60000/0.6.0 | recovery-final-install.log与package.txt，lastUpdateTime2026-10-03 07:00:38；升级中UI首次50秒超时保留，不能计新版UI通过 |
-
 | P6-6 | 请求恢复head bb7065a实际Android CI | success；6m5s，Gradle5m13s | [37104816437](https://github.com/anjingdtl/ShineWord/actions/runs/37104816437)，移动类型检查及Debug构建通过 |
 | P6-6 | Native逐attempt审批与冷停恢复 | 通过；integrity ok，0自动发送，停止run全部字段不变 | native-approved-replay-cold.sqlite及native-replay-ui-results；取消后重开同1attempt，ordinary resume/API入口隐藏，正常Alert审批后unknown/null用量保留，replay_approved_at写入，attempt数1、QA计数5不增；模型构建须另点继续 |
-
 | P6-6 | Scoped canon冲突/展示审批/旧包/投影定向 | 0；46/46 | phase6-final-canon-review-tests.log，7.894秒；canonical冲突阻断+审查+零mapper+unverified排除、review事务fence回滚 |
 | P6-6 | 追加严格类型首次 | 2，TS18048 | phase6-final-native-review-core.log；snapshot显示项可能undefined，修复为显式runtime guard，未用断言/关闭严格检查 |
 | P6-6 | 最新 npm run verify:core | 0；781/781，无skip/todo | phase6-final-native-review-fixed-core.log，93.198秒；与APK/软件VM并行，非设备性能 |
 | P6-6 | 最新mobile typecheck / version / diff | 0 / 0 / 0 | phase6-final-native-review-fixed-mobile/version.log，60000/0.6.0，root严格typecheck由verify:core实际执行通过 |
 | P6-6 | 最新Standalone Debug APK | 0，BUILD SUCCESSFUL，2m19s | phase6-final-native-review-fixed-apk.log；107004131bytes，SHA256 5b67a1bc31fab1a9475bf0fb4f52eca97518cddc4d055faa6f8a6a9f6bb9ab08；真实bundle重建，尚须设备复测 |
 | P6-6 | 第一Native真实抽取/质量门禁 | 抽取完成，冲突阻断，0artifact | QA6 HTTP200/39.881秒/5065in/2982out/cached0，28facts/24entities；冷DB integrity ok/FK0；不能将抽取成功等同开局发布，也不能称设备90秒达标 |
+
+| P6-6 | 冲突审查head ee09cb4实际Core CI | success；781/781，32.231秒 | [37108580877](https://github.com/anjingdtl/ShineWord/actions/runs/37108580877)，0fail/skipped/todo，版本一致 |
+| P6-6 | 冲突审查head ee09cb4实际Android CI | success；Gradle5m2s | [37108580871](https://github.com/anjingdtl/ShineWord/actions/runs/37108580871)，移动类型检查及Debug构建通过 |
+| P6-6 | 最新APK保留数据安装/正常逐事实审查 | install-r Success；审查队列1→0 | canon-review-final-install.log、canon-review-details/canon-review-resolved；引用不足身份正常转为待核实资料，未降低门禁，模型attempt仍6；后续发布结果单列 |
+
+| P6-6 | Native TXT缓存发布/冷停验证 | ready；completed；integrity ok/FK0 | native-first-published-cold.sqlite：45entries/117citations、0..6400CP；27explicit+1speculation、审查/审计resolved、speculation未引用；0重复抽取/映射，旧unknown/null用量保留。独立style QA7 HTTP200/13.207秒/1713in460out |
+
+| P6-6 | 开局目标请求治理/未知/删除/预算/缓存定向 | 0；34/34 | phase6-opening-goal-governance-tests.log；含4新用例、旧建议与M6故障，既有SQLite账本/Android串行adapter |
+| P6-6 | 新治理首轮mobile typecheck | 2，TS2322 | phase6-opening-goal-mobile.log；共享hash端口允许sync或async，按M0已有语义修复签名，不用类型断言 |
+| P6-6 | 新治理最终verify:core（含root typecheck） | 0；785/785，120.047秒 | phase6-final-opening-governance-core.log，0fail/skipped/todo；与TCG及APK争用，不是设备性能 |
+| P6-6 | 新治理mobile typecheck/version/diff | 0 / 0 / 0 | phase6-final-opening-governance-mobile/version.log，V0.6.0/60000 |
+| P6-6 | 新治理standalone Debug | 0，BUILD SUCCESSFUL，3m7s | phase6-final-opening-governance-apk.log，实际root bundle；107008727bytes，SHAdca2affe691424e622e6fd2f0ffdb92cda3470f0a183b940907d8101fc2284d6 |
+| P6-6 | Native后台两个抽取期间连续两回合/宿主退出冷恢复 | 通过已取证范围；v2、4模型请求成功、integrity ok/FK0 | native-after-host-exit-cold.sqlite；两个P2 6400..9600/9600..12800抽取完成但3事实冲突阻断，两次interaction completed，无新unknown；不能计两个后段采用通过 |
 
 后续按实际命令、退出码、场景和未验范围追加。小说全文、凭据、未脱敏请求和构建产物不入库。
 
@@ -83,7 +91,7 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 
 
 
-真实模型付费口径：私有验收数据库账本25条succeeded / 1条outcome_unknown，input120012 / output48257 / reasoning1406（reasoning包含在output内，不再相加）。初始直接连接探测不在这些数据库内，不能把这个总计当服务商账单总额。第二后段unknown为sent后私有transport请求上限在fetch前抛错，按生产保护保守保留，未自动重发。
+恢复前历史模型付费口径：私有验收数据库账本25条succeeded / 1条outcome_unknown，input120012 / output48257 / reasoning1406（reasoning包含在output内，不再相加）。初始直接连接探测不在这些数据库内，不能把这个总计当服务商账单总额。第二后段unknown为sent后私有transport请求上限在fetch前抛错，按生产保护保守保留，未自动重发。
 
 最终真实测量元数据见 MEASUREMENTS.json，逐项验收见 ACCEPTANCE_MATRIX.md。BuildTTFP从source-active至已验证成果：42.859秒；9.142秒导入单列；52.046秒从harness导入开始至成果，**不是Android UserTTFP或稳定90秒保证**。没有同质量旧/新对照、P50/P95样本集或独立人工标注，不宣称相对提速30%/等待降低50%等指标已经达标。
 
@@ -96,3 +104,10 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 
 
 编码复核纠正：授权小说完整字节strict GBK解码成功，UTF-8 strict失败；Android imported_sources.encoding=gbk/status=active，byte_length=7178905/code_point_count=3460333。原文档UTF-8标注错误已纠正，不改变此前真实API的hash/坐标/Token/耗时证据。
+
+| 2026-10-03：跨API未知结果审查修复 | build:core + node --test tests/phase6-opening-goal-governance.test.cjs | 0，5/5，302.103ms | 相同语义先unknown，再换端点/模型/推理预算，真实SQLite仅1物理调用和1logicalID，unknown/null usage/未审批保留；不借成功缓存掩盖未知 |
+
+| 2026-10-03：稳定语义ID最终全量 | npm run verify:core | 0，786/786、119273.318ms，0fail/skip/todo | phase6-final-semantic-core.log；root严格typecheck包含，未删除/绕过测试 |
+| 2026-10-03：稳定语义ID移动与版本 | npm run typecheck --prefix mobile；npm run verify:version；git diff --check | 各0 | phase6-final-semantic-mobile.log、phase6-final-semantic-version.log |
+
+| 2026-10-03：稳定语义ID独立Debug | JAVA_HOME=JDK17 ANDROID_HOME=SDK36 GRADLE_USER_HOME=toolchains/gradle npm run apk:debug --prefix mobile | 0，BUILD SUCCESSFUL 3m10s | phase6-final-semantic-apk.log；107008739bytes，SHA256 64b766bb3c5b6cccaf2478f8b9eb462439c029e3287a1bdc5976535d9a5b2f75，root源码bundle已重建 |

@@ -3,6 +3,7 @@ import { RejectionSamplingRandomSource } from '../../src/domain/rules/random';
 // lazy-fetch at play time (lazy group requests can fail on device networks).
 import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompatible';
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
+import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
 import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
 import { schedulerForProfile, setSchedulerActivity } from './llmScheduler';
 import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
@@ -87,10 +88,11 @@ export async function buildProvider(profile: ApiProfile): Promise<LlmProvider> {
   // Rate governance (2026-10-01): game turns ride the same per-endpoint
   // scheduler as world build, so 429 penalties learned during a build keep
   // pacing the play loop and vice versa.
+  const runtime = await getDatabaseRuntime();
   return new RateScheduledProvider(
     new OpenAICompatibleProvider(profile, new KeychainSecretStore(), new FetchHttpTransport(), 300_000),
     schedulerForProfile(profile),
-  );
+  ).withLedger(runtime.llmLedger, { modelProfileFingerprint: llmModelProfileFingerprint(profile) });
 }
 
 export async function listCampaigns(): Promise<CampaignListItem[]> {

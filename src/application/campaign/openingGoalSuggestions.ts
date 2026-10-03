@@ -8,11 +8,34 @@
  * player's own words. Failures degrade silently to "no suggestions" - the
  * wizard must never block on this.
  */
-import type { LlmProvider } from '../llm/types';
+import type { ApiProfile, LlmProvider, LlmRequest } from '../llm/types';
+import { normalizeReasoningTier } from '../llm/types';
 import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestDemands';
+import { resolveModelCapabilities } from '../llm/capabilityResolver';
+import { planLlmRequest } from '../llm/requestBudgetKernel';
+import { stableFingerprint } from '../llm/requestPlan';
+import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
+import { reasoningDialectForModel } from '../llm/reasoningPolicy';
+import { estimateTokens } from '../context/tokenEstimate';
+import { endpointBucketId } from '../worldBuild/rateScheduler';
 
 const MAX_GOAL_LENGTH = 40;
 const MAX_GOALS = 2;
+const goalCache = new Map<string, { promise: Promise<string[]>; settled: boolean }>();
+const MAX_CACHED_GOAL_REQUESTS = 32;
+
+function parseGoals(text: string): string[] {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== 'object' || parsed === null || !('goals' in parsed) || !Array.isArray(parsed.goals)) return [];
+  const seen = new Set<string>();
+  const goals: string[] = [];
+  for (const raw of parsed.goals) {
+    const goal = sanitizeGoal(raw);
+    if (goal && !seen.has(goal)) { seen.add(goal); goals.push(goal); }
+    if (goals.length >= MAX_GOALS) break;
+  }
+  return goals;
+}
 
 export interface OpeningGoalSuggestionInput {
   worldTitle: string;
@@ -24,6 +47,19 @@ export interface OpeningGoalSuggestionInput {
   characterNames: readonly string[];
   /** The player's character name (original or canon). */
   playerName: string;
+}
+
+/** Production uses the same scheduled/ledgered provider as campaign turns.
+ * Optional only for the original read-only API's callers and old tests. */
+export interface OpeningGoalGovernance {
+  worldId: string;
+  packageRevision: number;
+  packageContentHash: string;
+  anchorEventId: string;
+  profile: ApiProfile;
+  sha256Hex(input: string): Promise<string> | string;
+  isCurrent(): Promise<boolean>;
+  queueSignal?: AbortSignal;
 }
 
 function sanitizeGoal(raw: unknown): string | null {
@@ -40,6 +76,7 @@ function sanitizeGoal(raw: unknown): string | null {
 export async function suggestOpeningGoals(
   provider: LlmProvider,
   input: OpeningGoalSuggestionInput,
+  governance?: OpeningGoalGovernance,
 ): Promise<string[]> {
   const systemLines = [
     '你是文字冒险游戏的开局目标策划。根据给定的开局时刻、地点与人物，提出两个具体、可玩性强的开局目标。',
@@ -64,27 +101,77 @@ export async function suggestOpeningGoals(
     .join('\n');
 
   try {
-    const response = await provider.complete({
+    let cacheKey: string | null = null;
+    let request: LlmRequest = {
       role: 'Planner',
       system,
       user,
       maxOutputTokens: DEFAULT_OUTPUT_DEMANDS.opening_goal.maximum,
       jsonMode: true,
       requestKind: 'opening_goal',
-    });
-    const parsed = JSON.parse(response.text) as { goals?: unknown };
-    if (!Array.isArray(parsed.goals)) return [];
-    const seen = new Set<string>();
-    const goals: string[] = [];
-    for (const raw of parsed.goals) {
-      const goal = sanitizeGoal(raw);
-      if (goal && !seen.has(goal)) {
-        seen.add(goal);
-        goals.push(goal);
-      }
-      if (goals.length >= MAX_GOALS) break;
+    };
+    if (governance) {
+      if (!governance.worldId || !Number.isSafeInteger(governance.packageRevision)
+        || governance.packageRevision < 1 || !/^[a-f0-9]{64}$/i.test(governance.packageContentHash)
+        || !governance.anchorEventId || governance.queueSignal?.aborted || !await governance.isCurrent()) return [];
+      const profile = governance.profile;
+      const maximum = Math.min(DEFAULT_OUTPUT_DEMANDS.opening_goal.maximum, profile.contentOutputTokens ?? 16_384);
+      const plan = planLlmRequest({ capabilities: resolveModelCapabilities({
+        declared: { contextWindowTokens: profile.capabilities.contextWindow,
+          maxOutputTokens: profile.capabilities.maxOutputTokens, supportsJsonMode: profile.capabilities.supportsJson,
+          reportsUsage: profile.capabilities.reportsUsage, reasoningUsageReported: profile.capabilities.reportsUsage },
+        reasoningMode: 'always_on',
+      }), requestKind: 'opening_goal', estimatedMandatoryInputTokens: estimateTokens(`${system}\n${user}`),
+        businessOutputDemand: { ...DEFAULT_OUTPUT_DEMANDS.opening_goal,
+          target: Math.min(DEFAULT_OUTPUT_DEMANDS.opening_goal.target, maximum), maximum },
+        reasoningPolicy: { tier: normalizeReasoningTier(profile.reasoningTier ?? profile.reasoningEffort),
+          providerDialect: profile.reasoningDialect ?? reasoningDialectForModel(profile.model), model: profile.model },
+      });
+      if (!plan.reasoningPolicy) throw new Error('opening_goal_policy_missing');
+      const digest = await governance.sha256Hex(JSON.stringify({
+        version: 'opening-goal-2', revision: governance.packageRevision, contentHash: governance.packageContentHash,
+        anchorEventId: governance.anchorEventId, system, user,
+      }));
+      if (!/^[a-f0-9]{64}$/i.test(digest)) throw new Error('opening_goal_invalid_hash');
+      const logicalRequestId = `opening-goal:${governance.worldId}:${digest}`;
+      // Unknown remote outcomes belong to the semantic request, even after
+      // changing API/model/budget. Known suggestions may vary by configuration.
+      cacheKey = `${logicalRequestId}:${llmModelProfileFingerprint(profile)}:${stableFingerprint(plan)}`;
+      request = { ...request, maxOutputTokens: plan.wireOutputTokens, maxPhysicalRequests: 1,
+        jsonMode: profile.capabilities.supportsJson, queueSignal: governance.queueSignal,
+        reasoningTier: plan.reasoningPolicy.tier, reasoningReserveTokens: plan.reasoningPolicy.reserveTokens,
+        reasoningPolicyVersion: plan.reasoningPolicy.policyVersion,
+        ledger: { logicalRequestId, requestKind: 'opening_goal', worldId: governance.worldId },
+        scheduling: { logicalTaskId: logicalRequestId, role: 'goal_recommender', priority: 'P1',
+          endpointBucketId: endpointBucketId(profile.endpoint), requestPlanHash: stableFingerprint(plan),
+          estimatedInputTokens: plan.mandatoryInputTokens, reservedOutputTokens: plan.wireOutputTokens, worldId: governance.worldId },
+      };
+      if (governance.queueSignal?.aborted || !await governance.isCurrent()) return [];
     }
-    return goals;
+    let completion: Promise<string[]>;
+    if (cacheKey) {
+      const key = cacheKey;
+      const prior = goalCache.get(key);
+      if (prior) completion = prior.promise;
+      else {
+        if (goalCache.size >= MAX_CACHED_GOAL_REQUESTS) {
+          const disposable = [...goalCache].find(([, value]) => value.settled);
+          if (!disposable) return [];
+          goalCache.delete(disposable[0]);
+        }
+        const entry = { promise: Promise.resolve<string[]>([]), settled: false };
+        goalCache.set(key, entry);
+        completion = Promise.resolve().then(() => provider.complete(request)).then(response => parseGoals(response.text)).then(goals => {
+          entry.settled = true;
+          if (!goals.length) goalCache.delete(key);
+          return goals;
+        }, error => { goalCache.delete(key); throw error; });
+        entry.promise = completion;
+      }
+    } else completion = provider.complete(request).then(response => parseGoals(response.text));
+    const goals = await completion;
+    if (governance && (governance.queueSignal?.aborted || !await governance.isCurrent())) return [];
+    return [...goals];
   } catch {
     return [];
   }
