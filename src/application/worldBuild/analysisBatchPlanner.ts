@@ -260,7 +260,9 @@ export function planAnalysisBatches(
   const orderedChunks = orderChunksByChapter(chapters, chunks);
   const planned = runs.flatMap(run => run.slices.flatMap(slice => slice.memberRanges));
   if (planned.length !== orderedChunks.length) {
-    throw new Error(`Analysis batch plan lost chunks: ${planned.length}/${orderedChunks.length}.`);
+    const missing = orderedChunks.filter(chunk => !planned.some(range => range.chunkId === chunk.chunkId))
+      .slice(0, 4).map(chunk => `${chunk.chunkId}@${chunk.chapterId}`).join(',');
+    throw new Error(`Analysis batch plan lost chunks: ${planned.length}/${orderedChunks.length}. Missing: ${missing}`);
   }
   for (let i = 0; i < planned.length; i += 1) {
     if (planned[i]?.chunkId !== orderedChunks[i]?.chunkId) {

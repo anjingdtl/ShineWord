@@ -47,6 +47,44 @@ async function harness() {
     range:(start,end,source='src1') => catalog.createRange(source,start,end)};
 }
 
+test('preparation failure survives cold projection and needs an explicit local retry',async () => {
+  const h=await harness();const opening=await h.service.ensureBootstrap({worldId:'w',executionConfigFingerprint:config});
+  const ensure=h.options.executor.ensureRun;let calls=0;
+  h.options.executor.ensureRun=async()=>{calls++;throw Error('batch coverage rejected');};
+  await assert.rejects(h.service.dispatch('w'),/batch coverage rejected/);
+  const cold=new SegmentBuildService(h.options);
+  const failed=await cold.readReadiness({worldId:'w'});
+  assert.equal(failed.segments[0].status,'failed_retryable');
+  assert.equal(failed.segments[0].lastErrorCode,'execution_prepare_failed');
+  assert.equal(failed.diagnostics[0].code,'execution_prepare_failed');
+  await cold.dispatch('w');assert.equal(calls,1);assert.equal(h.executions.size,0);
+  assert.equal(await cold.retryPreparation('w',opening.intent.segmentId),true);
+  h.options.executor.ensureRun=ensure;await cold.dispatch('w');
+  assert.equal(h.executions.size,1);assert.equal(h.ensures[0].intentId,opening.intent.intentId);h.db.close();
+});
+
+test('preparation retry respects user pause and never approves an unknown sent run',async () => {
+  const h=await harness();const opening=await h.service.ensureBootstrap({worldId:'w',executionConfigFingerprint:config});
+  const ensure=h.options.executor.ensureRun;
+  h.options.executor.ensureRun=async()=>{await h.service.setPause('w','user');throw Error('local preparation failed');};
+  await assert.rejects(h.service.dispatch('w'),/local preparation failed/);
+  assert.equal((await h.service.readReadiness({worldId:'w'})).pauseReason,'user');
+  assert.equal(await h.service.retryPreparation('w',opening.intent.segmentId),false);
+  await h.service.resume('w');assert.equal(await h.service.retryPreparation('w',opening.intent.segmentId),true);
+  h.options.executor.ensureRun=ensure;await h.service.dispatch('w');
+  const [segment]=await h.store.listSegments('w');h.executions.get(segment.runIds[0]).requestOutcome='outcome_unknown';
+  assert.equal(await h.service.retryPreparation('w',opening.intent.segmentId),false);
+  const calls=h.ensures.length;await h.service.dispatch('w');assert.equal(h.ensures.length,calls);h.db.close();
+});
+
+test('late preparation failure cannot revive a deleted project',async () => {
+  const h=await harness();await h.service.ensureBootstrap({worldId:'w',executionConfigFingerprint:config});
+  h.options.executor.ensureRun=async()=>{h.db.prepare('DELETE FROM worlds WHERE world_id=?').run('w');throw Error('project removed while preparing');};
+  await assert.rejects(h.service.dispatch('w'),/project removed/);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM world_segments').get().n,0);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM worlds').get().n,0);h.db.close();
+});
+
 test('bootstrap is one small bounded logical range; completed runs alone never mean ready',async () => {
   const h=await harness();const opening=await h.service.ensureBootstrap({worldId:'w',executionConfigFingerprint:config});
   assert.equal(opening.intent.ranges[0].endCp,3200);assert.equal(opening.intent.reason,'bootstrap');assert.equal(opening.intent.priority,'P1');

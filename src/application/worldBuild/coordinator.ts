@@ -291,6 +291,19 @@ function chunkJobId(chunkId: string): string {
   return `job-extract-${chunkId}`;
 }
 
+async function scopedSourceChunk(
+  deps: Pick<CoordinatorDeps, 'sourceStore' | 'sha256Hex'>,
+  sourceId: string, chunk: SourceChunk, startOffset: number, endOffset: number,
+): Promise<SourceChunk> {
+  if (startOffset === chunk.startOffset && endOffset === chunk.endOffset) return chunk;
+  const text = await deps.sourceStore.readRange(sourceId, startOffset, endOffset);
+  const contentHash = await deps.sha256Hex(text);
+  // Preserve the complete identity across async/native boundaries. A narrowed
+  // storage chunk still belongs to its original chapter and chunk ordinal.
+  return { chunkId: chunk.chunkId, chapterId: chunk.chapterId, chunkIndex: chunk.chunkIndex,
+    startOffset, endOffset, charCount: endOffset - startOffset, contentHash };
+}
+
 export interface UnitRangeEntry {
   chunkId: string;
   chapterId: string;
@@ -355,10 +368,8 @@ export async function createExtractionRun(
     for (const chunk of plannedChunks) {
       const startOffset = Math.max(chunk.startOffset, input.scope.startCp);
       const endOffset = Math.min(chunk.endOffset, input.scope.endCp);
-      clipped.push(startOffset === chunk.startOffset && endOffset === chunk.endOffset ? chunk : {
-        ...chunk, startOffset, endOffset, charCount: endOffset - startOffset,
-        contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(input.sourceId, startOffset, endOffset)),
-      });
+      const narrowed = await scopedSourceChunk(deps, input.sourceId, chunk, startOffset, endOffset);
+      clipped.push(narrowed);
     }
     plannedChunks = clipped;
   }
@@ -665,10 +676,8 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   for (const chunk of scopedBookChunks) {
     const startOffset = Math.max(chunk.startOffset, runScope?.startCp ?? chunk.startOffset);
     const endOffset = Math.min(chunk.endOffset, runScope?.endCp ?? chunk.endOffset);
-    bookChunks.push(startOffset === chunk.startOffset && endOffset === chunk.endOffset ? chunk : {
-      ...chunk, startOffset, endOffset, charCount: endOffset - startOffset,
-      contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(run.sourceId, startOffset, endOffset)),
-    });
+    const narrowed = await scopedSourceChunk(deps, run.sourceId, chunk, startOffset, endOffset);
+    bookChunks.push(narrowed);
   }
   const globalSegmentIndexOf = new Map(bookChunks.map((chunk, index) => [chunk.chunkId, index + 1]));
 
@@ -1011,11 +1020,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         // jobs, fact evidence and package provenance all use these ids.
         if (range.startCp < chunk.startOffset || range.endCp > chunk.endOffset
           || range.startCp >= range.endCp) { sourceDrifted = true; break; }
-        const clipped = range.startCp !== chunk.startOffset || range.endCp !== chunk.endOffset
-          ? { ...chunk, startOffset: range.startCp, endOffset: range.endCp,
-            charCount: range.endCp - range.startCp,
-            contentHash: await deps.sha256Hex(await deps.sourceStore.readRange(run.sourceId, range.startCp, range.endCp)) }
-          : chunk;
+        const clipped = await scopedSourceChunk(deps, run.sourceId, chunk, range.startCp, range.endCp);
         unitChunks.push(toWorldChunk(clipped));
       }
       if (sourceDrifted) {

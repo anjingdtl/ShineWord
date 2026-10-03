@@ -50,7 +50,11 @@ export interface PickedTextRef {
 export async function pickTextRef(): Promise<PickedTextRef | null> {
   const picked = await native().pickTextFile();
   if (!picked) return null;
-  return { uri: picked.uri, name: picked.name ?? 'novel.txt', size: picked.size };
+  const name = picked.name ?? 'novel.txt';
+  if (!/\.txt$/i.test(name)) {
+    throw new Error('请选择 TXT 小说文件（.txt）；世界包和存档请使用对应的导入入口。');
+  }
+  return { uri: picked.uri, name, size: picked.size };
 }
 
 export function base64ToBytes(base64: string): Uint8Array {

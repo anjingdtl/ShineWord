@@ -56,6 +56,15 @@ export async function getSegmentReadiness(worldId: string, campaignId?: string, 
   return runtime.segments.readReadiness({ worldId, campaignId, branchId });
 }
 
+export async function retrySegmentPreparation(worldId: string, segmentId: string): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  if (!await runtime.segments.retryPreparation(worldId, segmentId)) return;
+  const queued = await runtime.segments.dispatch(worldId);
+  for (const segment of queued.filter(s => s.intent.segmentId === segmentId)) {
+    for (const runId of segment.runIds) await startSegmentRun(runId);
+  }
+}
+
 /** Uses scene evidence, coverage and dependency demand, never turn counts. */
 export async function maintainSegmentContent(input: {
   worldId: string; campaignId: string; branchId: string; locationId: string | null;

@@ -331,6 +331,9 @@ async function importNovelInternal(
       const fingerprint = await runtime.segmentConfigs.register(worldId, config);
       const bootstrap = await runtime.segments.ensureBootstrap({ worldId, executionConfigFingerprint: fingerprint, maxCodePoints: openingInputCodePoints(openingBudget) });
       await runtime.sourceIndex.ensureIndexed(bootstrap.intent.ranges);
+      if (!bootstrap.runIds.length && bootstrap.lastErrorCode === 'execution_prepare_failed') {
+        await runtime.segments.retryPreparation(worldId, bootstrap.intent.segmentId);
+      }
       const queued = await runtime.segments.dispatch(worldId);
       const runIds = queued.flatMap(segment => [...segment.runIds]);
       onProgress({ phase: 'extracting', chunksDone: 0, message: '正在准备有原文依据的开局资料' });

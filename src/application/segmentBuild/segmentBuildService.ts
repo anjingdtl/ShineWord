@@ -111,8 +111,17 @@ export class SegmentBuildService {
       if (!currentPlan || currentPlan.pauseReason) break;
       const current=(await this.ports.store.listSegments(worldId)).find(v => v.intent.segmentId===segment.intent.segmentId);
       if (!current || !viable(current) || current.status==='ready') continue;
-      const result = await this.ports.executor.ensureRun(current.intent);
-      if (!result.runIds.length || result.runIds.some(id => !id)) throw new Error('executor_run_missing');
+      let result: Awaited<ReturnType<BuildExecutorPortV1['ensureRun']>>;
+      try {
+        result = await this.ports.executor.ensureRun(current.intent);
+        if (!result.runIds.length || result.runIds.some(id => !id)) throw new Error('executor_run_missing');
+      } catch (error) {
+        // Preparation can fail before a run exists. Keep that failure visible
+        // after navigation/cold start without creating a second run ledger.
+        if (!current.runIds.length) await this.ports.store.saveProjection({ ...current,
+          status: 'failed_retryable', lastErrorCode: 'execution_prepare_failed', updatedAt: this.now() });
+        throw error;
+      }
       const attached=await this.ports.store.attachRuns(segment.intent.segmentId,segment.intent.generation,result.runIds,this.now());
       if (!attached) for (const runId of result.runIds) await this.ports.executor.requestControl(runId,'cancel');
     }
@@ -136,7 +145,8 @@ export class SegmentBuildService {
         catch { diagnostics.push({segmentId:record.intent.segmentId,code:'execution_projection_unavailable',retryAt:null}); }
       }
       let status = projectStatus(record,executions);
-      let lastErrorCode = executions.find(v => v.lastErrorCode)?.lastErrorCode ?? null;
+      let lastErrorCode = executions.find(v => v.lastErrorCode)?.lastErrorCode
+        ?? (!record.runIds.length ? record.lastErrorCode : null);
       const waiting=executions.find(v => ['waiting_network','waiting_unlock','paused_user','stopped_user','paused_system'].includes(v.status));
       if (waiting) executionPauseReason=waiting.status==='waiting_network' ? 'network' : waiting.status==='waiting_unlock' ? 'unlock'
         : waiting.status==='paused_system' ? 'system' : 'user';
@@ -210,6 +220,15 @@ export class SegmentBuildService {
     }
   }
   async resume(worldId: string): Promise<void> { await this.setPause(worldId,null); }
+  /** Explicit retry of local preparation only; never approves a sent/unknown request. */
+  async retryPreparation(worldId: string, segmentId: string): Promise<boolean> {
+    const readiness = await this.readReadiness({ worldId });
+    if (readiness.pauseReason) return false;
+    const segment = readiness.segments.find(s => s.intent.segmentId === segmentId);
+    if (!segment || segment.runIds.length || segment.status !== 'failed_retryable'
+      || segment.lastErrorCode !== 'execution_prepare_failed') return false;
+    return this.ports.store.saveProjection({ ...segment, status: 'planned', lastErrorCode: null, updatedAt: this.now() });
+  }
   async cancelDemand(demandId: string): Promise<void> { await this.ports.store.cancelDemand(demandId); }
   async releaseStaleBranchDemands(input: { worldId: string; campaignId: string; branchId: string; stateVersion: number | null }): Promise<void> {
     for (const demand of await this.ports.store.listDemands(input.worldId)) if (demand.active && demand.ref
