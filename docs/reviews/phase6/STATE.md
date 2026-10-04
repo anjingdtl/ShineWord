@@ -46,5 +46,6 @@
 - 90 秒开局：新增独立冷样本 B（UTF-8 前 80k 新项目，导入点击→可玩 74.5s，零人工干预）；连同样本 A 共 n=2 冷样本，均为单设备非统计。
 - QA 转发器 35 attempt（33 HTTP200 + 合成 429 + 发送后断连），input 276,411 / output 43,372（cached 37,376）；与 App 唯一 M6 账本逐条一致。
 - L4 已关闭（2026-10-04）：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集；`slug` 改为对历史算法输出整体转义（非 CJK 键 id 逐字节不变），新增 `normalizeNonconformingCanonIds()` 存量修复通道并在 watchdog 与 headless runner 双入口构建前调用。独立复审 approve-with-nits、应修项全部吸收；门禁 verify:core 796/796（+4 新回归）、root/mobile 类型/version/diff 全 0。设备端 part3 原始路径回归通过：install -r 保留数据→正常 UI"继续构建"→存量 13/2/8 不合规 id 全部转义重命名（引用零孤儿、FK 0、integrity ok）→1 次预期重映射（id 重命名致批次缓存失效）→第 5 段发布成功、run completed、诊断 0 新增、账本 35→36 与转发器一致。
-- 未关闭：part3 恢复时一次 batchHash 1 字符漂移导致的映射重发（成因未定谳）；以及下条未验清单。
+- 未关闭→已关闭 L5（2026-10-04）：batchHash 1 字符漂移定谳为 mapper prompt 对 facts 数组顺序不稳定——run A 首次 finalize 把 3 条投影事实内存追加到数组末尾，重试 run B 从 DB 重读位于 ORDER BY fact_id 排序位，序列化不同导致内容寻址检查点必然未命中（生产管线+设备快照逐字节复现 b6794184/167cfa06 两值；wire +1 字符为信封噪音）。修复：prompt facts 按 factId 规范排序 + 批次切分前排序 + canonSnapshotHash 同修（artifactId 可复现）；entities/events/entries 保序以免作废既有检查点。797/797 门禁、独立复审 approve-with-nits 应修项全吸收；修复后 reload/append 两路径收敛同一 hash 且重载值不变（既有检查点零失效）。
+- 未验清单见下条。
 - 未验：真机/API24/Android15-16、锁屏、双 runner、构建中删除/切 API 设备路径、三题材人工评分、L4 根因。

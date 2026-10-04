@@ -764,15 +764,29 @@ interface MapperPromptPayload {
   existingEntries?: readonly ContentEntry[];
 }
 
-function buildMapperUserPrompt(
+/**
+ * The facts array is sorted by factId: projection facts (named-mention /
+ * location-mention) materialize in memory during the first finalize after an
+ * extraction commit and are APPENDED after the sorted listFacts result,
+ * while every later reload places them at their ORDER BY fact_id positions.
+ * Sorting keeps the serialized prompt - and with it the content-addressed
+ * mapping checkpoint - a pure function of stored canon, so a retry after a
+ * failed publication reuses the paid mapping instead of re-requesting the
+ * whole batch (device evidence: batchHash b6794184 -> 167cfa06 drift, one
+ * full remap re-paid on resume). Facts were already sorted on the reload
+ * path, so existing checkpoint hashes are unaffected. Entities, events and
+ * existingEntries keep their caller order, which is reload-stable.
+ */
+export function buildMapperUserPrompt(
   facts: readonly StoredFact[],
   entities: readonly StoredEntity[],
   events: readonly StoredEvent[],
   existingEntries?: readonly ContentEntry[],
 ): string {
+  const sortedFacts = [...facts].sort((a, b) => (a.factId < b.factId ? -1 : a.factId > b.factId ? 1 : 0));
   const nameByEntity = new Map(entities.map(entity => [entity.entityId, entity.name]));
   const payload: MapperPromptPayload = {
-    facts: facts.map(fact => ({
+    facts: sortedFacts.map(fact => ({
       factId: fact.factId,
       subject: nameByEntity.get(fact.subjectEntityId) ?? fact.subjectEntityId,
       predicate: fact.predicate,
@@ -815,12 +829,19 @@ async function requestMappingProposals(
   // WorldMapper V2 (1M plan P4): a resident run maps with WHOLE-BOOK vision -
   // one batch with every fact (the 800-fact truncation lifts), full entity
   // and event context, rule-mapping proposals included.
+  // Facts sort by factId BEFORE batching: the first finalize after an
+  // extraction commit appends in-memory projections after the sorted
+  // listFacts result, while reloads interleave them at their ORDER BY
+  // positions. Stabilizing the order here keeps both the batch DECOMPOSITION
+  // and each batch's checkpoint hash identical across those runs (a tail
+  // projection would otherwise land in a different 800-fact batch on resume).
   const batches: Array<{ facts: readonly StoredFact[]; key: string; recovery: boolean }> = [];
+  const orderedFacts = [...facts].sort((a, b) => (a.factId < b.factId ? -1 : a.factId > b.factId ? 1 : 0));
   if (input.resident) {
-    batches.push({ facts, key: 'b0001', recovery: false });
+    batches.push({ facts: orderedFacts, key: 'b0001', recovery: false });
   } else {
-    for (let offset = 0; offset < facts.length; offset += MAX_PROMPT_FACTS) {
-      batches.push({ facts: facts.slice(offset, offset + MAX_PROMPT_FACTS),
+    for (let offset = 0; offset < orderedFacts.length; offset += MAX_PROMPT_FACTS) {
+      batches.push({ facts: orderedFacts.slice(offset, offset + MAX_PROMPT_FACTS),
         key: `b${String(batches.length + 1).padStart(4, '0')}`, recovery: false });
     }
   }
@@ -1579,8 +1600,14 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       [...selection.affectedEntryIds, 'lore-review-summary']);
   }
   const sections = buildSections(entries);
+  // scopedFacts carries the in-memory projection append order on the first
+  // finalize after an extraction commit and the ORDER BY fact_id order on
+  // every reload; sorting keeps this snapshot - which content-addresses the
+  // segment artifact - reproducible from stored canon alone.
   const canonSnapshotHash = await input.sha256Hex(JSON.stringify({
-    selectionVersion: CANON_SELECTION_VERSION, facts: scopedFacts, entities, events,
+    selectionVersion: CANON_SELECTION_VERSION,
+    facts: [...scopedFacts].sort((a, b) => (a.factId < b.factId ? -1 : a.factId > b.factId ? 1 : 0)),
+    entities, events,
   }));
   const draft: BuildPackageDraftResult = { entries, sections, reviewIssues: reviewIssueCount, mappingUsage,
     canonSnapshotHash, selection: { ...selection, facts: scopedFacts } };

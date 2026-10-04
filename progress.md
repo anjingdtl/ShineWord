@@ -76,13 +76,14 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 | L2 | 依赖恢复路径提交的回合完成后故事面板不刷新（乐观合并行 `{...item}` 保留旧条目、并发 refresh 无序、回前台不重读） | `f9d6a72`：合并改写新视图、refresh 按启动序号串行化、回前台刷新一次 |
 | L3 | 映射请求在途时用户暂停，已到手且账本已结算的响应在 done 检查点写入前被丢弃，恢复时整批重发重复计费（与抽取路径自身合同相反） | `ccfe68e`：在手响应先落内容寻址检查点，暂停/租约检查移至批次边界；两条回归测试分别钉住 signal 暂停与 stale fence（旧代码失败、新代码通过） |
 | L4 | 追加第三部后段发布被 M5 以 `invalid_artifact_structure` 确定性阻断。根因：CJK 实体键经 `slug()` 原样进入 entity/fact/mapping id（如 `ent-…-边陲镇`），这些 id 进入段工件后违反协议 TOKEN 字符集 `[a-zA-Z0-9._:-]`，结构守卫必然拒绝 | 本轮（见下）：`slug` 改为 `sanitizeTokenFragment(历史算法输出)`（非 CJK 键 id 逐字节不变，保护重放身份；CJK 键转义结果与存量修复逐字符同构）；新增 `normalizeNonconformingCanonIds()` 存量修复通道（FK 校验事务内重写全部 canon 侧引用，幂等）；watchdog 与 headless runner 双入口在构建前调用 |
+| L5 | part3 恢复时映射整批重发（#26 与 #25 输入仅差 1 字符→batchHash 漂移→done 检查点未命中）。密码学级定谳：run A 首次 finalize 中投影事实（温蒂-named-mention 等 3 条）在**内存追加到 facts 数组末尾**后进 mapper prompt，重试 run B 从 DB 重读时位于 `ORDER BY fact_id` **排序位置**——序列化顺序不同导致内容寻址 hash 必然不同（用生产管线+设备 DB 快照逐字节复现了两个 hash：b6794184/167cfa06）；wire 的 +1 字符是请求信封层噪音，与 hash 无关 | 本轮（见下）：mapper prompt 的 facts 按 factId 规范排序（entities/events/entries 保持调用方序——重载本稳定，排序反而作废既有检查点）；批次切分前同样排序（多批路径成员漂移一并消除）；`canonSnapshotHash`（决定 artifactId）同修 |
 
 三笔修复均通过独立复审（approve / approve-with-nits，意见已吸收），最终门禁 `verify:core` 792/792、root/mobile 严格类型、`verify:version`、`git diff --check`、独立 Debug 构建全部通过；L1/L2 在设备上按原始复现路径验证，L3 由真实 SQLite 协议级测试钉住（设备端 part2 映射暂停→冷重启→继续时 0 重复调用发布）。
 
 ### 未关闭缺陷（准确记录）
 
 - **L4（已关闭，2026-10-04 设备回归通过）**：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集（见上表）。代码修复过全量门禁与独立复审（approve-with-nits，应修项已吸收）；设备端按 part3 原始路径回归通过（证据见”L4 修复轮”），缺陷关闭。
-- part3 恢复时观察到一次映射重发（#26 与 #25 输入差 1 字符→batchHash 漂移→缓存未命中）。L3 修复覆盖的“在手丢弃”场景已被协议测试钉住；该 1 字符漂移的成因未定谳，待查（注：本轮 id 重命名导致的映射缓存失效重发是确定性、可解释的另一类，不与此混同）。
+- **L5（已关闭，2026-10-04 密码学级定谳并修复）**：batchHash 1 字符漂移的完整根因链与修复见上表；独立复审（approve-with-nits）另发现并同步修复同类缺陷两处（批次切分成员漂移、canonSnapshotHash 漂移），修复后生产管线在设备 DB 快照上对”首跑追加序/重试重载序”均收敛同一 hash（167cfa06），且重载路径 hash 不变（既有检查点零失效）。
 
 ### 本轮新增设备证据（API37.1 WHPX 模拟器，正常 UI 驱动）
 
@@ -119,6 +120,25 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 - Post-state（发布后取证）：残留不合规 id **0/0/0**；引用零孤儿（facts→entities、mappings→entities、aliases、fact_sources 四路 LEFT JOIN 均 0）；`PRAGMA foreign_key_check` 0 违规、`integrity_check` ok；目标 run `completed`/publishing/`last_error_code=null`；工件 5 段；诊断表 **0 新增行**（原 L4 阻断行保留为历史）；账本 **36 = 35+1**，与私有转发器逐条一致（本轮 cap 8 请求/200k token，实用 1）。
 - 日志无 FATAL/无 crash、无修复告警输出（修复成功路径静默）。转发器已停、adb reverse 已移除、0 在途请求。
 - 边界：单设备单次回归（n=1、模拟器非真机），不外推统计性能；"继续构建"前的审查项在本路径为空（上次运行已完成审查）。
+
+## L5 修复轮（2026-10-04，本地开发机，纯 host 取证）
+
+**取证方法**：不依赖猜测——用 dist 生产代码 + 设备 pre-fix DB 快照（`pre-install.sqlite`）复刻 mobile `sourceImport.ts` 的 finalize 输入（intent/binding/fingerprint/previousEntries/publishedEvidence/mappingVersion 逐项对齐），包装 `sha256Hex` 截获 hash 原文：
+
+1. **复现 #26（重试路径）**：重建 hash 与设备 job 行 `167cfa06…f3b29ef` 完全一致——重建输入获密码学级验证。
+2. **复现 #25（首跑路径）**：把 run A 在 17:55:05.166 创建的 3 条投影事实（`温蒂-named-mention`、`border-town-location-mention`、`边陲镇-location-mention`）从 `ORDER BY fact_id` 排序位置挪到数组末尾（模拟管线 `facts.push` 的内存追加序），重建 hash 精确命中 `b6794184…84603`。
+3. **结论**：canon 表在两次计算之间零写入（逐表时间窗核查），两次输入是**同一 DB 状态的不同内存序**；batchHash 对 facts 数组顺序不稳定是根因，wire +1 字符为信封噪音。23,172 次单字段变异枚举零命中也排除了"单字段内容变化"假说。
+4. 旁证：账本两行 input_tokens 相同（35336）、治理参数（tier/reserve/wire 上限）逐字段一致。
+
+**修复**（实现→独立复审 approve-with-nits→吸收→门禁）：
+
+1. `buildMapperUserPrompt`（现导出）：facts 按 factId 规范排序——hash 成为存储 canon 的纯函数；entities/events/existingEntries 保持调用方序（重载路径本就稳定，排序反而会改变现有世界的 hash、作废已付费检查点）。
+2. 批次切分前排序（`requestMappingProposals` 入口）：消除 >800 事实多批路径的批次成员漂移（复审发现的同类缺陷 5B）。
+3. `canonSnapshotHash`（决定 artifactId）：facts 同样排序（同类缺陷 5A）——首跑生成的工件身份从此可由存储 canon 复现。
+4. 回归测试 `tests/mapper-prompt-canonical-order.test.cjs`：追加序与排序序的 prompt 逐字节一致；facts 序规范化、其余成员保序分别断言。
+
+**验证**：797/797（+1 新测试）、root/mobile 严格类型、version、diff 全 0；修复后生产管线在设备快照上 reload/append 两路径均收敛 `167cfa06`（重载路径 hash 不变=既有检查点零失效，旧漂移值不再出现）。审查意见（测试恒真断言、existingEntries 未覆盖、5A/5B）全部吸收。
+
 
 
 ## 用户指定的本地资源

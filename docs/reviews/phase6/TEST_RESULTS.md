@@ -180,3 +180,14 @@ P6-5 探索中的真实样本（非性能完整验收）：用户授权小说原
 | resident-build-p4 T5 | 通过 | 期望值改为 `entityIdFor` 生产推导 + TOKEN 断言；合同变更后 `ent-w-p4-陈青云` → `ent-w-p4-u9648u9752u4e91` |
 | 独立复审（全量 diff，只读） | approve-with-nits | GLOB 语义、PRAGMA/事务顺序、FK 引用覆盖（对照 builtinMigrations 全部迁移）、重放同态逐项验证；应修 4 项（headless runner 绕行、超长 id 幂等兜底、静默吞错加 warn、fact_sources 补 world 作用域）已全部吸收 |
 | 设备：part3 原始路径回归（L4 关闭证据） | 通过 | install -r 保留数据→正常 UI"继续构建"→13/2/8 不合规 id 转义重命名（`夜莺→u591cu83ba` 等）→引用零孤儿/FK0/integrity ok→1 次预期重映射（200/35.7s/38,531 tokens）→第 5 段发布、run completed、诊断 0 新增、账本 35→36 与转发器一致（cap 8/200k 实用 1） | APK SHA256 a553efb7…；pre/post SQLite、截图、UI 树、账本在私有 scratch qa-l4fix/；n=1 单设备非统计 |
+
+## L5 修复轮（2026-10-04，host 取证 + 修复）
+
+| 命令/场景 | 退出码/结果 | 证据与边界 |
+|---|---|---|
+| hash 重建（#26 重试路径） | 与设备 job `167cfa06…` 完全一致 | dist 生产管线 + pre-fix 设备快照复刻 mobile finalize 输入；包装 sha256Hex 截获原文 |
+| hash 重建（#25 首跑路径：3 条投影事实模拟内存追加序） | 精确命中 `b6794184…` | 两次计算间 canon 表零写入（逐表时间窗核查）；根因=facts 数组顺序不稳定，非内容变化 |
+| 单字段变异枚举 | 23,172 次零命中 | 排除"某字段 +1 字符"假说；wire +1 字符为请求信封噪音（账本两行 input_tokens 均 35336） |
+| 独立复审（L5 diff，只读） | approve-with-nits | factId 全序成立（PK+去重）；无其他消费方依赖插入序；同类缺陷 2 处（批次切分成员漂移、canonSnapshotHash/artifactId 漂移）已同步修复；测试恒真断言与 existingEntries 覆盖已补 |
+| verify:core / root+mobile typecheck / version / diff | 0；**797/797**（+1 新回归 `mapper-prompt-canonical-order`） | 追加序与排序序 prompt 逐字节一致；facts 序规范化、entities/events/entries 保序分别断言 |
+| 修复后案发现场复核 | reload→167cfa06=true；append→167cfa06=true | 生产管线两路径收敛同一 hash；重载路径值不变=既有映射检查点零失效 |
