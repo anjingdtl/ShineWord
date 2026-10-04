@@ -10,6 +10,7 @@ import { cloneGameState, type EncounterSnapshotEntry, type GameStateSnapshot } f
 import type { SituationSnapshotEntry } from '../../domain/situations/types';
 import type { EncounterState } from '../../domain/combat/encounter';
 import { replaceEncounterSnapshots } from './encounterPersistence';
+import { projectStoryEntry, type StoryEntry } from '../../application/campaign/storyEntry';
 import type { EffectOperation } from '../../domain/turns/types';
 import type { RollGrade, RollRecord, SkillRank } from '../../domain/rules/types';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../../application/worldPackage/branchContentStore';
@@ -298,6 +299,40 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         effects: parseJson<EffectOperation[]>(row.effects_json, 'turns.effects_json'),
         committedAt: row.committed_at,
       };
+    });
+  }
+
+  /** UI-only history: keep snapshot reads out of the LLM/memory history path. */
+  async listStoryEntries(branchId: string): Promise<Array<StoryEntry & {
+    stateVersion: number; rollRecord: RollRecord | null;
+  }>> {
+    const [turns, rows] = await Promise.all([
+      this.listCommittedTurns(branchId),
+      this.db.queryAll<SqliteRow & {
+        turn_id: string; action_contract_json: string;
+        before_json: string | null; after_json: string | null;
+      }>(`SELECT t.turn_id, t.action_contract_json,
+                  b.snapshot_json AS before_json, a.snapshot_json AS after_json
+             FROM turns t
+             LEFT JOIN snapshots b ON b.branch_id = t.branch_id AND b.state_version = t.expected_state_version
+             LEFT JOIN snapshots a ON a.branch_id = t.branch_id AND a.state_version = t.committed_state_version
+            WHERE t.branch_id = ? AND t.status = 'Committed'`, [branchId]),
+    ]);
+    const metadata = new Map(rows.map(row => [row.turn_id, row]));
+    const optionalJson = <T>(value: string | null | undefined): T | null => {
+      if (!value) return null;
+      try { return JSON.parse(value) as T; } catch { return null; }
+    };
+    return turns.map(turn => {
+      const row = metadata.get(turn.turnId);
+      const story = projectStoryEntry({
+        turnId: turn.turnId, narrativeText: turn.narrativeText, narrativeStatus: turn.narrativeStatus,
+        outcomeGrade: turn.rollRecord?.grade ?? turn.outcomeGrade,
+        action: optionalJson<import('../../domain/turns/types').ActionContract>(row?.action_contract_json),
+        beforeState: optionalJson<GameStateSnapshot>(row?.before_json),
+        afterState: optionalJson<GameStateSnapshot>(row?.after_json),
+      });
+      return { ...story, stateVersion: turn.stateVersion, rollRecord: turn.rollRecord };
     });
   }
 

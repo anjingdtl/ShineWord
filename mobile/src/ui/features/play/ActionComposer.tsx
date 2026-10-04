@@ -75,13 +75,13 @@ export function ActionComposer(props: {
       <View style={[styles.actions, { gap: theme.space.md }]}>
         <Text style={[typeStyle(theme, theme.type.micro), { color: theme.text.muted, flex: 1 }]}>
           {props.busy
-            ? '正在结算这一回合…'
+            ? '故事正在展开…'
             : props.encounterActive
-              ? '战斗文字只识别明确目标、戒备或撤退；未选目标时会先请你澄清。'
-              : '行动由本地规则检定，再交给叙事模型。'}
+              ? '写明你的攻击对象，或选择戒备、援救、撤退。'
+              : '选择一条路径，或写下你想做的事。'}
         </Text>
         <Button
-          label={props.busy ? '结算中…' : '行动'}
+          label={props.busy ? '进行中…' : '行动'}
           wrapLabel
           onPress={props.onSubmit}
           disabled={!canSend}

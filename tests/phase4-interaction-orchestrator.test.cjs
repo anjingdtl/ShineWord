@@ -5,6 +5,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 const { SqliteInteractionOperationJournal } = require('../dist/application/campaign/interactionOrchestrator');
 const { projectStoryEntry } = require('../dist/application/campaign/storyEntry');
+const { compileProposal } = require('../dist/application/game/v2Compile');
 const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
 const { proposeEncounterIntent } = require('../dist/application/campaign/encounterIntent');
 const { recommendOpeningLoadout } = require('../dist/application/campaign/openingRecommendation');
@@ -171,7 +172,7 @@ test('the SQLite atomic game commit rejects a stale cross-branch fence inside it
   } finally { db.close(); }
 });
 
-test('story projection keeps committed prose and uses a safe mechanical fallback instead of public summary or effects', () => {
+test('story projection keeps only committed prose and never uses public summary or effects as a fallback', () => {
   assert.deepEqual(projectStoryEntry({
     turnId: 'internal-turn-key', narrativeText: '雨声渐停，门后的人终于回应。',
     narrativeStatus: 'Committed', outcomeGrade: 'success',
@@ -182,12 +183,122 @@ test('story projection keeps committed prose and uses a safe mechanical fallback
     turnId: 'enc:secret:decision-basis', narrativeText: null,
     narrativeStatus: null, outcomeGrade: 'failure',
   }), {
-    turnId: 'enc:secret:decision-basis', text: '本地规则已完成这一步行动。', grade: 'failure', mechanicalOnly: true,
+    turnId: 'enc:secret:decision-basis', text: '', grade: 'failure', mechanicalOnly: true,
   });
   assert.equal(projectStoryEntry({
     turnId: 'pending', narrativeText: '未提交的叙事草稿',
     narrativeStatus: 'Candidate', outcomeGrade: 'partial',
-  }).text, '本地规则已完成这一步行动。');
+  }).text, '');
+});
+
+function storyState(stateVersion, stamina, clockMinutes = 0) {
+  return {
+    branchId: 'b1', stateVersion, clockMinutes, clockSeconds: clockMinutes * 60,
+    actors: {
+      pc: { actorId: 'pc', locationId: 'here', resources: { hp: 8, stamina }, conditions: [] },
+      hidden: { actorId: 'hidden', locationId: 'elsewhere', resources: { hp: 900 }, conditions: [] },
+    }, itemOwners: {}, cards: [{ actorId: 'pc', card: { actorId: 'pc', controller: 'player' } }],
+  };
+}
+
+test('story feedback shows the chosen rest and actual capped recovery, not promised effects or NPC resources', () => {
+  const story = projectStoryEntry({
+    turnId: 'rest', narrativeText: null, narrativeStatus: null, outcomeGrade: 'success',
+    action: { actorId: 'pc', actionType: 'short_rest', intent: '安全短休 30 分钟' },
+    beforeState: storyState(0, 7), afterState: storyState(1, 8, 30),
+    publicSummary: 'GM秘密：幕后身份', effects: [{ op: 'restoreResource', resourceId: 'stamina', amount: 999 }],
+  });
+  assert.equal(story.choice, '原地短休');
+  assert.equal(story.result, '休整完成');
+  assert.equal(story.resultDetails, '耗时 30 分钟 · 体力恢复 1 点');
+  assert.equal(story.text, '');
+  assert.doesNotMatch(JSON.stringify(story), /GM秘密|999|900|本地规则/);
+  const full = projectStoryEntry({
+    turnId: 'rest2', narrativeText: null, narrativeStatus: null, outcomeGrade: 'success',
+    action: { actorId: 'pc', actionType: 'short_rest', intent: '休息' },
+    beforeState: storyState(1, 8, 30), afterState: storyState(2, 8, 60),
+  });
+  assert.equal(full.resultDetails, '耗时 30 分钟 · 体力保持 8 点');
+});
+
+test('story feedback retains a failed choice and persisted cost before committed prose, without inventing missing deltas', () => {
+  const story = projectStoryEntry({
+    turnId: 'search', narrativeText: '你没能看清门后的动静。', narrativeStatus: 'Committed', outcomeGrade: 'failure',
+    action: { actorId: 'pc', actionType: 'skill_check', intent: '我先仔细检查门缝。' },
+    beforeState: storyState(0, 7), afterState: storyState(1, 6, 5),
+  });
+  assert.equal(story.choice, '我先仔细检查门缝。');
+  assert.equal(story.result, '未能成功');
+  assert.equal(story.resultDetails, '耗时 5 分钟 · 体力消耗 1 点');
+  assert.equal(story.text, '你没能看清门后的动静。');
+  const missing = projectStoryEntry({
+    turnId: 'legacy', narrativeText: '未提交草稿', narrativeStatus: 'Candidate', outcomeGrade: 'success',
+    action: { actorId: 'pc', actionType: 'observe', intent: '查看四周' }, afterState: storyState(1, 6, 5),
+  });
+  assert.equal(missing.text, '');
+  assert.equal(missing.resultDetails, undefined);
+});
+
+test('story feedback omits NPC rationale, setup records and malformed legacy player metadata', () => {
+  for (const action of [
+    { actorId: 'hidden', actionType: 'guard', intent: '幕后人物保持戒备。依据：秘密任务' },
+    { actorId: 'pc', actionType: 'scene_actors', intent: '当前场景已采用的人物资料载入' },
+  ]) {
+    const story = projectStoryEntry({ turnId: 'internal', narrativeText: null, narrativeStatus: null,
+      outcomeGrade: 'success', action, beforeState: storyState(0, 7), afterState: storyState(1, 7) });
+    assert.equal(story.text, '');
+    assert.equal(story.choice, undefined);
+    assert.equal(story.result, undefined);
+    assert.doesNotMatch(JSON.stringify(story), /秘密|资料载入/);
+  }
+  assert.doesNotThrow(() => projectStoryEntry({ turnId: 'broken', narrativeText: null, narrativeStatus: null,
+    outcomeGrade: 'success', action: null, beforeState: { cards: [null, { card: null }] } }));
+});
+
+test('SQLite story history uses each turn and branch snapshots and upgrades existing rows without rewriting them', async () => {
+  const { db, adapter } = setup();
+  try {
+    const addSnapshot = (branch, version, state) => db.prepare(
+      'INSERT INTO snapshots (branch_id,state_version,snapshot_json,state_hash,created_at) VALUES (?,?,?,?,?)',
+    ).run(branch, version, JSON.stringify(state), 'hash', 't');
+    const action = { actorId: 'pc', actionType: 'short_rest', intent: '安全短休 30 分钟' };
+    const addTurn = (branch, turnId, previous, next, contract) => db.prepare(
+      `INSERT INTO turns (branch_id,turn_id,status,expected_state_version,committed_state_version,
+       action_contract_json,action_contract_hash,outcome_grade,public_summary,effects_json,created_at,committed_at)
+       VALUES (?,?,'Committed',?,?,?,'hash','success','GM秘密','[]','t','t')`,
+    ).run(branch, turnId, previous, next, JSON.stringify(contract));
+    addSnapshot('b1', 0, storyState(0, 7));
+    addSnapshot('b1', 1, storyState(1, 8, 30));
+    addSnapshot('b1', 2, storyState(2, 3, 31));
+    addTurn('b1', 'rest', 0, 1, action);
+    addTurn('b1', 'setup', 1, 2, { actorId: 'pc', actionType: 'scene_actors', intent: '秘密载入' });
+    addSnapshot('b2', 0, { ...storyState(0, 2), branchId: 'b2' });
+    addSnapshot('b2', 1, { ...storyState(1, 4, 30), branchId: 'b2' });
+    addTurn('b2', 'rest', 0, 1, action);
+    const store = new SqliteTurnStore(adapter);
+    const original = db.prepare('SELECT action_contract_json FROM turns WHERE branch_id=? AND turn_id=?').get('b1', 'rest');
+    const first = await store.listStoryEntries('b1');
+    assert.equal(first[0].resultDetails, '耗时 30 分钟 · 体力恢复 1 点');
+    assert.equal(first[1].choice, undefined);
+    assert.equal(first[1].text, '');
+    const fork = await store.listStoryEntries('b2');
+    assert.equal(fork[0].resultDetails, '耗时 30 分钟 · 体力恢复 2 点');
+    assert.deepEqual(db.prepare('SELECT action_contract_json FROM turns WHERE branch_id=? AND turn_id=?').get('b1', 'rest'), original);
+    assert.doesNotMatch(JSON.stringify(first), /GM秘密|秘密载入/);
+  } finally { db.close(); }
+});
+
+test('compiled contract preserves the exact submitted player choice despite a Planner paraphrase', () => {
+  const { contract } = compileProposal({
+    requestedIntent: '我检查门缝，看看里面有没有人。',
+    proposal: { proposalVersion: '2.0', turnId: 't', expectedStateVersion: 0, actorId: 'pc',
+      actionKind: 'observe', intent: '巡视四周', evidenceIds: [] },
+    actingCard: { actorId: 'pc' }, cards: [], catalog: {}, abilities: [], scenes: [], constraints: [],
+    state: storyState(0, 7),
+  });
+  assert.equal(contract.intent, '我检查门缝，看看里面有没有人。');
+  assert.equal(contract.actionType, 'observe');
+  assert.deepEqual(contract.outcomes.success.effects, []);
 });
 
 test('active-encounter text intent accepts only explicit public targets and never invents combat parameters', () => {

@@ -166,6 +166,9 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
       ...(baseAction.destinationId ? { destinationId: baseAction.destinationId } : {}) } };
   }
   const compiled = compileProposalBase(compileInput, selected !== undefined);
+  // Preserve the player's submitted choice in the frozen, hashed contract;
+  // a Planner paraphrase must not replace it in history or recovery.
+  compiled.contract.intent = requestedIntent;
   if (methods.length === 0) return compiled;
   return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent);
 }

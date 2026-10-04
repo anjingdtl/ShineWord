@@ -67,7 +67,7 @@ export function NarrativeFeed(props: {
       <FlatList
         ref={listRef}
         style={styles.list}
-        data={props.turns}
+        data={props.turns.filter(turn => turn.text.trim() || turn.choice || turn.result)}
         keyExtractor={item => item.turnId}
         onScroll={onScroll}
         onScrollBeginDrag={() => { readerScrolling.current = true; }}
@@ -89,8 +89,8 @@ export function NarrativeFeed(props: {
             title="故事还没开始"
             description={
               props.goal
-                ? `主目标：${props.goal}\n写下你的第一个行动，检定由角色卡与本地规则完成。`
-                : '写下你的第一个行动，检定由角色卡与本地规则完成。'
+                ? `主目标：${props.goal}\n写下你的第一个行动，开始这段旅程。`
+                : '写下你的第一个行动，开始这段旅程。'
             }
           />
         }
@@ -105,7 +105,7 @@ export function NarrativeFeed(props: {
                   typeStyle(theme, theme.type.caption),
                   { color: theme.text.muted, textAlign: 'center' },
                 ]}>
-                正在结算这一回合…
+                故事正在展开…
               </Text>
             </View>
           ) : null}

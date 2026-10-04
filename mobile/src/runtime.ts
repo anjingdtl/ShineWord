@@ -18,7 +18,7 @@ import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
 import { KeychainSecretStore } from './secureKeyStore';
 import { publishUserRequestedSourceLookupDelta } from '../../src/application/worldPackage/progressiveDelta';
 import { SqliteInteractionOperationJournal } from '../../src/application/campaign/interactionOrchestrator';
-import { projectStoryEntry } from '../../src/application/campaign/storyEntry';
+import type { StoryEntry } from '../../src/application/campaign/storyEntry';
 import * as playRecovery from '../../src/application/campaign/playRecovery';
 
 export type { PlayRecovery } from '../../src/application/campaign/playRecovery';
@@ -210,14 +210,11 @@ export interface TurnRollView {
   grade: string;
 }
 
-export interface TurnView {
-  turnId: string;
-  text: string;
+export interface TurnView extends Omit<StoryEntry, 'grade'> {
   grade: string;
   /** Branch state version this turn committed as. */
   stateVersion: number;
   resumed: boolean;
-  mechanicalOnly: boolean;
   /** Absent for turns that needed no roll (deterministic auto-success). */
   roll?: TurnRollView;
   /** P7 guidance for the decision point this turn created (read-only view). */
@@ -241,7 +238,7 @@ export async function subscribeGuidanceUpdates(listener: (branchId: string) => v
 
 export async function loadHistory(branchId: string): Promise<TurnView[]> {
   const runtime = await getDatabaseRuntime();
-  const rows = await runtime.turns.listCommittedTurns(branchId);
+  const rows = await runtime.turns.listStoryEntries(branchId);
   // P7: attach committed guidance per decision point (source turn keyed).
   const guidanceByTurn = new Map<string, TurnGuidanceV1>();
   try {
@@ -252,18 +249,15 @@ export async function loadHistory(branchId: string): Promise<TurnView[]> {
     // Guidance is derived; a read failure degrades to unadorned history.
   }
   return rows.map(row => {
-    const story = projectStoryEntry({
-      turnId: row.turnId,
-      narrativeText: row.narrativeText,
-      narrativeStatus: row.narrativeStatus,
-      outcomeGrade: row.rollRecord?.grade ?? row.outcomeGrade,
-    });
     const guidance = guidanceByTurn.get(row.turnId);
     return {
-      turnId: story.turnId,
-      text: story.text,
-      grade: story.grade,
-      mechanicalOnly: story.mechanicalOnly,
+      turnId: row.turnId,
+      text: row.text,
+      grade: row.grade,
+      mechanicalOnly: row.mechanicalOnly,
+      ...(row.choice ? { choice: row.choice } : {}),
+      ...(row.result ? { result: row.result } : {}),
+      ...(row.resultDetails ? { resultDetails: row.resultDetails } : {}),
       stateVersion: row.stateVersion,
       resumed: false,
       ...(guidance ? { guidance } : {}),

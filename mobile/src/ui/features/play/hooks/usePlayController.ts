@@ -381,7 +381,7 @@ export function usePlayController(): PlayController {
     setBusy(true);
     setError(null);
     const activeEncounter = encounter?.status === 'active' ? encounter : null;
-    setNotice(activeEncounter ? '识别战斗行动…' : '拟定检定…');
+    setNotice('正在展开你的行动…');
     try {
       let draftVersion: number | null = null;
       if (!activeEncounter) {
@@ -430,7 +430,7 @@ export function usePlayController(): PlayController {
         }
         setEncounter(view);
         if (view.status === 'active' && !view.currentActorIsPlayer) {
-          setNotice('同伴与对手正在按规则行动…');
+          setNotice('同伴与对手正在行动…');
           const latest = await progressAutomaticActors(session, view);
           setEncounter(latest);
           if (latest.currentActorIsPlayer || latest.status !== 'active') setNotice(null);
@@ -446,16 +446,12 @@ export function usePlayController(): PlayController {
       const result = await session.playTurn({ campaignId, branchId, intent: value, guidanceChoice });
       if (draftVersion !== null) await clearPlayIntentDraft(branchId, draftVersion);
       setIntent(previous => previous === value ? '' : previous);
-      const turnView: TurnView = { ...result, mechanicalOnly: false };
-      // The turn is already committed; merge it into the feed by id so a
-      // resumed turn never duplicates (plan §18.3).
-      setTurns(previous =>
-        previous.some(item => item.turnId === turnView.turnId)
-          ? previous.map(item => (item.turnId === turnView.turnId ? { ...turnView } : item))
-          : [...previous, turnView],
-      );
       setNotice(null);
+      // Use the persisted projection immediately, including choice/result;
+      // avoid flashing a narration-only row before history refreshes.
       await refresh();
+      if (result.resumed) setTurns(previous => previous.map(turn =>
+        turn.turnId === result.turnId ? { ...turn, resumed: true } : turn));
     } catch (e) {
       // A failed submit restores the intent so nothing the player typed is lost.
       if (fromComposer) setIntent(value);
@@ -524,7 +520,7 @@ export function usePlayController(): PlayController {
       const view = await work(session);
       setEncounter(view);
       if (view.status === 'active' && !view.currentActorIsPlayer) {
-        setNotice('同伴与对手正在按规则行动…');
+        setNotice('同伴与对手正在行动…');
         const latest = await progressAutomaticActors(session, view);
         setEncounter(latest);
         if (latest.currentActorIsPlayer || latest.status !== 'active') setNotice(null);
