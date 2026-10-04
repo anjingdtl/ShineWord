@@ -13,6 +13,8 @@
  * window (plan §8: the adapter declares the dialect - never both).
  */
 
+import { BudgetInfeasibleError } from '../llm/requestPlan';
+
 export type ReasoningBudgetDialect = 'inside_completion' | 'separate';
 
 export interface RequestEnvelopeInput {
@@ -82,8 +84,11 @@ export function computeRequestEnvelope(input: RequestEnvelopeInput): RequestEnve
 
   const hardInputLimit = C - inputSideOutput - S;
   if (hardInputLimit <= 0) {
-    throw new Error(
+    // P8-2: a typed failure, so the planner's BudgetInfeasibleError
+    // dispatch sees it instead of crashing the turn with a plain Error.
+    throw new BudgetInfeasibleError(
       `Envelope infeasible: context ${C} - output ${inputSideOutput} - safety ${S} leaves no input room.`,
+      'envelope_infeasible',
     );
   }
   return {

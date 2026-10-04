@@ -32,6 +32,7 @@ import { renderFrozenContext } from '../context/contextRenderer';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { evaluateCheckpointEligibility } from '../memory/storyMemoryEligibility';
 import { buildPendingBridge, renderPendingBridge } from '../memory/pendingBridge';
+import { compileMemoryMaterialCandidates } from '../memory/storyMemoryCompiler';
 import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
@@ -1145,11 +1146,13 @@ export class CampaignSession {
     plannerWireOutputTokens: number;
     narratorText: string;
     narratorWireOutputTokens: number;
+    plannerFinalWire: import('../llm/finalWireVerifier').FinalWireBudget;
+    narratorFinalWire: import('../llm/finalWireVerifier').FinalWireBudget;
     reasoningTier: ReturnType<typeof normalizeReasoningTier>;
     plannerReasoningReserveTokens: number | null;
     narratorReasoningReserveTokens: number | null;
-    plannerReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext };
-    narratorReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext };
+    plannerReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext; finalWire: import('../llm/finalWireVerifier').FinalWireBudget };
+    narratorReasoningRecovery?: { worldContext: string; wireOutputTokens: number; reserveTokens: number; context: FrozenTurnContext; finalWire: import('../llm/finalWireVerifier').FinalWireBudget };
     reasoningPolicyVersion: string;
     plannerContext: FrozenTurnContext;
     narratorContext: FrozenTurnContext;
@@ -1172,7 +1175,6 @@ export class CampaignSession {
     // Story memory eligibility (P8-1, plan §14.2): a discriminating verdict
     // replaces the crude clean+lag gate. Rejected checkpoints contribute no
     // body; the pending bridge carries (through, current] continuity instead.
-    let storyMemoryText = '';
     let pendingBridgeText = '';
     let bridgeFromVersion = 0;
     if (this.deps.storyMemory) {
@@ -1188,7 +1190,14 @@ export class CampaignSession {
         committedTurnVersions: undefined,
       });
       if (verdict.usable) {
-        storyMemoryText = compilePreviousMemoryView(verdict.checkpoint);
+        // P8-2 compact per-entity projection (plan §10.3): the objective is
+        // mandatory, characters/relationships compete per entity (B05).
+        const memoryMaterials = compileMemoryMaterialCandidates(verdict.checkpoint, queryText);
+        const memoryCollection = collectTypedCandidates({ materials: memoryMaterials, queryText });
+        plannerCandidates.push(...memoryCollection.candidates);
+        for (const diagnostic of memoryCollection.diagnostics) {
+          collectionDiagnostics.push(`${diagnostic.code}: ${diagnostic.detail}`);
+        }
         bridgeFromVersion = verdict.checkpoint.throughStateVersion;
       } else {
         // Fail visibly: the rejection reason rides the frozen context.
@@ -1211,17 +1220,6 @@ export class CampaignSession {
           pendingBridgeText = renderPendingBridge(bridge);
         }
       }
-    }
-    if (storyMemoryText) {
-      const candidate = buildCandidate({
-        id: 'story-memory-v2',
-        board: 'storyMemory',
-        heading: '长期故事状态',
-        text: storyMemoryText,
-        priority: 90,
-        provenance: { sourceType: 'story_memory_v2', sourceId: input.branchId, stateVersion: input.stateVersion },
-      }, queryText);
-      if (candidate) plannerCandidates.push(candidate);
     }
     if (pendingBridgeText) {
       const candidate = buildCandidate({
@@ -1305,8 +1303,10 @@ export class CampaignSession {
         // stays mandatory, memory stays preferred.
         requirement: candidate.board === 'currentState' ? 'mandatory' as const : 'preferred' as const,
       }));
+    // P8-2 (B05): no blind character pre-truncation — the allocator clips
+    // recent story by tokens with sentence boundaries when needed.
     const recentStory = input.recentHistory.slice(-3).map(turn =>
-      `${turn.turnId}: ${(turn.narrativeText ?? turn.publicSummary ?? '').slice(0, 200)}`).join('\n');
+      `${turn.turnId}: ${turn.narrativeText ?? turn.publicSummary ?? ''}`).join('\n');
     if (recentStory) {
       const candidate = buildCandidate({
         id: 'narrator-recent-story',
@@ -1353,8 +1353,15 @@ export class CampaignSession {
       reasoningPolicy: recoveryPolicy,
       collectionDiagnostics,
     });
-    const plannerReasoningRecovery = !plannerRecoveryPlan.context.legacyFallback
-      && typeof plannerRecoveryPlan.context.reasoning?.reserveTokens === 'number'
+    // P8-2 final wire budgets (plan §10.4): derived from the same frozen
+    // plans that render the contexts, so Preview/Send/verify share one source.
+    const finalWireOf = (plan: typeof plannerPlan) => ({
+      contextWindowTokens: plan.envelope.contextWindowTokens,
+      hardInputLimit: plan.envelope.hard,
+      wireOutputTokens: plan.wireOutputTokens,
+      safetyMarginTokens: plan.envelope.safetyMarginTokens,
+    });
+    const plannerReasoningRecovery = typeof plannerRecoveryPlan.context.reasoning?.reserveTokens === 'number'
       && typeof plannerPlan.context.reasoning?.reserveTokens === 'number'
       && plannerRecoveryPlan.context.reasoning.reserveTokens > plannerPlan.context.reasoning.reserveTokens
       ? {
@@ -1362,10 +1369,10 @@ export class CampaignSession {
           wireOutputTokens: plannerRecoveryPlan.wireOutputTokens,
           reserveTokens: plannerRecoveryPlan.context.reasoning.reserveTokens,
           context: plannerRecoveryPlan.context,
+          finalWire: finalWireOf(plannerRecoveryPlan),
         }
       : undefined;
-    const narratorReasoningRecovery = !narratorRecoveryPlan.context.legacyFallback
-      && typeof narratorRecoveryPlan.context.reasoning?.reserveTokens === 'number'
+    const narratorReasoningRecovery = typeof narratorRecoveryPlan.context.reasoning?.reserveTokens === 'number'
       && typeof narratorPlan.context.reasoning?.reserveTokens === 'number'
       && narratorRecoveryPlan.context.reasoning.reserveTokens > narratorPlan.context.reasoning.reserveTokens
       ? {
@@ -1373,6 +1380,7 @@ export class CampaignSession {
           wireOutputTokens: narratorRecoveryPlan.wireOutputTokens,
           reserveTokens: narratorRecoveryPlan.context.reasoning.reserveTokens,
           context: narratorRecoveryPlan.context,
+          finalWire: finalWireOf(narratorRecoveryPlan),
         }
       : undefined;
 
@@ -1381,6 +1389,8 @@ export class CampaignSession {
       plannerWireOutputTokens: plannerPlan.wireOutputTokens,
       narratorText: renderFrozenContext(narratorPlan.context),
       narratorWireOutputTokens: narratorPlan.wireOutputTokens,
+      plannerFinalWire: finalWireOf(plannerPlan),
+      narratorFinalWire: finalWireOf(narratorPlan),
       reasoningTier,
       plannerReasoningReserveTokens: plannerPlan.context.reasoning?.reserveTokens ?? null,
       narratorReasoningReserveTokens: narratorPlan.context.reasoning?.reserveTokens ?? null,
@@ -2348,6 +2358,8 @@ export class CampaignSession {
         playerIntent: options.intent,
         worldContext: plannerWorldContext,
         plannerWireOutputTokens: turnBundle.plannerWireOutputTokens,
+        plannerFinalWire: turnBundle.plannerFinalWire,
+        narratorFinalWire: turnBundle.narratorFinalWire,
         reasoningTier: turnBundle.reasoningTier,
         plannerReasoningReserveTokens: turnBundle.plannerReasoningReserveTokens,
         narratorReasoningReserveTokens: turnBundle.narratorReasoningReserveTokens,

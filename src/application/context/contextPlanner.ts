@@ -1,11 +1,14 @@
 /**
- * Turn context planner (plan §57, §102): collect -> filter -> relevance ->
- * elastic allocation (M1 kernel) -> freeze -> render.
+ * Turn context planner (plan §57, §102; P8-2 §10): collect -> filter ->
+ * relevance -> elastic allocation (M1 kernel) with whole-item reclamation ->
+ * freeze -> render.
  *
- * The kernel resolves the window/output/reasoning budget from REAL
- * capabilities; unknown capabilities fall back to the legacy fixed-budget
- * rendering so a bad profile can never make a campaign unplayable - the
- * fallback is explicit on the frozen context, never silent.
+ * P8-2: the legacy full-context fallback is gone (plan B07). Every
+ * BudgetInfeasibleError - unknown capabilities, mandatory over the window,
+ * infeasible envelope - propagates as a typed failure and the caller must
+ * stop before any HTTP dispatch. Whole-item candidates that cannot fit are
+ * skipped and their allocation returns to the pool for the remaining items
+ * (plan §10.2; T06), with the drop reason recorded on the frozen context.
  */
 
 import type { ContextCandidate } from './contextTypes';
@@ -18,7 +21,6 @@ import {
   type OutputDemand,
 } from '../llm/requestPlan';
 import { planLlmRequest } from '../llm/requestBudgetKernel';
-import { REASONING_POLICY_VERSION } from '../llm/reasoningPolicy';
 
 export interface TurnContextPlanInput {
   requestKind: 'planner' | 'narrator';
@@ -44,66 +46,74 @@ export interface TurnContextPlanResult {
   /** Wire budget includes the frozen reasoning reserve when supported. */
   wireOutputTokens: number;
   envelope: {
+    contextWindowTokens: number;
+    safetyMarginTokens: number;
     hard: number;
     soft: number;
     burst: number;
-  } | null;
+  };
 }
 
-/** Legacy fixed budgets, used only when capabilities are unknown. */
-export const LEGACY_PLANNER_OUTPUT_TOKENS = 1200;
-export const LEGACY_NARRATOR_OUTPUT_TOKENS = 1500;
+/** Bounded reclamation passes; deterministic inputs converge in <= 2. */
+const MAX_RECLAMATION_PASSES = 4;
 
-export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanResult {
-  let plan: ReturnType<typeof planLlmRequest> | null = null;
-  let fallbackReason: string | undefined;
-  try {
-    plan = planLlmRequest({
-      capabilities: input.capabilities,
-      requestKind: input.requestKind === 'planner' ? 'planner' : 'narrator',
-      estimatedMandatoryInputTokens: input.estimatedMandatoryInputTokens,
-      businessOutputDemand: input.businessOutputDemand,
-      contextDemands: input.candidates.map(candidate => ({
-        id: candidate.id,
-        board: candidate.board,
-        requirement: candidate.requirement,
-        priority: candidate.priority,
-        relevance: candidate.relevance,
-        estimatedTokens: candidate.estimatedTokens,
-        minTokens: candidate.minTokens,
-        targetTokens: candidate.targetTokens,
-        clipMode: candidate.clipMode,
-      })),
-      reasoningBudget: input.reasoningBudget,
-      reasoningReserveTokens: input.reasoningReserveTokens,
-      reasoningPolicy: input.reasoningPolicy,
-      providerWireMaxOutputTokens: input.providerWireMaxOutputTokens,
-    });
-  } catch (error) {
-    if (!(error instanceof BudgetInfeasibleError)) throw error;
-    // Unknown/unusable capabilities -> legacy path, explicitly flagged.
-    plan = null;
-    fallbackReason = `${error.code}: ${error.message}`;
-  }
+interface AllocationWalk {
+  included: FrozenIncludedCandidate[];
+  droppedEntries: Array<{ id: string; reason: string }>;
+}
 
-  if (!plan) {
-    return renderLegacy(input, fallbackReason);
-  }
+function allocateOnce(
+  input: TurnContextPlanInput,
+  candidates: readonly ContextCandidate[],
+): ReturnType<typeof planLlmRequest> {
+  return planLlmRequest({
+    capabilities: input.capabilities,
+    requestKind: input.requestKind === 'planner' ? 'planner' : 'narrator',
+    estimatedMandatoryInputTokens: input.estimatedMandatoryInputTokens,
+    businessOutputDemand: input.businessOutputDemand,
+    contextDemands: candidates.map(candidate => ({
+      id: candidate.id,
+      board: candidate.board,
+      requirement: candidate.requirement,
+      priority: candidate.priority,
+      relevance: candidate.relevance,
+      estimatedTokens: candidate.estimatedTokens,
+      minTokens: candidate.minTokens,
+      targetTokens: candidate.targetTokens,
+      clipMode: candidate.clipMode,
+    })),
+    reasoningBudget: input.reasoningBudget,
+    reasoningReserveTokens: input.reasoningReserveTokens,
+    reasoningPolicy: input.reasoningPolicy,
+    providerWireMaxOutputTokens: input.providerWireMaxOutputTokens,
+  });
+}
 
+function walkAllocations(
+  candidates: readonly ContextCandidate[],
+  plan: ReturnType<typeof planLlmRequest>,
+): { walk: AllocationWalk; kept: ContextCandidate[]; reclaimable: boolean } {
   const allocationById = new Map((plan.allocation?.allocations ?? []).map(entry => [entry.id, entry]));
   const included: FrozenIncludedCandidate[] = [];
-  const dropped: string[] = [];
-  for (const candidate of input.candidates) {
+  const droppedEntries: Array<{ id: string; reason: string }> = [];
+  const kept: ContextCandidate[] = [];
+  let reclaimable = false;
+  for (const candidate of candidates) {
     const entry = allocationById.get(candidate.id);
     if (!entry || entry.allocated <= 0) {
-      dropped.push(candidate.id);
+      droppedEntries.push({ id: candidate.id, reason: 'unallocated' });
+      // Unallocated items stay eligible: after whole-item reclamation frees
+      // budget, a previously starved item may fit on the next pass.
+      kept.push(candidate);
       continue;
     }
     if (candidate.clipMode === 'whole_item' && entry.allocated < candidate.estimatedTokens) {
       // Whole-or-nothing (plan §16): a half character card is worse than an
-      // absent one; mandatory floors are guaranteed by the allocator.
+      // absent one. Mandatory floors are guaranteed by the allocator, so this
+      // only happens to preferred/optional items.
       if (candidate.requirement !== 'mandatory') {
-        dropped.push(candidate.id);
+        droppedEntries.push({ id: candidate.id, reason: 'whole_item_too_large' });
+        reclaimable = true;
         continue;
       }
     }
@@ -119,8 +129,40 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
       allocatedTokens: entry.allocated,
       clipped,
     });
+    kept.push(candidate);
   }
-  const estimatedTotal = included.reduce((sum, item) => sum + estimateTokens(item.text), 0);
+  return { walk: { included, droppedEntries }, kept, reclaimable };
+}
+
+export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanResult {
+  let active = input.candidates;
+  const droppedEntries: Array<{ id: string; reason: string }> = [];
+  let plan: ReturnType<typeof planLlmRequest> | null = null;
+  let walk: AllocationWalk = { included: [], droppedEntries: [] };
+
+  for (let pass = 0; pass < MAX_RECLAMATION_PASSES; pass += 1) {
+    plan = allocateOnce(input, active);
+    const result = walkAllocations(active, plan);
+    walk = result.walk;
+    // Permanent drops leave the demand set; the next pass redistributes
+    // their share to the survivors (plan §10.2.5).
+    for (const entry of result.walk.droppedEntries) {
+      if (entry.reason === 'whole_item_too_large') droppedEntries.push(entry);
+    }
+    active = result.kept;
+    if (!result.reclaimable) break;
+  }
+  if (!plan) throw new BudgetInfeasibleError('no plan produced', 'envelope_infeasible');
+  // Final verdict for items that never received an allocation.
+  const includedIds = new Set(walk.included.map(item => item.id));
+  const recordedIds = new Set(droppedEntries.map(entry => entry.id));
+  for (const candidate of active) {
+    if (!includedIds.has(candidate.id) && !recordedIds.has(candidate.id)) {
+      droppedEntries.push({ id: candidate.id, reason: 'unallocated' });
+    }
+  }
+
+  const estimatedTotal = walk.included.reduce((sum, item) => sum + estimateTokens(item.text), 0);
   const context = freezeTurnContext({
     requestKind: input.requestKind,
     branchId: input.branchId,
@@ -133,8 +175,9 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
       reserveTokens: plan.reasoningPolicy.reserveTokens,
       policyVersion: plan.reasoningPolicy.policyVersion,
     } : undefined,
-    included,
-    droppedCandidateIds: dropped,
+    included: walk.included,
+    droppedCandidateIds: droppedEntries.map(entry => entry.id),
+    droppedEntries,
     estimatedTokens: estimatedTotal,
     collectionDiagnostics: input.collectionDiagnostics,
   });
@@ -143,49 +186,11 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
     requestedOutputTokens: plan.requestedOutputTokens,
     wireOutputTokens: plan.wireOutputTokens,
     envelope: {
+      contextWindowTokens: plan.envelope.contextWindowTokens,
+      safetyMarginTokens: plan.envelope.safetyMarginTokens,
       hard: plan.envelope.hardInputLimit,
       soft: plan.envelope.softInputLimit,
       burst: plan.envelope.burstInputLimit,
     },
-  };
-}
-
-function renderLegacy(input: TurnContextPlanInput, fallbackReason?: string): TurnContextPlanResult {
-  const included: FrozenIncludedCandidate[] = input.candidates.map(candidate => ({
-    id: candidate.id,
-    board: candidate.board,
-    heading: candidate.heading,
-    text: candidate.text,
-    allocatedTokens: candidate.estimatedTokens,
-    clipped: false,
-  }));
-  const context = freezeTurnContext({
-    requestKind: input.requestKind,
-    branchId: input.branchId,
-    stateVersion: input.stateVersion,
-    modelProfileFingerprint: 'legacy',
-    budgetPlanFingerprint: 'legacy',
-    reasoning: input.reasoningPolicy ? {
-      tier: input.reasoningPolicy.tier,
-      effectiveTier: input.reasoningPolicy.tier,
-      reserveTokens: null,
-      policyVersion: REASONING_POLICY_VERSION,
-    } : undefined,
-    included,
-    droppedCandidateIds: [],
-    estimatedTokens: included.reduce((sum, item) => sum + estimateTokens(item.text), 0),
-    legacyFallback: true,
-    fallbackReason,
-    collectionDiagnostics: input.collectionDiagnostics,
-  });
-  return {
-    context,
-    requestedOutputTokens: input.requestKind === 'planner'
-      ? LEGACY_PLANNER_OUTPUT_TOKENS
-      : LEGACY_NARRATOR_OUTPUT_TOKENS,
-    wireOutputTokens: input.requestKind === 'planner'
-      ? LEGACY_PLANNER_OUTPUT_TOKENS
-      : LEGACY_NARRATOR_OUTPUT_TOKENS,
-    envelope: null,
   };
 }

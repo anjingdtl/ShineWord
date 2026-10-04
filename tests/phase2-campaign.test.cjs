@@ -16,6 +16,7 @@ const {
 } = require('../dist/domain/characters/card');
 const { createCampaign } = require('../dist/application/campaign/createCampaign');
 const { CampaignSession } = require('../dist/application/campaign/session');
+const { BudgetInfeasibleError } = require('../dist/application/llm/requestPlan');
 const {
   freezeInitiative, distanceBetweenZones, decideNpcAction, DEFAULT_REST_POLICY,
 } = require('../dist/application/campaign/encounterFlow');
@@ -441,7 +442,7 @@ async function makeSession(db, campaignId = 'camp-s', options = {}) {
     narratives: new SqliteNarrativeStore(adapter),
     hashProvider: sha,
     random: options.random ?? RNG,
-  }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
+  }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   return { session, adapter, worldStore, provider };
 }
 
@@ -507,7 +508,7 @@ test('two campaigns of one world stay isolated; rewind restores historical skill
   const mk = () => new Session({
     db: adapter, turns: new SqliteTurnStore(adapter), game: new SqliteGameStore(adapter),
     worldStore, narratives: new SqliteNarrativeStore(adapter), hashProvider: sha, random: RNG,
-  }, new ScriptedPlannerProvider(), { endpoint: 'https://x', model: 'm', keyRef: 'kr' });
+  }, new ScriptedPlannerProvider(), { endpoint: 'https://x', model: 'm', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
 
   const s1 = mk();
   await s1.playTurn({ campaignId: 'camp-1', branchId: 'camp-1-main', intent: '行动一' });
@@ -669,8 +670,10 @@ test('M5: playTurn routes planner/narrator through kernel budgets and separate c
 
   const contexts = session.lastTurnContexts;
   assert.ok(contexts.planner && contexts.narrator);
-  assert.equal(contexts.planner.legacyFallback, false);
-  assert.equal(contexts.narrator.legacyFallback, false);
+  // P8-2: the legacy full-context fallback is gone — no frozen context may
+  // carry the old flag, and every plan comes from the real kernel.
+  assert.equal(contexts.planner.legacyFallback, undefined);
+  assert.equal(contexts.narrator.legacyFallback, undefined);
   assert.notEqual(contexts.planner.contextId, contexts.narrator.contextId);
   assert.equal(contexts.narrator.included.some(item => item.board === 'worldKnowledge'), false);
   assert.equal(contexts.narrator.included.some(item => item.board === 'sourceEvidence'), false);
@@ -766,7 +769,7 @@ test('M5: reasoning_only retries Planner at the same tier with a boosted reserve
   }
 });
 
-test('M5: unknown capabilities degrade to the legacy path without breaking play', async () => {
+test('M5: unknown capabilities fail closed with zero HTTP (legacy fallback removed)', async () => {
   const db = setupDb();
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
@@ -781,14 +784,14 @@ test('M5: unknown capabilities degrade to the legacy path without breaking play'
     narratives: new SqliteNarrativeStore(adapter),
     hashProvider: sha,
     random: RNG,
+    // P8-2 (plan A08/I06): a profile without a declared context window must
+    // never reach the provider — the legacy fixed-budget path is gone.
   }, provider, { endpoint: 'https://x', model: 'stub', keyRef: 'kr' });
 
-  const result = await session.playTurn({ campaignId: 'camp-legacy', branchId: 'camp-legacy-main', intent: '潜行' });
-  assert.ok(result.stateVersion >= 1, 'the turn still plays');
-  assert.equal(session.lastTurnContexts.planner.legacyFallback, true);
-  assert.equal(
-    provider.requests.find(request => request.role === 'Planner').maxOutputTokens,
-    1_200,
-    'legacy fixed planner budget',
+  await assert.rejects(
+    () => session.playTurn({ campaignId: 'camp-legacy', branchId: 'camp-legacy-main', intent: '潜行' }),
+    error => error instanceof BudgetInfeasibleError && error.code === 'context_window_unknown',
   );
+  assert.equal(provider.requests.length, 0, 'zero HTTP dispatch on unknown capabilities');
+  assert.equal(session.lastTurnContexts.planner, undefined, 'no frozen context was produced');
 });

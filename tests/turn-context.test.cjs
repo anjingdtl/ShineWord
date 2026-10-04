@@ -1,11 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { planTurnContext, LEGACY_PLANNER_OUTPUT_TOKENS } = require('../dist/application/context/contextPlanner');
+const { planTurnContext } = require('../dist/application/context/contextPlanner');
 const { renderFrozenContext } = require('../dist/application/context/contextRenderer');
 const { buildCandidate, candidatesFromParts } = require('../dist/application/context/candidateCollector');
 const { resolveModelCapabilities } = require('../dist/application/llm/capabilityResolver');
 const { DEFAULT_OUTPUT_DEMANDS } = require('../dist/application/llm/requestBudgetKernel');
+const { BudgetInfeasibleError } = require('../dist/application/llm/requestPlan');
 
 function capabilitiesFor(window, maxOutput = 32_768) {
   return resolveModelCapabilities({
@@ -212,44 +213,38 @@ test('whole-item candidates drop instead of clipping in half', () => {
   assert.ok(true);
 });
 
-test('unknown capabilities fall back to the legacy path, explicitly flagged', () => {
+test('unknown capabilities fail closed with a typed zero-send error (P8-2)', () => {
   const unknown = resolveModelCapabilities({ reasoningMode: 'unknown' });
-  const result = planTurnContext({
-    requestKind: 'planner',
-    branchId: 'b1',
-    stateVersion: 1,
-    candidates: heavyCandidates('x'),
-    capabilities: unknown,
-    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
-    estimatedMandatoryInputTokens: 320,
-  });
-  assert.equal(result.context.legacyFallback, true);
-  assert.ok(result.context.fallbackReason?.includes('context_window_unknown'));
-  assert.equal(result.requestedOutputTokens, LEGACY_PLANNER_OUTPUT_TOKENS);
-  assert.equal(result.envelope, null);
-  // Nothing is dropped on the legacy path - same shape as the old builder.
-  assert.equal(result.context.droppedCandidateIds.length, 0);
+  assert.throws(
+    () => planTurnContext({
+      requestKind: 'planner',
+      branchId: 'b1',
+      stateVersion: 1,
+      candidates: heavyCandidates('x'),
+      capabilities: unknown,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+      estimatedMandatoryInputTokens: 320,
+    }),
+    error => error instanceof BudgetInfeasibleError && error.code === 'context_window_unknown',
+    'unknown window must stop the turn before any dispatch',
+  );
 });
 
-test('unknown context fallback freezes tier but keeps reserve explicitly unknown', () => {
+test('unknown capabilities with a frozen reasoning policy still fail closed on the window', () => {
   const unknown = resolveModelCapabilities({ reasoningMode: 'unknown' });
-  const result = planTurnContext({
-    requestKind: 'planner',
-    branchId: 'b1',
-    stateVersion: 2,
-    candidates: heavyCandidates('x'),
-    capabilities: unknown,
-    businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
-    estimatedMandatoryInputTokens: 320,
-    reasoningPolicy: { tier: 'max', providerDialect: 'generic', model: 'custom-unknown' },
-  });
-  assert.equal(result.context.legacyFallback, true);
-  assert.deepEqual(result.context.reasoning, {
-    tier: 'max',
-    effectiveTier: 'max',
-    reserveTokens: null,
-    policyVersion: 'reasoning-policy-1',
-  });
+  assert.throws(
+    () => planTurnContext({
+      requestKind: 'planner',
+      branchId: 'b1',
+      stateVersion: 2,
+      candidates: heavyCandidates('x'),
+      capabilities: unknown,
+      businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
+      estimatedMandatoryInputTokens: 320,
+      reasoningPolicy: { tier: 'max', providerDialect: 'generic', model: 'custom-unknown' },
+    }),
+    error => error instanceof BudgetInfeasibleError && error.code === 'context_window_unknown',
+  );
 });
 
 test('renderer emits readable sections in board order', () => {

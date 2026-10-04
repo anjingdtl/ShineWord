@@ -3,7 +3,8 @@
 | 日期 | 施工包 | 内容 | 检查结果 | Commit |
 |---|---|---|---|---|
 | 2026-10-04 | P8-0 | 基线复核（四子系统探索 + P7 收尾边界）；协议登记冻结（PROTOCOL_BASELINE.md）；六类最小回归建立（tests/phase8-gaps.test.cjs，开工 RED）；验收矩阵脚手架 | 见下 | 4f289a3 |
-| 2026-10-04 | P8-1 | `turn-material-1` 类型化材料合同 + `turnMaterialCollector`（未知标签→诊断，G1 转绿）；`storyMemoryEligibility` 判别式检查点资格（未来/异支/脏/无指纹/覆盖缺口拒绝，G2 转绿）；`pendingBridge` 覆盖枚举与渲染；session 读门禁替换为资格+补桥；`listCommittedTurnsAfter` 分页读取；`planMemoryCoverage` 委托共享实现 | typecheck PASS；858 项测试 854 过 / 4 RED（G3–G6，归属 P8-3/4/5）；新增 phase8-p8-1 九项全过 | （见 git log） |
+| 2026-10-04 | P8-1 | `turn-material-1` 类型化材料合同 + `turnMaterialCollector`（未知标签→诊断，G1 转绿）；`storyMemoryEligibility` 判别式检查点资格（未来/异支/脏/无指纹/覆盖缺口拒绝，G2 转绿）；`pendingBridge` 覆盖枚举与渲染；session 读门禁替换为资格+补桥；`listCommittedTurnsAfter` 分页读取；`planMemoryCoverage` 委托共享实现 | typecheck PASS；858 项测试 854 过 / 4 RED（G3–G6，归属 P8-3/4/5）；新增 phase8-p8-1 九项全过 | 9eac725 |
+| 2026-10-04 | P8-2 | 删除 `renderLegacy` 全量回退（B07）；`computeRequestEnvelope` 改抛 `BudgetInfeasibleError('envelope_infeasible')`；分配器两遍回收（whole-item 跳过+回收+unallocated 重试，T06）；`finalWireVerifier` 最终消息校验接入 Planner/Narrator 发送点（§10.4）；记忆逐实体 compact 投影（B05：目标 mandatory、人物/关系逐项竞争）；去掉 recentStory 字符截断；测试夹具补能力声明、3 个 legacy 回退测试按新政策重写（A08：能力未知=零发送） | typecheck PASS；873 项测试 869 过 / 4 预期 RED（G3–G6）；新增 phase8-p8-2 六项全过 | （见 git log） |
 
 ## P8-0 基线复核结论
 

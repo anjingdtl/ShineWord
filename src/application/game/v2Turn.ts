@@ -13,6 +13,7 @@ import type { ActionContract } from '../../domain/turns/types';
 import type { ContentDependencyBinding } from '../../domain/content/types';
 import type { LlmProvider, LlmRequest, ReasoningTier } from '../llm/types';
 import { classifyLlmFailure } from '../llm/requestLedger';
+import { BudgetInfeasibleError } from '../llm/requestPlan';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { parseStrictJsonObject } from '../llm/json';
 import { parseStructuredOutput } from '../llm/structuredOutput';
@@ -29,6 +30,7 @@ import { compileProposal, type CompiledAction } from './v2Compile';
 import { contentDependencyBinding } from '../worldPackage/contentManifest';
 import { describeWorldClock } from '../../domain/state/worldClock';
 import { fitGuidanceNarratorRequest } from '../guidance/requestBudget';
+import { verifyFinalWireRequest, type FinalWireBudget } from '../llm/finalWireVerifier';
 
 export interface NarrativeCandidate {
   turnId: string;
@@ -44,6 +46,8 @@ export interface TurnReasoningRecoveryPlan {
   wireOutputTokens: number;
   reserveTokens: number;
   context: FrozenTurnContext;
+  /** P8-2: envelope for the recovery dispatch's final wire check. */
+  finalWire?: FinalWireBudget;
 }
 
 export interface RunV2TurnInput {
@@ -91,6 +95,10 @@ export interface RunV2TurnInput {
   /** Kernel-resolved provider wire output ceilings, including reasoning. */
   plannerWireOutputTokens: number;
   narratorWireOutputTokens: number;
+  /** P8-2: frozen envelopes for the final wire gate (plan §10.4); when
+   * absent (pure-domain tests) the gate is skipped. */
+  plannerFinalWire?: FinalWireBudget;
+  narratorFinalWire?: FinalWireBudget;
   plannerReasoningRecovery?: TurnReasoningRecoveryPlan;
   narratorReasoningRecovery?: TurnReasoningRecoveryPlan;
   onReasoningRecovery?: (role: 'planner' | 'narrator', context: FrozenTurnContext) => void;
@@ -350,8 +358,23 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
           stateVersion: state.stateVersion,
         },
       });
-      let planned;
+      const finalWireCheck = (worldContext: string, wireOutputTokens: number, budget?: FinalWireBudget): void => {
+        if (!budget) return;
+        const request = makeRequest(worldContext, wireOutputTokens, null);
+        verifyFinalWireRequest({
+          messages: [
+            { role: 'system', content: request.system },
+            { role: 'user', content: request.user },
+          ],
+          budget,
+        });
+      };      let planned;
       try {
+        finalWireCheck(
+          input.worldContext ?? '',
+          input.plannerWireOutputTokens,
+          input.plannerFinalWire,
+        );
         planned = await input.provider.complete(makeRequest(
           input.worldContext ?? '', input.plannerWireOutputTokens, input.plannerReasoningReserveTokens,
         ));
@@ -360,6 +383,11 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
         budget.consume('Planner');
         input.onReasoningRecovery?.('planner', recovery.context);
+        finalWireCheck(
+          recovery.worldContext,
+          recovery.wireOutputTokens,
+          recovery.finalWire,
+        );
         planned = await input.provider.complete({
           ...makeRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
           maxPhysicalRequests: 1,
@@ -503,19 +531,64 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     let narrated;
     const prepareNarratorRequest = (request: LlmRequest): LlmRequest => input.narratorBudget
       ? fitGuidanceNarratorRequest(request, { ...input.narratorBudget, plainNarratorSystem: narratorSystem(false) }) : request;
+    // P8-2 final wire gate (plan §10.4): after all payload assembly and
+    // optional-packet shedding, the real messages must fit the frozen
+    // envelope. Over-budget optional payloads are shed from the SAME frozen
+    // pool; a mandatory overflow fails with zero HTTP.
+    const checkNarratorWire = (request: LlmRequest, budget?: FinalWireBudget): LlmRequest => {
+      if (!budget) return request;
+      const verify = (candidate: LlmRequest): void => {
+        verifyFinalWireRequest({
+          messages: [
+            { role: 'system', content: candidate.system },
+            { role: 'user', content: candidate.user },
+          ],
+          budget,
+        });
+      };
+      let current = request;
+      try {
+        verify(current);
+        return current;
+      } catch (error) {
+        if (!(error instanceof BudgetInfeasibleError)) throw error;
+      }
+      try {
+        const payload = JSON.parse(current.user) as Record<string, unknown>;
+        if (payload.situationPacket !== undefined) {
+          delete payload.situationPacket;
+          current = { ...current, system: narratorSystem(false), user: JSON.stringify(payload) };
+          verify(current);
+          return current;
+        }
+        if (payload.styleExpression !== undefined) {
+          delete payload.styleExpression;
+          current = { ...current, user: JSON.stringify(payload) };
+          verify(current);
+          return current;
+        }
+      } catch (error) {
+        if (error instanceof BudgetInfeasibleError) throw error;
+      }
+      verify(current);
+      return current;
+    };
     try {
-      narrated = await input.provider.complete(prepareNarratorRequest(makeNarratorRequest(
-        input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
-      )));
+      narrated = await input.provider.complete(checkNarratorWire(
+        prepareNarratorRequest(makeNarratorRequest(
+          input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
+        )),
+        input.narratorFinalWire,
+      ));
     } catch (error) {
       const recovery = input.narratorReasoningRecovery;
       if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
       budget.consume('Narrator');
       input.onReasoningRecovery?.('narrator', recovery.context);
-      narrated = await input.provider.complete(prepareNarratorRequest({
+      narrated = await input.provider.complete(checkNarratorWire(prepareNarratorRequest({
         ...makeNarratorRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
         maxPhysicalRequests: 1,
-      }));
+      }), recovery.finalWire ?? input.narratorFinalWire));
     }
     const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
       label: 'Narrator candidate',

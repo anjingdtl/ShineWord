@@ -90,6 +90,12 @@ export interface TurnMaterialCandidate {
   payload: Readonly<Record<string, unknown>>;
   /** SHA-256 over the canonical payload; identity for dedupe and freeze. */
   contentHash: string;
+  /**
+   * Adapter-only hint for the legacy board budget kernel. Kind→board is
+   * derived when absent; world-package and story-memory entities use this to
+   * land on different boards despite sharing a kind.
+   */
+  boardOverride?: 'authority' | 'currentState' | 'worldKnowledge' | 'storyMemory' | 'recentHistory' | 'sourceEvidence';
 }
 
 export type TurnMaterialDiagnosticCode =

@@ -35,12 +35,10 @@ export interface FrozenTurnContext {
   reasoning?: FrozenTurnReasoning;
   includedCandidateIds: string[];
   droppedCandidateIds: string[];
+  /** P8-2: per-drop reason (allocation / whole-item) for audit. */
+  droppedEntries?: ReadonlyArray<{ id: string; reason: string }>;
   included: FrozenIncludedCandidate[];
   estimatedTokens: number;
-  /** True when the budget kernel was unavailable (unknown capabilities) and
-   * the legacy fixed-budget path rendered the context instead. */
-  legacyFallback: boolean;
-  fallbackReason?: string;
   /** P8-1 audit trail: materials the collector refused (unknown labels,
    * missing dependencies). Frozen so a drop is never silent. */
   collectionDiagnostics?: string[];
@@ -55,9 +53,8 @@ export function freezeTurnContext(input: {
   reasoning?: FrozenTurnReasoning;
   included: FrozenIncludedCandidate[];
   droppedCandidateIds: string[];
+  droppedEntries?: ReadonlyArray<{ id: string; reason: string }>;
   estimatedTokens: number;
-  legacyFallback?: boolean;
-  fallbackReason?: string;
   collectionDiagnostics?: readonly string[];
 }): FrozenTurnContext {
   const included = input.included;
@@ -81,8 +78,9 @@ export function freezeTurnContext(input: {
     droppedCandidateIds: [...input.droppedCandidateIds],
     included,
     estimatedTokens: input.estimatedTokens,
-    legacyFallback: input.legacyFallback ?? false,
-    fallbackReason: input.fallbackReason,
+    droppedEntries: input.droppedEntries && input.droppedEntries.length > 0
+      ? input.droppedEntries
+      : undefined,
     collectionDiagnostics: input.collectionDiagnostics && input.collectionDiagnostics.length > 0
       ? [...input.collectionDiagnostics]
       : undefined,

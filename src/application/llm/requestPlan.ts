@@ -48,7 +48,8 @@ export type BudgetInfeasibleCode =
   | 'reasoning_policy_mismatch'
   | 'envelope_infeasible'
   | 'mandatory_input_infeasible'
-  | 'mandatory_exceeds_hard';
+  | 'mandatory_exceeds_hard'
+  | 'final_wire_exceeded';
 
 export class BudgetInfeasibleError extends Error {
   constructor(

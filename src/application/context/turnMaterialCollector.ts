@@ -29,11 +29,12 @@ const LABEL_MATERIALS: ReadonlyArray<{
   kind: TurnMaterialCandidate['kind'];
   authorityDomain: AuthorityDomain;
   retention: MaterialRetention;
+  boardOverride?: TurnMaterialCandidate['boardOverride'];
 }> = [
   { prefix: '【世界】', board: 'worldKnowledge', heading: '世界设定', kind: 'world_entry', authorityDomain: 'world_baseline', retention: 'preferred' },
   { prefix: '【世界规则】', board: 'worldKnowledge', heading: '世界规则', kind: 'rule_summary', authorityDomain: 'rules', retention: 'preferred' },
   { prefix: '【当前位置可调查的隐藏线索引用】', board: 'worldKnowledge', heading: '可调查线索', kind: 'world_entry', authorityDomain: 'viewer_knowledge', retention: 'preferred' },
-  { prefix: '【可见人物】', board: 'worldKnowledge', heading: '相关人物', kind: 'character_relationship', authorityDomain: 'viewer_knowledge', retention: 'preferred' },
+  { prefix: '【可见人物】', board: 'worldKnowledge', heading: '相关人物', kind: 'character_relationship', authorityDomain: 'viewer_knowledge', retention: 'preferred', boardOverride: 'worldKnowledge' },
   { prefix: '【角色】', board: 'currentState', heading: '队伍', kind: 'actor_state', authorityDomain: 'committed_state', retention: 'mandatory' },
   { prefix: '【当前时刻】', board: 'currentState', heading: '当前时刻', kind: 'situation', authorityDomain: 'committed_state', retention: 'mandatory' },
   { prefix: '【主目标】', board: 'currentState', heading: '当前目标', kind: 'current_objective', authorityDomain: 'story_memory', retention: 'mandatory' },
@@ -45,8 +46,8 @@ const LABEL_MATERIALS: ReadonlyArray<{
   { prefix: '【可用技能】', board: 'authority', heading: '可用技能', kind: 'available_actions', authorityDomain: 'rules', retention: 'mandatory' },
 ];
 
-function boardForKind(kind: TurnMaterialCandidate['kind']): ContextCandidate['board'] {
-  switch (kind) {
+function boardForKind(material: Pick<TurnMaterialCandidate, 'kind' | 'boardOverride'>): ContextCandidate['board'] {
+  switch (material.kind) {
     case 'rule_summary':
     case 'available_actions':
       return 'authority';
@@ -55,8 +56,9 @@ function boardForKind(kind: TurnMaterialCandidate['kind']): ContextCandidate['bo
     case 'current_objective':
       return 'currentState';
     case 'world_entry':
-    case 'character_relationship':
       return 'worldKnowledge';
+    case 'character_relationship':
+      return material.boardOverride ?? 'storyMemory';
     case 'pending_bridge':
     case 'relevant_recall':
       return 'storyMemory';
@@ -105,6 +107,7 @@ export function buildTypedMaterial(input: {
   relevance?: number;
   dependencies?: readonly string[];
   payload: Readonly<Record<string, unknown>>;
+  boardOverride?: TurnMaterialCandidate['boardOverride'];
 }): TurnMaterialCandidate {
   if (!isTurnMaterialKind(input.kind)) {
     throw new Error(`turn-material-1: unknown material kind ${String(input.kind)}`);
@@ -123,6 +126,7 @@ export function buildTypedMaterial(input: {
     dependencies: input.dependencies ?? [],
     payload: input.payload,
     contentHash: hashTypedMaterialPayload({ kind: input.kind, payload: input.payload }),
+    ...(input.boardOverride ? { boardOverride: input.boardOverride } : {}),
   };
 }
 
@@ -148,7 +152,7 @@ export function typedMaterialToCandidate(
   const requirement = materialRequirement(material.retention);
   return buildCandidate({
     id: material.id,
-    board: boardForKind(material.kind),
+    board: boardForKind(material),
     heading: headingForKind(material.kind),
     text,
     requirement,
@@ -223,6 +227,7 @@ export function collectTypedCandidates(
         visibility: 'party',
         retention: mapped.retention,
         payload: { text: trimmed },
+        ...(mapped.boardOverride ? { boardOverride: mapped.boardOverride } : {}),
       });
       const candidate = typedMaterialToCandidate(material, input.queryText);
       if (candidate) candidates.push(candidate);

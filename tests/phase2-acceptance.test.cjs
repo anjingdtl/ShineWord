@@ -227,7 +227,7 @@ async function makeSession(db, { random = RNG_MAX, initialSkills = ['stealth'], 
   const session = new CampaignSession({
     db: adapter, turns: new SqliteTurnStore(adapter), game: new SqliteGameStore(adapter),
     worldStore, narratives: new SqliteNarrativeStore(adapter), hashProvider: sha, random,
-  }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
+  }, provider, { endpoint: 'https://x', model: 'test-model', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   return { session, adapter, worldStore, provider };
 }
 
@@ -608,7 +608,7 @@ test('A01: compiled ability healing carries the engine cap even when hp is low',
   const session = new CampaignSession({
     db: adapter, turns: new SqliteTurnStore(adapter), game: new SqliteGameStore(adapter),
     worldStore, narratives: new SqliteNarrativeStore(adapter), hashProvider: sha, random: RNG_MAX,
-  }, provider, { endpoint: 'https://x', model: 'm', keyRef: 'kr' });
+  }, provider, { endpoint: 'https://x', model: 'm', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   provider.override = payload => ({
     proposalVersion: '2.0', turnId: payload.turnId, expectedStateVersion: payload.expectedStateVersion,
     actorId: 'actor-shen', actionKind: 'ability', abilityId: 'ability-bandage', targetId: 'actor-shen',
@@ -2061,7 +2061,7 @@ test('discovering an in-scene clue advances a quest, grants an item and survives
   const session = new CampaignSession({
     db: adapter, turns: new SqliteTurnStore(adapter), game: new SqliteGameStore(adapter),
     worldStore, narratives: new SqliteNarrativeStore(adapter), hashProvider: sha, random: RNG_MAX,
-  }, provider, { endpoint: 'https://x', model: 'm', keyRef: 'kr' });
+  }, provider, { endpoint: 'https://x', model: 'm', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   const before = await session.getSummary('camp-knowledge', 'camp-knowledge-main');
   assert.equal(assembleBook({ entries, sections }, 'player_handbook', { includeGm: false, knowledge: { discoveredEntryIds: new Set() } })
     .flatMap(group => group.entries).some(found => found.entryId === 'clue-secret'), false);
@@ -2202,7 +2202,7 @@ test('portable package identity restores a combat save after local world-id rema
     narratives: new SqliteNarrativeStore(targetAdapter),
     hashProvider: sha,
     random: RNG_MAX,
-  }, new ProposalProvider(), { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
+  }, new ProposalProvider(), { endpoint: 'https://x', model: 'test-model', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   const restoredEncounter = await restoredSession.getActiveEncounter('portable-restored-campaign', 'portable-restored-main');
   assert.ok(restoredEncounter, 'an imported world package resolves the save dependency after local-id remapping');
   assert.equal(restoredEncounter.currentActorId, sourceEncounter.currentActorId,
@@ -2241,7 +2241,7 @@ test('portable package identity restores a combat save after local world-id rema
     narratives: new SqliteNarrativeStore(chainedAdapter),
     hashProvider: sha,
     random: RNG_MAX,
-  }, new ProposalProvider(), { endpoint: 'https://x', model: 'test-model', keyRef: 'kr' });
+  }, new ProposalProvider(), { endpoint: 'https://x', model: 'test-model', keyRef: 'kr', capabilities: { contextWindow: 32768, maxOutputTokens: 8192, supportsJson: true, reportsUsage: true } });
   const chainedEncounter = await chainedSession.getActiveEncounter('portable-chained-campaign', 'portable-chained-main');
   assert.ok(chainedEncounter, 'an exported save remains portable after its world package has crossed multiple import hops');
   assert.equal(chainedEncounter.currentActorId, sourceEncounter.currentActorId,
