@@ -80,7 +80,11 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
   const manifest: WorldPackageManifest = {
     worldId: input.worldId,
     revision,
-    schemaVersion: input.buildScope ? 'world-package-3' : 'world-package-2',
+    // P7: packages carrying situation entries declare schema 4; older loaders
+    // reject it explicitly instead of silently dropping playable content.
+    schemaVersion: input.entries.some(entry => entry.kind === 'situation')
+      ? 'world-package-4'
+      : input.buildScope ? 'world-package-3' : 'world-package-2',
     sourceSha256: input.sourceSha256,
     ruleset: { id: SHINEWORD_RULESET_ID, version: SHINEWORD_RULESET_VERSION },
     mappingVersion: input.mappingVersion,

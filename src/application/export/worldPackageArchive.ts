@@ -385,7 +385,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
-  if (!input.manifest || !['world-package-2', 'world-package-3'].includes(input.manifest.schemaVersion) ||
+  if (!input.manifest || !['world-package-2', 'world-package-3', 'world-package-4'].includes(input.manifest.schemaVersion) ||
       typeof input.manifest.worldId !== 'string' || !input.manifest.worldId.trim() || input.manifest.worldId.length > 120 ||
       !Number.isSafeInteger(input.manifest.revision) || input.manifest.revision < 1) {
     throw new Error('World package manifest is invalid.');
@@ -393,7 +393,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
   if (!/^[a-f0-9]{64}$/i.test(input.manifest.contentHash) || !/^[a-f0-9]{64}$/i.test(input.manifest.sourceSha256)) {
     throw new Error('World package hashes must be SHA-256 hex strings.');
   }
-  if (input.manifest.schemaVersion === 'world-package-3') {
+  if (input.manifest.schemaVersion === 'world-package-3' || input.manifest.schemaVersion === 'world-package-4') {
     const scope = input.manifest.buildScope;
     if (!scope || !['progressive', 'full'].includes(scope.strategy)
       || !['opening', 'incremental', 'whole_source'].includes(scope.scope)

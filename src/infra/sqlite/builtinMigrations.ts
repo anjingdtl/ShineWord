@@ -1249,5 +1249,24 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
     ALTER TABLE interaction_operations_v31 RENAME TO interaction_operations;
     CREATE UNIQUE INDEX idx_interaction_one_running_per_branch ON interaction_operations(branch_id) WHERE status='running';
   ` },
-  { version: 32, name: 'phase7_situation_state_and_guidance', sql: PHASE7_SITUATION_SCHEMA_SQL },
+  { version: 32, name: 'phase7_situation_state_and_guidance', foreignKeys: 'off', sql: PHASE7_SITUATION_SCHEMA_SQL + `
+    CREATE TABLE package_entries_v32 (
+      world_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      entry_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('skill', 'ability', 'item', 'condition', 'actor_template', 'origin', 'path', 'scene', 'quest', 'lore', 'constraint', 'situation')),
+      definition_json TEXT NOT NULL,
+      provenance_json TEXT NOT NULL,
+      field_provenance_json TEXT NOT NULL DEFAULT '{}',
+      visibility TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public', 'gm', 'discoverable')),
+      dependency_ids_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(world_id, revision, entry_id),
+      FOREIGN KEY(world_id, revision) REFERENCES world_packages(world_id, revision) ON DELETE CASCADE
+    );
+    INSERT INTO package_entries_v32 SELECT * FROM package_entries;
+    DROP TABLE package_entries;
+    ALTER TABLE package_entries_v32 RENAME TO package_entries;
+    CREATE INDEX IF NOT EXISTS idx_package_entries_kind ON package_entries(world_id, kind);
+  ` },
 ];

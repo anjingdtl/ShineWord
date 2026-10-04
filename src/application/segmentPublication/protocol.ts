@@ -30,7 +30,7 @@ function provenance(v: unknown): v is Provenance {
 }
 function entry(v: unknown): v is ContentEntry {
   return isRecord(v) && id(v.entryId) && natural(v.revision) && Number(v.revision) > 0
-    && ['skill','ability','item','condition','actor_template','origin','path','scene','quest','lore','constraint'].includes(String(v.kind))
+    && ['skill','ability','item','condition','actor_template','origin','path','scene','quest','lore','constraint','situation'].includes(String(v.kind))
     && provenance(v.provenance) && isRecord(v.fieldProvenance) && Object.keys(v.fieldProvenance).length <= 100
     && Object.values(v.fieldProvenance).every(provenance) && ['public','gm','discoverable'].includes(String(v.visibility))
     && (v.revealPolicyId === undefined || id(v.revealPolicyId)) && strings(v.dependencyIds)

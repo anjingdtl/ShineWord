@@ -304,7 +304,7 @@ test('progressive opening compiles, publishes with a hashed partial scope, creat
     usage: { inputTokens: 200, outputTokens: 150, reasoningTokens: 30, estimated: false },
     extractionMs: 130, createdAt: 'now',
   });
-  assert.equal(published.manifest.schemaVersion, 'world-package-3');
+  assert.equal(published.manifest.schemaVersion, 'world-package-4'); // P7: opening situation promotes the schema
   assert.equal(published.manifest.status, 'published');
   assert.equal(published.manifest.buildScope.strategy, 'progressive');
   assert.equal(published.manifest.buildScope.scope, 'opening');

@@ -7,6 +7,7 @@ import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import { codePointLength } from '../../domain/world/textOffsets';
 import { parseStrictJsonObject } from '../llm/json';
 import { createProgressiveBaselineEntries, buildSections } from './buildPackageFromCanon';
+import { compileOpeningSituation } from './compileOpeningSituation';
 import { publishWorldPackage } from './publish';
 import { resolveModelCapabilities } from '../llm/capabilityResolver';
 import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
@@ -477,6 +478,15 @@ export async function compileProgressiveOpeningPackage(input: {
       clues: [],
     },
   });
+  // P7: one conservative local situation keeps the progressive opening
+  // intervenable before any model mapping ran (plan §5.4/§5.5).
+  const openingSituation = compileOpeningSituation({
+    entries,
+    situationText: input.dossier.situation,
+    goalText: input.dossier.initialGoal,
+    locationName: input.dossier.locationName,
+  });
+  if (openingSituation) entries.push(openingSituation);
   const sections = buildSections(entries);
   try {
     const published = await publishWorldPackage({
@@ -514,7 +524,11 @@ export async function compileProgressiveOpeningPackage(input: {
       createdAt: timestamp,
     });
     return { manifest: published.manifest, entries, sections };
-  } catch {
-    throw new OpeningPreparationError('package_validation', input.requestMetrics, 'publish');
+  } catch (error) {
+    // Keep the underlying gate failure attached for diagnosis; it never
+    // reaches the UI raw (the message stays the desensitized stage code).
+    const wrapped = new OpeningPreparationError('package_validation', input.requestMetrics, 'publish');
+    (wrapped as { cause?: unknown }).cause = error;
+    throw wrapped;
   }
 }

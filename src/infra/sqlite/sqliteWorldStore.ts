@@ -1436,7 +1436,7 @@ export class SqliteWorldStore implements WorldStore {
     );
     const schemaVersion = String(row.schema_version);
     let buildScope: WorldPackageManifest['buildScope'];
-    if (schemaVersion === 'world-package-3') {
+    if (schemaVersion === 'world-package-3' || schemaVersion === 'world-package-4') {
       try {
         const parsed = JSON.parse(String(row.build_scope_json ?? '{}')) as WorldPackageManifest['buildScope'];
         if (!parsed || !Array.isArray(parsed.sourceRanges)) throw new Error('missing scope');
@@ -1445,7 +1445,7 @@ export class SqliteWorldStore implements WorldStore {
         throw new Error(`World package ${worldId} r${revision} has invalid progressive scope metadata.`);
       }
     }
-    if (schemaVersion !== 'world-package-2' && schemaVersion !== 'world-package-3') {
+    if (schemaVersion !== 'world-package-2' && schemaVersion !== 'world-package-3' && schemaVersion !== 'world-package-4') {
       throw new Error(`Unsupported world package schema: ${schemaVersion}.`);
     }
     return {

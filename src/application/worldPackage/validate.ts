@@ -28,6 +28,10 @@ const KIND_DEPENDENCY_RULES: Record<string, { allowed: string[]; description: st
   path: { allowed: ['origin', 'ability'], description: 'paths require origins and grant abilities' },
   scene: { allowed: ['actor_template', 'item', 'quest'], description: 'scenes place actors, items and clues' },
   quest: { allowed: ['item', 'scene'], description: 'quests reward items and reference scenes' },
+  situation: {
+    allowed: ['skill', 'ability', 'item', 'actor_template', 'scene', 'quest', 'lore', 'condition'],
+    description: 'situations bind participants, methods and knowledge gates to published entries',
+  },
 };
 
 /**

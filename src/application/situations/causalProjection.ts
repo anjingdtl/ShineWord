@@ -72,6 +72,23 @@ function resolvedReferenceKeys(situations: readonly SituationSnapshotEntry[]): s
   return keys;
 }
 
+/**
+ * Resolve a reference-event fate actor id against the branch: mapper-compiled
+ * ids may be entity ids or npc entry ids; the branch state keys runtime
+ * actors. Unresolvable fates are skipped (never applied to a guessed actor).
+ */
+function resolveFateActor(actorId: string, state: GameStateSnapshot): string | null {
+  if (state.actors[actorId]) return actorId;
+  for (const card of state.cards ?? []) {
+    const cardRecord = card.card as { actorId?: string; templateId?: string } | null;
+    if (!cardRecord || typeof cardRecord.templateId !== 'string') continue;
+    if (cardRecord.templateId === actorId || cardRecord.templateId === `npc-${actorId.replace(/^npc-/, '')}`) {
+      return state.actors[card.actorId] ? card.actorId : null;
+    }
+  }
+  return null;
+}
+
 export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplySituationRuntimeResult {
   const state = input.nextState;
   const existing = state.situations ?? [];
@@ -202,7 +219,10 @@ export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplyS
         },
       });
       if (decision.actorFate) {
-        actorFates.push({ ...decision.actorFate, eventKey: decision.eventKey });
+        const resolved = resolveFateActor(decision.actorFate.actorId, state);
+        if (resolved) {
+          actorFates.push({ actorId: resolved, lifeStatus: decision.actorFate.lifeStatus, eventKey: decision.eventKey });
+        }
       }
     }
   }

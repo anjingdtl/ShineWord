@@ -13,11 +13,14 @@ import type {
   WorldPackageBuildScope,
   WorldPackageManifest,
 } from '../../domain/content/types';
+import { validateDefinition } from '../../domain/content/types';
+import { validateConditionShape } from '../../domain/situations/conditions';
 import { publishWorldPackage } from './publish';
 import { sourceRangesCoverWholeText } from './preparationStatus';
 import { hasCharacterLocationEvidence } from '../world/locationEvidence';
 import { isFactVisibleAtAnchor } from '../world/opening';
 import { compileOpeningActors } from './compileOpeningActors';
+import { compileOpeningSituation } from './compileOpeningSituation';
 import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
 import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION, factCoveredByRanges,
   type IncrementalMappingOptions, type SelectedCanon } from '../incrementalMapping/canonSelection';
@@ -206,6 +209,10 @@ const MAPPER_SYSTEM = [
   '"actorTemplates":[{"id":string,"name":string,"category":"human|beast|spirit|undead|construct|faction","description":string,"attributes":object,"skills":object,"hp":number,"stamina":number,"defense":number,"attacks":[{"name":string,"skillId":string,"damage":number,"range":"touch|near|mid|far"}],"abilities":string[],"behavior":{"goal":string,"retreatThreshold":number,"morale":"low|steady|fierce"},"lootPolicy":string,"lootItemIds":string[],"threat":{"damage":number,"durability":number,"actions":number,"control":number,"environment":number},"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"items":[{"id":string,"name":string,"description":string,"category":"weapon|armor|tool|consumable|valuables|key","armorReduction":number,"weaponSkillId":string,"weaponBonusDice":number,"effects":[{"op":string,"amount":number}],"unique":boolean,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"lore":[{"id":string,"name":string,"title":string,"text":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"situations":[{"id":string,"title":string,"summary":string,"gmBrief":string,"locationId":string,"participantIds":string[],',
+  '"activation":object,"knowledgeCondition":object,"signs":[{"text":string}],"pressure":{"description":string},',
+  '"methods":[{"id":string,"title":string,"goal":string,"firstStep":{"intent":string,"actionKind":"skill_check|ability|observe|talk|interact|move","skillId":string,"targetId":string,"destinationId":string},"requires":{"skillId":string,"minRank":"untrained|novice|trained|expert|master","itemId":string,"knowledgeEntryId":string},"tradeoffs":string,"preparation":string,"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
+  '"referenceEvents":[{"eventKey":string,"worldTimeOrder":number,"condition":object,"actorFate":object,"summary":string,"evidenceEventId":string}],"provenanceKind":string,"evidenceFactIds":string[],"rationale":string}],',
   '"ruleMappings":[{"target":string,"kind":"attribute|skill|power_tier|resource","mapping":object,"evidenceFactIds":string[]}]}',
   'Rules:',
   '- attribute MUST be exactly one of: physique, agility, insight, knowledge, willpower, social.',
@@ -220,6 +227,11 @@ const MAPPER_SYSTEM = [
   '- Skill names come from the novel\'s own vocabulary (what the text calls the practice), never from a generic genre dictionary.',
   '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
   '- ruleMappings target MUST be the name of an entity from the provided entities list; kind MUST be one of attribute, skill, power_tier, resource; evidenceFactIds must reference provided fact ids. Mappings without verified evidence are dropped.',
+  '- situations organize PLAYABLE intervention points. Propose a situation only when the facts show a live conflict or opportunity with participants, not for background flavor. summary/signs/tradeoffs/preparation text is PLAYER-VISIBLE: never put undiscovered identities, secrets or future outcomes there; put GM-only notes in gmBrief.',
+  '- situation activation/knowledgeCondition/condition nodes MUST use only whitelisted kinds: all{of}, any{of}, not{of}, actor_alive{actorId}, actor_at{actorId,locationId}, actor_condition{actorId,conditionId}, item_owned_by{itemId,actorId}, knowledge_known{entryId}, relationship_at_least{fromActorId,toActorId,closeness}, quest_status{questId,status}, situation_status{situationId,status}, reference_event_resolved{eventKey}, world_time_at_least{order}. actorId/itemId/skillId reference proposed entry ids or entity ids from the provided entities list.',
+  '- each situation offers 2-4 genuinely different methods (different goal, first step or requirements). firstStep.intent describes ONE concrete first action, never a whole plan. method skillId/itemId must reference proposed entries; requires.skillId only when the evidence shows the approach needs that proficiency.',
+  '- referenceEvents convert LATER canon outcomes (a death, a downfall) into branch-conditional futures: eventKey = the canon event id from the provided events list, worldTimeOrder = that event order, condition = whitelist nodes over CURRENT branch state, actorFate only {actorId,lifeStatus:"dead"} for a death the canon event itself states. Never fabricate deaths the events do not contain.',
+  '- situation provenance: participants/events explicit or inferred with evidenceFactIds; deadlines/costs rule_mapping; interaction windows and pressure pacing design_fill.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -329,6 +341,7 @@ interface CleanedProposals {
   skills: ContentEntry[];
   constraints: ContentEntry[];
   lore: ContentEntry[];
+  situations: ContentEntry[];
 }
 
 interface RawActorTemplate {
@@ -622,6 +635,225 @@ function cleanLore(raw: unknown, ctx: CleanContext): ContentEntry | null {
   });
 }
 
+/**
+ * P7 situation proposal cleaning. Everything the model returns is validated
+ * against the frozen whitelist: condition AST shape, method structural
+ * distinctness, references limited to entries proposed in this package (or
+ * previous/dependency entries), reference events bound to REAL canon events.
+ * A situation that fails any hard rule is rejected into the review queue —
+ * the compiler never invents skills, people, entrances or secrets to reach a
+ * method count.
+ */
+export interface SituationCleanContext {
+  ctx: CleanContext;
+  /** Entry ids visible to situations (proposed so far + previous + dependency entries). */
+  knownEntryIds: ReadonlySet<string>;
+  /** Canon events visible in this build: eventId → worldTimeOrder. */
+  knownEvents: ReadonlyMap<string, { worldTimeOrder: number | null }>;
+  /** factId → subjectEntityId, used to bind actor fates to evidenced actors. */
+  factSubjects: ReadonlyMap<string, string>;
+  /** Lore entry ids usable as knowledge gates (discoverable/public lore). */
+  knowledgeEntryIds: ReadonlySet<string>;
+}
+
+function cleanConditionNode(raw: unknown): unknown | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const errors: string[] = [];
+  validateConditionShape(record, errors, 'condition');
+  if (errors.length > 0) return null;
+  return record;
+}
+
+export function cleanSituation(raw: unknown, situation: SituationCleanContext): ContentEntry | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = slugId(record.id);
+  const reasons: string[] = [];
+  if (!id) reasons.push('missing or invalid id.');
+  const title = asString(record.title);
+  const summary = asString(record.summary);
+  const gmBrief = asString(record.gmBrief) ?? 'GM 备注：无额外秘密。';
+  if (!title) reasons.push('missing title.');
+  if (!summary) reasons.push('missing summary.');
+  const activation = cleanConditionNode(record.activation);
+  if (!activation) reasons.push('activation must be a whitelisted condition tree.');
+  const knowledgeCondition = record.knowledgeCondition === undefined
+    ? undefined : cleanConditionNode(record.knowledgeCondition) ?? undefined;
+  if (record.knowledgeCondition !== undefined && !knowledgeCondition) {
+    reasons.push('knowledgeCondition is not a whitelisted condition tree.');
+  }
+
+  const participantIds = asStringArray(record.participantIds);
+  const danglingParticipants = participantIds.filter(participantId =>
+    !situation.knownEntryIds.has(participantId) && !situation.knownEntryIds.has(`npc-${participantId}`));
+  if (danglingParticipants.length > 0) reasons.push(`unknown participant ids: ${danglingParticipants.join(',')}.`);
+
+  const rawMethods = Array.isArray(record.methods) ? record.methods : [];
+  const methods: Array<Record<string, unknown>> = [];
+  const methodSignatures = new Set<string>();
+  const methodIds = new Set<string>();
+  for (const candidate of rawMethods) {
+    const method = asRecord(candidate);
+    if (!method) continue;
+    const methodId = slugId(method.id);
+    const methodTitle = asString(method.title);
+    const goal = asString(method.goal);
+    const intent = asString(method.firstStep && (method.firstStep as Record<string, unknown>).intent);
+    const firstStepRaw = asRecord(method.firstStep);
+    const actionKind = firstStepRaw ? asString(firstStepRaw.actionKind) : null;
+    if (!methodId || !methodTitle || !goal || !intent || !actionKind
+      || !['skill_check', 'ability', 'observe', 'talk', 'interact', 'move'].includes(actionKind)) {
+      continue; // malformed method: dropped, never guessed
+    }
+    if (methodIds.has(methodId)) continue;
+    methodIds.add(methodId);
+    const step: Record<string, unknown> = { intent, actionKind };
+    const skillId = firstStepRaw ? asString(firstStepRaw.skillId) : null;
+    if (skillId) {
+      const resolved = situation.knownEntryIds.has(skillId) || situation.knownEntryIds.has(`skill-${skillId}`)
+        ? (situation.knownEntryIds.has(skillId) ? skillId : `skill-${skillId}`) : null;
+      if (!resolved) {
+        reasons.push(`method ${methodId} references unknown skill ${skillId}.`);
+        continue;
+      }
+      step.skillId = resolved;
+    }
+    const targetId = firstStepRaw ? asString(firstStepRaw.targetId) : null;
+    if (targetId) step.targetEntryId = targetId;
+    const destinationId = firstStepRaw ? asString(firstStepRaw.destinationId) : null;
+    if (destinationId) step.destinationId = destinationId;
+    const requires: Record<string, unknown> = {};
+    const requiresRaw = asRecord(method.requires);
+    if (requiresRaw) {
+      if (requiresRaw.skillId) {
+        const resolved = asString(requiresRaw.skillId);
+        if (resolved && (situation.knownEntryIds.has(resolved) || situation.knownEntryIds.has(`skill-${resolved}`))) {
+          requires.skillId = situation.knownEntryIds.has(resolved) ? resolved : `skill-${resolved}`;
+          const minRank = asString(requiresRaw.minRank);
+          if (minRank && ['untrained', 'novice', 'trained', 'expert', 'master'].includes(minRank)) {
+            requires.minRank = minRank;
+          }
+        }
+      }
+      if (requiresRaw.itemId) {
+        const resolved = asString(requiresRaw.itemId);
+        if (resolved && (situation.knownEntryIds.has(resolved) || situation.knownEntryIds.has(`item-${resolved}`))) {
+          requires.itemId = situation.knownEntryIds.has(resolved) ? resolved : `item-${resolved}`;
+        }
+      }
+      if (requiresRaw.knowledgeEntryId) {
+        const resolved = asString(requiresRaw.knowledgeEntryId);
+        if (resolved && situation.knowledgeEntryIds.has(resolved)) {
+          requires.knowledgeEntryId = resolved;
+        }
+      }
+      const condition = requiresRaw.condition !== undefined ? cleanConditionNode(requiresRaw.condition) : null;
+      if (condition) requires.condition = condition;
+    }
+    const signature = `${actionKind}|${String(step.skillId ?? '')}|${String(step.targetEntryId ?? '')}|${String(step.destinationId ?? '')}`;
+    if (methodSignatures.has(signature)) continue; // synonym duplicate
+    methodSignatures.add(signature);
+    methods.push({
+      methodId,
+      title: methodTitle,
+      goal,
+      firstStep: step,
+      requires,
+      tradeoffs: asString(method.tradeoffs) ?? '取舍未知。',
+      preparation: asString(method.preparation) ?? '无。',
+    });
+  }
+  if (methods.length < 2) reasons.push(`a situation needs at least 2 structurally distinct methods (got ${methods.length}).`);
+
+  const provenance = cleanProvenance(situation.ctx, record, 'design_fill', '局面组织：为可玩性设计，参与者和事件引用来自原著事实。');
+  if (!provenance) {
+    rejectEntry(situation.ctx, 'situation', id ?? String(record.id ?? '?'), [...reasons, 'invalid provenance.']);
+    return null;
+  }
+  const situationProvenance = provenance;
+
+  // Reference events must bind to real canon events from the provided list.
+  const referenceEvents: Array<Record<string, unknown>> = [];
+  if (Array.isArray(record.referenceEvents)) {
+    for (const candidate of record.referenceEvents) {
+      const projection = asRecord(candidate);
+      if (!projection) continue;
+      const eventKey = asString(projection.eventKey);
+      const knownEvent = eventKey ? situation.knownEvents.get(eventKey) : undefined;
+      if (!eventKey || !knownEvent) {
+        // A fabricated event key drops THAT projection (with an audit note),
+        // not the whole playable situation.
+        rejectEntry(situation.ctx, 'situation_reference_event', eventKey ?? String(projection.eventKey ?? '?'),
+          ['not a provided canon event; projection dropped.']);
+        continue;
+      }
+      if (knownEvent.worldTimeOrder === null) {
+        continue; // events without story order cannot become timed futures
+      }
+      const entry: Record<string, unknown> = {
+        eventKey,
+        worldTimeOrder: knownEvent.worldTimeOrder,
+        situationId: `situation-${id}`,
+      };
+      const condition = projection.condition !== undefined ? cleanConditionNode(projection.condition) : null;
+      if (condition) entry.condition = condition;
+      const fate = asRecord(projection.actorFate);
+      if (fate && asString(fate.actorId) && asString(fate.lifeStatus) === 'dead') {
+        const actorId = asString(fate.actorId)!;
+        // The death must be evidenced: at least one cited fact of this
+        // situation is about that actor's entity. Local code never invents
+        // fates the canon does not state.
+        const evidenced = situationProvenance.sourceFactIds.some(factId => {
+          const subject = situation.factSubjects.get(factId);
+          return subject !== undefined && (actorId.endsWith(subject) || subject.endsWith(actorId));
+        });
+        if (evidenced) entry.actorFate = { actorId, lifeStatus: 'dead' };
+      }
+      referenceEvents.push(entry);
+    }
+  }
+
+  if (reasons.length > 0 || !id || !title || !summary || !activation) {
+    rejectEntry(situation.ctx, 'situation', id ?? String(record.id ?? '?'), reasons);
+    return null;
+  }
+
+  const definition: Record<string, unknown> = {
+    title,
+    summary,
+    gmBrief,
+    ...(asString(record.locationId) ? { locationId: asString(record.locationId)! } : {}),
+    participantEntryIds: participantIds
+      .map(participantId => situation.knownEntryIds.has(participantId) ? participantId : `npc-${participantId}`)
+      .filter(participantId => situation.knownEntryIds.has(participantId)),
+    activation,
+    ...(knowledgeCondition ? { knowledgeCondition } : {}),
+    signs: (Array.isArray(record.signs) ? record.signs : [])
+      .map(sign => asRecord(sign)).filter((sign): sign is Record<string, unknown> => sign !== null)
+      .map(sign => ({ text: asString(sign.text) ?? '' }))
+      .filter(sign => sign.text.length > 0)
+      .slice(0, 5),
+    pressure: { description: asString((asRecord(record.pressure) ?? {}).text)
+      ?? asString((asRecord(record.pressure) ?? {}).description) ?? '局势会随时间变化。' },
+    methods,
+    transitions: {},
+    ...(referenceEvents.length > 0 ? { referenceEvents } : {}),
+  };
+  const definitionErrors = validateDefinition('situation', definition);
+  if (definitionErrors.length > 0) {
+    rejectEntry(situation.ctx, 'situation', id, definitionErrors);
+    return null;
+  }
+  return makeEntry({
+    entryId: `situation-${id}`,
+    kind: 'situation',
+    provenance,
+    visibility: 'gm',
+    definition,
+  });
+}
+
 function cleanActorTemplate(raw: unknown, ctx: CleanContext): RawActorTemplate | null {
   const record = asRecord(raw);
   if (!record) return null;
@@ -849,6 +1081,7 @@ async function requestMappingProposals(
   const skills: ContentEntry[] = [];
   const constraints: ContentEntry[] = [];
   const lore: ContentEntry[] = [];
+  const situations: ContentEntry[] = [];
   const actorTemplates: RawActorTemplate[] = [];
   const items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
   const allRejected: Array<{ kind: string; id: string; reasons: string[] }> = [];
@@ -1026,7 +1259,7 @@ async function requestMappingProposals(
         // itself is honored at the batch boundary checks below.
         raw = parseStructuredOutput<Record<string, unknown>>(response.text, { label: 'WorldMapper mapping output' }).value;
       }
-      const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore'];
+      const proposalKeys = ['skills', 'constraints', 'actorTemplates', 'items', 'lore', 'situations'];
       if (!proposalKeys.some(key => Array.isArray(raw[key]))) {
         throw new Error('WorldMapper mapping output has no recognizable proposal arrays.');
       }
@@ -1115,6 +1348,39 @@ async function requestMappingProposals(
             ? { kind: 'inferred' as const } : {}) };
       }
     }
+    // P7 situations clean LAST within a batch: their references may point at
+    // skills/items/templates proposed earlier in the same batch.
+    if (Array.isArray(raw.situations) && raw.situations.length > 0) {
+      const knownEntryIds = new Set<string>([
+        ...[...entriesById.keys()],
+        ...actorTemplates.map(template => template.entryId),
+        ...items.map(item => item.entry.entryId),
+        ...(input.incrementalMapping?.previousEntries ?? []).map((entry: ContentEntry) => entry.entryId),
+      ]);
+      const knowledgeEntryIds = new Set<string>(lore.map(entry => entry.entryId));
+      const knownEvents = new Map(events.map(event => [event.eventId, {
+        worldTimeOrder: event.worldTimeOrder,
+      } as { worldTimeOrder: number | null }]));
+      const factSubjects = new Map(facts.map(fact => [fact.factId, fact.subjectEntityId] as const));
+      const situationContext: SituationCleanContext = {
+        ctx,
+        knownEntryIds,
+        knownEvents,
+        factSubjects,
+        knowledgeEntryIds,
+      };
+      for (const candidate of raw.situations) {
+        const cleaned = cleanSituation(candidate, situationContext);
+        if (!cleaned) continue;
+        const existing = situations.find(entry => entry.entryId === cleaned.entryId);
+        if (!existing) {
+          situations.push(cleaned);
+        } else if (canonicalStringify(existing.definition as CanonicalJson)
+          !== canonicalStringify(cleaned.definition as CanonicalJson)) {
+          rejectEntry(ctx, 'conflict', cleaned.entryId, ['later batch redefined situation with a different definition']);
+        }
+      }
+    }
     mappedFactCount += batch.length;
     allRejected.push(...ctx.rejected);
 
@@ -1147,7 +1413,7 @@ async function requestMappingProposals(
   }
 
   return {
-    proposals: { skills, constraints, lore },
+    proposals: { skills, constraints, lore, situations },
     usage: usagePerBatch.filter(Boolean).length > 0
       ? { batches: usagePerBatch, skippedBatches }
       : null,
@@ -1196,6 +1462,7 @@ export function buildSections(entries: readonly ContentEntry[]): BookSection[] {
   push({ book: 'player_handbook', sectionKey: 'locations', title: '地点与场景', entryIds: byKind('scene', 'public') });
   push({ book: 'gm_guide', sectionKey: 'constraints', title: '世界约束', entryIds: constraints });
   push({ book: 'gm_guide', sectionKey: 'review', title: '冲突与审核摘要', entryIds: reviewLore });
+  push({ book: 'gm_guide', sectionKey: 'situations', title: '局面与动向', entryIds: byKind('situation') });
   push({ book: 'gm_guide', sectionKey: 'npcs', title: '人物模板', entryIds: templates });
   push({ book: 'gm_guide', sectionKey: 'items', title: '物品', entryIds: items });
   push({ book: 'monster_manual', sectionKey: 'creatures', title: '对手图鉴', entryIds: templates });
@@ -1378,7 +1645,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   // novel's complete three books (P2 acceptance G04).
   progress('mapping', input.mappingMode === 'startup_local' ? '本地编译有证据的开局人物与规则' : 'LLM 映射小说事实为世界包条目提案');
   let mappingUsage: unknown | null = null;
-  let proposals: CleanedProposals = { skills: [], constraints: [], lore: [] };
+  let proposals: CleanedProposals = { skills: [], constraints: [], lore: [], situations: [] };
   let actorTemplates: RawActorTemplate[] = [];
   let items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
   let mappingSucceeded = false;
@@ -1503,6 +1770,46 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     entries.push(item.entry);
   }
 
+  // P7 situations: dependency closure over every referenced entry id. A
+  // dangling reference (content adopted later, mapper drift) drops the
+  // situation into the review queue instead of blocking the whole package —
+  // the old play loop keeps working without it.
+  const publishedIds = new Set(entries.map(entry => entry.entryId));
+  for (const situation of proposals.situations) {
+    const definition = situation.definition as {
+      participantEntryIds?: string[];
+      locationId?: string;
+      methods?: Array<{ firstStep?: { skillId?: string; itemId?: string }; requires?: { skillId?: string; itemId?: string; knowledgeEntryId?: string } }>;
+    };
+    const references = new Set<string>(definition.participantEntryIds ?? []);
+    if (definition.locationId) references.add(definition.locationId);
+    for (const method of definition.methods ?? []) {
+      if (method.firstStep?.skillId) references.add(method.firstStep.skillId);
+      if (method.firstStep?.itemId) references.add(method.firstStep.itemId);
+      if (method.requires?.skillId) references.add(method.requires.skillId);
+      if (method.requires?.itemId) references.add(method.requires.itemId);
+      if (method.requires?.knowledgeEntryId) references.add(method.requires.knowledgeEntryId);
+    }
+    const dangling = [...references].filter(ref => !publishedIds.has(ref));
+    if (dangling.length > 0) {
+      await worldStore.saveReviewIssue({
+        worldId,
+        issueId: `situation-dangling-${situation.entryId}`,
+        kind: 'situation_dangling_reference',
+        severity: 'major',
+        detailJson: JSON.stringify({
+          situationId: situation.entryId,
+          dangling,
+          note: `局面引用了尚未发布的条目；该局面未进入本包，待依赖补齐后随新版本进入。`,
+        }),
+        createdAt: input.createdAt,
+      });
+      continue;
+    }
+    situation.dependencyIds = [...references];
+    entries.push(situation);
+  }
+
   if (input.incrementalMapping) {
     const values = (value: unknown): string[] => typeof value === 'string' ? [value]
       : Array.isArray(value) ? value.flatMap(values) : value && typeof value === 'object' ? Object.values(value).flatMap(values) : [];
@@ -1546,6 +1853,18 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       && (e.definition as { actors?: string[] }).actors?.length);
     if (!playable) throw new Error('开局缺少同一时点带证据的行动依赖闭包');
     entries = [playable, ...entries.filter(e => e !== playable)];
+    // P7: a conservative local opening situation keeps the fast opening
+    // intervenable before any model mapping ran (plan §5.4/§5.5).
+    if (!entries.some(entry => entry.kind === 'situation')) {
+      const dossier = (key: string): string | undefined => allFacts
+        .find(fact => fact.factId === `fact-${input.worldId}-opening-${key}`)?.predicate;
+      const openingSituation = compileOpeningSituation({
+        entries,
+        situationText: dossier('situation'),
+        goalText: dossier('goal'),
+      });
+      if (openingSituation) entries.push(openingSituation);
+    }
   }
 
   // GM-facing review summary: conflict facts and open issues, always attached.
