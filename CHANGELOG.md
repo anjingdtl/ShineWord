@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-04
+
+第八阶段（Shine-TRPG P8）：通用规则核心 + 可组合机制模块 + 世界规则配置，回合上下文与长期记忆完整闭环。单一当前协议（开发期舍弃旧版兼容）。
+
+- 协议基线（`shineword-core@0.3.0`、ActionContract 2.0 + RuleBinding、`turn-material-1`、`world-rule-config-1`、`mechanism-manifest-1`、save-9、story-memory 观察协议、迁移 33）：旧输入逐版本明确拒绝，无转换器、无双轨运行时。
+- 类型化回合材料与判别式记忆资格：未知材料一律诊断、未来/异支/脏检查点拒绝、Pending Bridge 逐提交覆盖连续性；删除 `【标签】` 静默丢弃与 `clean+≤8` 旧门禁。
+- 弹性预算收紧：删除 legacy 全量上下文回退；能力未知/mandatory 超窗/信封不可行/最终 wire 超限全部零发送；whole-item 跳过回收不饿死；记忆逐实体 compact 投影。
+- 持久化冻结（frozen-turn-materials-1）：冻结根先于任何发送落库、规范化内容 SHA-256、损坏显式失败保留信封、恢复按 turnId 复用冻结材料。
+- 唯一提交边界：叙述采纳与 `turn-postprocess-handoff-1` outbox 同事务，outbox 失败整笔回滚；分支串行协调器（租约+fencing token 条件写入）；本地 episodic 索引与 LLM 记忆维护解耦。
+- 长期记忆观察协议：批次证据表、确定性 known-change 门（关键变化缺失不得 clean）、accepted-only 派生、实体时间从证据推导、CAS 原子批次应用、fork 仅重放 applied 补丁。
+- 机制注册表与能力闭包：8 个首期模块、有界参数 schema、类型化约束目标（纯文本阻止拒绝发布）、不可执行 effect 发布期拒绝；新增可选 `pressure_track` 模块。
+- save-9：唯一存档协议，携带 Story Memory 与覆盖区间，导入零 LLM；新空库基线安装，旧开发库检测后拒绝并提示开发重置（API 配置与安全密钥链不受影响）。
+- 真实 GLM 三组合旅程（悬疑/奇幻/日常各 ≥22 提交、≥3 个有效记忆批次）与 100/300/1000 累积旅程验证。
+
 ## [0.7.0] - 2026-10-04
 
 第七阶段（Shine-TRPG P7）：三宝书可玩局面、原著命运改写与回合结算后的路径引导。
