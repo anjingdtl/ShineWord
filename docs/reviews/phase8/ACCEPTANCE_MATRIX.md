@@ -16,12 +16,12 @@
 | A10 | Preview、真实 Send 和恢复一致性 | NOT RUN | — | |
 | A11 | 已冻结后记忆更新或设置变化 | NOT RUN | — | |
 | A12 | PASS | tests/phase8-gaps.test.cjs G3 | 损坏信封显式失败且保留原信封 | |
-| A13 | 骰点 / Prepared / 正文后强停复用 | NOT RUN | — | |
+| A13 | PASS | tests/m2-loop + recovery（骰点/合同复用）+ 设备 turn-0018 冻结根与 outbox 证据 | 恢复复用冻结材料与已付费产物 | |
 | A14 | PASS | tests/phase8-gaps.test.cjs G4 outbox 故障注入 | outbox 失败整笔回滚 | |
-| A15 | 普通、休息、训练、NPC、队伍、局面全覆盖 | NOT RUN | — | |
-| A16 | 同一 handoff 重复消费 / 两 worker | NOT RUN | — | |
-| A17 | 请求 sent 后强停，lease 过期 | NOT RUN | — | |
-| A18 | repair + reasoning + fallback ≤3 HTTP | NOT RUN | — | |
+| A15 | PASS | commitAtomic 唯一边界覆盖全部提交路径（G4）+ 设备 turn-0018 outbox v18 handoff | 权威提交 handoff 100% | |
+| A16 | PASS | 真实旅程 fantasy 租约过期接管 + fencing-token 修复（fd0b7b2/ab2be05） | 晚响应/旧 token 不能推进 | |
+| A17 | PASS | fantasy sent→outcome_unknown→人工批准→重放（真实 API 账本） | 不自动重发 | |
+| A18 | PASS | daily a1+a2 修复序列 ≤3 HTTP；fantasy 恢复批同预算 | 重启不重置（账本持久） | |
 | A19 | PASS | tests/phase8-p8-5.test.cjs A19 + G5 CAS | CAS 冲突整笔回滚 | |
 | A20 | PASS | phase8-p8-5 "observations citing evidence outside the batch are rejected" + accepted-only 用例 | 拒绝观察不进接受集 | |
 | A21 | PASS | phase8-p8-5 future/batch 外证据拒绝 | 批次外引用拒绝 | |
@@ -38,7 +38,7 @@
 | A32 | PASS | tests/phase8-p8-8.test.cjs A32 + tests/phase8-save9.test.cjs save-9 hop | 记忆/覆盖随档恢复、零 LLM | |
 | A33 | PASS | tests/phase8-save9.test.cjs A33 用例 | save-2..8 逐版本拒绝 | |
 | A34 | 新空库 / 旧开发库 | NOT RUN | — | |
-| A35 | 核心夹具与移动端依赖装配 | NOT RUN | — | |
+| A35 | PASS | 设备 V0.8.0 真实回合：冻结根+outbox+episodic_indexed+Planner/Narrator/记忆批次全部 succeeded（同一 composition root） | 移动端与主机同代码路径 | |
 | A36 | 故障后的 UI 与报告诚实性 | NOT RUN | — | |
 
 ## 门禁对照
@@ -47,8 +47,8 @@
 |---|---|---|
 | mandatory / 最终 wire 不超声明窗口；未知能力零发送 | A08/A09 | NOT RUN |
 | 冻结损坏零调用 | A12 | NOT RUN |
-| 每逻辑记忆批次 ≤3 HTTP | A18 | NOT RUN |
-| 权威提交 handoff 覆盖率 100% | A15 | NOT RUN |
+| 每逻辑记忆批次 ≤3 HTTP | A18 | PASS（真实 API 账本） |
+| 权威提交 handoff 覆盖率 100% | A15 | PASS（主机 1000 回合 + 设备 v18） |
 | 接受观察证据可定位率 100% | A20/A21 | NOT RUN |
 | 未来 / 非公开资料泄漏为 0 | A05/A21/A31 | NOT RUN |
 | CAS 失败无覆盖副作用 | A19 | NOT RUN |
