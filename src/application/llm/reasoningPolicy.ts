@@ -141,6 +141,10 @@ export const REASONING_RESERVE_POLICY: Record<LlmRequestKind, TierReserves> = {
     target: { low: 1_024, high: 4_096, max: 12_288 },
     minimum: { low: 512, high: 2_048, max: 6_144 },
   },
+  narrator_guidance: {
+    target: { low: 512, high: 2_048, max: 6_144 },
+    minimum: { low: 256, high: 1_024, max: 3_072 },
+  },
   opening_goal: {
     target: { low: 1_024, high: 2_048, max: 4_096 },
     minimum: { low: 512, high: 1_024, max: 2_048 },

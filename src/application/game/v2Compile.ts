@@ -141,10 +141,13 @@ function bindSituationMethod(
     } else if (contract.skillId !== undefined) {
       continue; // a non-skill method cannot match a skill_check contract
     }
-    if (step.targetEntryId !== undefined) {
-      const targetCard = contract.targetId ? cards.find(card => card.actorId === contract.targetId) : undefined;
+    if (step.targetEntryId !== undefined && contract.targetId !== undefined) {
+      const targetCard = cards.find(card => card.actorId === contract.targetId);
       if (!(contract.targetId === step.targetEntryId || targetCard?.templateId === step.targetEntryId)) continue;
     }
+    // A method whose first step names a target binds even when the compiled
+    // contract carries no targetId (non-social skill checks have none) — the
+    // action kind + skill still identify the attempt structurally.
     if (step.destinationId !== undefined) {
       const moves = (contract.outcomes.success.effects ?? [])
         .filter((effect): effect is Extract<EffectOperation, { op: 'changeLocation' }> => effect.op === 'changeLocation');

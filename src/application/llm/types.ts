@@ -29,7 +29,8 @@ export type LlmRequestKind =
   | 'registry'
   | 'summarizer'
   | 'style_analyzer'
-  | 'opening_goal';
+  | 'opening_goal'
+  | 'narrator_guidance';
 
 export function normalizeReasoningTier(value: unknown): ReasoningTier {
   if (value === 'high' || value === 'max') return value;

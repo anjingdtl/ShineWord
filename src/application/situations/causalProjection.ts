@@ -169,6 +169,12 @@ export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplyS
     });
     for (const decision of decisions) {
       if (decision.action === 'pending') continue;
+      // Intervention window: a reference cannot fire in the SAME commit that
+      // activated its owning situation — the player first sees the situation
+      // and its paths, and the reference lands on the next boundary if the
+      // branch has not changed its preconditions.
+      const owner = situations.find(entry => entry.situationId === decision.situationId);
+      if (owner && owner.activatedAtVersion === state.stateVersion) continue;
       if (decision.action === 'suppress') {
         const applied = applySituationTransitions({
           situations,

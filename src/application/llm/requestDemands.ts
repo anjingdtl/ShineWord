@@ -14,4 +14,6 @@ export const DEFAULT_OUTPUT_DEMANDS: Record<LlmRequestKind, OutputDemand> = {
   summarizer: { minimum: 400, target: 800, maximum: 2_000 },
   style_analyzer: { minimum: 400, target: 900, maximum: 2_000 },
   opening_goal: { minimum: 200, target: 500, maximum: 1_200 },
+  // Ancillary decision-point guidance: summary + <=6 short steps only.
+  narrator_guidance: { minimum: 300, target: 900, maximum: 2_500 },
 };

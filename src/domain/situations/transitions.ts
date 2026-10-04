@@ -216,7 +216,19 @@ export function tickSituationStatuses(input: SituationTickInput): SituationTickR
     const activation = evaluateCondition(definition.activation, input.facts);
     if (entry.status === 'dormant') {
       if (activation.value && !activation.unknown) {
-        ops.push({ kind: 'set_situation_status', situationId: definition.situationId, status: 'eligible' });
+        // Situations without a knowledge gate go straight to active: the
+        // opening intervenable point must not wait an extra tick.
+        const knowledge = definition.knowledgeCondition
+          ? evaluateCondition(definition.knowledgeCondition, input.facts)
+          : { value: true, unknown: false };
+        ops.push(knowledge.value && !knowledge.unknown
+          ? {
+            kind: 'set_situation_status',
+            situationId: definition.situationId,
+            status: 'active',
+            dueClockSeconds: definition.pressure?.deadlineClockSeconds,
+          }
+          : { kind: 'set_situation_status', situationId: definition.situationId, status: 'eligible' });
       }
       continue;
     }

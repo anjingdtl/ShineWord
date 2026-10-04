@@ -112,25 +112,40 @@ test('transition batches are idempotent through processedEventKeys', () => {
 });
 
 test('status tick walks dormant→eligible→active and suppresses on falsified preconditions', () => {
-  const defs = [{
-    situationId: 'sit-a',
-    activation: { kind: 'world_time_at_least', order: 18 },
-    transitions: {},
-  }];
+  const defs = [
+    {
+      situationId: 'sit-a',
+      activation: { kind: 'world_time_at_least', order: 18 },
+      knowledgeCondition: { kind: 'knowledge_known', entryId: 'lore-north-trail' },
+      transitions: {},
+    },
+    {
+      situationId: 'sit-open',
+      activation: { kind: 'world_time_at_least', order: 0 },
+      transitions: {},
+    },
+  ];
   const dormant = [{
     situationId: 'sit-a', status: 'dormant', counters: {}, processedEventKeys: [],
     promises: [], suppressedEventKeys: {}, sourceTurnId: 't0', statusVersion: 0,
+  }, {
+    situationId: 'sit-open', status: 'dormant', counters: {}, processedEventKeys: [],
+    promises: [], suppressedEventKeys: {}, sourceTurnId: 't0', statusVersion: 0,
   }];
+  // Player does NOT know the clue yet: sit-a only reaches eligible, while the
+  // knowledge-free sit-open activates immediately.
   const eligible = tickSituationStatuses({
-    definitions: defs, situations: dormant, facts: baseFacts({ causalWorldTimeOrder: 20 }),
+    definitions: defs, situations: dormant,
+    facts: baseFacts({ causalWorldTimeOrder: 20, discoveries: [] }),
     stateVersion: 1, clockSeconds: 0, sourceTurnId: 't1',
   });
-  assert.equal(eligible.situations[0].status, 'eligible');
+  assert.equal(eligible.situations.find(s => s.situationId === 'sit-a').status, 'eligible');
+  assert.equal(eligible.situations.find(s => s.situationId === 'sit-open').status, 'active', 'no knowledge gate → activates');
   const active = tickSituationStatuses({
     definitions: defs, situations: eligible.situations, facts: baseFacts({ causalWorldTimeOrder: 20 }),
     stateVersion: 2, clockSeconds: 0, sourceTurnId: 't2',
   });
-  assert.equal(active.situations[0].status, 'active', 'no knowledge condition → activates');
+  assert.equal(active.situations.find(s => s.situationId === 'sit-a').status, 'active', 'knowledge arrives → activates');
 
   // Falsified precondition after activation → suppressed with audit.
   const falsifiedDefs = [{

@@ -97,6 +97,7 @@ import type {
 } from '../../domain/situations/types';
 import { buildSituationPacket } from '../guidance/packet';
 import { assembleTurnGuidance } from '../guidance/validate';
+import { buildLocalAncillaryGuidance, upgradeAncillaryGuidance } from '../guidance/ancillary';
 import type { PublicSituationPacketV1, TurnGuidanceV1 } from '../guidance/types';
 import type { GuidanceStore } from '../ports/guidanceStore';
 import { canonicalStringify } from '../../domain/turns/canonical';
@@ -1437,9 +1438,14 @@ export class CampaignSession {
     factsById: ReadonlyMap<string, { validFrom: string | null }>,
     situationDefinitions: ReadonlyArray<{ situationId: string; definition: SituationDefinitionV1 }>,
     runtimeEvents: ReadonlyArray<{ eventType: string; payload: unknown }> = [],
+    /** Full catalog for discovery-driven lifts (discovery is the permission). */
+    allEntries: readonly ContentEntry[] = entries,
+    /** Static floor from the adopted catalog (adoption = story region). */
+    catalogFloor = 0,
   ): void {
-    let order = nextState.causalWorldTimeOrder ?? 0;
+    let order = Math.max(nextState.causalWorldTimeOrder ?? 0, catalogFloor);
     const entryById = new Map(entries.map(entry => [entry.entryId, entry] as const));
+    const catalogById = new Map(allEntries.map(entry => [entry.entryId, entry] as const));
     const liftFromFactIds = (factIds: Iterable<string>): void => {
       for (const factId of factIds) {
         const fact = factsById.get(factId);
@@ -1448,12 +1454,15 @@ export class CampaignSession {
         if (Number.isFinite(from) && from > order) order = from;
       }
     };
+    // Evidence citations lift only over player-visible entries (foresight
+    // stays blocked); DISCOVERED clues lift over the full catalog because the
+    // discovery pipeline itself gates what is reachable (scene clues).
     for (const entryId of contract.evidenceIds) {
       liftFromFactIds(entryById.get(entryId)?.provenance.sourceFactIds ?? []);
     }
     for (const discovery of nextState.discoveries ?? []) {
       if (discovery.sourceTurnId !== contract.turnId) continue;
-      liftFromFactIds(entryById.get(discovery.entryId)?.provenance.sourceFactIds ?? []);
+      liftFromFactIds(catalogById.get(discovery.entryId)?.provenance.sourceFactIds ?? []);
     }
     for (const event of runtimeEvents) {
       if (event.eventType !== 'reference_event_due') continue;
@@ -1474,6 +1483,86 @@ export class CampaignSession {
       return await this.deps.guidance.latestForVersion(branchId, stateVersion);
     } catch {
       // Guidance is derived content; a read failure degrades to none.
+      return null;
+    }
+  }
+
+  /**
+   * P7 §8.3: attach guidance to a decision point created by a LOCAL action
+   * (rest/training/transfer) or an NPC auto-step boundary. Local guidance is
+   * saved synchronously; an async LLM upgrade may replace it for the SAME
+   * decision point (deduped by the guidance store, P1 priority, never
+   * blocking the player, never re-settling the committed action).
+   */
+  async ensureDecisionPointGuidance(options: {
+    campaignId: string;
+    branchId: string;
+    sourceTurnId: string;
+    committedEvents?: ReadonlyArray<{ eventType: string; payload: unknown }>;
+    /** Skip the async LLM upgrade (offline / budget-constrained callers). */
+    localOnly?: boolean;
+  }): Promise<TurnGuidanceV1 | null> {
+    if (!this.deps.guidance) return null;
+    try {
+      const summary = await this.getSummary(options.campaignId, options.branchId);
+      const playerCard = summary.cards.find(card => card.controller === 'player');
+      if (!playerCard || summary.packageRevision < 1) return null;
+      const basePackage = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
+      if (!basePackage) return null;
+      const manifest = summary.state.contentManifest;
+      const deltas = manifest
+        ? await loadBranchDeltaEntries({
+          manifest, worldId: summary.worldId, branchId: options.branchId,
+          stateVersion: summary.state.stateVersion, baseRevision: summary.packageRevision,
+          baseContentHash: basePackage.manifest.contentHash,
+          getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
+          sha256Hex: this.deps.hashProvider.sha256Hex,
+        })
+        : [];
+      const allEntries = this.deps.segmentContent && summary.state.segmentContentBinding
+        ? (await this.deps.segmentContent.loadEffectiveCatalog({
+          campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding,
+        })).entries
+        : [...basePackage.entries, ...deltas.flatMap(delta => delta.entries)];
+      const situationDefinitions = allEntries
+        .filter(entry => entry.kind === 'situation')
+        .map(entry => ({ situationId: entry.entryId, definition: entry.definition as SituationDefinitionV1 }));
+      if (situationDefinitions.length === 0) return null;
+
+      const knownEntryIds = new Set((summary.state.discoveries ?? [])
+        .filter(item => item.actorId === playerCard.actorId).map(item => item.entryId));
+      const allCards = await this.loadAllCards(options.branchId);
+      const visibleActorNames = new Map(allCards
+        .filter(card => card.actorId !== playerCard.actorId
+          && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId)
+        .map(card => [card.actorId, card.name] as const));
+      const input = {
+        provider: this.provider,
+        guidanceStore: this.deps.guidance,
+        sha256Hex: this.deps.hashProvider.sha256Hex,
+        campaignId: options.campaignId,
+        branchId: options.branchId,
+        playerCard,
+        state: summary.state,
+        sourceTurnId: options.sourceTurnId,
+        committedEvents: options.committedEvents ?? [],
+        situationDefinitions,
+        entries: allEntries,
+        knownEntryIds,
+        visibleActorNames,
+        ...(options.localOnly ? { localOnly: true } : {}),
+        wireOutputTokens: 1600,
+        reasoningTier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
+        reasoningReserveTokens: this.profile.reasoningReserveTokens ?? null,
+        reasoningPolicyVersion: REASONING_POLICY_VERSION,
+      };
+      const local = buildLocalAncillaryGuidance(input);
+      await this.deps.guidance.save(local);
+      if (options.localOnly) return local;
+      void upgradeAncillaryGuidance(input).catch(() => undefined);
+      return local;
+    } catch {
+      // Guidance is derived; its failure must never fail a committed action.
       return null;
     }
   }
@@ -1826,8 +1915,24 @@ export class CampaignSession {
     const anchor = campaignAnchorRow
       ? JSON.parse(campaignAnchorRow.anchor_json) as { worldTimeOrder?: number; anchorEventId?: string }
       : {};
-    const worldTimeOrder = Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0;
+    const anchorOrder = Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0;
     const facts = await this.deps.worldStore.listFacts(summary.worldId);
+    // P7 §4.2: the branch's effective story order is max(anchor, committed
+    // causal progress, adopted catalog floor). Adopting later content means
+    // the branch HAS reached that story region; the anchor alone would hide
+    // it forever. This never lets narrative text skip canon time.
+    const factOrderById = new Map(facts.map(fact => {
+      const order = fact.validFrom === null ? null : Number(fact.validFrom);
+      return [fact.factId, Number.isFinite(order) ? order : null] as const;
+    }));
+    let catalogCausalFloor = anchorOrder;
+    for (const entry of allEntries) {
+      for (const factId of entry.provenance.sourceFactIds) {
+        const order = factOrderById.get(factId);
+        if (order !== null && order !== undefined && order > catalogCausalFloor) catalogCausalFloor = order;
+      }
+    }
+    const worldTimeOrder = Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0, catalogCausalFloor);
     const anchorEvents = (await this.deps.worldStore.listEvents(summary.worldId))
       .filter(event => event.status === 'canon' && event.worldTimeOrder !== null);
     const projectionFacts = projectLegacyAnchorlessOpeningFacts(
@@ -1918,6 +2023,17 @@ export class CampaignSession {
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, projectionFacts,
     );
+    // P7: active situations and their method first steps (player-safe only —
+    // gmBrief and hidden conditions never enter any model context). Situation
+    // entries are gm-visibility, so this reads the authoritative projection.
+    for (const situation of situationDefinitions) {
+      if (situationStatusById.get(situation.situationId)?.status !== 'active') continue;
+      const methodLines = situation.definition.methods
+        .map(method => `- ${method.title}：${method.firstStep.intent}`)
+        .slice(0, 4)
+        .join('\n');
+      contextParts.push(`【当前局面】${situation.definition.summary}（压力：${situation.definition.pressure.description}）\n可选介入办法（均为首步尝试，玩家也可能自行描述其他做法）：\n${methodLines}`);
+    }
     // Legal skill ids for skill_check proposals (plan §40 mandatory): the
     // planner may only reference skills the actor actually knows.
     const actorSkillIds = Object.keys(playerCard.skills ?? {});
@@ -2099,7 +2215,7 @@ export class CampaignSession {
               contractOrigin: 'engine' as const,
               updateNextState: nextState => {
                 if (contract.styleSnapshot) nextState.styleSnapshot = contract.styleSnapshot;
-                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions);
+                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions, [], allEntries, catalogCausalFloor);
               },
               applyAuthoritativeState: nextState => {
                 const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
@@ -2117,7 +2233,7 @@ export class CampaignSession {
                   const actorState = nextState.actors[fate.actorId];
                   if (actorState) actorState.lifeStatus = fate.lifeStatus;
                 }
-                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions, runtime.events);
+                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions, runtime.events, allEntries, catalogCausalFloor);
                 return [...discoveryEvents, ...runtime.events];
               },
             });
@@ -2346,6 +2462,12 @@ export class CampaignSession {
       outcomeGrade: 'success',
       committedAt: new Date().toISOString(),
     });
+    void this.ensureDecisionPointGuidance({
+      campaignId: options.campaignId,
+      branchId: options.branchId,
+      sourceTurnId: turnId,
+      committedEvents: [{ eventType: 'rest_completed', payload: { kind: options.kind } }],
+    }).catch(() => undefined);
     return {
       committed: true,
       clockSecondsAdvanced: minutes * 60,
@@ -2466,6 +2588,12 @@ export class CampaignSession {
       },
       committedAt: new Date().toISOString(),
     });
+    void this.ensureDecisionPointGuidance({
+      campaignId: options.campaignId,
+      branchId: options.branchId,
+      sourceTurnId: turnId,
+      committedEvents: [{ eventType: 'training_completed', payload: { skillId: storedSkillKey } }],
+    }).catch(() => undefined);
     return {
       advanced: true,
       nextRank: result.nextRank,
