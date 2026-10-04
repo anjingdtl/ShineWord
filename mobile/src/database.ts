@@ -19,6 +19,7 @@ import { BUILTIN_MIGRATIONS } from '../../src/infra/sqlite/builtinMigrations';
 import { applySqliteMigrations } from '../../src/infra/sqlite/migrations';
 import { ReactNativeSqliteAdapter, type ReactNativeSqliteDatabase } from '../../src/infra/sqlite/reactNativeSqliteAdapter';
 import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStore';
+import { SqliteGuidanceStore } from '../../src/infra/sqlite/sqliteGuidanceStore';
 import { SqliteTurnStore } from '../../src/infra/sqlite/sqliteTurnStore';
 import { SqliteGameStore } from '../../src/infra/sqlite/sqliteGameStore';
 import { SqliteWorldStore } from '../../src/infra/sqlite/sqliteWorldStore';
@@ -38,6 +39,7 @@ export interface MobileDatabaseRuntime {
   db: ReactNativeSqliteAdapter;
   turns: SqliteTurnStore;
   narratives: SqliteNarrativeStore;
+  guidance: SqliteGuidanceStore;
   game: SqliteGameStore;
   worldStore: SqliteWorldStore;
   sourceStore: SqliteSourceStore;
@@ -115,6 +117,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     db,
     turns: new SqliteTurnStore(db),
     narratives: new SqliteNarrativeStore(db),
+    guidance: new SqliteGuidanceStore(db),
     game: new SqliteGameStore(db),
     worldStore,
     sourceStore,

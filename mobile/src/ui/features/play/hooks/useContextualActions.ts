@@ -27,7 +27,7 @@ export function useContextualActions(input: {
         && actor.conditions.includes('disabled'));
       if (ally) choices.push({ id: 'rescue-ally', kind: 'rescue', label: `援救 ${ally.name}`, targetActorId: ally.actorId });
       choices.push({ id: 'retreat', kind: 'retreat', label: '撤离这场冲突' });
-      return choices.slice(0, 3);
+      return choices;
     }
 
     const choices: ActionChoice[] = [
@@ -51,6 +51,6 @@ export function useContextualActions(input: {
     if (projection?.quests.some(quest => quest.status === 'active')) {
       choices.push({ id: 'active-quests', kind: 'inspect', label: '查看当前目标', target: 'quests' });
     }
-    return choices.slice(0, 3);
+    return choices;
   }, [projection, encounter, sceneEncounters]);
 }

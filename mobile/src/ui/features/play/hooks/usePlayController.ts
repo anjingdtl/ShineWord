@@ -36,6 +36,7 @@ import { setPlayScreenActivity } from '../../../../llmScheduler';
 import { maintainSegmentContent, getSegmentReadiness, releaseRewoundSegmentDemands } from '../../../../segmentRuntime';
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
+import type { GuidanceStepView } from '../../../../../../src/application/guidance/types';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
 import { useAppSession } from '../../../state/AppSessionContext';
@@ -80,6 +81,10 @@ export interface PlayController {
   rejoinOptions: Array<{ actorId: string; name: string; eligible: boolean; reason: string | null }>;
   combat: PlayCombatView;
   refresh: () => Promise<void>;
+  /** P7: submit a guidance step's first action with staleness re-validation. */
+  submitGuidanceStep: (step: import('../../../../../../src/application/guidance/types').GuidanceStepView) => void;
+  /** P7 §8.3: attach guidance after NPC automatic steps reach a player boundary. */
+  attachNpcBoundaryGuidance: () => Promise<void>;
   submit: (intentOverride?: string) => Promise<void>;
   rest: (kind: 'short' | 'long') => Promise<void>;
   rewind: () => Promise<void>;
@@ -282,6 +287,29 @@ export function usePlayController(): PlayController {
       autoNpcRunning.current = false;
     }
   }, [campaignId, branchId]);
+
+  /**
+   * P7 §8.3: when automatic actors finished and it is the player's move
+   * again, attach guidance to that decision point (local first; the session
+   * may upgrade it asynchronously). Failure never blocks play.
+   */
+  const attachNpcBoundaryGuidance = useCallback(async (): Promise<void> => {
+    if (!profile) return;
+    try {
+      const session = await createSession(profile, await buildProvider(profile));
+      const summary = await session.getSummary(campaignId, branchId);
+      await session.ensureDecisionPointGuidance({
+        campaignId,
+        branchId,
+        sourceTurnId: `auto-${summary.state.stateVersion}`,
+        committedEvents: [{ eventType: 'npc_auto_boundary', payload: {} }],
+      });
+      await refresh();
+    } catch {
+      // Guidance is derived content; keep playing without it.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId, branchId, profile]);
 
   // Kill-process recovery: an ACTIVE encounter restores and completes any
   // pending NPC decisions from its durable child request ids.
@@ -623,6 +651,31 @@ export function usePlayController(): PlayController {
     return `${branchId.slice(-16)}:${version}:${actorId.slice(-16)}:${action}:${subject.slice(-16)}`;
   }
 
+  /**
+   * P7: submit one guidance step's FIRST action. The click re-validates the
+   * decision point against the live branch state — a stale path (NPC moved
+   * the world, branch switched) never auto-executes. Multi-clicks collapse
+   * into the existing actionInFlight gate.
+   */
+  const submitGuidanceStep = (step: GuidanceStepView): void => {
+    if (busy || actionInFlight.current) return;
+    const latest = turns[turns.length - 1];
+    const guidance = latest?.guidance;
+    if (!guidance) return;
+    if (guidance.decisionPoint.branchId !== branchId
+      || guidance.decisionPoint.stateVersion !== projection?.stateVersion) {
+      setNotice('局面已经变化，这条路径不再直接可用；请参考最新建议或自由描述行动。');
+      void refresh();
+      return;
+    }
+    if (step.availability !== 'available') {
+      setIntent(step.firstStepIntent);
+      setNotice('这条路还差一步准备；已把第一步填入输入框，可先补齐条件或修改后提交。');
+      return;
+    }
+    void submit(step.firstStepIntent);
+  };
+
   return {
     campaignId,
     branchId,
@@ -633,6 +686,8 @@ export function usePlayController(): PlayController {
     busy,
     recovery,
     recoverTurn,
+    submitGuidanceStep,
+    attachNpcBoundaryGuidance,
     error,
     notice,
     setError,

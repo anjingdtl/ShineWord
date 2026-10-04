@@ -18,7 +18,9 @@ export function ActionChoices(props: {
   onChoose: (choice: ActionChoice) => void;
 }): React.JSX.Element | null {
   const { theme } = useTheme();
-  const choices = props.choices.slice(0, 3);
+  // P7 §10.1: the count policy lives in the core projection — the view no
+  // longer truncates, so an important route is never silently dropped here.
+  const choices = props.choices;
   if (choices.length === 0) return null;
   return (
     <View style={{ paddingHorizontal: theme.space.lg, paddingVertical: theme.space.xs, gap: theme.space.xs }}>

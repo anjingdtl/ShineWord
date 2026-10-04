@@ -5,6 +5,7 @@ import { OpenAICompatibleProvider } from '../../src/application/llm/openAICompat
 import { RateScheduledProvider } from '../../src/application/llm/scheduledProvider';
 import { llmModelProfileFingerprint } from '../../src/application/llm/profileFingerprint';
 import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
+import type { TurnGuidanceV1 } from '../../src/application/guidance/types';
 import { schedulerForProfile, setSchedulerActivity } from './llmScheduler';
 import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
 import type { ActorCard } from '../../src/domain/characters/card';
@@ -71,6 +72,7 @@ export async function createSession(
       llmLedger: runtime.llmLedger,
       storyMemory: { store: runtime.storyMemory },
       episodic: { store: runtime.episodic },
+      guidance: runtime.guidance,
       hashProvider: nativeSha256,
       random: new RejectionSamplingRandomSource(createNativeRandomBytes()),
     },
@@ -218,11 +220,32 @@ export interface TurnView {
   mechanicalOnly: boolean;
   /** Absent for turns that needed no roll (deterministic auto-success). */
   roll?: TurnRollView;
+  /** P7 guidance for the decision point this turn created (read-only view). */
+  guidance?: TurnGuidanceV1;
+}
+
+/** Latest committed guidance at or before a state version (P7 UI refresh). */
+export async function getGuidanceAtVersion(branchId: string, stateVersion: number): Promise<TurnGuidanceV1 | null> {
+  const runtime = await getDatabaseRuntime();
+  try {
+    return await runtime.guidance.latestForVersion(branchId, stateVersion);
+  } catch {
+    return null;
+  }
 }
 
 export async function loadHistory(branchId: string): Promise<TurnView[]> {
   const runtime = await getDatabaseRuntime();
   const rows = await runtime.turns.listCommittedTurns(branchId);
+  // P7: attach committed guidance per decision point (source turn keyed).
+  const guidanceByTurn = new Map<string, TurnGuidanceV1>();
+  try {
+    for (const guidance of await runtime.guidance.listAll(branchId)) {
+      guidanceByTurn.set(guidance.decisionPoint.sourceTurnId, guidance);
+    }
+  } catch {
+    // Guidance is derived; a read failure degrades to unadorned history.
+  }
   return rows.map(row => {
     const story = projectStoryEntry({
       turnId: row.turnId,
@@ -230,6 +253,7 @@ export async function loadHistory(branchId: string): Promise<TurnView[]> {
       narrativeStatus: row.narrativeStatus,
       outcomeGrade: row.rollRecord?.grade ?? row.outcomeGrade,
     });
+    const guidance = guidanceByTurn.get(row.turnId);
     return {
       turnId: story.turnId,
       text: story.text,
@@ -237,6 +261,7 @@ export async function loadHistory(branchId: string): Promise<TurnView[]> {
       mechanicalOnly: story.mechanicalOnly,
       stateVersion: row.stateVersion,
       resumed: false,
+      ...(guidance ? { guidance } : {}),
       ...(row.rollRecord
         ? {
             roll: {

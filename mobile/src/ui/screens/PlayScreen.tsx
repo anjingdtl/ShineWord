@@ -9,6 +9,7 @@ import { StatusBanner } from '../components/StatusBanner';
 import { Button } from '../components/Button';
 import { typeStyle } from '../components/typography';
 import { ActionChoices, type ActionChoice } from '../features/play/ActionChoices';
+import { GuidanceCard } from '../features/play/GuidanceCard';
 import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PlayHeader } from '../features/play/PlayHeader';
@@ -63,6 +64,9 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     void AsyncStorage.setItem('shineword.play.guide.v1', 'seen').catch(() => undefined);
   };
 
+  // P7: the newest committed turn's guidance drives the actionable path
+  // card; older turns keep their guidance as history inside the feed data.
+  const latestGuidance = turns.length > 0 ? turns[turns.length - 1].guidance : undefined;
   const choices = useContextualActions({
     projection: view,
     encounter,
@@ -165,6 +169,15 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
       </View>
 
+      {latestGuidance && encounter?.status !== 'active' ? (
+        <GuidanceCard
+          guidance={latestGuidance}
+          currentStateVersion={view?.stateVersion}
+          disabled={busy || recoveryLocked}
+          onSubmitStep={controller.submitGuidanceStep}
+          onPrefillIntent={value => controller.setIntent(value)}
+        />
+      ) : null}
       <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} />
       <ActionComposer
         value={intent}
