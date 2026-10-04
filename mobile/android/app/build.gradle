@@ -64,8 +64,8 @@ android {
         applicationId "com.shineword.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 60000
-        versionName "0.6.0"
+        versionCode 70000
+        versionName "0.7.0"
         buildConfigField "boolean", "STANDALONE_DEBUG", standaloneDebug.toString()
 
         ndk {

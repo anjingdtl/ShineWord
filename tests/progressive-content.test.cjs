@@ -476,7 +476,7 @@ test('branch delta publication, frozen Planner dependency, fork/save/archive res
 
     const exported = await exportSave({ db: fixture.adapter, sha256Hex: sha.sha256Hex,
       campaignId: fixture.opening.campaignId, branchId: fixture.campaign.branchId, createdAt: 't3' });
-    assert.equal(exported.save.manifest.schemaVersion, 'shineword-save-7');
+    assert.equal(exported.save.manifest.schemaVersion, 'shineword-save-8'); // P7: saves declare save-8
     assert.equal(exported.save.contentDeltas.length, 3);
     assert.equal((await validateSaveJson(exported.json, sha.sha256Hex)).ok, true);
     const malformedSave = JSON.parse(exported.json);

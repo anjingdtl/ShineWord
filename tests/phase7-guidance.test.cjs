@@ -40,6 +40,7 @@ const { SqliteSourceStore } = require('../dist/infra/sqlite/sqliteSourceStore');
 const { publishWorldPackage } = require('../dist/application/worldPackage/publish');
 const { createCampaign } = require('../dist/application/campaign/createCampaign');
 const { CampaignSession } = require('../dist/application/campaign/session');
+const { forkBranch } = require('../dist/application/branch/fork');
 
 const sha = { sha256Hex: async s => crypto.createHash('sha256').update(s).digest('hex') };
 const now = '2026-10-04T00:00:00.000Z';
@@ -370,5 +371,36 @@ test('A01/A02: fate suppression once the causal order reaches the reference', as
       const events = await h2.worlds.listEvents('w');
       assert.equal(events.length, 0, 'no canon rows were rewritten by branch play');
     } finally { h2.db.close(); }
+  } finally { h.db.close(); }
+});
+
+test('A14: replaying a committed turn resumes without new requests or double settlement', async () => {
+  const h = await fixture(); try {
+    h.provider.narratorScript = [{ text: '你查看四周。' }];
+    const first = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const requests = h.provider.requests.length;
+    // Process died after commit but before returning: the same turn replays
+    // through the committed-resume path — zero new LLM requests, same version.
+    const replay = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围', turnIdOverride: first.turnId });
+    assert.equal(replay.resumed, true);
+    assert.equal(replay.stateVersion, first.stateVersion);
+    assert.equal(h.provider.requests.length, requests, 'no additional business calls');
+    const state = await h.turns.getState(h.campaign.branchId);
+    assert.equal(state.situations.find(x => x.situationId === 'situation-sect').statusVersion, 1, 'situation tick applied exactly once');
+  } finally { h.db.close(); }
+});
+
+test('A15: fork carries situation state independently per branch', async () => {
+  const h = await fixture(); try {
+    h.provider.narratorScript = [{ text: '你查看四周。' }];
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const fork = await forkBranch({ db: h.adapter, turnStore: h.turns, gameStore: h.game,
+      sourceBranchId: h.campaign.branchId, targetBranchId: 'p7-fork', campaignId: 'c',
+      forkTurnId: null, atStateVersion: 2, createdAt: now });
+    const forkState = await h.turns.getState('p7-fork');
+    assert.ok(fork.snapshot.situations?.some(x => x.situationId === 'situation-sect'), 'fork snapshot carries situation history');
+    assert.equal(forkState?.situations?.[0]?.situationId, 'situation-sect', 'forked branch reads its own situation state');
+    // Old guidance never crosses into the fork's decision points.
+    assert.equal((await h.guidance.get('p7-fork', `${h.campaign.branchId}:1`)), null);
   } finally { h.db.close(); }
 });

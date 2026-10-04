@@ -1,19 +1,19 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.6.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V0.7.0-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.6.0** · versionCode 60000。第六阶段增加有证据闭包的小段开局、持久中文索引、按依赖补建、分支安全采用、P0～P3 请求资源保留及独立项目叙述风格；SQLite schema 31，旧任务和存档保留兼容。真实 GLM 一次新本地项目 TTFP 52.046 秒（服务端热缓存，n=1），不能据此保证稳定 90 秒。工程、内容、设备的证据和未验范围分别见 [第六阶段报告](docs/reviews/phase6/FINAL_REPORT.md)。仅支持 Android；LLM 由用户配置 OpenAI-compatible 端点。
+> 当前版本：**V0.7.0** · versionCode 70000。第六阶段增加有证据闭包的小段开局、持久中文索引、按依赖补建、分支安全采用、P0～P3 请求资源保留及独立项目叙述风格；SQLite schema 31，旧任务和存档保留兼容。真实 GLM 一次新本地项目 TTFP 52.046 秒（服务端热缓存，n=1），不能据此保证稳定 90 秒。工程、内容、设备的证据和未验范围分别见 [第六阶段报告](docs/reviews/phase6/FINAL_REPORT.md)。仅支持 Android；LLM 由用户配置 OpenAI-compatible 端点。
 
 内置预设 DeepSeek V4.1 Flash 与 GLM-5.3-Flash 均按官方模型列表登记真实能力（DeepSeek 请求 ID `deepseek-flash`，上下文 1,048,576，最大输出 393,216；[官方模型列表](https://api-docs.deepseek.com/api/list-models/)）。设置页预算预览复用真实 Request Budget Kernel，是未计入实际回合必需协议输入的估算。V0.4.4 世界构建恢复的自动化验收与限制见 [RESULTS.md](docs/reviews/world-build-recovery/RESULTS.md)：映射恢复以本地合成端点与生产 HTTP 传输验证，未调用付费模型，不能据此保证任何真实供应商故障都能恢复；V0.4.5 限流治理另以真实 GLM-TEST 端点全链路实测（构建发布 + 11 回合游玩、零 429）。
 
 ## 核心特性
 
-- **依赖驱动的小段建设（V0.6.0）**：新项目精准读取前部，小说输入上限为模型上下文 10% 且受 6400 码点和总预算约束；真实事实在本地编译规则，20 事实、人物/地点/事件/行动/引用闭包与冲突门禁全部保留。后段按当前域和行动依赖补建，近期缓冲最多两段；兼容抽取复用，映射只取变化及必要依赖。世界 ready 与各分支 adopted 分离，冻结回合和人物历史不被后台改写。
+- **依赖驱动的小段建设（V0.7.0）**：新项目精准读取前部，小说输入上限为模型上下文 10% 且受 6400 码点和总预算约束；真实事实在本地编译规则，20 事实、人物/地点/事件/行动/引用闭包与冲突门禁全部保留。后段按当前域和行动依赖补建，近期缓冲最多两段；兼容抽取复用，映射只取变化及必要依赖。世界 ready 与各分支 adopted 分离，冻结回合和人物历史不被后台改写。
 - **持久检索与项目风格**：稳定原文索引独立于别名及玩家权限，覆盖不足与损坏明确返回诊断。项目风格支持跟随原著、预设、自定义；分析为低优先后台工作，用户覆盖优先，每回合本地编译并冻结可恢复快照，禁止风格修改事实、裁定、权限和硬预算。
 
 - **确定性骰点**：Shine-TRPG Ruleset V0.1——六属性、d4～d12 技能骰、1～4 颗骰取最高、四档结果等级。骰点由本地引擎用 Android SecureRandom 拒绝采样完成，先持久化 RollRecord 再调用叙事模型；Narrator 失败或重启后复用同一骰点，永不重掷。
@@ -27,7 +27,7 @@
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.6.0`，`versionCode=60000`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.6.0`，`versionCode=70000`。
 
 ## 安全与隐私
 

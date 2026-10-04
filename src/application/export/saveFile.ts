@@ -16,9 +16,12 @@ import { createBaseContentManifest, isBranchContentManifestStructure, isProgress
   verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
-export const SAVE_SCHEMA_VERSION = 'shineword-save-7';
+export const SAVE_SCHEMA_VERSION = 'shineword-save-8';
+/** Save-7 adds nothing over save-6 structurally; P7 saves may carry guidance. */
+export const PRE_PHASE7_SAVE_SCHEMA_VERSION = 'shineword-save-7';
 export const PRE_PHASE6_SAVE_SCHEMA_VERSION = 'shineword-save-6';
-const hasContentManifestSchema = (schema: unknown): boolean => schema === SAVE_SCHEMA_VERSION || schema === PRE_PHASE6_SAVE_SCHEMA_VERSION;
+const hasContentManifestSchema = (schema: unknown): boolean =>
+  schema === SAVE_SCHEMA_VERSION || schema === PRE_PHASE7_SAVE_SCHEMA_VERSION || schema === PRE_PHASE6_SAVE_SCHEMA_VERSION;
 export const SAVE_FILE_EXTENSION = '.shineword-save.json';
 /** Previous full-save schema with rewind history, before branch content manifests. */
 export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-5';
@@ -30,7 +33,7 @@ export const OLDER_V3_SAVE_SCHEMA_VERSION = 'shineword-save-3';
 export const LEGACY_SAVE_SCHEMA_VERSION = 'shineword-save-2';
 
 export interface SaveManifest {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PRE_PHASE6_SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
+  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PRE_PHASE7_SAVE_SCHEMA_VERSION | typeof PRE_PHASE6_SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
   /** Optional for older saves; preserves the user-facing campaign name. */
@@ -114,6 +117,8 @@ export interface SaveFile {
   rewardLedger: Array<{ encounterId: string; actorId: string; skillId: string; rewardKind: string; grantedAt: string }>;
   /** Immutable branch event log (audit + derived-projection rebuild input). */
   branchEvents: Array<{ eventSeq: number; turnId: string; stateVersion: number; eventType: string; payloadJson: string }>;
+  /** P7 (save-8): committed decision-point guidance; absent on save-7 files. */
+  guidance?: import('../guidance/types').TurnGuidanceV1[];
 }
 
 const FORBIDDEN_SAVE_KEYS = new Set(['apikey', 'api_key', 'key', 'secret', 'token', 'authorization']);
@@ -172,6 +177,7 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
   }
   if (save.segmentArtifacts !== undefined) payload.segmentArtifacts = save.segmentArtifacts as unknown as CanonicalJson;
   if (save.projectStyle !== undefined) payload.projectStyle = save.projectStyle as unknown as CanonicalJson;
+  if (save.guidance !== undefined) payload.guidance = save.guidance as unknown as CanonicalJson;
   return payload;
 }
 
@@ -456,6 +462,20 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
       payloadJson: event.payload_json,
     })),
   };
+  // P7: committed decision-point guidance travels with the save; absence on
+  // old branches stays absent (never fabricated).
+  try {
+    const rows = await db.queryAll<{ guidance_json: string }>(
+      'SELECT guidance_json FROM branch_decision_guidance WHERE branch_id = ? ORDER BY state_version ASC',
+      [input.branchId],
+    );
+    if (rows.length > 0) {
+      (payload as { guidance?: import('../guidance/types').TurnGuidanceV1[] }).guidance
+        = rows.map(row => JSON.parse(row.guidance_json) as import('../guidance/types').TurnGuidanceV1);
+    }
+  } catch {
+    // Guidance is derived content; export proceeds without it.
+  }
 
   const payloadSha256 = await input.sha256Hex(canonicalStringify(payloadForHash(payload)));
 
@@ -532,7 +552,9 @@ export async function validateSaveJsonBytes(
     return { ok: false, errors: ['Save file is not valid JSON.'] };
   }
   const schemaVersion = parsed.manifest?.schemaVersion;
-  if (schemaVersion !== SAVE_SCHEMA_VERSION && schemaVersion !== PRE_PHASE6_SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
+  const isSave8 = schemaVersion === SAVE_SCHEMA_VERSION;
+  const isSave7 = schemaVersion === PRE_PHASE7_SAVE_SCHEMA_VERSION;
+  if (!isSave8 && !isSave7 && schemaVersion !== PRE_PHASE6_SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
       schemaVersion !== OLDER_SAVE_SCHEMA_VERSION && schemaVersion !== OLDER_V3_SAVE_SCHEMA_VERSION) {
     if (schemaVersion === LEGACY_SAVE_SCHEMA_VERSION) {
       return {
@@ -616,8 +638,35 @@ export async function validateSaveJsonBytes(
         errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a current save.');
     }
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION && !Array.isArray(parsed.segmentArtifacts)) errors.push('Save v7 requires segmentArtifacts.');
-  if (schemaVersion !== SAVE_SCHEMA_VERSION) {
+  if ((isSave8 || isSave7) && !Array.isArray(parsed.segmentArtifacts)) errors.push('Save v7 requires segmentArtifacts.');
+  // P7: guidance sections only ride save-8; situation snapshots likewise.
+  if (!isSave8) {
+    if (parsed.guidance !== undefined) errors.push('Phase7 guidance requires save v8.');
+    const hasSituations = (value: unknown): boolean => {
+      if (Array.isArray(value)) return value.some(hasSituations);
+      return value !== null && typeof value === 'object'
+        && Object.entries(value as Record<string, unknown>).some(([key, nested]) =>
+          key === 'situations' || key === 'causalWorldTimeOrder' || hasSituations(nested));
+    };
+    if (hasSituations(parsed.state) || hasSituations(parsed.snapshotHistory)) {
+      errors.push('Phase7 situation state requires save v8.');
+    }
+  }
+  if (isSave8 && parsed.guidance !== undefined) {
+    if (!Array.isArray(parsed.guidance)) errors.push('guidance must be an array.');
+    else {
+      for (const [index, record] of parsed.guidance.entries()) {
+        const binding = (record as unknown as { decisionPoint?: Record<string, unknown> })?.decisionPoint;
+        if ((record as unknown as { guidanceVersion?: unknown })?.guidanceVersion !== 'turn-guidance-1'
+          || !binding || typeof binding.branchId !== 'string'
+          || typeof binding.decisionPointId !== 'string' || typeof binding.sourceTurnId !== 'string'
+          || !Number.isSafeInteger(binding.stateVersion)) {
+          errors.push(`guidance[${index}] has an invalid decision-point binding.`);
+        }
+      }
+    }
+  }
+  if (!isSave8 && !isSave7) {
     const phase6Keys = new Set(['segmentContentBinding', 'styleSnapshot', 'artifactIds', 'artifactManifestHash']);
     const hasPhase6 = (value: unknown): boolean => {
       if (Array.isArray(value)) return value.some(hasPhase6);
@@ -1110,6 +1159,33 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
           `INSERT OR IGNORE INTO turn_narratives (branch_id, turn_id, outcome_grade, text, status, created_at)
            VALUES (?, ?, ?, ?, 'Committed', ?)`,
           [input.newBranchId, turn.turnId, turn.outcomeGrade ?? 'success', turn.narrativeText, input.createdAt],
+        );
+      }
+    }
+    // P7: decision-point guidance is history, restored with REBOUND branch
+    // identity (same meaning, new branch); its decisionPointIds are rebuilt
+    // from the new branch id so old paths can never submit on the new branch.
+    if (Array.isArray(save.guidance)) {
+      for (const record of save.guidance) {
+        const decisionPointId = `${input.newBranchId}:${record.decisionPoint.stateVersion}`;
+        const rebound = {
+          ...record,
+          decisionPoint: { ...record.decisionPoint, branchId: input.newBranchId, decisionPointId },
+        };
+        await tx.execute(
+          `INSERT OR REPLACE INTO branch_decision_guidance
+            (branch_id, decision_point_id, source_turn_id, state_version, severity, guidance_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            input.newBranchId,
+            decisionPointId,
+            record.decisionPoint.sourceTurnId,
+            record.decisionPoint.stateVersion,
+            record.severity,
+            JSON.stringify(rebound),
+            input.createdAt,
+            input.createdAt,
+          ],
         );
       }
     }

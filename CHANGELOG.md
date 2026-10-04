@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-04
+
+第七阶段（Shine-TRPG P7）：三宝书可玩局面、原著命运改写与回合结算后的路径引导。
+
+- 新增 `situation` 内容类型（world-package-4）：局面定义、办法模板、条件白名单与受限结果，Mapper 协议 v2 提案 + 本地强校验；快速/渐进开局自带本地开局局面。
+- 战役因果状态（SQLite 迁移 32：`branch_situations`/`branch_decision_guidance`）：局面状态机、承诺、参考事件抑制与因果进度；原著 canon 与分支事实分离，救下的人物不会被原著未来覆盖。
+- Prepared 回合管线：骰点后一次性本地归约（含局面运行时），同一 Narrator 请求输出正文与路径；正文与引导独立校验降级，普通回合仍为 Planner+Narrator 两次业务调用。
+- 决策点引导（turn-guidance-1）：安全局势包、本地资格候选（available/needs_preparation）、秘密过滤、附属引导请求 narrator_guidance（P1）。
+- 移动端：引导路径卡（这次变化/眼下局势/下一步）、过期校验提交、需准备路径填入输入框、NPC 边界本地引导；候选数量政策收口核心投影。
+- 存档协议 shineword-save-8：局面状态与决策点引导随完整快照往返；save-7 旧档照常导入。
+
 ## [0.6.0] - 2026-10-03
 
 ### Added — 渐进小段建设与独立叙述风格
