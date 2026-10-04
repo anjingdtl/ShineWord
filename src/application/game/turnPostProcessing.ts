@@ -48,6 +48,7 @@ export interface PostprocessHandoff {
   leaseExpiresAt: string | null;
   fencingToken: number | null;
   attempts: number;
+  episodicIndexed: boolean;
   physicalHttpCount: number;
   diagnosticsJson: string | null;
   createdAt: string;
@@ -55,6 +56,7 @@ export interface PostprocessHandoff {
 }
 
 interface HandoffRow extends SqliteRow {
+  episodic_indexed: number;
   handoff_id: string;
   campaign_id: string;
   branch_id: string;
@@ -126,6 +128,7 @@ export class TurnPostProcessingCoordinator {
       leaseExpiresAt: row.lease_expires_at,
       fencingToken: row.fencing_token,
       attempts: row.attempts,
+      episodicIndexed: row.episodic_indexed === 1,
       physicalHttpCount: row.physical_http_count,
       diagnosticsJson: row.diagnostics_json,
       createdAt: row.created_at,
@@ -146,7 +149,7 @@ export class TurnPostProcessingCoordinator {
         WHERE branch_id = ?
           AND status IN ('pending', 'retryable_failed')
           AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-        ORDER BY committed_state_version ASC
+        ORDER BY episodic_indexed ASC, committed_state_version ASC
         LIMIT ?`,
       [branchId, now.toISOString(), limit],
     );
@@ -207,6 +210,7 @@ export class TurnPostProcessingCoordinator {
 
   async processBranch(branchId: string, options?: { maxWaves?: number }): Promise<ProcessBranchResult> {
     const owner = `worker:${branchId}:local`;
+    const indexedTurnIds = new Set<string>();
     const maxWaves = options?.maxWaves ?? 1;
     const result: ProcessBranchResult = {
       claimed: 0,
@@ -220,24 +224,41 @@ export class TurnPostProcessingCoordinator {
       result.claimed += handoffs.length;
 
       // (1) Local episodic indexing — idempotent, provider-independent.
+      // A handoff released back to pending (memory cadence not yet due) may
+      // be re-claimed on a later wave; the UPSERT is idempotent and the
+      // counter reports UNIQUE turns, not repeat writes.
       for (const handoff of handoffs) {
+        if (indexedTurnIds.has(handoff.turnId)) continue;
         const committed: CommittedTurnHistoryEntry[] =
           await this.input.turns.listCommittedTurnsAfter(branchId, handoff.committedStateVersion - 1);
         const turn = committed.find(entry => entry.turnId === handoff.turnId);
         if (turn && this.input.episodic) {
           const record = episodicRecordFromTurn({ entry: turn });
           await this.input.episodic.store.saveTurnRecord(record);
+          await this.input.db.execute(
+            `UPDATE frozen_turn_postprocess_outbox SET episodic_indexed = 1
+              WHERE handoff_id = ? AND status = 'running' AND lease_owner = ? AND fencing_token = ?`,
+            [handoff.handoffId, owner, handoff.fencingToken ?? 0],
+          );
+          indexedTurnIds.add(handoff.turnId);
           result.indexed += 1;
         }
       }
 
       // (2) Memory maintenance — only when the memory store, provider and
       // frozen request policy are wired; otherwise the handoffs return to
-      // pending and stay covered by the pending bridge.
+      // pending and stay covered by the pending bridge. When this wave
+      // contained only already-indexed rows, there is nothing new to do:
+      // stop instead of cycling the same rows until the wave budget ends.
       if (!this.input.storyMemory || !this.input.provider || !this.input.capabilities || !this.input.reasoningPolicy) {
+        // episodicIndexed reflects the flag as of the CLAIM: the claim
+        // ordering prefers un-indexed rows, so an all-indexed wave means
+        // the whole pending queue is already indexed — nothing new to do.
+        const allAlreadyIndexed = handoffs.every(h => h.episodicIndexed);
         for (const handoff of handoffs) {
           await this.releaseHandoff(handoff.handoffId, owner, handoff.fencingToken ?? 0);
         }
+        if (allAlreadyIndexed) break;
         continue;
       }
 

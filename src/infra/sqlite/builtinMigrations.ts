@@ -1301,6 +1301,7 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
       lease_expires_at TEXT,
       fencing_token INTEGER,
       attempts INTEGER NOT NULL DEFAULT 0,
+      episodic_indexed INTEGER NOT NULL DEFAULT 0,
       physical_http_count INTEGER NOT NULL DEFAULT 0,
       diagnostics_json TEXT,
       created_at TEXT NOT NULL,
