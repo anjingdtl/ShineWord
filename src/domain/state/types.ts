@@ -133,6 +133,11 @@ export interface GameStateSnapshot {
    */
   situations?: import('../situations/types').SituationSnapshotEntry[];
   /**
+   * pressure_track module state (P8-7): bounded tension tracks owned by the
+   * optional module. Absent unless the world configuration enables it.
+   */
+  pressureTracks?: Record<string, { level: number; maxLevel: number; lastChangedStateVersion?: number }>;
+  /**
    * Campaign causal progress (P7 §4.2): the highest canon worldTimeOrder the
    * branch has actually reached through committed facts/events — never the
    * turn count, never world-clock minutes. Absent on pre-P7 snapshots.
@@ -244,5 +249,11 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
     ...(entry.processedEventIds ? { processedEventIds: [...entry.processedEventIds] } : {}),
   }));
   if (state.questRewards) cloned.questRewards = state.questRewards.map(entry => ({ ...entry }));
+  // pressure_track module state (P8-7) travels with every clone.
+  if (state.pressureTracks) {
+    cloned.pressureTracks = Object.fromEntries(
+      Object.entries(state.pressureTracks).map(([trackId, track]) => [trackId, { ...track }]),
+    );
+  }
   return cloned;
 }

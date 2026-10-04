@@ -1,5 +1,6 @@
 import type { EffectOperation, ResourcePrecondition } from '../turns/types';
 import { cloneGameState, type GameStateSnapshot } from './types';
+import { applyPressureChange, ensurePressureTrack } from '../rules/modules/pressureTrack';
 
 function requireActor(state: GameStateSnapshot, actorId: string) {
   const actor = state.actors[actorId];
@@ -137,6 +138,20 @@ export function applyEffects(
       case 'recordEvent':
         // Event persistence belongs to the transaction layer; this effect is state-neutral.
         break;
+      case 'raisePressure': {
+        // pressure_track module (P8-7): ensures the bounded track exists at
+        // the declared maxLevel, then raises it. Engine-injected only.
+        ensurePressureTrack(next, effect.trackId, effect.maxLevel);
+        applyPressureChange(next, effect.trackId, effect.amount, current.stateVersion + 1);
+        break;
+      }
+      case 'relievePressure': {
+        if (!next.pressureTracks?.[effect.trackId]) {
+          throw new Error(`pressure_track: unknown track '${effect.trackId}'.`);
+        }
+        applyPressureChange(next, effect.trackId, -Math.abs(effect.amount), current.stateVersion + 1);
+        break;
+      }
       default: {
         const exhaustive: never = effect;
         throw new Error(`Unsupported effect: ${JSON.stringify(exhaustive)}.`);

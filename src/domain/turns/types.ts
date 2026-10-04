@@ -33,7 +33,11 @@ export type PlannerEffectOperation =
 
 export type EngineEffectOperation =
   | { op: 'removeCondition'; actorId: string; conditionId: string }
-  | { op: 'grantItem'; itemId: string; actorId: string };
+  | { op: 'grantItem'; itemId: string; actorId: string }
+  /** pressure_track module contributions (P8-7): engine-injected only; the
+   * planner channel can never author pressure changes. */
+  | { op: 'raisePressure'; trackId: string; amount: number; maxLevel: number }
+  | { op: 'relievePressure'; trackId: string; amount: number };
 
 export type EffectOperation = PlannerEffectOperation | EngineEffectOperation;
 

@@ -76,6 +76,36 @@ export function computeWorldRuleConfigurationHash(config: WorldRuleConfiguration
 }
 
 /**
+ * Human-readable rule preview for the three-treasures book / world build UI
+ * (plan §8.1): generated from the published configuration, showing what is
+ * enabled, why, what is executable and what is NOT supported. The book's
+ * prose never becomes a second rule authority — this preview IS the rule
+ * summary, with provenance.
+ */
+export function renderRulePreview(
+  projection: PublicRuleProjection,
+  capabilityTable: ExecutableCapabilityTable,
+): string[] {
+  const lines: string[] = [];
+  lines.push(`规则核心 ${projection.coreId}@${projection.coreVersion}（配置 ${projection.configurationHash.slice(0, 12)}…）`);
+  for (const module of projection.modules) {
+    lines.push(`· 已启用机制 ${module.moduleId} v${module.version}：可执行能力 ${module.capabilities.join('、')}`);
+  }
+  const disabledCapabilities = ['pressure_raise', 'pressure_relief', 'encounter_begin', 'initiative_queue', 'loot_grant']
+    .filter(capability => !capabilityTable.capabilities.includes(capability));
+  if (disabledCapabilities.length > 0) {
+    lines.push(`· 未启用能力（相应行动入口不可用）：${disabledCapabilities.join('、')}`);
+  }
+  for (const constraint of capabilityTable.constraints) {
+    lines.push(`· 限制 ${constraint.constraintId}：${constraint.enforcement === 'block_action' ? '阻止' : '审计'} ${constraint.targetKinds.join('、')}`);
+  }
+  for (const rule of projection.rules) {
+    if (rule.origin === 'explicit') lines.push(`· ${rule.text}`);
+  }
+  return lines;
+}
+
+/**
  * Compiles (validates + closes) a world rule configuration. Deterministic:
  * identical configurations produce byte-identical bindings and projections.
  */
