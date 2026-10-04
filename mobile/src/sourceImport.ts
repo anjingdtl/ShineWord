@@ -1472,7 +1472,7 @@ async function runExtractionInternal(
             worldId,
             runId: run.runId,
             sourceSha256: manifest.rawSha256Hex,
-            mappingVersion: `mapper-2#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
+            mappingVersion: `mapper-3#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
             createdAt: new Date().toISOString(),
             stageScope: {
               ranges: [{ startCodePoint: 0, endCodePoint: prefixEnd, contentSha256: coveredHash }],
@@ -1533,7 +1533,7 @@ async function runExtractionInternal(
           }
           const provider = makeProvider();
           const localOpening = openingBuild && intent.reason === 'bootstrap' && (runConfig?.openingPolicyVersion === 'opening-90s-1' || runConfig?.openingPolicyVersion === 'opening-90s-2' || runConfig?.openingPolicyVersion === OPENING_POLICY_VERSION);
-          const mappingVersion = localOpening ? 'opening-local-rules-1' : `mapper-2#${effectiveProfile.model}#${effectiveProfile.reasoningTier ?? 'low'}`;
+          const mappingVersion = localOpening ? 'opening-local-rules-1' : `mapper-3#${effectiveProfile.model}#${effectiveProfile.reasoningTier ?? 'low'}`;
           const input = { worldStore: runtime.worldStore,
             provider: { complete: (request: Parameters<typeof governMappingRequest>[0]) => governMappingRequest(request, r => provider.complete(r), requestGovernance, run) },
             sha256Hex: nativeSha256.sha256Hex, worldId: run.worldId, runId: run.runId,
@@ -1691,7 +1691,7 @@ async function runExtractionInternal(
             worldId: run.worldId,
             runId: run.runId,
             sourceSha256: world.sourceSha256,
-            mappingVersion: `mapper-2#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
+            mappingVersion: `mapper-3#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
             createdAt: new Date().toISOString(),
             stageScope: {
               ranges: [{ startCodePoint: 0, endCodePoint: coveredEnd, contentSha256: coveredHash }],
@@ -1751,8 +1751,8 @@ async function runExtractionInternal(
           runId: run.runId,
           sourceSha256: world.sourceSha256,
           mappingVersion: residentMapping
-            ? `mapper-2#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`
-            : `mapper-2#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
+            ? `mapper-3#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`
+            : `mapper-3#${effectiveProfile.model}#${requestGovernance.profile.reasoningTier ?? 'low'}`,
           createdAt: new Date().toISOString(),
           sourceRanges,
           sourceCodePointCount: sourceManifest.codePointCount,

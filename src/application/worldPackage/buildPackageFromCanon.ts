@@ -228,7 +228,8 @@ const MAPPER_SYSTEM = [
   '- Do not invent facts the evidence does not support; prefer fewer, well-evidenced entries.',
   '- ruleMappings target MUST be the name of an entity from the provided entities list; kind MUST be one of attribute, skill, power_tier, resource; evidenceFactIds must reference provided fact ids. Mappings without verified evidence are dropped.',
   '- situations organize PLAYABLE intervention points. Propose a situation only when the facts show a live conflict or opportunity with participants, not for background flavor. summary/signs/tradeoffs/preparation text is PLAYER-VISIBLE: never put undiscovered identities, secrets or future outcomes there; put GM-only notes in gmBrief.',
-  '- situation activation/knowledgeCondition/condition nodes MUST use only whitelisted kinds: all{of}, any{of}, not{of}, actor_alive{actorId}, actor_at{actorId,locationId}, actor_condition{actorId,conditionId}, item_owned_by{itemId,actorId}, knowledge_known{entryId}, relationship_at_least{fromActorId,toActorId,closeness}, quest_status{questId,status}, situation_status{situationId,status}, reference_event_resolved{eventKey}, world_time_at_least{order}. actorId/itemId/skillId reference proposed entry ids or entity ids from the provided entities list.',
+  '- condition objects use EXACTLY this JSON form: {"kind":"all","of":[...]}, {"kind":"any","of":[...]}, {"kind":"not","of":{...}}, or leaves {"kind":"actor_alive","actorId":x}, {"kind":"actor_at","actorId":x,"locationId":y}, {"kind":"actor_condition","actorId":x,"conditionId":y}, {"kind":"item_owned_by","itemId":x,"actorId":y}, {"kind":"knowledge_known","entryId":x}, {"kind":"relationship_at_least","fromActorId":x,"toActorId":y,"closeness":n}, {"kind":"quest_status","questId":x,"status":y}, {"kind":"situation_status","situationId":x,"status":y}, {"kind":"reference_event_resolved","eventKey":x}, {"kind":"world_time_at_least","order":n}. Always include the "kind" field.',
+  '- participantIds and firstStep.targetId may use the actor template ids proposed in this package (npc-…) or entity ids from the provided entities list; ids are resolved locally.',
   '- each situation offers 2-4 genuinely different methods (different goal, first step or requirements). firstStep.intent describes ONE concrete first action, never a whole plan. method skillId/itemId must reference proposed entries; requires.skillId only when the evidence shows the approach needs that proficiency.',
   '- referenceEvents convert LATER canon outcomes (a death, a downfall) into branch-conditional futures: eventKey = the canon event id from the provided events list, worldTimeOrder = that event order, condition = whitelist nodes over CURRENT branch state, actorFate only {actorId,lifeStatus:"dead"} for a death the canon event itself states. Never fabricate deaths the events do not contain.',
   '- situation provenance: participants/events explicit or inferred with evidenceFactIds; deadlines/costs rule_mapping; interaction windows and pressure pacing design_fill.',
@@ -654,11 +655,54 @@ export interface SituationCleanContext {
   factSubjects: ReadonlyMap<string, string>;
   /** Lore entry ids usable as knowledge gates (discoverable/public lore). */
   knowledgeEntryIds: ReadonlySet<string>;
+  /** Extraction entities: models reference entity ids where the package uses
+   *  template entry ids; resolve entityId → npc entry id by name match. */
+  entityNameToTemplateId: ReadonlyMap<string, string>;
+  /** entryId → kind, so method targets pointed at items resolve to itemId. */
+  entryKinds: ReadonlyMap<string, string>;
+}
+
+const WRAPPED_CONDITION_KINDS = new Set([
+  'all', 'any', 'not', 'actor_alive', 'actor_at', 'actor_condition', 'item_owned_by',
+  'knowledge_known', 'relationship_at_least', 'quest_status', 'situation_status',
+  'reference_event_resolved', 'world_time_at_least',
+]);
+
+/**
+ * Models routinely express the documented `all{of[]}` schema in wrapped form
+ * ({"all": {"of": [...]}} instead of {"kind":"all","of":[...]}; leaves like
+ * {"actor_alive": {"actorId": "…"}}). Normalize that shape recursively; the
+ * normalized tree still passes the SAME whitelist validation.
+ */
+function normalizeConditionNode(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw;
+  const record = raw as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const firstKey = keys[0] as string | undefined;
+  const firstValue = firstKey === undefined ? undefined : record[firstKey];
+  if (keys.length === 1 && firstKey !== undefined && WRAPPED_CONDITION_KINDS.has(firstKey)
+    && typeof firstValue === 'object' && firstValue !== null && !Array.isArray(firstValue)) {
+    const kind = firstKey;
+    const params = firstValue as Record<string, unknown>;
+    const normalized: Record<string, unknown> = { kind, ...params };
+    if (normalized.of !== undefined) {
+      normalized.of = Array.isArray(normalized.of)
+        ? normalized.of.map(normalizeConditionNode) : normalizeConditionNode(normalized.of);
+    }
+    return normalized;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    out[key] = key === 'of' && Array.isArray(value)
+      ? value.map(normalizeConditionNode)
+      : key === 'of' ? normalizeConditionNode(value) : value;
+  }
+  return out;
 }
 
 function cleanConditionNode(raw: unknown): unknown | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
+  const record = normalizeConditionNode(raw) as Record<string, unknown>;
   const errors: string[] = [];
   validateConditionShape(record, errors, 'condition');
   if (errors.length > 0) return null;
@@ -684,9 +728,21 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
     reasons.push('knowledgeCondition is not a whitelisted condition tree.');
   }
 
-  const participantIds = asStringArray(record.participantIds);
-  const danglingParticipants = participantIds.filter(participantId =>
-    !situation.knownEntryIds.has(participantId) && !situation.knownEntryIds.has(`npc-${participantId}`));
+  const resolveRef = (value: string): string | null => {
+    if (situation.knownEntryIds.has(value)) return value;
+    if (situation.knownEntryIds.has(`npc-${value}`)) return `npc-${value}`;
+    const byEntity = situation.entityNameToTemplateId.get(value);
+    if (byEntity && situation.knownEntryIds.has(byEntity)) return byEntity;
+    return null;
+  };
+  const rawParticipants = asStringArray(record.participantIds);
+  const participantIds: string[] = [];
+  const danglingParticipants: string[] = [];
+  for (const participantId of rawParticipants) {
+    const resolved = resolveRef(participantId);
+    if (resolved) participantIds.push(resolved);
+    else danglingParticipants.push(participantId);
+  }
   if (danglingParticipants.length > 0) reasons.push(`unknown participant ids: ${danglingParticipants.join(',')}.`);
 
   const rawMethods = Array.isArray(record.methods) ? record.methods : [];
@@ -719,8 +775,19 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
       }
       step.skillId = resolved;
     }
-    const targetId = firstStepRaw ? asString(firstStepRaw.targetId) : null;
-    if (targetId) step.targetEntryId = targetId;
+    const targetIdRaw = firstStepRaw ? asString(firstStepRaw.targetId) : null;
+    const targetId = targetIdRaw ? resolveRef(targetIdRaw) : null;
+    if (targetIdRaw && !targetId) {
+      // A target the model never proposed (often an item id in targetId) does
+      // not invalidate the ACTION itself — drop just the reference.
+      rejectEntry(situation.ctx, 'situation_target', `${id}:${methodId}`,
+        [`unresolved target ${targetIdRaw}; reference dropped, method kept.`]);
+    }
+    if (targetId) {
+      // A target that names an ITEM entry is a tool reference, not an actor.
+      if (situation.entryKinds?.get(targetId) === 'item') step.itemId = targetId;
+      else step.targetEntryId = targetId;
+    }
     const destinationId = firstStepRaw ? asString(firstStepRaw.destinationId) : null;
     if (destinationId) step.destinationId = destinationId;
     const requires: Record<string, unknown> = {};
@@ -824,9 +891,7 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
     summary,
     gmBrief,
     ...(asString(record.locationId) ? { locationId: asString(record.locationId)! } : {}),
-    participantEntryIds: participantIds
-      .map(participantId => situation.knownEntryIds.has(participantId) ? participantId : `npc-${participantId}`)
-      .filter(participantId => situation.knownEntryIds.has(participantId)),
+    participantEntryIds: participantIds.filter(participantId => situation.knownEntryIds.has(participantId)),
     activation,
     ...(knowledgeCondition ? { knowledgeCondition } : {}),
     signs: (Array.isArray(record.signs) ? record.signs : [])
@@ -1362,11 +1427,42 @@ async function requestMappingProposals(
         worldTimeOrder: event.worldTimeOrder,
       } as { worldTimeOrder: number | null }]));
       const factSubjects = new Map(facts.map(fact => [fact.factId, fact.subjectEntityId] as const));
+      // Entity id/name → actor-template entry id: models reference canon
+      // entities where the package uses template entries.
+      const entityNameToTemplateId = new Map<string, string>();
+      const templateNameById = new Map<string, string>();
+      const entryKinds = new Map<string, string>();
+      for (const template of actorTemplates) {
+        templateNameById.set(template.entryId,
+          String((template.entry.definition as { name?: unknown }).name ?? ''));
+      }
+      // Incremental runs carry actor templates from EARLIER batches; the
+      // model references those entities too, so index them as well.
+      for (const entry of input.incrementalMapping?.previousEntries ?? []) {
+        entryKinds.set(entry.entryId, entry.kind);
+        if (entry.kind === 'actor_template') {
+          templateNameById.set(entry.entryId,
+            String((entry.definition as { name?: unknown }).name ?? ''));
+        }
+      }
+      for (const entry of entriesById.values()) entryKinds.set(entry.entryId, entry.kind);
+      for (const template of actorTemplates) entryKinds.set(template.entryId, 'actor_template');
+      for (const item of items) entryKinds.set(item.entry.entryId, 'item');
+      for (const entity of entities) {
+        for (const [entryId, templateName] of templateNameById) {
+          if (templateName && (templateName === entity.name || entity.aliases.includes(templateName))) {
+            entityNameToTemplateId.set(entity.entityId, entryId);
+            break;
+          }
+        }
+      }
       const situationContext: SituationCleanContext = {
         ctx,
         knownEntryIds,
         knownEvents,
         factSubjects,
+        entityNameToTemplateId,
+        entryKinds,
         knowledgeEntryIds,
       };
       for (const candidate of raw.situations) {
@@ -1775,12 +1871,36 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   // situation into the review queue instead of blocking the whole package —
   // the old play loop keeps working without it.
   const publishedIds = new Set(entries.map(entry => entry.entryId));
+  // Models may reference canon actors as actor-canon-{entityId}; resolve to
+  // the published template by entity name BEFORE closure (definition rewrite).
+  const templateIdByEntity = new Map<string, string>();
+  const templateIdsByName = new Map(entries
+    .filter(entry => entry.kind === 'actor_template')
+    .map(entry => [String((entry.definition as { name?: unknown }).name ?? ''), entry.entryId] as const));
+  for (const entity of entities) {
+    const byName = templateIdsByName.get(entity.name);
+    if (byName) templateIdByEntity.set(entity.entityId, byName);
+  }
+  const resolveCanonRef = (value: string): string => {
+    if (publishedIds.has(value)) return value;
+    const entityId = value.startsWith('actor-canon-') ? value.slice('actor-canon-'.length) : value;
+    const resolved = templateIdByEntity.get(entityId);
+    return resolved ?? value;
+  };
   for (const situation of proposals.situations) {
     const definition = situation.definition as {
       participantEntryIds?: string[];
       locationId?: string;
-      methods?: Array<{ firstStep?: { skillId?: string; itemId?: string }; requires?: { skillId?: string; itemId?: string; knowledgeEntryId?: string } }>;
+      methods?: Array<{ firstStep?: { skillId?: string; itemId?: string; targetEntryId?: string }; requires?: { skillId?: string; itemId?: string; knowledgeEntryId?: string } }>;
     };
+    if (Array.isArray(definition.participantEntryIds)) {
+      definition.participantEntryIds = definition.participantEntryIds.map(resolveCanonRef);
+    }
+    for (const method of definition.methods ?? []) {
+      if (method.firstStep?.targetEntryId) {
+        method.firstStep.targetEntryId = resolveCanonRef(method.firstStep.targetEntryId);
+      }
+    }
     const references = new Set<string>(definition.participantEntryIds ?? []);
     if (definition.locationId) references.add(definition.locationId);
     for (const method of definition.methods ?? []) {

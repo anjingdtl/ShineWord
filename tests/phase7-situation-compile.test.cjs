@@ -18,6 +18,8 @@ function cleanContext(overrides = {}) {
     knownEvents: new Map(overrides.knownEvents ?? [['evt-death', { worldTimeOrder: 30 }]]),
     factSubjects: new Map(overrides.factSubjects ?? [['f1', 'ent-companion'], ['f2', 'ent-pursuer'], ['f3', 'ent-sect']]),
     knowledgeEntryIds: new Set(overrides.knowledgeEntryIds ?? ['lore-north-trail']),
+    entityNameToTemplateId: new Map(overrides.entityNameToTemplateId ?? []),
+    entryKinds: new Map(overrides.entryKinds ?? [['skill-medicine','skill'],['skill-tracking','skill'],['npc-companion','actor_template'],['lore-north-trail','lore']]),
     rejected,
   };
 }
@@ -151,4 +153,30 @@ test('compileOpeningSituation yields a valid situation from baseline entries onl
   assert.equal(sections.find(s => s.book === 'player_handbook' && s.sectionKey === 'situations'), undefined);
   // No scene → no situation (never invented).
   assert.equal(compileOpeningSituation({ entries: createProgressiveBaselineEntries() }), null);
+});
+
+test('cleanSituation accepts wrapped condition forms and entity-id references (device r1 shape)', () => {
+  const context = cleanContext();
+  // Real-model shape observed on device: {"all":{"of":[{"actor_at":{...}}]}}
+  // and participant ids referencing extraction entities instead of entries.
+  context.entityNameToTemplateId = new Map([['ent-anna', 'npc-companion']]);
+  const raw = validRaw({
+    participantIds: ['ent-anna'],
+    activation: { all: { of: [
+      { actor_at: { actorId: 'ent-anna', locationId: 'bridge' } },
+      { actor_alive: { actorId: 'ent-anna' } },
+    ] } },
+    knowledgeCondition: { any: { of: [{ knowledge_known: { entryId: 'lore-north-trail' } }] } },
+  });
+  raw.methods[0].firstStep.targetId = 'ent-anna';
+  const entry = cleanSituation(raw, context);
+  assert.ok(entry, 'wrapped conditions normalize; entity ids resolve to template entries');
+  assert.deepEqual(entry.definition.participantEntryIds, ['npc-companion']);
+  assert.equal(entry.definition.methods[0].firstStep.targetEntryId, 'npc-companion');
+  assert.equal(entry.definition.activation.kind, 'all');
+  assert.equal(entry.definition.activation.of[0].kind, 'actor_at');
+  // Unknown wrapped kinds still fail the whitelist.
+  const bad = cleanContext();
+  bad.entityNameToTemplateId = new Map();
+  assert.equal(cleanSituation(validRaw({ activation: { lua_eval: { code: 'true' } } }), bad), null);
 });
