@@ -88,7 +88,18 @@ import { assembleBook } from '../worldPackage/publish';
 import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAtAnchor, openingRelationshipFor, meetsRecruitmentRelationship } from './recruitment';
 import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
-import { commitResolvedTurn } from '../turns/commitTurn';
+import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
+import { applySituationRuntime } from '../situations/causalProjection';
+import type {
+  MethodTemplateV1,
+  SituationDefinitionV1,
+  SituationTransitionOp,
+} from '../../domain/situations/types';
+import { buildSituationPacket } from '../guidance/packet';
+import { assembleTurnGuidance } from '../guidance/validate';
+import type { PublicSituationPacketV1, TurnGuidanceV1 } from '../guidance/types';
+import type { GuidanceStore } from '../ports/guidanceStore';
+import { canonicalStringify } from '../../domain/turns/canonical';
 import { forkBranch } from '../branch/fork';
 import { hasBranchContentManifestTable, ensureBaseBranchContentManifest } from '../worldPackage/branchContentStore';
 import { contentDependencyBinding, createBaseContentManifest, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
@@ -121,6 +132,8 @@ export interface SessionDeps {
   storyMemory?: { store: SqliteStoryMemoryStore };
   /** Episodic recall index (infrastructure plan M4). */
   episodic?: { store: SqliteEpisodicStore };
+  /** P7 turn-guidance persistence; absent in pure-domain tests. */
+  guidance?: GuidanceStore;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
 }
@@ -150,6 +163,8 @@ export interface PlayTurnResult {
   resumed: boolean;
   stateVersion: number;
   practiceAwarded: boolean;
+  /** P7: committed guidance for the decision point this turn created. */
+  guidance?: TurnGuidanceV1;
 }
 
 export interface PlayTurnOptions {
@@ -1408,6 +1423,61 @@ export class CampaignSession {
     return parts;
   }
 
+  /**
+   * P7 campaign-causal progress (plan §4.2): the highest canon worldTimeOrder
+   * the branch has actually reached. Sources: the opening anchor, orders of
+   * canon facts cited by this turn's evidence or newly discovered entries,
+   * and reference events that fired on this branch. Turn numbers and
+   * world-clock minutes never advance this order.
+   */
+  private advanceCausalOrder(
+    nextState: GameStateSnapshot,
+    contract: ActionContract,
+    entries: readonly ContentEntry[],
+    factsById: ReadonlyMap<string, { validFrom: string | null }>,
+    situationDefinitions: ReadonlyArray<{ situationId: string; definition: SituationDefinitionV1 }>,
+    runtimeEvents: ReadonlyArray<{ eventType: string; payload: unknown }> = [],
+  ): void {
+    let order = nextState.causalWorldTimeOrder ?? 0;
+    const entryById = new Map(entries.map(entry => [entry.entryId, entry] as const));
+    const liftFromFactIds = (factIds: Iterable<string>): void => {
+      for (const factId of factIds) {
+        const fact = factsById.get(factId);
+        if (!fact || fact.validFrom === null) continue;
+        const from = Number(fact.validFrom);
+        if (Number.isFinite(from) && from > order) order = from;
+      }
+    };
+    for (const entryId of contract.evidenceIds) {
+      liftFromFactIds(entryById.get(entryId)?.provenance.sourceFactIds ?? []);
+    }
+    for (const discovery of nextState.discoveries ?? []) {
+      if (discovery.sourceTurnId !== contract.turnId) continue;
+      liftFromFactIds(entryById.get(discovery.entryId)?.provenance.sourceFactIds ?? []);
+    }
+    for (const event of runtimeEvents) {
+      if (event.eventType !== 'reference_event_due') continue;
+      const eventKey = String((event.payload as { eventKey?: unknown } | null)?.eventKey ?? '');
+      for (const situation of situationDefinitions) {
+        const projection = (situation.definition.referenceEvents ?? [])
+          .find(item => item.eventKey === eventKey);
+        if (projection && projection.worldTimeOrder > order) order = projection.worldTimeOrder;
+      }
+    }
+    nextState.causalWorldTimeOrder = order;
+  }
+
+  /** Latest committed guidance at or before the given version (UI refresh). */
+  async getGuidanceAtVersion(branchId: string, stateVersion: number): Promise<TurnGuidanceV1 | null> {
+    if (!this.deps.guidance) return null;
+    try {
+      return await this.deps.guidance.latestForVersion(branchId, stateVersion);
+    } catch {
+      // Guidance is derived content; a read failure degrades to none.
+      return null;
+    }
+  }
+
   private applyDiscoveryAndQuestProgress(
     nextState: GameStateSnapshot,
     contract: ActionContract,
@@ -1785,6 +1855,59 @@ export class CampaignSession {
       .map(card => card.actorId));
     const plannerCards = allCards.filter(card => sameGroupIds.has(card.actorId) || publicLocalNpcIds.has(card.actorId));
 
+    // P7: situation definitions bound to this branch's content. Old packages
+    // (world-package-2/3) carry none and keep the pre-P7 play loop intact.
+    const situationDefinitions = authoritativeEntries
+      .filter(entry => entry.kind === 'situation')
+      .map(entry => ({
+        situationId: entry.entryId,
+        definition: entry.definition as SituationDefinitionV1,
+      }));
+    const situationStatusById = new Map((summary.state.situations ?? [])
+      .map(entry => [entry.situationId, entry] as const));
+    const activeMethods: MethodTemplateV1[] = [];
+    const activeMethodSituations: string[] = [];
+    for (const situation of situationDefinitions) {
+      if (situationStatusById.get(situation.situationId)?.status === 'active') {
+        for (const method of situation.definition.methods) {
+          activeMethods.push(method);
+          activeMethodSituations.push(situation.situationId);
+        }
+      }
+    }
+    const factsById = new Map(facts.map(fact => [fact.factId, fact] as const));
+    const methodOpsForContract = (contract: ActionContract, grade: RollGrade): SituationTransitionOp[] => {
+      const ref = contract.methodRef;
+      if (!ref) return [];
+      const definition = situationDefinitions.find(situation => situation.situationId === ref.situationId);
+      const method = definition?.definition.methods.find(item => item.methodId === ref.methodId);
+      if (!method) return [];
+      return grade === 'success' || grade === 'full_success'
+        ? [...(method.onSuccess ?? [])]
+        : [...(method.onFailure ?? [])];
+    };
+    // Names that must never surface in player guidance text (A09): GM-only
+    // entries and undiscovered discoverable entries.
+    const blockedNames: string[] = [];
+    for (const entry of authoritativeEntries) {
+      if (entry.visibility === 'gm'
+        || (entry.visibility === 'discoverable' && !knownEntryIds.has(entry.entryId))) {
+        const definition = entry.definition as { name?: string; title?: string };
+        const name = definition.name ?? definition.title;
+        if (name && name.trim()) blockedNames.push(name.trim());
+      }
+    }
+    const visibleActorNames = new Map(plannerCards
+      .filter(card => card.actorId !== playerCard.actorId)
+      .map(card => [card.actorId, card.name] as const));
+    const keyItemIds = new Set<string>();
+    for (const situation of situationDefinitions) {
+      for (const method of situation.definition.methods) {
+        if (method.requires.itemId) keyItemIds.add(method.requires.itemId);
+        if (method.firstStep.itemId) keyItemIds.add(method.firstStep.itemId);
+      }
+    }
+
     const stateVersion = options.turnIdOverride
       ? Number.parseInt(options.turnIdOverride.replace(/^turn-/, ''), 10)
       : summary.state.stateVersion + 1;
@@ -1896,6 +2019,34 @@ export class CampaignSession {
     let usageSeq = 0;
     const gameStore = this.deps.game;
     const actorId = playerCard.actorId;
+    const settlementPlanFor = async (grade: RollGrade, contract: ActionContract): Promise<TurnSettlementPlan> => {
+      const actingActorId = contractActorId(contract, plannerCards);
+      const actingCard = plannerCards.find(card => card.actorId === (actingActorId ?? actorId));
+      const storedSkillKey = contract.skillId && actingCard
+        ? (resolveSkillKey(actingCard, contract.skillId) ?? contract.skillId)
+        : contract.skillId;
+      let plan: TurnSettlementPlan;
+      if (!contract.requiresRoll || !storedSkillKey) {
+        plan = emptySettlement(options.encounterId ?? `auto-${options.branchId}-${turnId}`);
+      } else {
+        const challengeId = options.encounterId
+          ?? await deriveChallengeId(gameStore, options.branchId, actingActorId ?? actorId, storedSkillKey);
+        plan = await buildTurnSettlement({
+          gameStore,
+          branchId: options.branchId,
+          turnId,
+          encounterId: challengeId,
+          actorId: actingActorId ?? actorId,
+          skillId: storedSkillKey,
+          outcomeGrade: grade,
+          stateVersion,
+          closeChallenge: !options.encounterId && (grade === 'full_success' || grade === 'success'),
+        });
+      }
+      const relationship = this.socialRelationshipDelta(summary.state, contract, grade, entries, plannerCards);
+      if (relationship) plan.relationships = [relationship];
+      return plan;
+    };
     let result;
     try {
       result = await runV2Turn({
@@ -1931,11 +2082,95 @@ export class CampaignSession {
         abilities,
         scenes,
         constraints,
-        updateCommittedState: (nextState, contract, grade) => {
-          if (contract.styleSnapshot) nextState.styleSnapshot = contract.styleSnapshot;
-          const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
-          return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
-        },
+        ...(activeMethods.length > 0 ? { methods: activeMethods, methodSituations: activeMethodSituations } : {}),
+        // P7 prepared pipeline: full local reduction BEFORE the Narrator, so
+        // guidance reflects the post-settlement state and the commit applies
+        // the exact prepared object (single reduction, single reward pass).
+        ...(situationDefinitions.length > 0 ? {
+          prepareResolution: async ({ contract, contractHash, grade, rollRecord }) => {
+            const settlement = await settlementPlanFor(grade, contract);
+            return prepareTurnResolution(this.deps.turns, {
+              branchId: options.branchId,
+              contract,
+              contractHash,
+              outcomeGrade: grade,
+              rollRecord,
+              settlement,
+              contractOrigin: 'engine' as const,
+              updateNextState: nextState => {
+                if (contract.styleSnapshot) nextState.styleSnapshot = contract.styleSnapshot;
+                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions);
+              },
+              applyAuthoritativeState: nextState => {
+                const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
+                const discoveryEvents = this.applyDiscoveryAndQuestProgress(
+                  nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
+                const runtime = applySituationRuntime({
+                  definitions: situationDefinitions,
+                  nextState,
+                  sourceTurnId: contract.turnId,
+                  playerActorId: playerCard.actorId,
+                  methodOps: methodOpsForContract(contract, grade),
+                });
+                nextState.situations = runtime.situations;
+                for (const fate of runtime.actorFates) {
+                  const actorState = nextState.actors[fate.actorId];
+                  if (actorState) actorState.lifeStatus = fate.lifeStatus;
+                }
+                this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions, runtime.events);
+                return [...discoveryEvents, ...runtime.events];
+              },
+            });
+          },
+          buildSituationPacket: (prepared: PreparedTurnResolution) => buildSituationPacket({
+            prepared,
+            situationDefinitions,
+            playerCard,
+            visibleActorNames,
+            keyItemIds,
+          }),
+          buildGuidance: async ({
+            prepared, contract, grade, llmSteps, llmSummary,
+          }) => {
+            const packet = buildSituationPacket({
+              prepared, situationDefinitions, playerCard, visibleActorNames, keyItemIds,
+            });
+            const knowledgeHash = await this.deps.hashProvider.sha256Hex(
+              [...knownEntryIds].sort().join('\n'));
+            const contentBindingHash = String(
+              summary.state.segmentContentBinding?.manifestHash
+              ?? contentManifest?.manifestHash ?? 'no-binding');
+            const contextHash = await this.deps.hashProvider.sha256Hex(
+              canonicalStringify((packet ?? { none: true }) as unknown as import('../../domain/turns/canonical').CanonicalJson));
+            return assembleTurnGuidance({
+              prepared,
+              contract,
+              grade,
+              llmSteps,
+              llmSummary,
+              packet,
+              campaignId: options.campaignId,
+              playerActorId: playerCard.actorId,
+              blockedNames,
+              situationDefinitions,
+              playerCard,
+              visibleActorNames,
+              keyItemIds,
+              contentBindingHash,
+              knowledgeHash,
+              contextHash,
+            });
+          },
+          saveGuidance: async guidance => {
+            if (this.deps.guidance) await this.deps.guidance.save(guidance);
+          },
+        } : {
+          updateCommittedState: (nextState: GameStateSnapshot, contract: ActionContract, grade: RollGrade) => {
+            if (contract.styleSnapshot) nextState.styleSnapshot = contract.styleSnapshot;
+            const sourceLocationId = summary.state.actors[contract.actorId]?.locationId ?? '';
+            return this.applyDiscoveryAndQuestProgress(nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
+          },
+        }),
         resolveRollSpec(contract: ActionContract) {
           // Card-driven: attributes and dice come from the character card and
           // the world skill catalog - never from model output.
@@ -1949,35 +2184,7 @@ export class CampaignSession {
             (contract.difficultyBand ?? 'normal') as DifficultyBand,
           );
         },
-      settlementFor: async (grade, contract) => {
-        const actingActorId = contractActorId(contract, plannerCards);
-        const actingCard = plannerCards.find(card => card.actorId === (actingActorId ?? actorId));
-        const storedSkillKey = contract.skillId && actingCard
-          ? (resolveSkillKey(actingCard, contract.skillId) ?? contract.skillId)
-          : contract.skillId;
-        // Practice only for risky checks; automatic actions never award.
-        let plan: TurnSettlementPlan;
-        if (!contract.requiresRoll || !storedSkillKey) {
-          plan = emptySettlement(options.encounterId ?? `auto-${options.branchId}-${turnId}`);
-        } else {
-          const challengeId = options.encounterId
-            ?? await deriveChallengeId(gameStore, options.branchId, actingActorId ?? actorId, storedSkillKey);
-          plan = await buildTurnSettlement({
-            gameStore,
-            branchId: options.branchId,
-            turnId,
-            encounterId: challengeId,
-            actorId: actingActorId ?? actorId,
-            skillId: storedSkillKey,
-            outcomeGrade: grade,
-            stateVersion,
-            closeChallenge: !options.encounterId && (grade === 'full_success' || grade === 'success'),
-          });
-        }
-        const relationship = this.socialRelationshipDelta(summary.state, contract, grade, entries, plannerCards);
-        if (relationship) plan.relationships = [relationship];
-        return plan;
-      },
+        settlementFor: (grade, contract) => settlementPlanFor(grade, contract),
         usageRecorder: record => {
           void this.deps.game.recordLlmUsage({
             branchId: options.branchId,
@@ -2086,6 +2293,7 @@ export class CampaignSession {
       resumed: result.resumed,
       stateVersion: result.stateVersion,
       practiceAwarded: false,
+      ...(result.guidance ? { guidance: result.guidance } : {}),
     };
   }
 

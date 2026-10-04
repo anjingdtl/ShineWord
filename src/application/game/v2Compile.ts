@@ -62,6 +62,16 @@ export interface CompileProposalInput {
   scenes: readonly SceneDefinition[];
   constraints?: readonly ConstraintDefinition[];
   state: GameStateSnapshot;
+  /**
+   * P7: published situation methods offered to this turn. When the compiled
+   * action structurally matches a method's first step (action kind + skill +
+   * target/destination), the LOCAL compiler stamps contract.methodRef and
+   * injects the method's engine successEffects — free text and suggested
+   * paths go through the same matching, never the title.
+   */
+  methods?: readonly import('../../domain/situations/types').MethodTemplateV1[];
+  /** Situation owner per method (parallel to methods). */
+  methodSituations?: readonly string[];
 }
 
 export interface CompiledAction {
@@ -105,6 +115,71 @@ function automaticOutcome(
  * names things the world or the card does not support.
  */
 export function compileProposal(input: CompileProposalInput): CompiledAction {
+  const compiled = compileProposalBase(input);
+  const methods = input.methods ?? [];
+  if (methods.length === 0) return compiled;
+  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards);
+}
+
+function normalizeSkillId(skillId: string): string {
+  return skillId.replace(/^skill-/, '');
+}
+
+function bindSituationMethod(
+  compiled: CompiledAction,
+  methods: readonly import('../../domain/situations/types').MethodTemplateV1[],
+  methodSituations: readonly string[],
+  cards: readonly ActorCard[],
+): CompiledAction {
+  const { contract } = compiled;
+  for (const [index, method] of methods.entries()) {
+    const step = method.firstStep;
+    if (step.actionKind !== contract.actionType) continue;
+    if (step.skillId !== undefined) {
+      if (contract.skillId === undefined) continue;
+      if (normalizeSkillId(step.skillId) !== normalizeSkillId(contract.skillId)) continue;
+    } else if (contract.skillId !== undefined) {
+      continue; // a non-skill method cannot match a skill_check contract
+    }
+    if (step.targetEntryId !== undefined) {
+      const targetCard = contract.targetId ? cards.find(card => card.actorId === contract.targetId) : undefined;
+      if (!(contract.targetId === step.targetEntryId || targetCard?.templateId === step.targetEntryId)) continue;
+    }
+    if (step.destinationId !== undefined) {
+      const moves = (contract.outcomes.success.effects ?? [])
+        .filter((effect): effect is Extract<EffectOperation, { op: 'changeLocation' }> => effect.op === 'changeLocation');
+      if (!moves.some(effect => effect.locationId === step.destinationId)) continue;
+    }
+    const situationId = methodSituations[index] ?? '';
+    if (!situationId) continue;
+    const successEffects = (method.successEffects ?? []) as EffectOperation[];
+    if (successEffects.length === 0 && !method.onSuccess && !method.onFailure) continue;
+    const withMethod: ActionContract = {
+      ...contract,
+      methodRef: { situationId, methodId: method.methodId },
+      ...(successEffects.length > 0
+        ? {
+          outcomes: {
+            ...contract.outcomes,
+            full_success: appendEffects(contract.outcomes.full_success, successEffects),
+            success: appendEffects(contract.outcomes.success, successEffects),
+          },
+        }
+        : {}),
+    };
+    return { ...compiled, contract: withMethod };
+  }
+  return compiled;
+}
+
+function appendEffects(
+  outcome: ActionContract['outcomes']['success'],
+  extra: readonly EffectOperation[],
+): ActionContract['outcomes']['success'] {
+  return { ...outcome, effects: [...outcome.effects, ...extra.map(effect => ({ ...effect }))] };
+}
+
+function compileProposalBase(input: CompileProposalInput): CompiledAction {
   const { proposal, actingCard, cards, catalog, abilities, scenes, state } = input;
   const actorId = actingCard.actorId;
   const currentLocation = state.actors[actorId]?.locationId;

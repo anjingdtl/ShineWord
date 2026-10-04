@@ -1,5 +1,6 @@
 import type { SkillRank } from '../rules/types';
 import type { AttributeName } from '../rules/types';
+import { validateConditionShape } from '../situations/conditions';
 
 /**
  * Phase 2 content model (plan §6): one world package, three book views. Every
@@ -40,7 +41,8 @@ export type EntryKind =
   | 'scene'
   | 'quest'
   | 'lore'
-  | 'constraint';
+  | 'constraint'
+  | 'situation';
 
 export type EntryVisibility = 'public' | 'gm' | 'discoverable';
 
@@ -49,7 +51,7 @@ export type BookName = 'player_handbook' | 'gm_guide' | 'monster_manual';
 export interface WorldPackageManifest {
   worldId: string;
   revision: number;
-  schemaVersion: 'world-package-2' | 'world-package-3';
+  schemaVersion: 'world-package-2' | 'world-package-3' | 'world-package-4';
   sourceSha256: string;
   ruleset: { id: string; version: string };
   mappingVersion: string;
@@ -577,6 +579,10 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
       }
       break;
     }
+    case 'situation': {
+      validateSituationDefinition(def, errors);
+      break;
+    }
     case 'lore':
     case 'constraint': {
       requireString('name');
@@ -586,4 +592,169 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
       errors.push(`unknown entry kind: ${String(kind)}.`);
   }
   return errors;
+}
+
+const SITUATION_TRANSITION_KINDS = new Set([
+  'set_situation_status', 'situation_counter', 'promise_create',
+  'promise_fulfill', 'promise_break', 'suppress_reference_event',
+]);
+
+const ENGINE_EFFECT_OPS = new Set([
+  'consumeResource', 'changeLocation', 'applyCondition', 'advanceClock',
+  'transferItem', 'restoreResource', 'recordEvent', 'removeCondition', 'grantItem',
+]);
+
+/** Structural validation for SituationDefinitionV1 (publication blocker). */
+function validateSituationDefinition(def: Record<string, unknown>, errors: string[]): void {
+  const requireText = (key: string): string => (typeof def[key] === 'string' ? (def[key] as string).trim() : '');
+  if (!requireText('title')) errors.push('situation: title must be a non-empty string.');
+  if (!requireText('summary')) errors.push('situation: summary must be a non-empty string.');
+  if (!requireText('gmBrief')) errors.push('situation: gmBrief must be a non-empty string.');
+  const pressure = def.pressure;
+  if (typeof pressure !== 'object' || pressure === null || Array.isArray(pressure)) {
+    errors.push('situation: pressure must be an object.');
+  } else if (typeof (pressure as Record<string, unknown>).description !== 'string') {
+    errors.push('situation: pressure.description must be a string.');
+  }
+  if (!Array.isArray(def.participantEntryIds)) {
+    errors.push('situation: participantEntryIds must be an array.');
+  }
+  if (def.activation === undefined) {
+    errors.push('situation: activation condition is required.');
+  } else {
+    validateConditionShape(def.activation, errors, 'situation.activation');
+  }
+  if (def.knowledgeCondition !== undefined) {
+    validateConditionShape(def.knowledgeCondition, errors, 'situation.knowledgeCondition');
+  }
+  if (!Array.isArray(def.signs)) {
+    errors.push('situation: signs must be an array.');
+  }
+  const methods = def.methods;
+  if (!Array.isArray(methods) || methods.length === 0) {
+    errors.push('situation: at least one method template is required.');
+    return;
+  }
+  const seenMethodIds = new Set<string>();
+  const firstStepSignatures = new Set<string>();
+  const goals = new Set<string>();
+  for (const [index, raw] of methods.entries()) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      errors.push(`situation.methods[${index}]: must be an object.`);
+      continue;
+    }
+    const method = raw as Record<string, unknown>;
+    const prefix = `situation.methods[${index}]`;
+    for (const key of ['methodId', 'title', 'goal', 'tradeoffs', 'preparation'] as const) {
+      if (typeof method[key] !== 'string' || !(method[key] as string).trim()) {
+        errors.push(`${prefix}.${key} must be a non-empty string.`);
+      }
+    }
+    if (typeof method.methodId === 'string') {
+      if (seenMethodIds.has(method.methodId)) {
+        errors.push(`${prefix}.methodId duplicate: ${method.methodId}.`);
+      }
+      seenMethodIds.add(method.methodId);
+    }
+    if (typeof method.goal === 'string') goals.add(method.goal);
+    const firstStep = method.firstStep;
+    if (typeof firstStep !== 'object' || firstStep === null || Array.isArray(firstStep)) {
+      errors.push(`${prefix}.firstStep must be an object.`);
+    } else {
+      const step = firstStep as Record<string, unknown>;
+      if (typeof step.intent !== 'string' || !step.intent.trim()) {
+        errors.push(`${prefix}.firstStep.intent must be a non-empty string.`);
+      }
+      if (!['skill_check', 'ability', 'observe', 'talk', 'interact', 'move'].includes(String(step.actionKind))) {
+        errors.push(`${prefix}.firstStep.actionKind must be a proposal action kind.`);
+      }
+      const signature = `${String(step.actionKind)}|${String(step.skillId ?? '')}|${String(step.targetEntryId ?? '')}|${String(step.destinationId ?? '')}`;
+      if (firstStepSignatures.has(signature)) {
+        errors.push(`${prefix}: methods must differ in goal, first step or requirements (duplicate of an earlier method).`);
+      }
+      firstStepSignatures.add(signature);
+    }
+    if (method.visibility !== undefined) {
+      validateConditionShape(method.visibility, errors, `${prefix}.visibility`);
+    }
+    if (method.successEffects !== undefined) {
+      if (!Array.isArray(method.successEffects)) {
+        errors.push(`${prefix}.successEffects must be an array.`);
+      } else {
+        for (const effect of method.successEffects) {
+          const op = (effect as Record<string, unknown> | null)?.op;
+          if (typeof op !== 'string' || !ENGINE_EFFECT_OPS.has(op)) {
+            errors.push(`${prefix}.successEffects: only existing engine effect ops are allowed.`);
+          }
+        }
+      }
+    }
+    for (const key of ['onSuccess', 'onFailure'] as const) {
+      if (method[key] !== undefined) {
+        if (!Array.isArray(method[key])) {
+          errors.push(`${prefix}.${key} must be an array.`);
+        } else {
+          for (const op of method[key] as unknown[]) {
+            const kind = (op as Record<string, unknown> | null)?.kind;
+            if (typeof kind !== 'string' || !SITUATION_TRANSITION_KINDS.has(kind)) {
+              errors.push(`${prefix}.${key}: unknown transition op ${String(kind)}.`);
+            }
+          }
+        }
+      }
+    }
+  }
+  const transitions = def.transitions;
+  if (typeof transitions !== 'object' || transitions === null || Array.isArray(transitions)) {
+    errors.push('situation: transitions must be an object.');
+  } else {
+    for (const key of ['onSuccess', 'onPartial', 'onFailure', 'onExpire'] as const) {
+      const ops = (transitions as Record<string, unknown>)[key];
+      if (ops === undefined) continue;
+      if (!Array.isArray(ops)) {
+        errors.push(`situation.transitions.${key} must be an array.`);
+        continue;
+      }
+      for (const op of ops as unknown[]) {
+        const kind = (op as Record<string, unknown> | null)?.kind;
+        if (typeof kind !== 'string' || !SITUATION_TRANSITION_KINDS.has(kind)) {
+          errors.push(`situation.transitions.${key}: unknown transition op ${String(kind)}.`);
+        }
+      }
+    }
+  }
+  const referenceEvents = def.referenceEvents;
+  if (referenceEvents !== undefined) {
+    if (!Array.isArray(referenceEvents)) {
+      errors.push('situation: referenceEvents must be an array.');
+    } else {
+      for (const [index, raw] of referenceEvents.entries()) {
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          errors.push(`situation.referenceEvents[${index}]: must be an object.`);
+          continue;
+        }
+        const projection = raw as Record<string, unknown>;
+        const prefix = `situation.referenceEvents[${index}]`;
+        if (typeof projection.eventKey !== 'string' || !projection.eventKey.trim()) {
+          errors.push(`${prefix}.eventKey must be a non-empty string.`);
+        }
+        if (!Number.isInteger(projection.worldTimeOrder) || Number(projection.worldTimeOrder) < 0) {
+          errors.push(`${prefix}.worldTimeOrder must be a non-negative integer.`);
+        }
+        if (typeof projection.situationId !== 'string' || !projection.situationId.trim()) {
+          errors.push(`${prefix}.situationId must be a non-empty string.`);
+        }
+        if (projection.condition !== undefined) {
+          validateConditionShape(projection.condition, errors, `${prefix}.condition`);
+        }
+        if (projection.actorFate !== undefined) {
+          const fate = projection.actorFate as Record<string, unknown> | undefined;
+          if (typeof fate !== 'object' || fate === null
+            || !['active', 'dead'].includes(String(fate.lifeStatus))) {
+            errors.push(`${prefix}.actorFate.lifeStatus must be 'active' or 'dead'.`);
+          }
+        }
+      }
+    }
+  }
 }

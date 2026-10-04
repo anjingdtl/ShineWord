@@ -54,7 +54,7 @@ export interface ActionContract {
   turnId: string;
   expectedStateVersion: number;
   /** Optional on pre-progressive contracts; when present it is frozen into
-   * actionContractHash and names every immutable package used this turn. */
+   *  actionContractHash and names every immutable package used this turn. */
   contentDependency?: ContentDependencyBinding;
   /** Recoverable expression projection frozen before any turn request. */
   styleSnapshot?: EffectiveStyleSnapshotV1;
@@ -71,4 +71,11 @@ export interface ActionContract {
   timeCostMinutes: number;
   resourcePreconditions: ResourcePrecondition[];
   outcomes: Record<RollGrade, OutcomeClause>;
+  /**
+   * P7: situation method binding stamped by the LOCAL compiler when the
+   * submitted action matches a published method's first step. Frozen into
+   * the contract hash; the planner channel can never author it. Situation
+   * transitions bound to the method apply only through the local reducer.
+   */
+  methodRef?: { situationId: string; methodId: string };
 }

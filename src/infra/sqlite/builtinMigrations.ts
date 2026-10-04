@@ -115,6 +115,37 @@ CREATE TABLE IF NOT EXISTS turn_narratives (
 );
 `;
 
+/** P7: branch situation state + per-decision-point turn guidance. */
+export const PHASE7_SITUATION_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS branch_situations (
+  branch_id TEXT NOT NULL,
+  situation_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL CHECK(state_version >= 0),
+  status TEXT NOT NULL CHECK(status IN ('dormant','eligible','active','resolved','suppressed')),
+  situation_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(branch_id, situation_id),
+  FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_branch_situations_version
+  ON branch_situations(branch_id, state_version);
+
+CREATE TABLE IF NOT EXISTS branch_decision_guidance (
+  branch_id TEXT NOT NULL,
+  decision_point_id TEXT NOT NULL,
+  source_turn_id TEXT NOT NULL,
+  state_version INTEGER NOT NULL CHECK(state_version >= 0),
+  severity TEXT NOT NULL CHECK(severity IN ('normal','major')),
+  guidance_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(branch_id, decision_point_id),
+  FOREIGN KEY(branch_id) REFERENCES branches(branch_id) ON DELETE CASCADE
+);
+`;
+
 export const WORLD_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS worlds (
@@ -1218,4 +1249,5 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
     ALTER TABLE interaction_operations_v31 RENAME TO interaction_operations;
     CREATE UNIQUE INDEX idx_interaction_one_running_per_branch ON interaction_operations(branch_id) WHERE status='running';
   ` },
+  { version: 32, name: 'phase7_situation_state_and_guidance', sql: PHASE7_SITUATION_SCHEMA_SQL },
 ];

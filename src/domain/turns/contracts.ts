@@ -14,6 +14,8 @@ const FORBIDDEN_PLANNER_FIELDS = new Set([
   'newLevel',
   // Engine-only fields: the planner never caps restores or grants loot.
   'cap',
+  // P7: method bindings are stamped by the local compiler only.
+  'methodRef',
 ]);
 
 /** Ops an LLM action contract may contain (V0.2). Engine-only ops

@@ -7,6 +7,7 @@ import type {
 import type { TurnRollJournal, StageRollTurnInput, StagedTurnRecord } from '../../application/ports/turnRollJournal';
 import type { SqliteDatabase, SqliteRow, SqliteTransaction } from '../../application/ports/sqlite';
 import { cloneGameState, type EncounterSnapshotEntry, type GameStateSnapshot } from '../../domain/state/types';
+import type { SituationSnapshotEntry } from '../../domain/situations/types';
 import type { EncounterState } from '../../domain/combat/encounter';
 import { replaceEncounterSnapshots } from './encounterPersistence';
 import type { EffectOperation } from '../../domain/turns/types';
@@ -226,6 +227,18 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       this.contentManifestTablesAvailable = await hasBranchContentManifestTable(reader);
     }
     return this.contentManifestTablesAvailable;
+  }
+
+  private situationTablesAvailable: boolean | null = null;
+
+  private async hasSituationTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
+    if (this.situationTablesAvailable === null) {
+      const row = await reader.queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'branch_situations'`,
+      );
+      this.situationTablesAvailable = (row?.n ?? 0) === 1;
+    }
+    return this.situationTablesAvailable;
   }
 
   async getState(branchId: string): Promise<GameStateSnapshot | null> {
@@ -642,6 +655,10 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     if (snapshotPayload?.contentManifest) state.contentManifest = snapshotPayload.contentManifest;
     if (snapshotPayload?.segmentContentBinding) state.segmentContentBinding = snapshotPayload.segmentContentBinding;
     if (snapshotPayload?.styleSnapshot) state.styleSnapshot = snapshotPayload.styleSnapshot;
+    if (snapshotPayload?.situations) state.situations = snapshotPayload.situations;
+    if (typeof snapshotPayload?.causalWorldTimeOrder === 'number') {
+      state.causalWorldTimeOrder = snapshotPayload.causalWorldTimeOrder;
+    }
     if (await this.hasContentManifestTables(db)) {
       const manifest = await readBranchContentManifest(db, branchId, branch.state_version);
       if (manifest) state.contentManifest = manifest;
@@ -676,6 +693,18 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     // still refuse incomplete encounter snapshots in forkBranch.
     if (!state.encounters && await this.hasEncounterTables(db)) {
       state.encounters = await this.readEncounterSnapshots(db, branchId);
+    }
+    // Situation projections are authoritative branch history (P7); hydrate
+    // the head when the snapshot predates them or omits the array.
+    if (!state.situations && await this.hasSituationTables(db)) {
+      const situationRows = await db.queryAll<{ situation_id: string; situation_json: string }>(
+        'SELECT situation_id, situation_json FROM branch_situations WHERE branch_id = ? ORDER BY situation_id',
+        [branchId],
+      );
+      if (situationRows.length > 0) {
+        state.situations = situationRows.map(row =>
+          parseJson<SituationSnapshotEntry>(row.situation_json, 'branch_situations.situation_json'));
+      }
     }
     const projectionsAvailable = await this.hasProjectionTables(db);
     if (projectionsAvailable && !state.cards) {
@@ -933,6 +962,27 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
             (branch_id, quest_id, reward_id, actor_id, granted_state_version)
            VALUES (?, ?, ?, ?, ?)`,
           [state.branchId, reward.questId, reward.rewardId, reward.actorId, reward.grantedStateVersion],
+        );
+      }
+    }
+
+    // Situation state shares the same transaction and snapshot boundary; the
+    // DELETE+reINSERT keeps the projection identical to nextState.situations.
+    if (await this.hasSituationTables(tx)) {
+      await tx.execute('DELETE FROM branch_situations WHERE branch_id = ?', [state.branchId]);
+      for (const situation of state.situations ?? []) {
+        await tx.execute(
+          `INSERT INTO branch_situations
+            (branch_id, situation_id, state_version, status, situation_json, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            state.branchId,
+            situation.situationId,
+            state.stateVersion,
+            situation.status,
+            JSON.stringify(situation),
+            committedAt,
+          ],
         );
       }
     }

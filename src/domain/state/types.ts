@@ -126,6 +126,18 @@ export interface GameStateSnapshot {
   discoveries?: KnowledgeSnapshotEntry[];
   questProgress?: QuestProgressSnapshotEntry[];
   questRewards?: QuestRewardSnapshotEntry[];
+  /**
+   * Situation/promises/suppressions are branch history (P7). Absent on
+   * pre-P7 snapshots and legacy saves — situation play then starts empty and
+   * never back-fills canon futures as campaign experience.
+   */
+  situations?: import('../situations/types').SituationSnapshotEntry[];
+  /**
+   * Campaign causal progress (P7 §4.2): the highest canon worldTimeOrder the
+   * branch has actually reached through committed facts/events — never the
+   * turn count, never world-clock minutes. Absent on pre-P7 snapshots.
+   */
+  causalWorldTimeOrder?: number;
   /** Exact base + published branch deltas visible at this state. */
   contentManifest?: BranchContentManifest;
   /** Immutable world artifact selection and last historical style binding. */
@@ -218,6 +230,14 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
   }
   if (state.encounters) cloned.encounters = state.encounters.map(cloneEncounter);
   if (state.discoveries) cloned.discoveries = state.discoveries.map(entry => ({ ...entry }));
+  if (state.situations) cloned.situations = state.situations.map(entry => ({
+    ...entry,
+    counters: { ...entry.counters },
+    processedEventKeys: [...entry.processedEventKeys],
+    promises: entry.promises.map(promise => ({ ...promise })),
+    suppressedEventKeys: { ...entry.suppressedEventKeys },
+  }));
+  if (typeof state.causalWorldTimeOrder === 'number') cloned.causalWorldTimeOrder = state.causalWorldTimeOrder;
   if (state.questProgress) cloned.questProgress = state.questProgress.map(entry => ({
     ...entry,
     counters: { ...entry.counters },

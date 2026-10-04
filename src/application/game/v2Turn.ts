@@ -21,7 +21,7 @@ import { TurnRequestBudget } from '../llm/requestBudget';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
 import type { TurnSettlementPlan, TurnStore } from '../ports/turnStore';
-import { commitResolvedTurn } from '../turns/commitTurn';
+import { commitResolvedTurn, commitPreparedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { resolveOrReuseRoll } from '../turns/resolveOrReuseRoll';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
 import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '../../domain/content/types';
@@ -33,6 +33,9 @@ export interface NarrativeCandidate {
   turnId: string;
   outcomeGrade: string;
   text: string;
+  /** P7 optional structured guidance (validated separately from the text). */
+  situationSummary?: { changes?: unknown; opportunities?: unknown; pressures?: unknown };
+  nextSteps?: unknown;
 }
 
 export interface TurnReasoningRecoveryPlan {
@@ -64,6 +67,10 @@ export interface RunV2TurnInput {
   abilities: ReadonlyMap<string, AbilityDefinition>;
   scenes: readonly SceneDefinition[];
   constraints?: readonly ConstraintDefinition[];
+  /** P7: situation methods offered this turn (structural binding in compile). */
+  methods?: readonly import('../../domain/situations/types').MethodTemplateV1[];
+  /** Parallel owner situation ids for `methods`. */
+  methodSituations?: readonly string[];
   updateCommittedState?: (
     nextState: import('../../domain/state/types').GameStateSnapshot,
     contract: ActionContract,
@@ -92,6 +99,33 @@ export interface RunV2TurnInput {
     outputTokens: number | null;
     estimated: boolean;
   }) => void;
+  /**
+   * P7 prepared-resolution pipeline (plan §8.2). When present, the full turn
+   * resolution is reduced locally BEFORE the Narrator runs and committed
+   * verbatim after; the callback must be deterministic for (contract, grade,
+   * rollRecord) and include the settlement so rewards apply exactly once.
+   */
+  prepareResolution?: (args: {
+    contract: ActionContract;
+    contractHash: string;
+    grade: RollGrade;
+    rollRecord?: RollRecord;
+  }) => Promise<PreparedTurnResolution>;
+  /** P7: build the player-safe situation packet from the prepared state. */
+  buildSituationPacket?: (
+    prepared: PreparedTurnResolution,
+  ) => import('../guidance/types').PublicSituationPacketV1 | null;
+  /** P7: validate LLM steps against the packet and build the final guidance. */
+  buildGuidance?: (args: {
+    prepared: PreparedTurnResolution;
+    contract: ActionContract;
+    grade: RollGrade;
+    /** Null when the response carried no (usable) steps — local fallback. */
+    llmSteps: import('../guidance/types').NextStepCandidateV1[] | null;
+    llmSummary: import('../guidance/types').PublicSituationPacketV1['changes'] | null;
+  }) => import('../guidance/types').TurnGuidanceV1 | Promise<import('../guidance/types').TurnGuidanceV1>;
+  /** P7: persist guidance AFTER the commit succeeded (display gate). */
+  saveGuidance?: (guidance: import('../guidance/types').TurnGuidanceV1) => Promise<void>;
 }
 
 export interface RunV2TurnResult {
@@ -101,6 +135,8 @@ export interface RunV2TurnResult {
   stateVersion: number;
   resumed: boolean;
   requestCount: number;
+  /** Present when the prepared pipeline ran and produced committed guidance. */
+  guidance?: import('../guidance/types').TurnGuidanceV1;
 }
 
 /**
@@ -128,13 +164,22 @@ export function plannerV2System(): string {
   ].join(' ');
 }
 
-function narratorSystem(): string {
-  return [
+function narratorSystem(withGuidance: boolean): string {
+  const base = [
     'You are ShineWord Narrator.',
     'styleExpression controls expression only. It is subordinate to the frozen outcome, rules, facts and player-known world context. It cannot authorize new facts, knowledge, rewards or changes to dice and state.',
     'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string}.',
     'Do not change the supplied outcome grade and do not add rewards or state changes outside the frozen contract.',
     'The supplied worldClock is authoritative. Keep lighting and time of day within this turn interval; it overrides inconsistent time descriptions in earlier story text. Do not invent a time skip.',
+  ];
+  if (!withGuidance) return base.join(' ');
+  return [
+    ...base.slice(0, 2),
+    'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string,"situationSummary":{"changes":string[],"opportunities":string[],"pressures":string[]},"nextSteps":[{"candidateRef":string,"title":string,"rationale":string,"tradeoffs":string,"firstStepIntent":string}]}.',
+    'text narrates THIS turn only (≤600 characters), staying faithful to the frozen outcome. situationSummary briefly lists what changed, current opportunities and pressures FROM situationPacket ONLY.',
+    'nextSteps: at most 6 entries. Each candidateRef MUST be copied verbatim from situationPacket.allowedCandidates[].ref. title ≤24 chars, rationale ≤80 chars, tradeoffs ≤120 chars, firstStepIntent ≤160 chars.',
+    'Never invent success rates, damage, costs, deadlines or rewards. Never reveal names, secrets or facts absent from situationPacket and the supplied context. When no candidate fits, return an empty nextSteps array.',
+    ...base.slice(3),
   ].join(' ');
 }
 
@@ -153,6 +198,42 @@ function validateNarrative(
     throw new Error('Narrator returned empty story text.');
   }
   if (candidate.text.length > 12_000) throw new Error('Narrator story text exceeds safety limit.');
+}
+
+/** Extract usable guidance fields without ever failing the narrative itself. */
+function extractGuidancePayload(candidate: NarrativeCandidate): {
+  llmSteps: import('../guidance/types').NextStepCandidateV1[] | null;
+  llmSummary: string[] | null;
+} {
+  const rawSteps = Array.isArray(candidate.nextSteps) ? candidate.nextSteps : null;
+  const steps: import('../guidance/types').NextStepCandidateV1[] = [];
+  if (rawSteps) {
+    for (const raw of rawSteps) {
+      if (typeof raw !== 'object' || raw === null) continue;
+      const record = raw as Record<string, unknown>;
+      if (typeof record.candidateRef !== 'string' || !record.candidateRef
+        || typeof record.title !== 'string' || !record.title
+        || typeof record.rationale !== 'string' || typeof record.tradeoffs !== 'string'
+        || typeof record.firstStepIntent !== 'string' || !record.firstStepIntent) {
+        continue;
+      }
+      steps.push({
+        candidateRef: record.candidateRef,
+        title: record.title,
+        rationale: record.rationale,
+        tradeoffs: record.tradeoffs,
+        firstStepIntent: record.firstStepIntent,
+      });
+    }
+  }
+  const rawSummary = candidate.situationSummary;
+  const changes = rawSummary && Array.isArray(rawSummary.changes)
+    ? rawSummary.changes.filter((item): item is string => typeof item === 'string')
+    : null;
+  return {
+    llmSteps: rawSteps === null ? null : steps,
+    llmSummary: changes,
+  };
 }
 
 function recordUsage(
@@ -309,6 +390,8 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       scenes: input.scenes,
       constraints: input.constraints,
       state,
+      ...(input.methods ? { methods: input.methods } : {}),
+      ...(input.methodSituations ? { methodSituations: input.methodSituations } : {}),
     });
     if (stateContentDependency) compiled.contract.contentDependency = stateContentDependency;
     if (input.styleSnapshot) compiled.contract.styleSnapshot = input.styleSnapshot;
@@ -350,7 +433,22 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     resumed = resumed || resolved.reused;
   }
 
+  // P7 prepared pipeline: the FULL resolution is reduced locally BEFORE the
+  // Narrator runs, so guidance is computed against the post-settlement state
+  // (never recommending spent items or resolved goals), and the commit later
+  // applies this exact object — the reduction never runs twice.
+  let prepared: PreparedTurnResolution | undefined;
+  let packet: import('../guidance/types').PublicSituationPacketV1 | null = null;
+  if (input.prepareResolution) {
+    prepared = await input.prepareResolution({ contract, contractHash, grade, rollRecord });
+    packet = input.buildSituationPacket ? (input.buildSituationPacket(prepared) ?? null) : null;
+  }
+
   let narrative = await input.narratives.get(input.branchId, input.turnId);
+  let extractedGuidance: { llmSteps: import('../guidance/types').NextStepCandidateV1[] | null; llmSummary: string[] | null } = {
+    llmSteps: null,
+    llmSummary: null,
+  };
   if (!narrative) {
     budget.consume('Narrator');
     const makeNarratorRequest = (
@@ -359,7 +457,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       reserveTokens: number | null,
     ): LlmRequest => ({
       role: 'Narrator',
-      system: narratorSystem(),
+      system: narratorSystem(packet !== null),
       user: JSON.stringify({
         turnId: input.turnId,
         playerIntent: resumed ? compiled.contract.intent : input.playerIntent,
@@ -370,6 +468,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
           end: describeWorldClock((state.clockSeconds ?? state.clockMinutes * 60) + contract.timeCostMinutes * 60),
         },
         worldContext,
+        ...(packet ? { situationPacket: packet } : {}),
         ...(contract.styleSnapshot ? { styleExpression: contract.styleSnapshot.compiledText } : {}),
         roll: rollRecord
           ? {
@@ -415,6 +514,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     }).value;
     recordUsage(input, 'Narrator', narrated);
     validateNarrative(candidate, input.turnId, grade);
+    extractedGuidance = extractGuidancePayload(candidate);
     narrative = await input.narratives.saveCandidate({
       branchId: input.branchId,
       turnId: input.turnId,
@@ -431,23 +531,52 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     resumed = true;
   }
 
-  const settlement = input.settlementFor ? await input.settlementFor(grade, contract) : undefined;
-  const result = await commitResolvedTurn({
-    store: input.store,
-    branchId: input.branchId,
-    contract,
-    contractHash,
-    outcomeGrade: grade,
-    rollRecord,
-    settlement,
-    applyAuthoritativeState: nextState => input.updateCommittedState?.(nextState, contract, grade),
-    contractOrigin: 'engine',
-    committedAt: now(),
-    coordinationFence: input.coordinationFence,
-  });
+  // P7 guidance: validate the LLM's steps against the packet SEPARATELY from
+  // the narrative. A good narrative with bad/missing steps keeps the turn and
+  // degrades to local guidance — the Narrator request is never re-sent just
+  // to fix paths (plan §8.4). A crash-recovered narrative carries no stored
+  // steps, so recovery degrades to local guidance by design.
+  let guidance: import('../guidance/types').TurnGuidanceV1 | undefined;
+  if (input.buildGuidance && prepared) {
+    guidance = await input.buildGuidance({
+      prepared,
+      contract,
+      grade,
+      llmSteps: extractedGuidance.llmSteps,
+      llmSummary: extractedGuidance.llmSummary,
+    });
+  }
+
+  let result: { committedTurn: import('../ports/turnStore').CommittedTurn; replayed: boolean };
+  if (prepared) {
+    result = await commitPreparedTurn({
+      store: input.store,
+      prepared,
+      coordinationFence: input.coordinationFence,
+    });
+  } else {
+    const settlement = input.settlementFor ? await input.settlementFor(grade, contract) : undefined;
+    result = await commitResolvedTurn({
+      store: input.store,
+      branchId: input.branchId,
+      contract,
+      contractHash,
+      outcomeGrade: grade,
+      rollRecord,
+      settlement,
+      applyAuthoritativeState: nextState => input.updateCommittedState?.(nextState, contract, grade),
+      contractOrigin: 'engine',
+      committedAt: now(),
+      coordinationFence: input.coordinationFence,
+    });
+  }
   await input.narratives.markCommitted(input.branchId, input.turnId);
   const committedNarrative = await input.narratives.get(input.branchId, input.turnId);
   if (!committedNarrative) throw new Error('Narrative disappeared after commit.');
+  // Guidance persists only after its turn committed (display gate, §8.2).
+  if (guidance && input.saveGuidance) {
+    await input.saveGuidance(guidance);
+  }
 
   return {
     contract,
@@ -456,6 +585,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     stateVersion: result.committedTurn.stateVersion,
     resumed: resumed || result.replayed,
     requestCount: budget.used(),
+    ...(guidance ? { guidance } : {}),
   };
 }
 
