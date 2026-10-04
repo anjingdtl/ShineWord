@@ -14,6 +14,7 @@ import {
   importPortableWorldPackageFile,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
+import { getDatabaseRuntime } from '../../database';
 import { importNovelUnified } from '../../sourceImport';
 import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
 import { refreshProjectBuildStatusFast, filterProjects, type ProjectStatusProjection } from '../../projectLibrary';
@@ -120,14 +121,30 @@ export function LibraryScreen(): React.JSX.Element {
         }
         await refresh();
       })().catch(e => setError(e instanceof Error ? e.message : String(e)));
-      setNotice(`已创建项目「${picked.name.replace(/\.txt$/i, '')}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);
+      // Same-source re-import intentionally reuses the EXISTING world for
+      // identical bytes (sourceImport reusedSource): the project the user
+      // lands in is the world that owns the source, NOT a new project named
+      // after the picked file. Saying "已创建项目" here lied about what
+      // actually happened (long-run 2026-10-05 BUG-IMPORT-DEDUP-1).
+      const landedTitle = await (async () => {
+        try {
+          const runtime = await getDatabaseRuntime();
+          const world = await runtime.worldStore.getWorld(imported.worldId);
+          return world?.title ?? picked.name.replace(/\.txt$/i, '');
+        } catch {
+          return picked.name.replace(/\.txt$/i, '');
+        }
+      })();
+      setNotice(imported.reusedSource
+        ? `该小说已存在项目「${landedTitle}」：同源文件继续在原项目上构建（本次 ${imported.chapterCount} 章）。`
+        : `已创建项目「${landedTitle}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);
       setImportMessage(null);
       await refresh();
       // Task §21: land in the fresh project's hub; its build progress lives
       // there, not in the global list.
       navigation.navigate('ProjectHub', {
         worldId: imported.worldId,
-        title: picked.name.replace(/\.txt$/i, ''),
+        title: landedTitle,
       });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
