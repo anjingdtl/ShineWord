@@ -250,7 +250,7 @@ test('phase6 schema 28/29/30 upgrade preserves populated interaction operations 
         INSERT INTO interaction_operation_steps VALUES ('old-op',0,'npc_turn','paid-old-0',1,2,'committed','now','now');
         INSERT INTO interaction_operation_steps VALUES ('old-op',1,'npc_turn','paid-old-1',2,NULL,'prepared','now','now');`);
       const before=db.prepare('SELECT * FROM interaction_operations').all(), steps=db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all();
-      assert.deepEqual(await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS),Array.from({length:32-baseline},(_,i)=>baseline+i+1));
+      assert.deepEqual(await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS),Array.from({length:33-baseline},(_,i)=>baseline+i+1));
       assert.deepEqual(db.prepare('SELECT * FROM interaction_operations').all(),before);assert.deepEqual(db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all(),steps);
       assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys,1);assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
       db.exec(`INSERT INTO interaction_operations VALUES ('new-turn','c','b','play_turn','running',3,9,0,1,'now','now')`);

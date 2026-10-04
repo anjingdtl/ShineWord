@@ -1269,4 +1269,44 @@ export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [
     ALTER TABLE package_entries_v32 RENAME TO package_entries;
     CREATE INDEX IF NOT EXISTS idx_package_entries_kind ON package_entries(world_id, kind);
   ` },
+  { version: 33, name: 'phase8_frozen_turn_materials', sql: `
+    CREATE TABLE IF NOT EXISTS frozen_turn_material_roots (
+      root_id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      logical_request_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      attempt INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_frozen_roots_turn
+      ON frozen_turn_material_roots(branch_id, turn_id);
+    CREATE TABLE IF NOT EXISTS frozen_turn_postprocess_outbox (
+      handoff_id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      committed_state_version INTEGER NOT NULL,
+      rule_binding_hash TEXT,
+      public_evidence_hash TEXT NOT NULL,
+      body_revision_hash TEXT,
+      has_body INTEGER NOT NULL DEFAULT 0,
+      task_schema TEXT NOT NULL DEFAULT 'turn-postprocess-handoff-1',
+      status TEXT NOT NULL CHECK(status IN ('pending','running','retryable_failed','outcome_unknown','blocked','succeeded','superseded','cancelled')),
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      fencing_token INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      physical_http_count INTEGER NOT NULL DEFAULT 0,
+      diagnostics_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_frozen_outbox_status
+      ON frozen_turn_postprocess_outbox(branch_id, status, committed_state_version);
+  ` },
 ];

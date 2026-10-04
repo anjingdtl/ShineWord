@@ -26,6 +26,7 @@ import {
   buildCandidate,
 } from '../context/candidateCollector';
 import { collectTypedCandidates } from '../context/turnMaterialCollector';
+import { RootFrozenMaterialsStore } from '../context/frozenTurnMaterialsStore';
 import type { ContextCandidate } from '../context/contextTypes';
 import { planTurnContext } from '../context/contextPlanner';
 import { renderFrozenContext } from '../context/contextRenderer';
@@ -2298,17 +2299,46 @@ export class CampaignSession {
         tokenAllowance: Math.max(0, Math.min(600, Math.floor((this.turnCapabilities().contextWindowTokens ?? 12000) * 0.025))),
       });
     }
-    const turnBundle = await this.buildTurnContextBundle({
-      branchId: options.branchId,
-      stateVersion: summary.state.stateVersion,
-      parts: contextParts,
-      sourceEvidenceText: safeSourceContext,
-      intent: options.intent,
-      goal: summary.goal,
-      plannerCards,
-      recentHistory,
-      styleText: styleSnapshot?.compiledText,
-    });
+    // P8-3 durable freeze (plan §11.3): a frozen root for this turnId is the
+    // recovery source. Resume reuses the frozen bundle verbatim — a restart
+    // never silently re-derives materials from the live DB (I05). A corrupted
+    // root fails explicitly with zero LLM calls and keeps the envelope.
+    const frozenStore = new RootFrozenMaterialsStore(this.deps.db, this.deps.hashProvider);
+    const frozenRoot = await frozenStore.loadRootSnapshot(options.branchId, turnId, 'turn:context');
+    let turnBundle;
+    if (frozenRoot?.payload.turnBundle
+      && frozenRoot.payload.stateBaseline.expectedStateVersion === summary.state.stateVersion) {
+      turnBundle = frozenRoot.payload.turnBundle;
+    } else {
+      turnBundle = await this.buildTurnContextBundle({
+        branchId: options.branchId,
+        stateVersion: summary.state.stateVersion,
+        parts: contextParts,
+        sourceEvidenceText: safeSourceContext,
+        intent: options.intent,
+        goal: summary.goal,
+        plannerCards,
+        recentHistory,
+        styleText: styleSnapshot?.compiledText,
+      });
+      await frozenStore.saveRootSnapshot({
+        campaignId: options.campaignId,
+        branchId: options.branchId,
+        turnId,
+        logicalRequestId: 'turn:context',
+        role: 'turn',
+        stage: 'context_bundle',
+        attempt: 1,
+        payload: {
+          turnBundle,
+          stateBaseline: { branchId: options.branchId, expectedStateVersion: summary.state.stateVersion },
+          capabilitiesFingerprint: this.cachedTurnCapabilities
+            ? `${this.cachedTurnCapabilities.contextWindowTokens}/${this.cachedTurnCapabilities.maxOutputTokens}`
+            : 'unknown',
+        },
+        createdAt: new Date().toISOString(),
+      });
+    }
     const plannerWorldContext = turnBundle.plannerText;
     this.lastTurnContexts = {
       planner: turnBundle.plannerContext,

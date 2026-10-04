@@ -31,13 +31,35 @@ const hashProvider = {
   },
 };
 
-function setupStoryMemoryDb() {
+async function setupStoryMemoryDb() {
   const db = new DatabaseSync(':memory:');
-  const migrationsDir = path.join(__dirname, '..', 'migrations');
-  for (const name of fs.readdirSync(migrationsDir).sort()) {
-    if (/^\d+_.*\.sql$/.test(name)) db.exec(fs.readFileSync(path.join(migrationsDir, name), 'utf8'));
-  }
+  const adapter = new NodeSqliteAdapter(db);
+  const { applySqliteMigrations } = require('../dist/infra/sqlite/migrations');
+  const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
+  await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
   return db;
+}
+
+/** Minimal async adapter over node:sqlite (same semantics as mobile RN adapter). */
+class NodeSqliteAdapter {
+  constructor(db) { this.db = db; }
+  async execute(sql, params = []) {
+    if (params.length === 0 && sql.includes(';')) { this.db.exec(sql); return 0; }
+    return this.db.prepare(sql).run(...params).changes;
+  }
+  async queryOne(sql, params = []) { return this.db.prepare(sql).get(...params) ?? null; }
+  async queryAll(sql, params = []) { return this.db.prepare(sql).all(...params); }
+  async transaction(work) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const value = await work(this);
+      this.db.exec('COMMIT');
+      return value;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
 }
 
 function cleanMemoryState(branchId, throughStateVersion) {
@@ -128,32 +150,40 @@ test('G2: a checkpoint with future coverage is rejected, not returned as usable 
 // G3 (B06/T01): there is no persisted freeze — lastTurnContexts is a
 // debugging field and a corrupted envelope silently degrades into a live-DB
 // refreeze. P8-3 adds durable frozen turn materials with explicit failure.
-test('G3: a corrupted persisted freeze fails explicitly with zero LLM calls', () => {
+test('G3: a corrupted persisted freeze fails explicitly with zero LLM calls', async () => {
   const { RootFrozenMaterialsStore } = requireModule(
     '../dist/application/context/frozenTurnMaterialsStore',
     'P8-3',
   );
-  const db = new DatabaseSync(':memory:');
-  const store = new RootFrozenMaterialsStore(db);
-  const snapshot = {
-    schemaVersion: 'frozen-turn-materials-1',
+  const db = await setupStoryMemoryDb();
+  const store = new RootFrozenMaterialsStore(new NodeSqliteAdapter(db), hashProvider);
+  await store.saveRootSnapshot({
     campaignId: 'campaign-a',
     branchId: 'branch-a',
     turnId: 'turn-1',
     logicalRequestId: 'planner:turn-1',
-    materials: [{ id: 'm1', kind: 'situation', contentHash: 'h1' }],
+    role: 'planner',
+    stage: 'context_bundle',
+    attempt: 1,
+    payload: {
+      stateBaseline: { branchId: 'branch-a', expectedStateVersion: 0 },
+      capabilitiesFingerprint: 'cap-1',
+      materials: [{ id: 'm1', kind: 'situation', contentHash: 'h1' }],
+    },
     createdAt: '2026-10-04T00:00:00.000Z',
-  };
-  store.saveRootSnapshot(snapshot);
+  });
   // Corrupt the persisted JSON directly.
   db.prepare(
-    'UPDATE frozen_turn_material_roots SET payload_json = "{not json" WHERE turn_id = ?',
-  ).run('turn-1');
-  assert.throws(
+    'UPDATE frozen_turn_material_roots SET payload_json = ? WHERE turn_id = ?',
+  ).run('{not json', 'turn-1');
+  await assert.rejects(
     () => store.loadRootSnapshot('branch-a', 'turn-1', 'planner:turn-1'),
     error => /frozen|corrupt|损坏/i.test(String(error && error.message)),
     'corrupted freeze must fail explicitly instead of reading the live DB',
   );
+  // The original envelope is preserved for diagnostics, not deleted.
+  const raw = await store.rawPayloadJson('branch-a', 'turn-1', 'planner:turn-1');
+  assert.equal(raw, '{not json', 'the corrupt envelope is kept, never silently replaced');
 });
 
 // G4 (B08/B12-of-plan): authoritative commits have no durable post-processing
@@ -161,7 +191,7 @@ test('G3: a corrupted persisted freeze fails explicitly with zero LLM calls', ()
 // roll the commit back. P8-4 puts commit + outbox in one transaction.
 test('G4: committing a turn writes a handoff outbox row in the same transaction, and outbox failure rolls everything back', async () => {
   const { SqliteTurnStore } = requireModule('../dist/infra/sqlite/sqliteTurnStore', 'P8-4');
-  const db = setupStoryMemoryDb();
+  const db = await setupStoryMemoryDb();
   db.prepare(
     'INSERT INTO branches (branch_id, campaign_id, state_version, created_at) VALUES (?, ?, ?, ?)',
   ).run('branch-a', 'campaign-a', 0, '2026-10-04T00:00:00.000Z');
@@ -225,7 +255,7 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
   assert.equal(outboxRows.n, 1, 'an authoritative commit must leave exactly one handoff row');
 
   // Fault injection: an outbox write failure must abort the whole commit.
-  const db2 = setupStoryMemoryDb();
+  const db2 = await setupStoryMemoryDb();
   db2.prepare(
     'INSERT INTO branches (branch_id, campaign_id, state_version, created_at) VALUES (?, ?, ?, ?)',
   ).run('branch-a', 'campaign-a', 0, '2026-10-04T00:00:00.000Z');
@@ -290,7 +320,7 @@ test('G5: story memory state writes are CAS-guarded; a stale fingerprint is refu
     '../dist/application/memory/storyMemoryCasRepository',
     'P8-5',
   );
-  const db = setupStoryMemoryDb();
+  const db = await setupStoryMemoryDb();
   const store = new SqliteStoryMemoryStore(db, hashProvider);
   const first = cleanMemoryState('branch-a', 8);
   first.metadata.fingerprint = 'fp-1';
