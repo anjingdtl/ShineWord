@@ -163,7 +163,16 @@ export class TurnPostProcessingCoordinator {
            AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
         [owner, leaseExpiresAt, now.toISOString(), row.handoff_id, now.toISOString()],
       );
-      if (changes > 0) claimed.push(this.mapRow({ ...row, status: 'running' }));
+      if (changes > 0) {
+        // Re-read to carry the NEW fencing token: the conditional terminal
+        // updates must match the token THIS claim produced, or a concurrent
+        // claimer's token would fail closed (I08).
+        const fresh = await this.input.db.queryOne<HandoffRow>(
+          'SELECT * FROM frozen_turn_postprocess_outbox WHERE handoff_id = ?',
+          [row.handoff_id],
+        );
+        if (fresh) claimed.push(this.mapRow(fresh));
+      }
     }
     return claimed;
   }
