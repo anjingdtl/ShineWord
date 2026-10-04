@@ -81,8 +81,8 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 
 ### 未关闭缺陷（准确记录）
 
-- **L4（代码级已修复，设备复现验证待做）**：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集（见上表）。修复已过全量门禁与独立复审（approve-with-nits，应修项已吸收：headless runner 绕行、超长 id 幂等加固、修复失败日志、fact_sources 作用域）；设备端按 part3 原始复现路径回归（追加第三部→段发布解除阻断）尚未执行，执行前不宣称 L4 验收关闭。
-- part3 恢复时观察到一次映射重发（#26 与 #25 输入差 1 字符→batchHash 漂移→缓存未命中）。L3 修复覆盖的“在手丢弃”场景已被协议测试钉住；该 1 字符漂移的成因未定谳，待查。
+- **L4（已关闭，2026-10-04 设备回归通过）**：根因确认为 CJK 实体键进入 canon id 违反段工件 TOKEN 字符集（见上表）。代码修复过全量门禁与独立复审（approve-with-nits，应修项已吸收）；设备端按 part3 原始路径回归通过（证据见”L4 修复轮”），缺陷关闭。
+- part3 恢复时观察到一次映射重发（#26 与 #25 输入差 1 字符→batchHash 漂移→缓存未命中）。L3 修复覆盖的“在手丢弃”场景已被协议测试钉住；该 1 字符漂移的成因未定谳，待查（注：本轮 id 重命名导致的映射缓存失效重发是确定性、可解释的另一类，不与此混同）。
 
 ### 本轮新增设备证据（API37.1 WHPX 模拟器，正常 UI 驱动）
 
@@ -108,7 +108,18 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 
 独立复审结论 approve-with-nits：GLOB 语义、PRAGMA/事务顺序、FK 引用覆盖（对照全部迁移）、重放一致性同态均被逐项验证；4 项应修（headless 绕行、超长 id 幂等、静默吞错、fact_sources 作用域）已全部吸收，事件 id 不对称以注释定谳。
 
-门禁：`verify:core` **796/796**（原 792 + 4 新增）、root/mobile 严格类型 0、`verify:version` 0、`git diff --check` 0。设备端 part3 原始路径回归（追加第三部→发布解除阻断）待做，完成前不宣称 L4 关闭。
+门禁：`verify:core` **796/796**（原 792 + 4 新增）、root/mobile 严格类型 0、`verify:version` 0、`git diff --check` 0。
+
+### L4 设备端回归（2026-10-04，emulator-5554 / Medium_Phone AVD / API37.1 WHPX）
+
+含修复的独立 Debug 构建（SHA256 `a553efb7dabf55874fc9d0469c36fe39226e0ddc32bd777d09d892f250b7c1d0`）`install -r` 保留数据升级，冷启动后**仅经正常 UI**（项目卡→继续构建）恢复 part3 任务，无任何数据库手工干预：
+
+- Pre-state（安装前取证）：L4 世界 `…-musjtyqo` 存量 13 实体 / 2 事实 / 8 映射 id 不合规（如 `ent-…-夜莺`）；目标 run `phase6-seg-36c8dda…-g1-r0` 为 `stopped_user`/`package_finalize_failed`，诊断表有其 `invalid_artifact_structure` 两行；已发布 4 段；账本 35 attempt。
+- 恢复过程：构建启动即执行存量修复（`夜莺→u591cu83ba`、`安娜→u5b89u5a1c`、`凡纳→u51e1u7eb3`、`北坡矿山→u5317u5761u77ffu5c71` 等）；引用被重命名实体的映射批次缓存按预期失效，产生 **1 次真实重映射调用**（HTTP 200，35.7s，38,531 tokens，cached 0）；随后第 5 段（3 成员 part3 段）发布成功。
+- Post-state（发布后取证）：残留不合规 id **0/0/0**；引用零孤儿（facts→entities、mappings→entities、aliases、fact_sources 四路 LEFT JOIN 均 0）；`PRAGMA foreign_key_check` 0 违规、`integrity_check` ok；目标 run `completed`/publishing/`last_error_code=null`；工件 5 段；诊断表 **0 新增行**（原 L4 阻断行保留为历史）；账本 **36 = 35+1**，与私有转发器逐条一致（本轮 cap 8 请求/200k token，实用 1）。
+- 日志无 FATAL/无 crash、无修复告警输出（修复成功路径静默）。转发器已停、adb reverse 已移除、0 在途请求。
+- 边界：单设备单次回归（n=1、模拟器非真机），不外推统计性能；"继续构建"前的审查项在本路径为空（上次运行已完成审查）。
+
 
 ## 用户指定的本地资源
 
