@@ -43,6 +43,25 @@ function relationshipIdFor(fromActorId: string, toActorId: string): string {
 const cap = (list: string[] | undefined, max: number): string[] =>
   (list ?? []).slice(0, max);
 
+/**
+ * P8-5 (B10/T09): an entity's change time comes from the evidence it cites,
+ * never from the batch end. When a patch item cites no in-batch evidence the
+ * validator has already rejected it; the fallback exists for replayed
+ * historical patches only.
+ */
+function evidenceTimeOf(
+  evidenceTurnIds: ReadonlyArray<string>,
+  turnVersions: ReadonlyMap<string, number>,
+  fallback: number,
+): number {
+  let latest = -1;
+  for (const turnId of evidenceTurnIds) {
+    const version = turnVersions.get(turnId);
+    if (version !== undefined && version > latest) latest = version;
+  }
+  return latest >= 0 ? latest : fallback;
+}
+
 export interface MergePatchInput {
   patch: StoryMemoryPatch;
   patchId: string;
@@ -97,7 +116,7 @@ export function mergeStoryMemoryPatch(
         secretsKnownToPlayer: cap(update.secretsKnownToPlayer ?? existing?.currentNarrativeState.secretsKnownToPlayer, MEMORY_MERGER_CAPS.secrets),
       },
       importantExperiences: cap(update.importantExperiences ?? existing?.importantExperiences, MEMORY_MERGER_CAPS.importantExperiences),
-      lastChangedStateVersion: to,
+      lastChangedStateVersion: evidenceTimeOf(update.evidenceTurnIds, input.turnVersions, to),
     };
   }
 
@@ -118,7 +137,7 @@ export function mergeStoryMemoryPatch(
       importantPromises: cap(update.importantPromises ?? existing?.importantPromises, MEMORY_MERGER_CAPS.relationshipPromises),
       unresolvedTensions: cap(update.unresolvedTensions ?? existing?.unresolvedTensions, MEMORY_MERGER_CAPS.unresolvedTensions),
       publicStatus: update.publicStatus ?? existing?.publicStatus ?? 'public',
-      lastChangedStateVersion: to,
+      lastChangedStateVersion: evidenceTimeOf(update.evidenceTurnIds, input.turnVersions, to),
     };
     next.relationships[relationshipId] = merged;
   }
@@ -134,7 +153,7 @@ export function mergeStoryMemoryPatch(
         stakes: change.stakes ?? existing?.stakes ?? '',
         status: 'open',
         resolution: change.action === 'update' ? existing?.resolution ?? null : null,
-        lastChangedStateVersion: to,
+        lastChangedStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
       };
     } else if (change.action === 'resolve') {
       delete next.narrative.activeConflicts[conflictId];
@@ -143,7 +162,7 @@ export function mergeStoryMemoryPatch(
         threadId: conflictId,
         title: change.title,
         resolution: change.resolution ?? '',
-        resolvedAtStateVersion: to,
+        resolvedAtStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
       });
     }
   }
@@ -158,7 +177,7 @@ export function mergeStoryMemoryPatch(
         description: change.description ?? existing?.description ?? '',
         status: 'open',
         resolution: null,
-        lastChangedStateVersion: to,
+        lastChangedStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
       };
     } else {
       delete next.narrative.openThreads[threadId];
@@ -166,7 +185,7 @@ export function mergeStoryMemoryPatch(
         threadId,
         title: change.title,
         resolution: change.resolution ?? '',
-        resolvedAtStateVersion: to,
+        resolvedAtStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
       });
     }
   }
@@ -181,7 +200,7 @@ export function mergeStoryMemoryPatch(
         description: change.description ?? existing?.description ?? '',
         status: 'planted',
         payoff: null,
-        lastChangedStateVersion: to,
+        lastChangedStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
       };
     } else {
       const existing = next.narrative.foreshadowing[foreshadowingId];
@@ -192,7 +211,7 @@ export function mergeStoryMemoryPatch(
           ...existing,
           status: 'paid_off',
           payoff: change.payoff ?? '',
-          lastChangedStateVersion: to,
+          lastChangedStateVersion: evidenceTimeOf(change.evidenceTurnIds, input.turnVersions, to),
         };
       }
     }

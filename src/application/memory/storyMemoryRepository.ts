@@ -168,6 +168,46 @@ export class SqliteStoryMemoryStore {
     );
   }
 
+  /**
+   * P8-5 atomic checkpoint application (B09/I09, plan §15.5): patch insert,
+   * CAS-guarded state write and patch-applied marking happen in ONE
+   * transaction. A crash can never leave a pending patch row with an
+   * already-advanced state row, and a concurrent writer's checkpoint (CAS
+   * mismatch) aborts the whole batch.
+   */
+  async applyCheckpointAtomically(input: {
+    patchRow: {
+      patchId: string;
+      fromStateVersion: number;
+      toStateVersion: number;
+      baseFingerprint: string;
+      patch: StoryMemoryPatch;
+    };
+    nextState: StoryMemoryState;
+  }): Promise<void> {
+    const now = new Date().toISOString();
+    const db = this.db as SqliteDbOrTx & { transaction?: SqliteDatabase['transaction'] };
+    if (typeof db.transaction !== 'function') {
+      throw new Error('Atomic checkpoint application requires a transactional story-memory store.');
+    }
+    await db.transaction(async tx => {
+      const txStore = new SqliteStoryMemoryStore(tx);
+      await txStore.insertPatch({
+        patchId: input.patchRow.patchId,
+        branchId: input.nextState.branchId,
+        fromStateVersion: input.patchRow.fromStateVersion,
+        toStateVersion: input.patchRow.toStateVersion,
+        baseFingerprint: input.patchRow.baseFingerprint,
+        patch: input.patchRow.patch,
+        createdAt: now,
+      });
+      await txStore.saveStateCas(input.nextState, {
+        expectedFingerprint: input.patchRow.baseFingerprint,
+      });
+      await txStore.markPatchApplied(input.patchRow.patchId, input.nextState.metadata.fingerprint, now);
+    });
+  }
+
   async markStatus(
     branchId: string,
     status: StoryMemoryStatus,
@@ -269,8 +309,12 @@ export async function forkStoryMemory(
     createdAt: string;
   },
 ): Promise<ForkedStoryMemory> {
-  const sourcePatches = await new SqliteStoryMemoryStore(db)
-    .listPatches(input.sourceBranchId, input.forkStateVersion);
+  const sourcePatches = (await new SqliteStoryMemoryStore(db)
+    .listPatches(input.sourceBranchId, input.forkStateVersion))
+    // P8-5 (B15/I13): only APPLIED patches replay onto the fork. A pending or
+    // rejected row was never a consumed checkpoint — replaying it would
+    // fabricate memory the source branch never observed.
+    .filter(row => row.status === 'applied');
 
   let state = emptyStoryMemoryState(input.targetBranchId, input.createdAt);
   const store = new SqliteStoryMemoryStore(db);

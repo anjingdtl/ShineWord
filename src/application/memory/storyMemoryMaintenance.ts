@@ -24,6 +24,7 @@ import type { CommittedTurnHistoryEntry } from '../../infra/sqlite/sqliteTurnSto
 import { emptyStoryMemoryState, type StoryMemoryState } from './storyMemoryTypes';
 import { validateStoryMemoryPatch } from './storyMemoryValidator';
 import { mergeStoryMemoryPatch } from './storyMemoryMerger';
+import { compileObservations, type ObservationEvidence } from './storyMemoryObservationCompiler';
 import { compileMemoryCheckpointRequest, compilePreviousMemoryView } from './storyMemoryCompiler';
 import {
   evaluateMemoryCadence,
@@ -303,6 +304,46 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
         expectedFromVersion: input.fromStateVersion,
         expectedToVersion: input.toStateVersion,
       });
+      // P8-5 observation gate (plan §15.2): the raw model output is compiled
+      // against the exact committed batch evidence. Empty observations on a
+      // batch with deterministic known changes, unknown evidence refs and
+      // invalid actions all route into the SAME bounded repair round instead
+      // of advancing a clean checkpoint on a fake success (T11/A23).
+      const evidence: ObservationEvidence[] = [];
+      for (const turn of input.batch) {
+        // The committed turn itself is evidence (plan §15.1) even when the
+        // turn carried no structured effects.
+        evidence.push({
+          eventId: `${turn.turnId}:turn`,
+          turnId: turn.turnId,
+          stateVersion: turn.stateVersion,
+          eventType: 'committed_turn',
+          payload: { outcomeGrade: turn.outcomeGrade ?? null },
+          publicSummary: turn.publicSummary ?? '',
+        });
+        const effects = turn.effects ?? [];
+        effects.forEach((effect, index) => {
+          evidence.push({
+            eventId: `${turn.turnId}:e${index}`,
+            turnId: turn.turnId,
+            stateVersion: turn.stateVersion,
+            eventType: String((effect as { op?: string }).op ?? ''),
+            payload: effect as Record<string, unknown>,
+            publicSummary: turn.publicSummary ?? '',
+          });
+        });
+      }
+      const compiled = compileObservations({
+        branchId: input.branchId,
+        evidence,
+        rawObservationText: response.text,
+        knownChangePolicy: { requireKnownChangeCoverage: true },
+      });
+      if (!compiled.accepted) {
+        repairErrors = compiled.diagnostics.map(d => `${d.code}: ${d.detail}`)
+          .concat(compiled.rejected.flatMap(item => item.diagnostics.map(d => `${d.code}: ${d.detail}`)));
+        continue;
+      }
       const turnVersions = new Map(input.batch.map(turn => [turn.turnId, turn.stateVersion]));
       const next = mergeStoryMemoryPatch(input.state, {
         patch,
@@ -311,17 +352,18 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
         turnVersions,
         now: input.now(),
       });
-      await input.store.insertPatch({
-        patchId,
-        branchId: input.branchId,
-        fromStateVersion: input.fromStateVersion,
-        toStateVersion: input.toStateVersion,
-        baseFingerprint: input.state.metadata.fingerprint,
-        patch,
-        createdAt: input.now(),
+      // P8-5 atomic application (B09): patch row + CAS state write + applied
+      // marker in ONE transaction — no three-step non-atomic persistence.
+      await input.store.applyCheckpointAtomically({
+        patchRow: {
+          patchId,
+          fromStateVersion: input.fromStateVersion,
+          toStateVersion: input.toStateVersion,
+          baseFingerprint: input.state.metadata.fingerprint,
+          patch,
+        },
+        nextState: next,
       });
-      await input.store.saveState(next);
-      await input.store.markPatchApplied(patchId, next.metadata.fingerprint, input.now());
       return { status: 'applied', patchId, state: next };
     } catch (error) {
       repairErrors = [error instanceof Error ? error.message : String(error)];
