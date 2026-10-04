@@ -75,6 +75,16 @@ async function rehash(save) {
   return JSON.stringify(save);
 }
 
+test('closeout: malformed imported guidance is rejected before it can crash the play view', async () => {
+  const h = await fixture(); try {
+    const exported = await exportSave({ db: h.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
+    exported.save.guidance[0].steps = null;
+    const validation = await validateSaveJson(await rehash(exported.save), sha.sha256Hex);
+    assert.equal(validation.ok, false);
+    assert.ok(validation.errors.some(error => error.includes('guidance steps')));
+  } finally { h.db.close?.(); }
+});
+
 test('save-8 carries guidance and situation state through a full hop with rebound identity', async () => {
   const source = await fixture();
   const target = await createMobileHarness();

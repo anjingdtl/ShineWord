@@ -1,0 +1,2 @@
+export const SHORT_REST_MINUTES = 30;
+export const SHORT_REST_STAMINA_RESTORE = 2;

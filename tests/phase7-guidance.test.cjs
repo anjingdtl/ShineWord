@@ -178,6 +178,7 @@ async function fixture(options = {}) {
     chunks: [],
   }, now);
   const entries = baseEntries();
+  options.editEntries?.(entries);
   const published = await publishWorldPackage({
     worldStore: worlds, sha256Hex: sha.sha256Hex, worldId: 'w', sourceSha256: 'a'.repeat(64),
     mappingVersion: 'p7-test', entries, sections: [], createdAt: now,
@@ -185,7 +186,7 @@ async function fixture(options = {}) {
   assert.equal(published.manifest.schemaVersion, 'world-package-4');
   const campaign = await createCampaign({
     db: adapter, worldStore: worlds, campaignId: 'c', title: 'P7 战役', worldId: 'w',
-    packageRevision: published.manifest.revision, anchor: { worldTimeOrder: 1, locationId: 'bridge' },
+    packageRevision: published.manifest.revision, anchor: { worldTimeOrder: options.anchorOrder ?? 1, locationId: 'bridge' },
     protagonist: {
       actorId: 'pc', kind: 'original', name: '玩家',
       attributes: { physique: 1, agility: 1, insight: 3, knowledge: 3, willpower: 1, social: 1 },
@@ -209,6 +210,14 @@ async function fixture(options = {}) {
   }, now);
   const seedState = await turns.getState(campaign.branchId);
   const next = { ...seedState, stateVersion: seedState.stateVersion + 1 };
+  // Rescue requires trained medicine; original characters start at novice.
+  // Seed the actual card AND its progression snapshot to satisfy the gate.
+  if (!options.noMedicine) {
+    next.skills = next.skills.map(s => s.actorId === 'pc' && s.skillId.replace(/^skill-/, '') === 'medicine' ? { ...s, rank: 'trained' } : s);
+    next.cards = next.cards.map(c => c.actorId === 'pc' ? { ...c, card: { ...c.card, skills: Object.fromEntries(Object.entries(c.card.skills).map(([key, rank]) => [key, key.replace(/^skill-/, '') === 'medicine' ? 'trained' : rank])) } } : c);
+    await adapter.execute('UPDATE actor_cards SET card_json = ? WHERE branch_id = ? AND actor_id = ?', [JSON.stringify(next.cards.find(c => c.actorId === 'pc').card), campaign.branchId, 'pc']);
+    await adapter.execute("UPDATE actor_skills SET rank = 'trained' WHERE branch_id = ? AND actor_id = ? AND skill_id IN ('medicine', 'skill-medicine')", [campaign.branchId, 'pc']);
+  }
   next.actors['actor-companion'] = {
     actorId: 'actor-companion', locationId: 'bridge',
     resources: { hp: 1, stamina: 2 }, conditions: ['bleeding'], lifeStatus: 'critical',
@@ -255,8 +264,143 @@ async function fixture(options = {}) {
   return { db, adapter, worlds, turns, narratives, guidance, provider, session, campaign, published };
 }
 
-test('A13/A11: two business calls; good narrative with bad paths commits once and degrades locally', async () => {
+test('closeout: a selected base action keeps its shape when the Planner drifts', async () => {
   const h = await fixture(); try {
+    const complete = h.provider.complete;
+    h.provider.complete = async function(request) {
+      const response = await complete.call(this, request);
+      if (request.role === 'Planner') {
+        const p = JSON.parse(response.text); p.actionKind = 'move'; p.destinationId = 'unknown-forest'; delete p.skillId;
+        response.text = JSON.stringify(p);
+      }
+      return response;
+    };
+    const result = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '观察周围环境，留意任何异常' });
+    const staged = await h.turns.getStagedTurn(h.campaign.branchId, result.turnId);
+    assert.equal(JSON.parse(staged.actionContractJson).actionType, 'observe');
+    assert.equal((await h.turns.getState(h.campaign.branchId)).actors.pc.locationId, 'bridge');
+  } finally { h.db.close(); }
+});
+
+test('closeout: current guidance is checked in the core before any request', async () => {
+  const h = await fixture(); try {
+    const first = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const step = first.guidance.steps.find(s => s.availability === 'available');
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const calls = h.provider.requests.length;
+    await assert.rejects(h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: step.firstStepIntent,
+      guidanceChoice: { decisionPoint: first.guidance.decisionPoint, candidateRef: step.candidateRef } }), /已失效/);
+    assert.equal(h.provider.requests.length, calls);
+    assert.equal((await h.turns.getState(h.campaign.branchId)).stateVersion, 3);
+  } finally { h.db.close(); }
+});
+test('closeout: selected guidance survives legal foreground NPC materialization', async () => {
+  const h = await fixture(); try {
+    const state = await h.turns.getState(h.campaign.branchId);
+    const next = { ...state, segmentContentBinding: {
+      manifestHash: state.contentManifest.manifestHash, artifactManifestHash: 'b'.repeat(64), branchId: h.campaign.branchId,
+      stateVersion: state.stateVersion, basePackageRevision: h.published.manifest.revision,
+      contentVersion: 1, deltaIds: [], artifactIds: [],
+    } };
+    // Adoption changes content binding at the existing version; it is not a
+    // gameplay commit. The real commit store requires this exact prior bind.
+    await h.adapter.execute('UPDATE snapshots SET snapshot_json = ? WHERE branch_id = ? AND state_version = ?',
+      [JSON.stringify(next), h.campaign.branchId, state.stateVersion]);
+    const entries = structuredClone((await h.worlds.getWorldPackage('w', h.published.manifest.revision)).entries);
+    const npc = structuredClone(entries.find(e => e.kind === 'actor_template'));
+    npc.entryId = 'npc-late'; npc.definition.name = '后到的守卫'; entries.push(npc);
+    entries.find(e => e.kind === 'scene').definition.actors.push(npc.entryId);
+    // NPC setup activates the situation. Its three methods would otherwise
+    // push the already selected observe action past the normal display cap.
+    entries.find(e => e.kind === 'situation').definition.methods.push({ methodId: 'talk-late', title: '询问新守卫',
+      goal: '获取消息', firstStep: { intent: '向新守卫询问情况', actionKind: 'talk', targetEntryId: npc.entryId },
+      requires: {}, tradeoffs: '花费时间', preparation: '无' });
+    h.session.deps.segmentContent = { async loadEffectiveCatalog() { return { entries }; } };
+    const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: 'c', branchId: h.campaign.branchId, sourceTurnId: 'adopt-fixture', localOnly: true });
+    const step = guidance.steps.find(s => s.actionId === 'observe');
+    const turn = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: step.firstStepIntent,
+      guidanceChoice: { decisionPoint: guidance.decisionPoint, candidateRef: step.candidateRef } });
+    assert.equal(turn.stateVersion, next.stateVersion + 2, 'one NPC setup boundary and one player action');
+    assert.ok((await h.turns.getState(h.campaign.branchId)).actors['npc-npc-late']);
+    assert.equal(h.provider.requests.length, 2);
+    assert.equal(turn.guidance.decisionPoint.sourceTurnId, turn.turnId);
+  } finally { h.db.close(); }
+});
+
+test('closeout: async SQLite replacement is atomic and never overwrites newer history', async () => {
+  const h = await fixture(); try {
+    const first = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const upgraded = { ...first.guidance, upgradeStatus: 'complete' };
+    assert.equal(await h.guidance.replaceIfCurrent(upgraded, first.guidance), true);
+    assert.equal(await h.guidance.replaceIfCurrent(first.guidance, first.guidance), false);
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    assert.equal(await h.guidance.replaceIfCurrent(first.guidance, upgraded), false);
+  } finally { h.db.close(); }
+});
+
+test('closeout: resting settles situation expiry at that same decision point', async () => {
+  const h = await fixture({ editEntries(entries) {
+    const d = entries.find(e => e.kind === 'situation').definition;
+    d.pressure.deadlineClockSeconds = 60;
+    d.transitions.onExpire = [{ kind: 'set_situation_status', situationId: 'situation-sect', status: 'resolved', resolution: '错过时机' }];
+  } }); try {
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    await h.session.rest({ campaignId: 'c', branchId: h.campaign.branchId, kind: 'short' });
+    const state = await h.turns.getState(h.campaign.branchId);
+    assert.equal(state.situations[0].status, 'resolved');
+    const guidance = await h.guidance.latestForVersion(h.campaign.branchId, state.stateVersion);
+    assert.ok(guidance);
+    assert.equal(guidance.decisionPoint.sourceTurnId, 'rest-short-3');
+    assert.equal(guidance.severity, 'major');
+  } finally { h.db.close(); }
+});
+
+test('closeout: unrelated medicine checks cannot rescue a companion', async () => {
+  const h = await fixture(); try {
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const result = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '运用医术检查草药的伤势治疗用途' });
+    const staged = await h.turns.getStagedTurn(h.campaign.branchId, result.turnId);
+    assert.equal(JSON.parse(staged.actionContractJson).methodRef, undefined);
+    const state = await h.turns.getState(h.campaign.branchId);
+    assert.ok(state.actors['actor-companion'].conditions.includes('bleeding'));
+    assert.equal(state.situations[0].counters.stabilized, undefined);
+  } finally { h.db.close(); }
+});
+
+test('closeout: unmet method prerequisites cannot be bypassed through free input', async () => {
+  const h = await fixture({ editEntries(entries) {
+    entries.find(e => e.kind === 'situation').definition.methods[0].requires.itemId = 'item-bandage';
+  } }); try {
+    await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    await assert.rejects(h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '检查同伴伤势并止血救治' }), /前提|物品|准备/);
+    const state = await h.turns.getState(h.campaign.branchId);
+    assert.ok(state.actors['actor-companion'].conditions.includes('bleeding'));
+  } finally { h.db.close(); }
+});
+
+test('closeout: adopted future content does not advance branch time or execute fate', async () => {
+  const h = await fixture({ editEntries(entries) {
+    entries.find(e => e.entryId === 'lore-north').visibility = 'gm';
+    entries.find(e => e.kind === 'scene').definition.clues = [];
+  } }); try {
+    for (let i = 0; i < 3; i++) await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    const state = await h.turns.getState(h.campaign.branchId);
+    assert.equal(state.causalWorldTimeOrder, 1);
+    assert.notEqual(state.actors['actor-companion'].lifeStatus, 'dead');
+  } finally { h.db.close(); }
+});
+
+test('closeout: guidance changes reject forged and hidden Narrator claims', async () => {
+  const h = await fixture(); try {
+    h.provider.narratorScript = [{ text: '你环顾四周。', situationSummary: { changes: ['北镇抚司密令已经暴露，获得999金币'] } }];
+    const result = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
+    assert.equal(JSON.stringify(result.guidance.situationSummary).includes('北镇抚司'), false);
+    assert.equal(JSON.stringify(result.guidance.situationSummary).includes('999'), false);
+  } finally { h.db.close(); }
+});
+
+test('A13/A11: two business calls; good narrative with bad paths commits once and degrades locally', async () => {
+  const h = await fixture({ anchorOrder: 2 }); try {
     h.provider.narratorScript = [
       // Turn 1: no guidance fields at all (old-style narrator output).
       { text: '你环顾四周，血迹通向北方。' },
@@ -331,7 +475,7 @@ test('A08/A18: eligibility follows the real card — missing skill yields needs_
     const heal = first.guidance.steps.find(s => s.methodId === 'heal');
     assert.ok(heal, 'the heal path is still SHOWN');
     assert.equal(heal.availability, 'needs_preparation');
-    assert.ok((heal.blockers ?? []).some(b => b.includes('skill-medicine')), 'blocker names the missing skill');
+    assert.ok((heal.blockers ?? []).some(b => b.includes('医术')), 'blocker names the missing skill in player wording');
     const survey = first.guidance.steps.find(s => s.methodId === 'survey');
     assert.equal(survey?.availability, 'available', 'a skill the player HAS stays available');
     const state = await h.turns.getState(h.campaign.branchId);
@@ -345,18 +489,20 @@ test('A08/A18: eligibility follows the real card — missing skill yields needs_
 });
 
 test('A01/A02: fate suppression once the causal order reaches the reference', async () => {
-  const h = await fixture(); try {
+  // The fixture explicitly starts at the canon milestone. Loading the later
+  // clue alone must never be treated as reaching it (covered above).
+  const h = await fixture({ anchorOrder: 2 }); try {
     h.provider.narratorScript = [{ text: '你查看四周。' }, { text: '你止住了血。' }, { text: '你们北上。' }];
     await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '查看周围' });
     await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '检查同伴伤势并止血救治' });
-    // Third turn cites the later canon fact, lifting causal order to 30.
+    // Continue beyond the confirmed milestone without reviving the fate.
     await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: '观察四周，寻找北上的路线线索' });
     const state = await h.turns.getState(h.campaign.branchId);
     const situation = state.situations.find(s => s.situationId === 'situation-sect');
     assert.ok(situation.suppressedEventKeys['evt-companion-death'], 'death reference suppressed with audit');
     assert.equal(state.actors['actor-companion'].lifeStatus, 'critical', 'the saved companion stays alive');
     // Control: without the heal, the reference fires on the branch.
-    const h2 = await fixture(); try {
+    const h2 = await fixture({ anchorOrder: 2 }); try {
       h2.provider.narratorScript = [{ text: '你查看四周。' }, { text: '你查看四周。' }, { text: '你们北上。' }];
       await h2.session.playTurn({ campaignId: 'c', branchId: h2.campaign.branchId, intent: '查看周围' });
       await h2.session.playTurn({ campaignId: 'c', branchId: h2.campaign.branchId, intent: '查看现场痕迹' });

@@ -109,6 +109,7 @@ export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplyS
 
   const buildFacts = (snapshot: GameStateSnapshot) => snapshotConditionFacts({
     actors: snapshot.actors,
+    cards: (snapshot.cards ?? []).map(item => item.card as import('../../domain/characters/card').ActorCard),
     itemOwners: snapshot.itemOwners,
     discoveries: snapshot.discoveries,
     relationships: snapshot.relationships,

@@ -24,6 +24,7 @@ import {
   loadHistory,
   getInteractionOperationJournal,
   createReadOnlySession,
+  subscribeGuidanceUpdates,
   loadPlayRecovery,
   savePlayIntentDraft,
   clearPlayIntentDraft,
@@ -37,6 +38,7 @@ import { maintainSegmentContent, getSegmentReadiness, releaseRewoundSegmentDeman
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import type { GuidanceStepView } from '../../../../../../src/application/guidance/types';
+import type { PlayTurnOptions } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
 import { useAppSession } from '../../../state/AppSessionContext';
@@ -282,6 +284,9 @@ export function usePlayController(): PlayController {
       if (result.pauseReason === 'step_limit' || result.pauseReason === 'wall_clock') {
         setNotice('自动行动已暂停，可继续写下自己的行动。');
       }
+      if (latest.stateVersion > initial.stateVersion && (latest.status !== 'active' || latest.currentActorIsPlayer)) {
+        await session.ensureDecisionPointGuidance({ campaignId, branchId, sourceTurnId: `auto-${latest.stateVersion}` });
+      }
       return latest;
     } finally {
       autoNpcRunning.current = false;
@@ -366,7 +371,7 @@ export function usePlayController(): PlayController {
   }, [foregroundEpoch, profile, encounter?.encounterId, encounter?.status, encounter?.currentActorIsPlayer,
     progressAutomaticActors, refresh]);
 
-  async function submit(intentOverride?: string, approveRecovery = false) {
+  async function submit(intentOverride?: string, approveRecovery = false, guidanceChoice?: PlayTurnOptions['guidanceChoice']) {
     if (actionInFlight.current || busy || !profile) return;
     const fromComposer = intentOverride === undefined;
     const value = (intentOverride ?? intent).trim();
@@ -388,6 +393,7 @@ export function usePlayController(): PlayController {
         draftVersion = await savePlayIntentDraft(campaignId, branchId, value);
       }
       const session = await createSession(profile, await buildProvider(profile));
+      if (guidanceChoice) await session.assertGuidanceChoiceCurrent(branchId, guidanceChoice, value);
       if (activeEncounter) {
         const proposal = proposeEncounterIntent(value, activeEncounter);
         if (proposal.kind === 'clarify') {
@@ -437,7 +443,7 @@ export function usePlayController(): PlayController {
           stateVersion: projection.stateVersion, locationId: projection.player?.locationId ?? null, intent: value });
         if (prepared.pending) { setNotice(prepared.message); await refresh(); return; }
       }
-      const result = await session.playTurn({ campaignId, branchId, intent: value });
+      const result = await session.playTurn({ campaignId, branchId, intent: value, guidanceChoice });
       if (draftVersion !== null) await clearPlayIntentDraft(branchId, draftVersion);
       setIntent(previous => previous === value ? '' : previous);
       const turnView: TurnView = { ...result, mechanicalOnly: false };
@@ -454,14 +460,30 @@ export function usePlayController(): PlayController {
       // A failed submit restores the intent so nothing the player typed is lost.
       if (fromComposer) setIntent(value);
       const message = e instanceof Error ? e.message : String(e);
-      setError(message === 'Network request failed' ? '网络连接失败。行动已保留，联网后可重试。' : message);
-      setNotice(null);
+      if (message.includes('这条路径已失效')) {
+        const currentSession = await createSession(profile, await buildProvider(profile));
+        const refreshed = await currentSession.ensureDecisionPointGuidance({ campaignId, branchId, sourceTurnId: 'refresh-current', localOnly: true }).catch(() => null);
+        setNotice(refreshed ? '已更新当前局面的路径，请重新选择第一步。' : null);
+        setError(refreshed ? null : message);
+      } else {
+        setNotice(null);
+        setError(message === 'Network request failed' ? '网络连接失败。行动已保留，联网后可重试。' : message);
+      }
       await refresh();
     } finally {
       actionInFlight.current = false;
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void subscribeGuidanceUpdates(updatedBranch => {
+      if (!cancelled && updatedBranch === branchId && foreground.current) void refresh();
+    }).then(dispose => { if (cancelled) dispose(); else unsubscribe = dispose; }).catch(() => undefined);
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [branchId, refresh]);
 
   async function recoverTurn() {
     if (!recovery?.intent) return;
@@ -527,13 +549,14 @@ export function usePlayController(): PlayController {
     return session.getPlayerAttackAvailability({ campaignId, branchId, encounterId, targetId: targetActorId });
   }
 
-  async function rest(kind: 'short' | 'long') {
+  async function rest(kind: 'short' | 'long', guidanceChoice?: PlayTurnOptions['guidanceChoice']) {
     if (!profile || pendingTurnBlocksAction()) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
       const session = await createSession(profile, await buildProvider(profile));
-      const result = await session.rest({ campaignId, branchId, kind });
+      const result = await session.rest({ campaignId, branchId, kind, guidanceChoice });
       setNotice(
         kind === 'short'
           ? `短休完成（推进 ${Math.round(result.clockSecondsAdvanced / 60)} 分钟）`
@@ -543,6 +566,7 @@ export function usePlayController(): PlayController {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -673,7 +697,9 @@ export function usePlayController(): PlayController {
       setNotice('这条路还差一步准备；已把第一步填入输入框，可先补齐条件或修改后提交。');
       return;
     }
-    void submit(step.firstStepIntent);
+    const choice = { decisionPoint: guidance.decisionPoint, candidateRef: step.candidateRef };
+    if (step.actionId === 'short_rest') { void rest('short', choice); return; }
+    void submit(step.firstStepIntent, false, choice);
   };
 
   return {

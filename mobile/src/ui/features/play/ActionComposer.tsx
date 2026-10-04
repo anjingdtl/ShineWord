@@ -82,6 +82,7 @@ export function ActionComposer(props: {
         </Text>
         <Button
           label={props.busy ? '结算中…' : '行动'}
+          wrapLabel
           onPress={props.onSubmit}
           disabled={!canSend}
           testID="play-submit"

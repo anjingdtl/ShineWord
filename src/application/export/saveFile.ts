@@ -3,6 +3,7 @@ import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArti
 import { validatePhase6Bundle, validatePortableProjectStyle, type PortableProjectStyleV1,
   type ProjectStyleArchivePortV1 } from './phase6Bundle';
 import type { GameStateSnapshot } from '../../domain/state/types';
+import { validateGuidanceRecord } from '../guidance/types';
 import {
   canonicalStringify,
   type CanonicalJson,
@@ -656,6 +657,7 @@ export async function validateSaveJsonBytes(
     if (!Array.isArray(parsed.guidance)) errors.push('guidance must be an array.');
     else {
       for (const [index, record] of parsed.guidance.entries()) {
+        for (const error of validateGuidanceRecord(record)) errors.push(`guidance[${index}]: ${error}.`);
         const binding = (record as unknown as { decisionPoint?: Record<string, unknown> })?.decisionPoint;
         if ((record as unknown as { guidanceVersion?: unknown })?.guidanceVersion !== 'turn-guidance-1'
           || !binding || typeof binding.branchId !== 'string'
@@ -1170,7 +1172,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
         const decisionPointId = `${input.newBranchId}:${record.decisionPoint.stateVersion}`;
         const rebound = {
           ...record,
-          decisionPoint: { ...record.decisionPoint, branchId: input.newBranchId, decisionPointId },
+          decisionPoint: { ...record.decisionPoint, campaignId: input.newCampaignId, branchId: input.newBranchId, decisionPointId },
         };
         await tx.execute(
           `INSERT OR REPLACE INTO branch_decision_guidance

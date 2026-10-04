@@ -35,6 +35,7 @@ export interface ConditionFacts {
    * committed branch events — NOT the turn count and NOT world-clock minutes.
    */
   causalWorldTimeOrder: number;
+  resolveActorId?: (actorId: string) => string;
 }
 
 export function validateConditionShape(
@@ -241,7 +242,7 @@ export function evaluateCondition(
     case 'item_owned_by': {
       const owner = facts.itemOwner(condition.itemId);
       if (owner === undefined) return UNKNOWN;
-      return owner === condition.actorId ? TRUE : FALSE;
+      return owner === (facts.resolveActorId?.(condition.actorId) ?? condition.actorId) ? TRUE : FALSE;
     }
     case 'knowledge_known': {
       const known = facts.knowledgeKnown(condition.entryId, condition.actorId);
@@ -289,7 +290,14 @@ export function snapshotConditionFacts(input: {
   playerActorId: string;
   resolvedReferenceEventKeys?: readonly string[];
   causalWorldTimeOrder: number;
+  cards?: ReadonlyArray<{ actorId: string; templateId?: string }>;
 }): ConditionFacts {
+  const aliases = new Map<string, string | null>();
+  for (const card of input.cards ?? []) {
+    if (!card.templateId || !input.actors[card.actorId]) continue;
+    aliases.set(card.templateId, aliases.has(card.templateId) ? null : card.actorId);
+  }
+  const resolveActorId = (id: string): string => input.actors[id] ? id : aliases.get(id) ?? id;
   const situationById = new Map((input.situations ?? []).map(entry => [entry.situationId, entry]));
   const knownEntries = new Map<string, Set<string>>();
   for (const discovery of input.discoveries ?? []) {
@@ -306,10 +314,14 @@ export function snapshotConditionFacts(input: {
   const questStatusById = new Map((input.questProgress ?? []).map(q => [q.questId, q.status]));
   const resolvedKeys = new Set(input.resolvedReferenceEventKeys ?? []);
   return {
-    actorLifeStatus: actorId => input.actors[actorId]?.lifeStatus,
-    actorLocation: actorId => input.actors[actorId]?.locationId,
+    resolveActorId,
+    actorLifeStatus: actorId => {
+      const actor = input.actors[resolveActorId(actorId)];
+      return actor ? actor.lifeStatus ?? 'active' : undefined;
+    },
+    actorLocation: actorId => input.actors[resolveActorId(actorId)]?.locationId,
     actorHasCondition: (actorId, conditionId) => {
-      const actor = input.actors[actorId];
+      const actor = input.actors[resolveActorId(actorId)];
       if (!actor) return undefined;
       return actor.conditions.includes(conditionId);
     },
@@ -318,9 +330,9 @@ export function snapshotConditionFacts(input: {
       const owners = knownEntries.get(entryId);
       if (!owners) return false;
       const target = actorId ?? input.playerActorId;
-      return owners.has(target);
+      return owners.has(resolveActorId(target));
     },
-    relationshipCloseness: (from, to) => relationshipKeys.get(`${from}->${to}`),
+    relationshipCloseness: (from, to) => relationshipKeys.get(`${resolveActorId(from)}->${resolveActorId(to)}`),
     questStatus: questId => questStatusById.get(questId),
     situationStatus: situationId => situationById.get(situationId)?.status,
     referenceEventResolved: eventKey => (resolvedKeys.size === 0 && !input.resolvedReferenceEventKeys

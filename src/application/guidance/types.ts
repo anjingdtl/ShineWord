@@ -1,4 +1,5 @@
 import type { ProposalActionKind } from '../../domain/turns/proposal';
+import type { GameStateSnapshot } from '../../domain/state/types';
 
 /**
  * Turn guidance contracts (frozen in docs/reviews/phase7/BASELINE_AND_CONTRACTS.md
@@ -38,6 +39,7 @@ export interface AllowedCandidateV1 {
   actionKind: ProposalActionKind;
   skillId?: string;
   itemId?: string;
+  destinationId?: string;
   tradeoffs: string;
   preparation: string;
   availability: 'available' | 'needs_preparation';
@@ -105,8 +107,44 @@ export interface TurnGuidanceV1 {
   steps: readonly GuidanceStepView[];
   degraded: boolean;
   degradationReason?: string;
+  /** A known ancillary response was consumed, even when wording degraded. */
+  upgradeStatus?: 'complete';
 }
 
 export function decisionPointIdFor(branchId: string, nextStateVersion: number): string {
   return `${branchId}:${nextStateVersion}`;
+}
+
+/** Segment adoption may change artifacts without changing the legacy manifest. */
+export function guidanceContentBindingHash(state: GameStateSnapshot): string {
+  return state.segmentContentBinding?.artifactManifestHash
+    ?? state.segmentContentBinding?.manifestHash ?? state.contentManifest?.manifestHash ?? 'no-binding';
+}
+
+/** Runtime boundary for persisted/imported derived views (no executable effects). */
+export function validateGuidanceRecord(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return ['guidance must be an object'];
+  const record = value as Record<string, unknown>;
+  const errors: string[] = [];
+  const strings = (value: unknown): boolean => Array.isArray(value) && value.length <= 5
+    && value.every(item => typeof item === 'string' && item.length <= 2000);
+  if (record.guidanceVersion !== GUIDANCE_VERSION) errors.push('unknown guidance version');
+  if (record.severity !== 'normal' && record.severity !== 'major') errors.push('invalid guidance severity');
+  if (typeof record.degraded !== 'boolean') errors.push('invalid guidance degradation flag');
+  const binding = record.decisionPoint as Record<string, unknown> | undefined;
+  if (!binding || ['campaignId', 'branchId', 'playerActorId', 'sourceTurnId', 'decisionPointId', 'contentBindingHash', 'knowledgeHash', 'contextHash']
+    .some(key => typeof binding[key] !== 'string') || !Number.isSafeInteger(binding.stateVersion) || Number(binding.stateVersion) < 0) errors.push('invalid guidance decision point');
+  const summary = record.situationSummary as Record<string, unknown> | undefined;
+  if (!summary || !strings(summary.changes) || !strings(summary.opportunities) || !strings(summary.pressures)) errors.push('invalid guidance summary');
+  if (!Array.isArray(record.steps) || record.steps.length > 4) errors.push('invalid guidance steps');
+  else for (const step of record.steps) {
+    if (!step || typeof step !== 'object') { errors.push('invalid guidance step'); continue; }
+    const s = step as Record<string, unknown>;
+    if (['candidateRef', 'title', 'rationale', 'tradeoffs', 'firstStepIntent'].some(key => typeof s[key] !== 'string' || String(s[key]).length > 2000)
+      || (s.source !== 'llm' && s.source !== 'local') || (s.availability !== 'available' && s.availability !== 'needs_preparation')
+      || !['skill_check', 'ability', 'observe', 'talk', 'interact', 'move'].includes(String(s.actionKind))
+      || (s.blockers !== undefined && (!Array.isArray(s.blockers) || s.blockers.length > 16
+        || s.blockers.some(item => typeof item !== 'string' || item.length > 2000)))) errors.push('invalid guidance step');
+  }
+  return errors;
 }

@@ -10,6 +10,9 @@ import type {
   SkillDefinition,
 } from '../../domain/content/types';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
+import { resolveMethodActor } from '../guidance/candidates';
+import type { AllowedCandidateV1 } from '../guidance/types';
+import { SHORT_REST_MINUTES, SHORT_REST_STAMINA_RESTORE } from '../../domain/rules/restPolicy';
 import { distanceBetweenZones, rangeCoversBand } from '../campaign/encounterFlow';
 import {
   assertAbilityAffordable,
@@ -72,6 +75,9 @@ export interface CompileProposalInput {
   methods?: readonly import('../../domain/situations/types').MethodTemplateV1[];
   /** Situation owner per method (parallel to methods). */
   methodSituations?: readonly string[];
+  /** Original player input, never rewritten by the Planner. */
+  requestedIntent?: string;
+  selectedBaseAction?: AllowedCandidateV1;
 }
 
 export interface CompiledAction {
@@ -115,10 +121,53 @@ function automaticOutcome(
  * names things the world or the card does not support.
  */
 export function compileProposal(input: CompileProposalInput): CompiledAction {
-  const compiled = compileProposalBase(input);
   const methods = input.methods ?? [];
+  const requestedIntent = input.requestedIntent ?? input.proposal.intent;
+  const normalize = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+  const matching = methods.filter(method => normalize(method.firstStep.intent) === normalize(requestedIntent));
+  if (matching.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
+  const selected = matching[0];
+  const baseAction = input.selectedBaseAction;
+  if (baseAction && (baseAction.availability !== 'available' || baseAction.firstStepIntent !== requestedIntent)) {
+    throw new ProposalRejectedError('当前基础行动与所选路径不一致。');
+  }
+  if (!selected && baseAction?.actionId === 'short_rest') {
+    const cap = input.actingCard.resourceMax.stamina ?? 10;
+    const outcome = automaticOutcome(true, '你进行了短休。', [{ op: 'restoreResource', actorId: input.actingCard.actorId, resourceId: 'stamina', amount: Math.min(SHORT_REST_STAMINA_RESTORE, cap), cap }]);
+    return { storedSkillKey: null, contract: { protocolVersion: '1.0', turnId: input.proposal.turnId,
+      expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId, actionType: 'short_rest',
+      intent: requestedIntent, evidenceIds: [], requiresRoll: false, timeCostMinutes: SHORT_REST_MINUTES,
+      resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } } };
+  }
+  let compileInput = input;
+  if (selected) {
+    const step = selected.firstStep;
+    const targetId = step.targetEntryId ? resolveMethodActor(step.targetEntryId, input.state, input.cards) : null;
+    if (step.targetEntryId && (!targetId || input.state.actors[targetId]?.lifeStatus === 'dead'
+      || input.state.actors[targetId]?.locationId !== input.state.actors[input.actingCard.actorId]?.locationId)) {
+      throw new ProposalRejectedError('行动对象需要在场且存活。');
+    }
+    // The published first step owns the shape of a selected method. A
+    // Planner paraphrase cannot silently turn a checked skill into observe.
+    compileInput = { ...input, proposal: {
+      proposalVersion: input.proposal.proposalVersion, turnId: input.proposal.turnId,
+      expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId,
+      actionKind: step.actionKind, intent: requestedIntent, evidenceIds: input.proposal.evidenceIds,
+      ...(step.skillId ? { skillId: step.skillId } : {}),
+      ...(step.abilityId ? { abilityId: step.abilityId } : {}),
+      ...(step.destinationId ? { destinationId: step.destinationId } : {}),
+      ...(targetId ? { targetId } : {}),
+      ...(input.proposal.difficultyBand ? { difficultyBand: input.proposal.difficultyBand } : {}),
+    } };
+  } else if (baseAction) {
+    compileInput = { ...input, proposal: { proposalVersion: '2.0', turnId: input.proposal.turnId,
+      expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId,
+      actionKind: baseAction.actionKind, intent: requestedIntent, evidenceIds: input.proposal.evidenceIds,
+      ...(baseAction.destinationId ? { destinationId: baseAction.destinationId } : {}) } };
+  }
+  const compiled = compileProposalBase(compileInput, selected !== undefined);
   if (methods.length === 0) return compiled;
-  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards);
+  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent);
 }
 
 function normalizeSkillId(skillId: string): string {
@@ -130,10 +179,13 @@ function bindSituationMethod(
   methods: readonly import('../../domain/situations/types').MethodTemplateV1[],
   methodSituations: readonly string[],
   cards: readonly ActorCard[],
+  requestedIntent: string,
 ): CompiledAction {
   const { contract } = compiled;
   for (const [index, method] of methods.entries()) {
     const step = method.firstStep;
+    const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+    if (normalizeIntent(requestedIntent) !== normalizeIntent(step.intent)) continue;
     if (step.actionKind !== contract.actionType) continue;
     if (step.skillId !== undefined) {
       if (contract.skillId === undefined) continue;
@@ -143,7 +195,8 @@ function bindSituationMethod(
     }
     if (step.targetEntryId !== undefined && contract.targetId !== undefined) {
       const targetCard = cards.find(card => card.actorId === contract.targetId);
-      if (!(contract.targetId === step.targetEntryId || targetCard?.templateId === step.targetEntryId)) continue;
+      if (!(contract.targetId === step.targetEntryId || targetCard?.templateId === step.targetEntryId
+        || contract.targetId === `actor-${step.targetEntryId.replace(/^npc-/, '')}`)) continue;
     }
     // A method whose first step names a target binds even when the compiled
     // contract carries no targetId (non-social skill checks have none) — the
@@ -156,7 +209,6 @@ function bindSituationMethod(
     const situationId = methodSituations[index] ?? '';
     if (!situationId) continue;
     const successEffects = (method.successEffects ?? []) as EffectOperation[];
-    if (successEffects.length === 0 && !method.onSuccess && !method.onFailure) continue;
     const withMethod: ActionContract = {
       ...contract,
       methodRef: { situationId, methodId: method.methodId },
@@ -182,7 +234,7 @@ function appendEffects(
   return { ...outcome, effects: [...outcome.effects, ...extra.map(effect => ({ ...effect }))] };
 }
 
-function compileProposalBase(input: CompileProposalInput): CompiledAction {
+function compileProposalBase(input: CompileProposalInput, publishedMethod = false): CompiledAction {
   const { proposal, actingCard, cards, catalog, abilities, scenes, state } = input;
   const actorId = actingCard.actorId;
   const currentLocation = state.actors[actorId]?.locationId;
@@ -283,10 +335,11 @@ function compileProposalBase(input: CompileProposalInput): CompiledAction {
       let socialTargetId: string | undefined;
       if (proposal.targetId) {
         const skillDefinition = catalog[skillId] ?? catalog[`skill-${skillId.replace(/^skill-/, '')}`];
-        if (skillDefinition?.usage !== 'social') {
+        if (skillDefinition?.usage !== 'social' && !publishedMethod) {
           throw new ProposalRejectedError('只有世界目录标记为 social 的技能检定才能影响关系；请使用交谈行动。');
         }
-        socialTargetId = resolveSocialTarget(proposal, actingCard, cards, state);
+        socialTargetId = skillDefinition?.usage === 'social'
+          ? resolveSocialTarget(proposal, actingCard, cards, state) : proposal.targetId;
       }
 
       // A skill check may move the actor on success; the destination is

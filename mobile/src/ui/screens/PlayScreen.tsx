@@ -155,6 +155,16 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
         guideVisible={guideVisible && !guideHidden}
         onDismissGuide={dismissGuide}
+        footer={latestGuidance && (encounter?.status !== 'active' || encounter.currentActorIsPlayer) ? (
+          <GuidanceCard
+            embedded
+            guidance={latestGuidance}
+            currentStateVersion={view?.stateVersion}
+            disabled={busy || recoveryLocked}
+            onSubmitStep={controller.submitGuidanceStep}
+            onPrefillIntent={value => controller.setIntent(value)}
+          />
+        ) : null}
       />
 
       <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.xs }}>
@@ -169,15 +179,6 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
       </View>
 
-      {latestGuidance && encounter?.status !== 'active' ? (
-        <GuidanceCard
-          guidance={latestGuidance}
-          currentStateVersion={view?.stateVersion}
-          disabled={busy || recoveryLocked}
-          onSubmitStep={controller.submitGuidanceStep}
-          onPrefillIntent={value => controller.setIntent(value)}
-        />
-      ) : null}
       <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} />
       <ActionComposer
         value={intent}

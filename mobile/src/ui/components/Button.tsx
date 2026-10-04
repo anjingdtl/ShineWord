@@ -30,6 +30,8 @@ export interface ButtonProps {
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
   testID?: string;
+  /** Keep action labels readable at large system font sizes. */
+  wrapLabel?: boolean;
 }
 
 export function Button(props: ButtonProps): React.JSX.Element {
@@ -94,6 +96,7 @@ export function Button(props: ButtonProps): React.JSX.Element {
       testID={props.testID}
       style={({ pressed }) => [
         props.block ? styles.block : styles.inline,
+        props.wrapLabel ? { maxWidth: '100%' } : null,
         props.style,
         disabled ? styles.disabled : null,
         pressed && !disabled
@@ -118,7 +121,7 @@ export function Button(props: ButtonProps): React.JSX.Element {
           borderRadius: radius,
         }}>
         {props.leading ? <View>{props.leading}</View> : null}
-        <Text style={[typeStyle(theme, type), { color: labelColor }]} numberOfLines={1}>
+        <Text style={[typeStyle(theme, type), { color: labelColor }, props.wrapLabel ? { flexShrink: 1 } : null]} numberOfLines={props.wrapLabel ? undefined : 1}>
           {props.label}
         </Text>
         {props.trailing ? <View>{props.trailing}</View> : null}

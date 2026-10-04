@@ -56,6 +56,7 @@ function scrubNumbers(text: string): boolean {
   // long digit runs (fabricated costs/damage/deadlines).
   if (ODDS_WORDS.test(text)) return false;
   if (/\d{4,}/.test(text)) return false;
+  if (/(?:\d+|[零〇一二两三四五六七八九十百千万]+)\s*(?:点|体力|生命|伤害|金币|银币|铜币|分钟|小时|回合|倍)/.test(text)) return false;
   return true;
 }
 
@@ -75,8 +76,6 @@ export function validateLlmStep(
   const fields = [
     ['title', raw.title, GUIDANCE_TEXT_LIMITS.title],
     ['rationale', raw.rationale, GUIDANCE_TEXT_LIMITS.rationale],
-    ['tradeoffs', raw.tradeoffs, GUIDANCE_TEXT_LIMITS.tradeoffs],
-    ['firstStepIntent', raw.firstStepIntent, GUIDANCE_TEXT_LIMITS.firstStepIntent],
   ] as const;
   let useLlm = true;
   let rejectedReason: string | undefined;
@@ -95,19 +94,17 @@ export function validateLlmStep(
       rejectedReason ??= `field ${field} fabricates odds or numbers`;
     }
   }
-  // The intent must stay recognizable against the allowed candidate; a wildly
-  // rewritten first step falls back to the published wording.
-  if (!raw.firstStepIntent.trim() || raw.firstStepIntent.length < 4) {
-    useLlm = false;
-    rejectedReason ??= 'first step intent too short';
-  }
+  // Raw costs and executable intent are never displayed or executed. Do not
+  // reject safe title/rationale because a copied local cost contains a number.
   const step: GuidanceStepView = {
     source: useLlm ? 'llm' : 'local',
     candidateRef: allowed.ref,
     title: useLlm ? raw.title : allowed.title,
     rationale: useLlm ? raw.rationale : allowed.goal,
-    tradeoffs: useLlm ? raw.tradeoffs : allowed.tradeoffs,
-    firstStepIntent: useLlm ? raw.firstStepIntent : allowed.firstStepIntent,
+    // Execution and costs stay bound to the locally assessed method. The
+    // model may explain a choice but cannot substitute a different action.
+    tradeoffs: allowed.tradeoffs,
+    firstStepIntent: allowed.firstStepIntent,
     actionKind: allowed.actionKind,
     availability: allowed.availability,
     ...(allowed.methodId ? { methodId: allowed.methodId } : {}),
@@ -120,7 +117,7 @@ export function validateLlmStep(
 }
 
 export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidanceV1 {
-  const { prepared, contract, packet, llmSteps, llmSummary } = input;
+  const { prepared, contract, packet, llmSteps } = input;
   const severity: GuidanceSeverity = detectSeverity(
     [...prepared.domainEvents, ...prepared.lifeEvents, ...prepared.extraEvents],
     {
@@ -162,8 +159,6 @@ export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidance
     for (const allowed of packet.allowedCandidates) {
       if (steps.length >= limit) break;
       if (usedRefs.has(allowed.ref)) continue;
-      // Prefer situation methods; keep at most one base action when short.
-      if (!allowed.methodId && steps.length > 0) continue;
       usedRefs.add(allowed.ref);
       steps.push({
         source: 'local',
@@ -189,7 +184,7 @@ export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidance
 
   const summary = packet
     ? {
-      changes: (llmSummary && llmSummary.length > 0 ? llmSummary : packet.changes).slice(0, 5),
+      changes: packet.changes.slice(0, 5),
       opportunities: packet.opportunities.map(item => item.text).slice(0, 5),
       pressures: packet.pressures.map(item => item.text).slice(0, 5),
     }

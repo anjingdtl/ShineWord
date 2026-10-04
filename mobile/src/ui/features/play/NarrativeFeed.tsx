@@ -28,6 +28,7 @@ export function NarrativeFeed(props: {
   /** First-session guide (product ask #4): caller owns the once-flag. */
   guideVisible?: boolean;
   onDismissGuide?: () => void;
+  footer?: React.ReactNode;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const listRef = useRef<FlatList<TurnView>>(null);
@@ -76,6 +77,7 @@ export function NarrativeFeed(props: {
         onContentSizeChange={followLatest}
         onLayout={followLatest}
         scrollEventThrottle={64}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
         ListHeaderComponent={
           props.guideVisible && props.onDismissGuide ? (
@@ -94,7 +96,9 @@ export function NarrativeFeed(props: {
         }
         renderItem={({ item }) => <TurnCard turn={item} />}
         ListFooterComponent={
-          props.busy ? (
+          <>
+          {props.footer}
+          {props.busy ? (
             <View style={{ paddingVertical: theme.space.sm }}>
               <Text
                 style={[
@@ -104,7 +108,8 @@ export function NarrativeFeed(props: {
                 正在结算这一回合…
               </Text>
             </View>
-          ) : null
+          ) : null}
+          </>
         }
       />
     </View>

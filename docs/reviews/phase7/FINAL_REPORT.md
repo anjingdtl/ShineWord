@@ -1,5 +1,7 @@
 # Shine-TRPG 第七阶段最终报告
 
+> 本文保留初次交付记录。后续收尾发现并修复了原报告未发现的实质缺陷，当前847项回归、真实模型长旅程、设备复验与证据边界请读取 [ACCEPTANCE_CLOSEOUT.md](ACCEPTANCE_CLOSEOUT.md) 和更新后的 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)。下文“无已知阻断”、采用目录推进因果时间及“需额外授权才能测试”的旧表述均由本次报告替代。
+
 日期：2026-10-04（Asia/Shanghai）。方案：`docs/Shine-TRPG_PHASE7_CONSTRUCTION_PLAN.md`。基线 `main@8648d4d` → 本阶段收尾提交见 git log（P7-0/1 c700aa5、P7-2 4ee789d、P7-3/4 1a64229、P7-5 c6dc478、P7-6 c1ba09f 及门限修复收尾提交）。
 
 ## 一、实际实现了什么

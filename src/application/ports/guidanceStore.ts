@@ -8,7 +8,10 @@ import type { TurnGuidanceV1 } from '../guidance/types';
  * was displayed; historical steps are never executable.
  */
 export interface GuidanceStore {
+  readonly dedupScope?: object;
   save(record: TurnGuidanceV1, now?: string): Promise<void>;
+  /** Atomic replacement while the branch and the stored binding stay current. */
+  replaceIfCurrent?(record: TurnGuidanceV1, expected: TurnGuidanceV1): Promise<boolean>;
   get(branchId: string, decisionPointId: string): Promise<TurnGuidanceV1 | null>;
   /** Latest guidance at or before the given state version (for UI refresh). */
   latestForVersion(branchId: string, stateVersion: number): Promise<TurnGuidanceV1 | null>;

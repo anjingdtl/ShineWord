@@ -1,4 +1,5 @@
 import type { GameStateSnapshot } from '../../domain/state/types';
+import type { ContentEntry } from '../../domain/content/types';
 import type {
   SituationDefinitionV1,
   SituationSnapshotEntry,
@@ -52,16 +53,18 @@ export interface BuildSituationPacketInput {
   visibleActorNames: ReadonlyMap<string, string>;
   /** Entry ids whose ownership change counts as a key item swing. */
   keyItemIds?: ReadonlySet<string>;
+  entries?: readonly ContentEntry[];
+  cards?: readonly ActorCard[];
+  allowedCandidates?: readonly AllowedCandidateV1[];
+  preferredCandidateRef?: string;
 }
 
-function summarizeChanges(prepared: PreparedTurnResolution): string[] {
+function summarizeChanges(prepared: PreparedTurnResolution, names: ReadonlyMap<string, string>): string[] {
   const changes: string[] = [];
-  const summary = prepared.committedTurn.publicSummary.trim();
-  if (summary) changes.push(summary);
   const seen = new Set<string>(changes);
-  for (const event of [...prepared.domainEvents, ...prepared.lifeEvents]) {
+  for (const event of [...prepared.domainEvents, ...prepared.lifeEvents, ...prepared.extraEvents]) {
     if (changes.length >= 5) break;
-    const text = describeEvent(event);
+    const text = describeEvent(event, names);
     if (text && !seen.has(text)) {
       seen.add(text);
       changes.push(text);
@@ -70,25 +73,25 @@ function summarizeChanges(prepared: PreparedTurnResolution): string[] {
   return changes;
 }
 
-function describeEvent(event: { eventType: string; payload: unknown }): string | null {
+function describeEvent(event: { eventType: string; payload: unknown }, names: ReadonlyMap<string, string>): string | null {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   switch (event.eventType) {
     case 'actor_death_resolved':
-      return `${String(payload.actorId)} 已死亡。`;
+      return names.has(String(payload.actorId)) ? `${names.get(String(payload.actorId))} 已死亡。` : null;
     case 'actor_recovered_from_critical':
-      return `${String(payload.actorId)} 脱离了危殆状态。`;
+      return names.has(String(payload.actorId)) ? `${names.get(String(payload.actorId))} 脱离了危殆状态。` : null;
     case 'actor_entered_critical_state':
-      return `${String(payload.actorId)} 陷入危殆。`;
+      return names.has(String(payload.actorId)) ? `${names.get(String(payload.actorId))} 陷入危殆。` : null;
     case 'knowledge_discovered':
-      return `发现了新线索：${String(payload.entryId)}。`;
+      return '发现了新线索。';
     case 'quest_activated':
-      return `任务开始：${String(payload.questId)}。`;
+      return '新的任务开始了。';
     case 'quest_succeeded':
-      return `任务完成：${String(payload.questId)}。`;
+      return '完成了一项任务。';
     case 'quest_reward_granted':
-      return `获得酬劳：${String(payload.itemId)}。`;
+      return '获得了任务酬劳。';
     case 'relationship_changed':
-      return `与 ${String(payload.toActorId)} 的关系发生了变化。`;
+      return names.has(String(payload.toActorId)) ? `与 ${names.get(String(payload.toActorId))} 的关系发生了变化。` : null;
     case 'situation_activated':
       return `新局面展开了。`;
     case 'situation_resolved':
@@ -122,12 +125,16 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   const context: MethodCandidateContext = {
     state,
     playerCard,
-    cardsByName: new Map(),
-    entries: [],
+    cardsByName: new Map((input.cards ?? []).map(card => [card.actorId, card])),
+    entries: input.entries ?? [],
     situationStatuses,
     causalWorldTimeOrder: causalOrder,
   };
-  const allowedCandidates = collectAllowedCandidates({ situationDefinitions, context });
+  const candidates = input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions, context });
+  // Bound model input even after many regions have been built. Keep current
+  // situation methods and legal base actions within a fixed public envelope.
+  const allowedCandidates = [...candidates.filter(c => c.methodId).slice(0, 8), ...candidates.filter(c => !c.methodId).slice(0, 4)];
+  if (input.preferredCandidateRef) allowedCandidates.sort((a, b) => Number(b.ref === input.preferredCandidateRef) - Number(a.ref === input.preferredCandidateRef));
   if (allowedCandidates.length === 0 && situationDefinitions.length === 0) return null;
 
   const opportunities: Array<{ text: string; situationId?: string }> = [];
@@ -137,6 +144,7 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   for (const { situationId, definition } of situationDefinitions) {
     const entry = situationStatuses.get(situationId);
     if (!entry) continue;
+    if (definition.locationId && definition.locationId !== state.actors[playerCard.actorId]?.locationId) continue;
     if (entry.status === 'active') {
       opportunities.push({ text: definition.summary, situationId });
       if (definition.pressure.description) {
@@ -147,9 +155,8 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
             : {}),
         });
       }
-    } else if (entry.status === 'eligible') {
-      opportunities.push({ text: `出现了新的动向：${definition.title}`, situationId });
     }
+    if (entry.status !== 'active') continue;
     for (const promise of entry.promises) {
       if (promise.status === 'open') {
         pressures.push({ text: `待兑现的承诺：${promise.description}` });
@@ -169,7 +176,7 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   void candidateIds;
 
   return {
-    changes: summarizeChanges(prepared),
+    changes: summarizeChanges(prepared, new Map([...input.visibleActorNames, [playerCard.actorId, playerCard.name]])),
     opportunities: opportunities.slice(0, 5),
     pressures: pressures.slice(0, 5),
     actorNotes: actorNotes.slice(0, 5),

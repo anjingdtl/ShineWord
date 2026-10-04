@@ -28,6 +28,7 @@ import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '.
 import { compileProposal, type CompiledAction } from './v2Compile';
 import { contentDependencyBinding } from '../worldPackage/contentManifest';
 import { describeWorldClock } from '../../domain/state/worldClock';
+import { fitGuidanceNarratorRequest } from '../guidance/requestBudget';
 
 export interface NarrativeCandidate {
   turnId: string;
@@ -71,6 +72,8 @@ export interface RunV2TurnInput {
   methods?: readonly import('../../domain/situations/types').MethodTemplateV1[];
   /** Parallel owner situation ids for `methods`. */
   methodSituations?: readonly string[];
+  selectedBaseAction?: import('../guidance/types').AllowedCandidateV1;
+  narratorBudget?: { capabilities: import('../llm/requestPlan').FrozenModelCapabilities; reasoningPolicy: import('../llm/reasoningPolicy').ReasoningPolicySelection };
   updateCommittedState?: (
     nextState: import('../../domain/state/types').GameStateSnapshot,
     contract: ActionContract,
@@ -178,6 +181,7 @@ function narratorSystem(withGuidance: boolean): string {
     'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string,"situationSummary":{"changes":string[],"opportunities":string[],"pressures":string[]},"nextSteps":[{"candidateRef":string,"title":string,"rationale":string,"tradeoffs":string,"firstStepIntent":string}]}.',
     'text narrates THIS turn only (≤600 characters), staying faithful to the frozen outcome. situationSummary briefly lists what changed, current opportunities and pressures FROM situationPacket ONLY.',
     'nextSteps: at most 6 entries. Each candidateRef MUST be copied verbatim from situationPacket.allowedCandidates[].ref. title ≤24 chars, rationale ≤80 chars, tradeoffs ≤120 chars, firstStepIntent ≤160 chars.',
+    'Copy tradeoffs and firstStepIntent verbatim from the referenced allowed candidate. Only title and rationale may be reworded; do not add numbers or claim guaranteed results in them.',
     'Never invent success rates, damage, costs, deadlines or rewards. Never reveal names, secrets or facts absent from situationPacket and the supplied context. When no candidate fits, return an empty nextSteps array.',
     ...base.slice(3),
   ].join(' ');
@@ -382,6 +386,8 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
 
     const proposalWithActor = { ...proposal, actorId: reconcileActor(proposal.actorId, input) };
     compiled = compileProposal({
+      requestedIntent: input.playerIntent,
+      selectedBaseAction: input.selectedBaseAction,
       proposal: proposalWithActor,
       actingCard: input.actingCard,
       cards: input.cards,
@@ -495,19 +501,21 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       },
     });
     let narrated;
+    const prepareNarratorRequest = (request: LlmRequest): LlmRequest => input.narratorBudget
+      ? fitGuidanceNarratorRequest(request, { ...input.narratorBudget, plainNarratorSystem: narratorSystem(false) }) : request;
     try {
-      narrated = await input.provider.complete(makeNarratorRequest(
+      narrated = await input.provider.complete(prepareNarratorRequest(makeNarratorRequest(
         input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
-      ));
+      )));
     } catch (error) {
       const recovery = input.narratorReasoningRecovery;
       if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
       budget.consume('Narrator');
       input.onReasoningRecovery?.('narrator', recovery.context);
-      narrated = await input.provider.complete({
+      narrated = await input.provider.complete(prepareNarratorRequest({
         ...makeNarratorRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
         maxPhysicalRequests: 1,
-      });
+      }));
     }
     const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
       label: 'Narrator candidate',

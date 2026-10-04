@@ -8,6 +8,7 @@ import type {
 } from '../../domain/situations/types';
 import { evaluateCondition, snapshotConditionFacts } from '../../domain/situations/conditions';
 import type { AllowedCandidateV1 } from './types';
+import { SHORT_REST_MINUTES } from '../../domain/rules/restPolicy';
 
 /**
  * Local candidate eligibility (P7 §3.6, plan §7.2): every displayed path is
@@ -28,6 +29,15 @@ export interface MethodCandidateContext {
 
 const RANK_ORDER = ['untrained', 'novice', 'trained', 'expert', 'master'] as const;
 
+export function resolveMethodActor(ref: string, state: GameStateSnapshot, cards: readonly ActorCard[]): string | null {
+  if (state.actors[ref]) return ref;
+  const matches = cards.filter(card => card.templateId === ref && state.actors[card.actorId]);
+  if (matches.length === 1) return matches[0]!.actorId;
+  if (matches.length > 1) return null;
+  const conventionalId = `actor-${ref.replace(/^npc-/, '')}`;
+  return state.actors[conventionalId] ? conventionalId : null;
+}
+
 function meetsRank(actual: string | undefined, required: string | undefined): boolean {
   if (!required) return true;
   const actualIndex = RANK_ORDER.indexOf((actual ?? 'untrained') as typeof RANK_ORDER[number]);
@@ -39,47 +49,67 @@ export function assessMethod(
   situationId: string,
   method: MethodTemplateV1,
   context: MethodCandidateContext,
-): AllowedCandidateV1 & { eligible: boolean } {
+): AllowedCandidateV1 & { eligible: boolean; visible: boolean } {
   const { state, playerCard } = context;
   const blockers: string[] = [];
+  const player = state.actors[playerCard.actorId];
+  if (!player || player.lifeStatus === 'critical' || player.lifeStatus === 'dead'
+    || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) blockers.push('需要先得到援救并恢复行动能力');
   const requires = method.requires ?? {};
 
-  if (requires.skillId) {
+  const requiredSkill = requires.skillId ?? method.firstStep.skillId;
+  if (requiredSkill) {
     const cardKey = Object.keys(playerCard.skills ?? {})
-      .find(key => key === requires.skillId || key.replace(/^skill-/, '') === requires.skillId!.replace(/^skill-/, ''));
+      .find(key => key.replace(/^skill-/, '') === requiredSkill.replace(/^skill-/, ''));
     const rank = cardKey ? playerCard.skills?.[cardKey] : undefined;
-    if (!cardKey || !meetsRank(rank, requires.minRank)) {
-      blockers.push(`需要技能 ${requires.skillId}${requires.minRank ? `（${requires.minRank}）` : ''}`);
+    const skillEntry = context.entries.find(entry => entry.kind === 'skill'
+      && entry.entryId.replace(/^skill-/, '') === requiredSkill.replace(/^skill-/, ''));
+    const skill = skillEntry?.definition as { name?: string; allowUntrained?: boolean } | undefined;
+    if ((!cardKey && !skill?.allowUntrained) || !meetsRank(rank, requires.minRank)) {
+      blockers.push(`需要技能 ${skill?.name ?? requiredSkill}${requires.minRank ? '（达到所需熟练程度）' : ''}`);
     }
   }
-  if (requires.itemId && state.itemOwners[requires.itemId] !== playerCard.actorId) {
-    blockers.push(`需要物品 ${requires.itemId}`);
+  const requiredItem = requires.itemId ?? method.firstStep.itemId;
+  if (requiredItem && state.itemOwners[requiredItem] !== playerCard.actorId) {
+    const item = context.entries.find(entry => entry.entryId === requiredItem && entry.visibility === 'public');
+    blockers.push(`需要物品 ${(item?.definition as { name?: string } | undefined)?.name ?? '（尚未持有）'}`);
   }
+  if (method.firstStep.abilityId && !playerCard.abilities.includes(method.firstStep.abilityId)) blockers.push('需要先掌握相关能力');
+  if (method.firstStep.targetEntryId) {
+    const actorId = resolveMethodActor(method.firstStep.targetEntryId, state, [...context.cardsByName.values()]);
+    const target = actorId ? state.actors[actorId] : undefined;
+    if (!target || target.locationId !== state.actors[playerCard.actorId]?.locationId || target.lifeStatus === 'dead') blockers.push('行动对象需要在场且存活');
+  }
+  if (method.firstStep.destinationId && !context.entries.some(entry => entry.kind === 'scene'
+    && (entry.definition as { locationId: string }).locationId === method.firstStep.destinationId)) blockers.push('需要先找到通往目的地的路径');
   if (requires.knowledgeEntryId) {
     const known = (state.discoveries ?? []).some(
       record => record.actorId === playerCard.actorId && record.entryId === requires.knowledgeEntryId);
-    if (!known) blockers.push(`需要先发现 ${requires.knowledgeEntryId}`);
+    if (!known) blockers.push('需要先发现相关线索');
   }
   if (requires.relationshipTo && requires.minCloseness !== undefined) {
     const closeness = (state.relationships ?? []).find(
       rel => rel.fromActorId === playerCard.actorId && rel.toActorId === requires.relationshipTo)?.closeness;
     if (closeness === undefined || closeness < requires.minCloseness) {
-      blockers.push(`需要与 ${requires.relationshipTo} 的关系达到 ${requires.minCloseness}`);
+      blockers.push('需要先增进与相关人物的关系');
     }
   }
   if (requires.actorAlive) {
-    const actor = state.actors[requires.actorAlive];
-    if (!actor || actor.lifeStatus === 'dead') blockers.push(`需要 ${requires.actorAlive} 仍然在场且存活`);
+    const actorId = resolveMethodActor(requires.actorAlive, state, [...context.cardsByName.values()]);
+    const actor = actorId ? state.actors[actorId] : undefined;
+    if (!actor || actor.lifeStatus === 'dead') blockers.push('相关人物需要仍然存活');
   }
   if (requires.actorAt) {
-    const actor = state.actors[requires.actorAt.actorId];
+    const actorId = resolveMethodActor(requires.actorAt.actorId, state, [...context.cardsByName.values()]);
+    const actor = actorId ? state.actors[actorId] : undefined;
     if (!actor || actor.locationId !== requires.actorAt.locationId) {
-      blockers.push(`需要 ${requires.actorAt.actorId} 位于 ${requires.actorAt.locationId}`);
+      blockers.push('相关人物需要到达指定地点');
     }
   }
   if (requires.condition) {
     const facts = snapshotConditionFacts({
       actors: state.actors,
+      cards: [...context.cardsByName.values()],
       itemOwners: state.itemOwners,
       discoveries: state.discoveries,
       relationships: state.relationships,
@@ -96,6 +126,7 @@ export function assessMethod(
   if (method.visibility) {
     const facts = snapshotConditionFacts({
       actors: state.actors,
+      cards: [...context.cardsByName.values()],
       itemOwners: state.itemOwners,
       discoveries: state.discoveries,
       relationships: state.relationships,
@@ -120,6 +151,7 @@ export function assessMethod(
         availability: 'needs_preparation',
         blockers,
         eligible: false,
+        visible: false,
       };
     }
   }
@@ -138,11 +170,12 @@ export function assessMethod(
     availability: blockers.length === 0 ? 'available' : 'needs_preparation',
     blockers,
     eligible: blockers.length === 0,
+    visible: true,
   };
 }
 
 /** Stable base actions always legal in free play (reading entries excluded). */
-export function baseActionCandidates(state: GameStateSnapshot, playerCard: ActorCard): AllowedCandidateV1[] {
+export function baseActionCandidates(state: GameStateSnapshot, playerCard: ActorCard, visibleActorIds?: ReadonlySet<string>, entries: readonly ContentEntry[] = [], preferredLocationIds: readonly string[] = []): AllowedCandidateV1[] {
   const candidates: AllowedCandidateV1[] = [];
   candidates.push({
     ref: 'action:observe',
@@ -158,6 +191,7 @@ export function baseActionCandidates(state: GameStateSnapshot, playerCard: Actor
   });
   const sameLocationNpcs = Object.values(state.actors).filter(actor =>
     actor.actorId !== playerCard.actorId
+    && (!visibleActorIds || visibleActorIds.has(actor.actorId))
     && actor.locationId === state.actors[playerCard.actorId]?.locationId
     && actor.lifeStatus !== 'dead');
   if (sameLocationNpcs.length > 0) {
@@ -174,7 +208,21 @@ export function baseActionCandidates(state: GameStateSnapshot, playerCard: Actor
       blockers: [],
     });
   }
-  if ((state.actors[playerCard.actorId]?.resources.stamina ?? 0) < 3) {
+  // The move compiler permits travel to published player-visible scenes.
+  // Offer one such destination so a quiet decision point can lead elsewhere.
+  const destinations = entries.filter(entry => entry.kind === 'scene' && entry.visibility === 'public')
+    .map(entry => (entry.definition as { name: string; locationId: string }))
+    .filter(scene => scene.locationId !== state.actors[playerCard.actorId]?.locationId)
+    .sort((a, b) => Number(preferredLocationIds.includes(b.locationId)) - Number(preferredLocationIds.includes(a.locationId)));
+  const destination = destinations[0];
+  if (destination) candidates.push({
+    ref: `action:move:${destination.locationId}`, actionId: 'move', destinationId: destination.locationId,
+    title: `前往${destination.name}`.slice(0, 24), goal: '在已知地点寻找新的互动或线索',
+    firstStepIntent: `前往${destination.locationId}`, actionKind: 'move',
+    tradeoffs: '移动会推进世界时钟；到达后再决定具体行动', preparation: '目的地已知',
+    availability: 'available', blockers: [],
+  });
+  {
     candidates.push({
       ref: 'action:short_rest',
       actionId: 'short_rest',
@@ -182,11 +230,15 @@ export function baseActionCandidates(state: GameStateSnapshot, playerCard: Actor
       goal: '恢复体力',
       firstStepIntent: '稍作休息恢复体力',
       actionKind: 'observe',
-      tradeoffs: '推进世界时钟 30 分钟',
+      tradeoffs: `推进世界时钟 ${SHORT_REST_MINUTES} 分钟；期间局势可能继续变化`,
       preparation: '无',
       availability: 'available',
       blockers: [],
     });
+  }
+  const player = state.actors[playerCard.actorId];
+  if (!player || player.lifeStatus === 'critical' || player.lifeStatus === 'dead' || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) {
+    for (const candidate of candidates) { candidate.availability = 'needs_preparation'; candidate.blockers = ['需要先得到援救并恢复行动能力']; }
   }
   return candidates;
 }
@@ -213,14 +265,18 @@ export function collectAllowedCandidates(input: {
   for (const { situationId, definition } of situationDefinitions) {
     const entry = context.situationStatuses.get(situationId);
     if (!entry || entry.status !== 'active') continue;
+    if (definition.locationId && definition.locationId !== context.state.actors[context.playerCard.actorId]?.locationId) continue;
     for (const method of definition.methods) {
       const assessed = assessMethod(situationId, method, context);
-      const { eligible, ...candidate } = assessed;
+      const { eligible, visible, ...candidate } = assessed;
       void eligible;
+      if (!visible) continue;
       push(candidate);
     }
   }
-  for (const candidate of baseActionCandidates(context.state, context.playerCard)) {
+  const preferredLocations = situationDefinitions.filter(s => context.situationStatuses.get(s.situationId)?.status === 'active')
+    .map(s => s.definition.locationId).filter((id): id is string => typeof id === 'string');
+  for (const candidate of baseActionCandidates(context.state, context.playerCard, new Set(context.cardsByName.keys()), context.entries, preferredLocations)) {
     push(candidate);
   }
   return collected;

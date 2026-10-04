@@ -234,6 +234,11 @@ export async function getGuidanceAtVersion(branchId: string, stateVersion: numbe
   }
 }
 
+export async function subscribeGuidanceUpdates(listener: (branchId: string) => void): Promise<() => void> {
+  const runtime = await getDatabaseRuntime();
+  return runtime.guidance.subscribe(listener);
+}
+
 export async function loadHistory(branchId: string): Promise<TurnView[]> {
   const runtime = await getDatabaseRuntime();
   const rows = await runtime.turns.listCommittedTurns(branchId);

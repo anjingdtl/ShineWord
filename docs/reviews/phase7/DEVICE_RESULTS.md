@@ -1,5 +1,7 @@
 # P7-7 设备端验收记录
 
+> 初次交付记录。后续已补四主题、完整软键盘/小屏/字体、强停unknown恢复、真实移动与人物载入，并修复漫画字色与布局。当前设备头v14及账本见 [ACCEPTANCE_CLOSEOUT.md](ACCEPTANCE_CLOSEOUT.md)；主机长旅程和人工原著介入场景不冒充端上全本自动映射验收。
+
 日期：2026-10-04（Asia/Shanghai）。设备 `emulator-5554`（Medium_Phone，API 37.1，WHPX，x86_64）。应用 `com.shineword.app` V0.7.0 / versionCode 70000（debug，`install -r` 保留数据升级）。
 
 ## 测试资源（授权）

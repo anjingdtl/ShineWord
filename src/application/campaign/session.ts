@@ -96,9 +96,13 @@ import type {
   SituationTransitionOp,
 } from '../../domain/situations/types';
 import { buildSituationPacket } from '../guidance/packet';
+import { assessMethod, baseActionCandidates } from '../guidance/candidates';
+import { SHORT_REST_MINUTES, SHORT_REST_STAMINA_RESTORE } from '../../domain/rules/restPolicy';
+import { decisionPointIdFor, guidanceContentBindingHash } from '../guidance/types';
+import type { AllowedCandidateV1 } from '../guidance/types';
 import { assembleTurnGuidance } from '../guidance/validate';
 import { buildLocalAncillaryGuidance, upgradeAncillaryGuidance } from '../guidance/ancillary';
-import type { PublicSituationPacketV1, TurnGuidanceV1 } from '../guidance/types';
+import type { PublicSituationPacketV1, TurnGuidanceV1, GuidanceDecisionPointBinding } from '../guidance/types';
 import type { GuidanceStore } from '../ports/guidanceStore';
 import { canonicalStringify } from '../../domain/turns/canonical';
 import { forkBranch } from '../branch/fork';
@@ -177,6 +181,7 @@ export interface PlayTurnOptions {
   turnIdOverride?: string;
   onProgress?: (phase: 'planning' | 'rolling' | 'narrating' | 'committing') => void;
   coordinationFence?: { campaignId: string; fenceToken: number };
+  guidanceChoice?: { decisionPoint: GuidanceDecisionPointBinding; candidateRef: string };
 }
 
 /**
@@ -385,6 +390,7 @@ export class CampaignSession {
       relationships: [],
       ...input.settlement,
     };
+    const applySituations = await this.localSituationReducer(input.campaignId, input.branchId, state, turnId, input.actorId);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: input.branchId,
@@ -395,8 +401,12 @@ export class CampaignSession {
       outcomeGrade: 'success',
       settlement,
       updateNextState: input.updateState,
+      applyAuthoritativeState: applySituations,
       events: input.events,
       committedAt: new Date().toISOString(),
+    });
+    if (input.actionType !== 'scene_actors') await this.ensureDecisionPointGuidance({
+      campaignId: input.campaignId, branchId: input.branchId, sourceTurnId: turnId,
     });
   }
 
@@ -1019,6 +1029,25 @@ export class CampaignSession {
     return [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
   }
 
+  private async localSituationReducer(campaignId: string, branchId: string, state: GameStateSnapshot, turnId: string, actingActorId: string): Promise<(next: GameStateSnapshot) => Array<{ eventType: string; payload: unknown }>> {
+    const anchor = await this.campaignAnchor(campaignId);
+    if (anchor.packageRevision < 1) return () => [];
+    const entries = await this.loadPackageEntries(anchor.worldId, anchor.packageRevision, { campaignId, state });
+    const facts = await this.deps.worldStore.listFacts(anchor.worldId);
+    const order = Math.max(anchor.worldTimeOrder, state.causalWorldTimeOrder ?? 0);
+    const definitions = entries.filter(entry => entry.kind === 'situation' && isEntryVisibleAtAnchor(entry, facts, order))
+      .map(entry => ({ situationId: entry.entryId, definition: entry.definition as SituationDefinitionV1 }));
+    const playerActorId = state.party?.find(member => member.role === 'protagonist')?.actorId ?? actingActorId;
+    return next => {
+      if (definitions.length === 0) return [];
+      next.causalWorldTimeOrder = order;
+      const runtime = applySituationRuntime({ definitions, nextState: next, sourceTurnId: turnId, playerActorId, methodOps: [] });
+      next.situations = runtime.situations;
+      for (const fate of runtime.actorFates) { if (next.actors[fate.actorId]) next.actors[fate.actorId]!.lifeStatus = fate.lifeStatus; }
+      return runtime.events;
+    };
+  }
+
   private async assertNoActiveEncounter(branchId: string): Promise<void> {
     const table = await this.deps.db.queryOne<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'encounters'",
@@ -1440,7 +1469,7 @@ export class CampaignSession {
     runtimeEvents: ReadonlyArray<{ eventType: string; payload: unknown }> = [],
     /** Full catalog for discovery-driven lifts (discovery is the permission). */
     allEntries: readonly ContentEntry[] = entries,
-    /** Static floor from the adopted catalog (adoption = story region). */
+    /** Opening anchor only; loading content never advances branch time. */
     catalogFloor = 0,
   ): void {
     let order = Math.max(nextState.causalWorldTimeOrder ?? 0, catalogFloor);
@@ -1487,6 +1516,22 @@ export class CampaignSession {
     }
   }
 
+  async assertGuidanceChoiceCurrent(branchId: string, choice: NonNullable<PlayTurnOptions['guidanceChoice']>, intent?: string): Promise<void> {
+    const state = await this.deps.turns.getState(branchId);
+    const stored = await this.deps.guidance?.get(branchId, choice.decisionPoint.decisionPointId);
+    const step = stored?.steps.find(item => item.candidateRef === choice.candidateRef);
+    const knownIds = (state?.discoveries ?? []).filter(d => d.actorId === choice.decisionPoint.playerActorId).map(d => d.entryId);
+    const knowledgeHash = await this.deps.hashProvider.sha256Hex([...new Set(knownIds)].sort().join('\n'));
+    if (!state || !stored || !step || step.availability !== 'available'
+      || branchId !== choice.decisionPoint.branchId || state.stateVersion !== choice.decisionPoint.stateVersion
+      || JSON.stringify(stored.decisionPoint) !== JSON.stringify(choice.decisionPoint)
+      || guidanceContentBindingHash(state) !== choice.decisionPoint.contentBindingHash
+      || knowledgeHash !== choice.decisionPoint.knowledgeHash
+      || (intent !== undefined && step.firstStepIntent !== intent)) {
+      throw new Error('局面已经变化，这条路径已失效；请刷新后选择最新路径。');
+    }
+  }
+
   /**
    * P7 §8.3: attach guidance to a decision point created by a LOCAL action
    * (rest/training/transfer) or an NPC auto-step boundary. Local guidance is
@@ -1501,6 +1546,8 @@ export class CampaignSession {
     committedEvents?: ReadonlyArray<{ eventType: string; payload: unknown }>;
     /** Skip the async LLM upgrade (offline / budget-constrained callers). */
     localOnly?: boolean;
+    /** Preserve an already selected legal candidate across NPC setup. */
+    preferredCandidateRef?: string;
   }): Promise<TurnGuidanceV1 | null> {
     if (!this.deps.guidance) return null;
     try {
@@ -1527,14 +1574,44 @@ export class CampaignSession {
       const situationDefinitions = allEntries
         .filter(entry => entry.kind === 'situation')
         .map(entry => ({ situationId: entry.entryId, definition: entry.definition as SituationDefinitionV1 }));
-      if (situationDefinitions.length === 0) return null;
 
       const knownEntryIds = new Set((summary.state.discoveries ?? [])
         .filter(item => item.actorId === playerCard.actorId).map(item => item.entryId));
       const allCards = await this.loadAllCards(options.branchId);
+      const anchorRow = await this.deps.db.queryOne<{ anchor_json: string }>('SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [options.campaignId]);
+      const anchorOrder = anchorRow ? Number((JSON.parse(anchorRow.anchor_json) as { worldTimeOrder?: number }).worldTimeOrder ?? 0) : 0;
+      const facts = await this.deps.worldStore.listFacts(summary.worldId);
+      const publicEntries = projectPlayerEntriesAtAnchor(allEntries, facts, Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0), knownEntryIds);
+      const currentDefinitions = situationDefinitions.filter(situation => {
+        const entry = allEntries.find(item => item.entryId === situation.situationId)!;
+        return isEntryVisibleAtAnchor(entry, facts, Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0));
+      });
+      const sourceTurns = await this.deps.turns.listCommittedTurns(options.branchId);
+      const sourceTurnId = sourceTurns.find(turn => turn.stateVersion === summary.state.stateVersion)?.turnId ?? options.sourceTurnId;
+      const committedRows = await this.deps.db.queryAll<{ event_type: string; payload_json: string }>(
+        'SELECT event_type, payload_json FROM branch_events WHERE branch_id = ? AND turn_id = ? ORDER BY event_seq', [options.branchId, sourceTurnId]);
+      const committedEvents = [...committedRows.map(row => ({ eventType: row.event_type, payload: JSON.parse(row.payload_json) as unknown })), ...(options.committedEvents ?? [])];
+      const activeEncounter = await this.getActiveEncounter(options.campaignId, options.branchId);
+      let combatCandidates: AllowedCandidateV1[] | undefined;
+      if (activeEncounter?.status === 'active') {
+        if (!activeEncounter.currentActorIsPlayer) return null;
+        combatCandidates = [];
+        for (const target of activeEncounter.actors.filter(actor => actor.side === 'hostile' && actor.hp > 0)) {
+          const available = await this.getPlayerAttackAvailability({ campaignId: options.campaignId, branchId: options.branchId, encounterId: activeEncounter.encounterId, targetId: target.actorId });
+          combatCandidates.push({ ref: `action:combat_attack:${target.actorId}`, actionId: 'combat_attack',
+            title: `攻击${target.name}`.slice(0, 24), goal: '尝试压制当前对手', firstStepIntent: `攻击${target.name}`,
+            actionKind: 'interact', tradeoffs: '进行战斗检定，消耗当前行动；结果由规则结算', preparation: '确认攻击条件',
+            availability: available.allowed ? 'available' : 'needs_preparation', blockers: available.allowed ? [] : [available.explanation ?? '攻击条件尚未满足'] });
+        }
+        combatCandidates.push({ ref: 'action:combat_guard', actionId: 'combat_guard', title: '保持戒备', goal: '观察战局，保留判断空间',
+          firstStepIntent: '保持戒备', actionKind: 'interact', tradeoffs: '本次主行动用于戒备，冲突继续推进', preparation: '无', availability: 'available', blockers: [] });
+        if (activeEncounter.exitIds.length > 0) combatCandidates.push({ ref: 'action:combat_retreat', actionId: 'combat_retreat', title: '尝试撤退', goal: '争取脱离冲突',
+          firstStepIntent: '撤退', actionKind: 'interact', tradeoffs: '撤退需要规则检定，可能失败', preparation: '存在可用出口', availability: 'available', blockers: [] });
+      }
       const visibleActorNames = new Map(allCards
         .filter(card => card.actorId !== playerCard.actorId
-          && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId)
+          && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId
+          && (card.controller === 'companion' || publicEntries.some(entry => entry.entryId === card.templateId)))
         .map(card => [card.actorId, card.name] as const));
       const input = {
         provider: this.provider,
@@ -1543,11 +1620,15 @@ export class CampaignSession {
         campaignId: options.campaignId,
         branchId: options.branchId,
         playerCard,
+        cards: allCards.filter(card => card.actorId === playerCard.actorId || visibleActorNames.has(card.actorId)),
         state: summary.state,
-        sourceTurnId: options.sourceTurnId,
-        committedEvents: options.committedEvents ?? [],
-        situationDefinitions,
-        entries: allEntries,
+        sourceTurnId,
+        committedEvents,
+        situationDefinitions: combatCandidates ? [] : currentDefinitions,
+        allowedCandidates: combatCandidates,
+        preferredCandidateRef: options.preferredCandidateRef,
+        entries: publicEntries,
+        blockedEntries: allEntries.filter(entry => !publicEntries.some(publicEntry => publicEntry.entryId === entry.entryId)),
         knownEntryIds,
         visibleActorNames,
         ...(options.localOnly ? { localOnly: true } : {}),
@@ -1555,8 +1636,23 @@ export class CampaignSession {
         reasoningTier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
         reasoningReserveTokens: this.profile.reasoningReserveTokens ?? null,
         reasoningPolicyVersion: REASONING_POLICY_VERSION,
+        capabilities: this.turnCapabilities(),
+        reasoningPolicy: {
+          tier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
+          providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model),
+          model: this.profile.model,
+        },
+        knowledgeHash: await this.deps.hashProvider.sha256Hex([...knownEntryIds].sort().join('\n')),
+        getCurrentState: () => this.deps.turns.getState(options.branchId),
       };
       const local = buildLocalAncillaryGuidance(input);
+      const existing = await this.deps.guidance.get(options.branchId, decisionPointIdFor(options.branchId, summary.state.stateVersion));
+      if (existing && JSON.stringify(existing.decisionPoint) === JSON.stringify(local.decisionPoint)) {
+        if (!options.localOnly && !existing.upgradeStatus && !existing.steps.some(step => step.source === 'llm')) {
+          void upgradeAncillaryGuidance(input).catch(() => undefined);
+        }
+        return existing;
+      }
       await this.deps.guidance.save(local);
       if (options.localOnly) return local;
       void upgradeAncillaryGuidance(input).catch(() => undefined);
@@ -1784,7 +1880,19 @@ export class CampaignSession {
     try {
       const available = await this.deps.db.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='interaction_operations'");
       if (!available) return await this.playTurnInForeground(options);
-      if (!options.turnIdOverride) await this.prepareAdoptedSceneActors(options);
+      if (options.guidanceChoice) await this.assertGuidanceChoiceCurrent(options.branchId, options.guidanceChoice, options.intent);
+      const materialized = !options.turnIdOverride && await this.prepareAdoptedSceneActors(options);
+      if (materialized && options.guidanceChoice) {
+        // Loading current-scene NPCs is part of this foreground action. Keep
+        // the selected intent only if the SAME candidate is still legal.
+        const refreshed = await this.ensureDecisionPointGuidance({ ...options, sourceTurnId: 'scene-actors', localOnly: true,
+          preferredCandidateRef: options.guidanceChoice.candidateRef });
+        const step = refreshed?.steps.find(s => s.candidateRef === options.guidanceChoice!.candidateRef);
+        if (!refreshed || !step || step.availability !== 'available' || step.firstStepIntent !== options.intent) {
+          throw new Error('局面已经变化，这条路径已失效；请刷新后选择最新路径。');
+        }
+        options = { ...options, guidanceChoice: { decisionPoint: refreshed.decisionPoint, candidateRef: step.candidateRef } };
+      }
       const state = await this.deps.turns.getState(options.branchId);
       if (!state) throw new Error('Unknown branch.');
       const turnId = options.turnIdOverride ?? `turn-${String(state.stateVersion+1).padStart(4,'0')}`;
@@ -1798,16 +1906,16 @@ export class CampaignSession {
 
   /** Materialize adopted scene templates only at a new player-action boundary.
    * Background publication/adoption never writes cards or actor state. */
-  private async prepareAdoptedSceneActors(options: PlayTurnOptions): Promise<void> {
-    if (!this.deps.segmentContent) return;
+  private async prepareAdoptedSceneActors(options: PlayTurnOptions): Promise<boolean> {
+    if (!this.deps.segmentContent) return false;
     const pending = await this.deps.db.queryOne(`SELECT turn_id FROM turns WHERE branch_id=? AND status<>'Committed' LIMIT 1`, [options.branchId]);
     const operation = await this.deps.db.queryOne(`SELECT operation_id FROM interaction_operations WHERE branch_id=? AND status IN ('running','paused_system') LIMIT 1`, [options.branchId]);
-    if (pending || operation) return;
+    if (pending || operation) return false;
     const summary = await this.getSummary(options.campaignId, options.branchId);
-    if (!summary.state.segmentContentBinding) return;
+    if (!summary.state.segmentContentBinding) return false;
     const player = summary.cards.find(card => card.controller === 'player');
     const playerState = player && summary.state.actors[player.actorId];
-    if (!player || !playerState?.locationId || playerState.lifeStatus === 'dead' || playerState.lifeStatus === 'critical') return;
+    if (!player || !playerState?.locationId || playerState.lifeStatus === 'dead' || playerState.lifeStatus === 'critical') return false;
     await this.assertNoActiveEncounter(options.branchId);
     const { worldTimeOrder } = await this.campaignAnchor(options.campaignId);
     const catalog = await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding });
@@ -1822,7 +1930,7 @@ export class CampaignSession {
       && !existing.some(card => card.templateId === entry.entryId || card.name === (entry.definition as ActorTemplateDefinition).name))
       .map(entry => createTemplateCard({ actorId: `npc-${entry.entryId}`, worldId: summary.worldId, worldPackageRevision: summary.packageRevision,
         templateId: entry.entryId, definition: entry.definition as ActorTemplateDefinition, controller: 'gm', kind: 'npc' }));
-    if (!cards.length) return;
+    if (!cards.length) return false;
     const loadout: Array<{ itemId: string; actorId: string; templateId: string }> = [];
     for (const card of cards) {
       const template = visible.find(entry => entry.entryId === card.templateId)!;
@@ -1853,11 +1961,13 @@ export class CampaignSession {
           }
         }, events: [{ eventType: 'adopted_scene_actors_instantiated', payload: { templateIds: cards.map(card => card.templateId) } }] });
     });
+    return true;
   }
 
   private async playTurnInForeground(options: PlayTurnOptions): Promise<PlayTurnResult> {
     await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
+    if (options.guidanceChoice) await this.assertGuidanceChoiceCurrent(options.branchId, options.guidanceChoice, options.intent);
     // Rule dispatch (plan §9 / G05): legacy V0.1 campaigns carry no package
     // lock; they stay readable but cannot play forward on V0.2 mechanics.
     if (summary.packageRevision < 1) {
@@ -1917,21 +2027,10 @@ export class CampaignSession {
       : {};
     const anchorOrder = Number.isFinite(anchor.worldTimeOrder) ? Number(anchor.worldTimeOrder) : 0;
     const facts = await this.deps.worldStore.listFacts(summary.worldId);
-    // P7 §4.2: the branch's effective story order is max(anchor, committed
-    // causal progress, adopted catalog floor). Adopting later content means
-    // the branch HAS reached that story region; the anchor alone would hide
-    // it forever. This never lets narrative text skip canon time.
-    const factOrderById = new Map(facts.map(fact => {
-      const order = fact.validFrom === null ? null : Number(fact.validFrom);
-      return [fact.factId, Number.isFinite(order) ? order : null] as const;
-    }));
-    let catalogCausalFloor = anchorOrder;
-    for (const entry of allEntries) {
-      for (const factId of entry.provenance.sourceFactIds) {
-        const order = factOrderById.get(factId);
-        if (order !== null && order !== undefined && order > catalogCausalFloor) catalogCausalFloor = order;
-      }
-    }
+    // P7 §4.2: only the anchor and committed causal progress advance story
+    // order. Loading later catalog entries does not prove a player reached
+    // their events and cannot execute a future fate.
+    const catalogCausalFloor = anchorOrder;
     const worldTimeOrder = Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0, catalogCausalFloor);
     const anchorEvents = (await this.deps.worldStore.listEvents(summary.worldId))
       .filter(event => event.status === 'canon' && event.worldTimeOrder !== null);
@@ -1973,8 +2072,22 @@ export class CampaignSession {
     const activeMethods: MethodTemplateV1[] = [];
     const activeMethodSituations: string[] = [];
     for (const situation of situationDefinitions) {
+      if (situation.definition.locationId && situation.definition.locationId !== playerState.locationId) continue;
       if (situationStatusById.get(situation.situationId)?.status === 'active') {
         for (const method of situation.definition.methods) {
+          const assessed = assessMethod(situation.situationId, method, {
+            state: summary.state, playerCard, entries,
+            cardsByName: new Map(plannerCards.map(card => [card.actorId, card])),
+            situationStatuses: situationStatusById, causalWorldTimeOrder: worldTimeOrder,
+          });
+          if (!assessed.visible) continue;
+          if (!assessed.eligible) {
+            const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+            if (normalizeIntent(options.intent) === normalizeIntent(method.firstStep.intent)) {
+              throw new Error(`尚未掌握技能或补齐行动前提：${assessed.blockers.join('；')}`);
+            }
+            continue;
+          }
           activeMethods.push(method);
           activeMethodSituations.push(situation.situationId);
         }
@@ -1994,8 +2107,9 @@ export class CampaignSession {
     // Names that must never surface in player guidance text (A09): GM-only
     // entries and undiscovered discoverable entries.
     const blockedNames: string[] = [];
-    for (const entry of authoritativeEntries) {
-      if (entry.visibility === 'gm'
+    for (const entry of allEntries) {
+      if (entry.kind === 'situation') continue;
+      if (!entries.some(visible => visible.entryId === entry.entryId) || entry.visibility === 'gm'
         || (entry.visibility === 'discoverable' && !knownEntryIds.has(entry.entryId))) {
         const definition = entry.definition as { name?: string; title?: string };
         const name = definition.name ?? definition.title;
@@ -2027,8 +2141,9 @@ export class CampaignSession {
     // gmBrief and hidden conditions never enter any model context). Situation
     // entries are gm-visibility, so this reads the authoritative projection.
     for (const situation of situationDefinitions) {
-      if (situationStatusById.get(situation.situationId)?.status !== 'active') continue;
-      const methodLines = situation.definition.methods
+      if (situationStatusById.get(situation.situationId)?.status !== 'active'
+        || (situation.definition.locationId && situation.definition.locationId !== playerState.locationId)) continue;
+      const methodLines = activeMethods.filter((_, index) => activeMethodSituations[index] === situation.situationId)
         .map(method => `- ${method.title}：${method.firstStep.intent}`)
         .slice(0, 4)
         .join('\n');
@@ -2182,6 +2297,10 @@ export class CampaignSession {
         narratorReasoningRecovery: turnBundle.narratorReasoningRecovery,
         reasoningPolicyVersion: turnBundle.reasoningPolicyVersion,
         narratorWorldContext: turnBundle.narratorText,
+        narratorBudget: { capabilities: this.turnCapabilities(), reasoningPolicy: {
+          tier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
+          providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model), model: this.profile.model,
+        } },
         narratorWireOutputTokens: turnBundle.narratorWireOutputTokens,
         styleSnapshot,
         coordinationFence: options.coordinationFence,
@@ -2198,6 +2317,10 @@ export class CampaignSession {
         abilities,
         scenes,
         constraints,
+        selectedBaseAction: baseActionCandidates(summary.state, playerCard, new Set(plannerCards.map(card => card.actorId)), entries,
+          situationDefinitions.filter(s => situationStatusById.get(s.situationId)?.status === 'active')
+            .map(s => s.definition.locationId).filter((id): id is string => typeof id === 'string'))
+          .find(candidate => candidate.firstStepIntent === options.intent),
         ...(activeMethods.length > 0 ? { methods: activeMethods, methodSituations: activeMethodSituations } : {}),
         // P7 prepared pipeline: full local reduction BEFORE the Narrator, so
         // guidance reflects the post-settlement state and the commit applies
@@ -2244,18 +2367,17 @@ export class CampaignSession {
             playerCard,
             visibleActorNames,
             keyItemIds,
+            entries, cards: plannerCards,
           }),
           buildGuidance: async ({
             prepared, contract, grade, llmSteps, llmSummary,
           }) => {
             const packet = buildSituationPacket({
-              prepared, situationDefinitions, playerCard, visibleActorNames, keyItemIds,
+              prepared, situationDefinitions, playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
             });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
-              [...knownEntryIds].sort().join('\n'));
-            const contentBindingHash = String(
-              summary.state.segmentContentBinding?.manifestHash
-              ?? contentManifest?.manifestHash ?? 'no-binding');
+              [...new Set((prepared.nextState.discoveries ?? []).filter(d => d.actorId === playerCard.actorId).map(d => d.entryId))].sort().join('\n'));
+            const contentBindingHash = guidanceContentBindingHash(prepared.nextState);
             const contextHash = await this.deps.hashProvider.sha256Hex(
               canonicalStringify((packet ?? { none: true }) as unknown as import('../../domain/turns/canonical').CanonicalJson));
             return assembleTurnGuidance({
@@ -2418,9 +2540,14 @@ export class CampaignSession {
     campaignId: string;
     branchId: string;
     kind: 'short' | 'long';
+    guidanceChoice?: PlayTurnOptions['guidanceChoice'];
   }): Promise<{ committed: boolean; clockSecondsAdvanced: number }> {
     await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
+    if (options.guidanceChoice) {
+      await this.assertGuidanceChoiceCurrent(options.branchId, options.guidanceChoice);
+      if (options.kind !== 'short' || options.guidanceChoice.candidateRef !== 'action:short_rest') throw new Error('休息路径与当前动作不一致。');
+    }
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
     const actor = summary.state.actors[playerCard.actorId];
@@ -2429,9 +2556,9 @@ export class CampaignSession {
       throw new Error('失能或濒危角色不能自行休整；需要先处理援救或结局风险。');
     }
 
-    const minutes = options.kind === 'short' ? 30 : 8 * 60;
+    const minutes = options.kind === 'short' ? SHORT_REST_MINUTES : 8 * 60;
     const staminaMax = playerCard.resourceMax.stamina ?? 10;
-    const staminaRestore = options.kind === 'short' ? Math.min(2, staminaMax) : staminaMax;
+    const staminaRestore = options.kind === 'short' ? Math.min(SHORT_REST_STAMINA_RESTORE, staminaMax) : staminaMax;
     const hpRestore = options.kind === 'long' ? Math.min(2, playerCard.resourceMax.hp ?? 10) : 0;
 
     const turnId = `rest-${options.kind}-${summary.state.stateVersion + 1}`;
@@ -2453,16 +2580,18 @@ export class CampaignSession {
         severe_failure: restOutcome(playerCard.actorId, staminaRestore, hpRestore, minutes, staminaMax, playerCard.resourceMax.hp ?? 10),
       },
     };
+    const applySituations = await this.localSituationReducer(options.campaignId, options.branchId, summary.state, turnId, playerCard.actorId);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
       contractHash: await this.deps.hashProvider.sha256Hex(`${turnId}:rest`),
+      applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
       committedAt: new Date().toISOString(),
     });
-    void this.ensureDecisionPointGuidance({
+    await this.ensureDecisionPointGuidance({
       campaignId: options.campaignId,
       branchId: options.branchId,
       sourceTurnId: turnId,
@@ -2565,11 +2694,13 @@ export class CampaignSession {
         severe_failure: trainingOutcome(options.actorId, storedSkillKey, result.nextRank, TRAINING_MINUTES, TRAINING_STAMINA_COST),
       },
     };
+    const applySituations = await this.localSituationReducer(options.campaignId, options.branchId, state, turnId, options.actorId);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
       contractHash: await this.deps.hashProvider.sha256Hex(`${turnId}:train`),
+      applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
       settlement: {
@@ -2588,7 +2719,7 @@ export class CampaignSession {
       },
       committedAt: new Date().toISOString(),
     });
-    void this.ensureDecisionPointGuidance({
+    await this.ensureDecisionPointGuidance({
       campaignId: options.campaignId,
       branchId: options.branchId,
       sourceTurnId: turnId,
