@@ -201,3 +201,14 @@ export function filterProjects(projects: readonly ProjectStatusProjection[], que
   const needle = query.trim().toLowerCase();
   return needle ? projects.filter(project => project.title.toLowerCase().includes(needle)) : [...projects];
 }
+
+/** Real world title for a worldId (same-source re-imports land in the
+ * EXISTING world; the picked file name is not the project name). */
+export async function getWorldTitle(worldId: string): Promise<string | null> {
+  const runtime = await getDatabaseRuntime();
+  const row = await runtime.db.queryOne<{ title: string }>(
+    'SELECT title FROM worlds WHERE world_id = ?',
+    [worldId],
+  ).catch(() => null);
+  return row?.title ?? null;
+}

@@ -14,10 +14,9 @@ import {
   importPortableWorldPackageFile,
 } from '../../runtime';
 import { pickNovelFile, pickTextRef } from '../../fileBridge';
-import { getDatabaseRuntime } from '../../database';
 import { importNovelUnified } from '../../sourceImport';
 import { deleteProjectNow, findActiveProjectRuns, stopAndDeleteProject } from '../../projectDeletion';
-import { refreshProjectBuildStatusFast, filterProjects, type ProjectStatusProjection } from '../../projectLibrary';
+import { refreshProjectBuildStatusFast, filterProjects, type ProjectStatusProjection, getWorldTitle } from '../../projectLibrary';
 import { createLibraryRefreshController, refreshLibraryFull } from '../../projectLibraryRefresh';
 import { ProjectActionsMenu } from '../features/library/ProjectActionsMenu';
 import { listOpenBuildTasks } from '../../buildTasks';
@@ -126,15 +125,9 @@ export function LibraryScreen(): React.JSX.Element {
       // lands in is the world that owns the source, NOT a new project named
       // after the picked file. Saying "已创建项目" here lied about what
       // actually happened (long-run 2026-10-05 BUG-IMPORT-DEDUP-1).
-      const landedTitle = await (async () => {
-        try {
-          const runtime = await getDatabaseRuntime();
-          const world = await runtime.worldStore.getWorld(imported.worldId);
-          return world?.title ?? picked.name.replace(/\.txt$/i, '');
-        } catch {
-          return picked.name.replace(/\.txt$/i, '');
-        }
-      })();
+      const landedTitle = await getWorldTitle(imported.worldId)
+        .then(title => title ?? picked.name.replace(/\.txt$/i, ''))
+        .catch(() => picked.name.replace(/\.txt$/i, ''));
       setNotice(imported.reusedSource
         ? `该小说已存在项目「${landedTitle}」：同源文件继续在原项目上构建（本次 ${imported.chapterCount} 章）。`
         : `已创建项目「${landedTitle}」：${imported.chapterCount} 章。构建在项目内进行，完成后即可开局。`);

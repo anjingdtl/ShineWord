@@ -144,14 +144,30 @@ export class TurnPostProcessingCoordinator {
   async claimNextHandoffs(branchId: string, owner: string): Promise<PostprocessHandoff[]> {
     const now = this.now();
     const limit = this.input.maxBatchHandoffs ?? DEFAULT_MAX_BATCH_HANDOFFS;
+    const nowIso = now.toISOString();
+    // Long-run fix (BUG-MEM-LAG-1): a running row whose lease has expired is
+    // claimable again — otherwise a worker that died mid-batch wedges every
+    // handoff from that point on (observed: v42..144 stuck 'running' after
+    // 144 committed turns). The fencing token bump makes the old worker's
+    // conditional writes fail closed, so the takeover stays safe.
+    // Without a wired memory provider the ONLY local sub-task is episodic
+    // indexing; already-indexed rows would be claimed and released forever
+    // (the same oldest eight every wave), starving nothing but burning the
+    // wave budget — so they are not claimed at all on that path.
+    const memoryCapable = Boolean(this.input.storyMemory && this.input.provider
+      && this.input.capabilities && this.input.reasoningPolicy);
+    const indexedFilter = memoryCapable ? '' : ' AND episodic_indexed = 0';
     const rows = await this.input.db.queryAll<HandoffRow>(
       `SELECT * FROM frozen_turn_postprocess_outbox
         WHERE branch_id = ?
-          AND status IN ('pending', 'retryable_failed')
-          AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+          AND (
+            status IN ('pending', 'retryable_failed')
+            OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+          )
+          AND (lease_expires_at IS NULL OR lease_expires_at <= ?)${indexedFilter}
         ORDER BY episodic_indexed ASC, committed_state_version ASC
         LIMIT ?`,
-      [branchId, now.toISOString(), limit],
+      [branchId, nowIso, nowIso, limit],
     );
     const claimed: PostprocessHandoff[] = [];
     const leaseExpiresAt = new Date(now.getTime() + (this.input.leaseDurationMs ?? DEFAULT_LEASE_MS)).toISOString();
@@ -162,9 +178,13 @@ export class TurnPostProcessingCoordinator {
         `UPDATE frozen_turn_postprocess_outbox SET
            status = 'running', lease_owner = ?, lease_expires_at = ?,
            fencing_token = COALESCE(fencing_token, 0) + 1, attempts = attempts + 1, updated_at = ?
-         WHERE handoff_id = ? AND status IN ('pending', 'retryable_failed')
+         WHERE handoff_id = ?
+           AND (
+             status IN ('pending', 'retryable_failed')
+             OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+           )
            AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
-        [owner, leaseExpiresAt, now.toISOString(), row.handoff_id, now.toISOString()],
+        [owner, leaseExpiresAt, now.toISOString(), row.handoff_id, nowIso, nowIso],
       );
       if (changes > 0) {
         // Re-read to carry the NEW fencing token: the conditional terminal
