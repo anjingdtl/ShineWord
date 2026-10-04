@@ -134,7 +134,7 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
   if (!selected && baseAction?.actionId === 'short_rest') {
     const cap = input.actingCard.resourceMax.stamina ?? 10;
     const outcome = automaticOutcome(true, '你进行了短休。', [{ op: 'restoreResource', actorId: input.actingCard.actorId, resourceId: 'stamina', amount: Math.min(SHORT_REST_STAMINA_RESTORE, cap), cap }]);
-    return { storedSkillKey: null, contract: { protocolVersion: '1.0', turnId: input.proposal.turnId,
+    return { storedSkillKey: null, contract: { protocolVersion: '2.0', turnId: input.proposal.turnId,
       expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId, actionType: 'short_rest',
       intent: requestedIntent, evidenceIds: [], requiresRoll: false, timeCostMinutes: SHORT_REST_MINUTES,
       resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } } };
@@ -243,7 +243,7 @@ function compileProposalBase(input: CompileProposalInput, publishedMethod = fals
   const currentLocation = state.actors[actorId]?.locationId;
 
   const base = {
-    protocolVersion: '1.0' as const,
+    protocolVersion: '2.0' as const,
     turnId: proposal.turnId,
     expectedStateVersion: proposal.expectedStateVersion,
     actorId,
@@ -494,7 +494,7 @@ function compileAbilityAction(input: CompileProposalInput): CompiledAction {
 
   return {
     contract: {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId: proposal.turnId,
       expectedStateVersion: proposal.expectedStateVersion,
       actorId: actingCard.actorId,

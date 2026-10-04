@@ -59,7 +59,7 @@ const shaProvider = {
 function actionContract(turnId = 'turn-sqlite-001', expectedStateVersion = 12) {
   const outcome = (achieved, publicSummary, effects = []) => ({ achieved, publicSummary, effects });
   return {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     turnId,
     expectedStateVersion,
     actorId: 'actor-player',

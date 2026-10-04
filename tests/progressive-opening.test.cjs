@@ -268,7 +268,7 @@ test('migration 14 upgrades an existing v2 package without changing its manifest
       (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
        mapping_version, status, content_hash, validation_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run('w-legacy-package', 1, 'world-package-2', 'a'.repeat(64), 'shineword-core', '0.2.0',
+      .run('w-legacy-package', 1, 'world-package-2', 'a'.repeat(64), 'shineword-core', '0.3.0',
         'legacy', 'published', 'b'.repeat(64), '{}', 'before');
     await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(13), () => 'after');
     const pkg = await worldStore.getWorldPackage('w-legacy-package', 1);

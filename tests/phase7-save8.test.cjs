@@ -28,7 +28,7 @@ async function fixture() {
   const entries = [lore('base-rule')], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
   const manifest = { schemaVersion: 'world-package-2', worldId: 'p7-world', revision: 1,
-    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.2.0' },
+    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   await h.runtime.worldStore.saveImportedWorldPackage({
     world: { worldId: manifest.worldId, title: 'P7 存档', sourceSha256: manifest.sourceSha256, sourceBytes: 0,
@@ -37,7 +37,7 @@ async function fixture() {
     validationJson: '{}', createdAt: NOW });
   await h.adapter.execute(`INSERT INTO campaigns
     (campaign_id, world_id, title, ruleset_id, ruleset_version, world_mapping_version, opening_json, created_at, package_revision, anchor_json, status)
-    VALUES ('c', ?, 'P7 存档', 'shineword-core', '0.2.0', 'mapping-1', '{}', ?, 1, '{}', 'active')`, [manifest.worldId, NOW]);
+    VALUES ('c', ?, 'P7 存档', 'shineword-core', '0.3.0', 'mapping-1', '{}', ?, 1, '{}', 'active')`, [manifest.worldId, NOW]);
   await h.adapter.execute("INSERT INTO branches(branch_id,campaign_id,state_version,created_at) VALUES ('b','c',1,?)", [NOW]);
   const contentManifest = createBaseContentManifest({ worldId: manifest.worldId, branchId: 'b', stateVersion: 0,
     basePackage: { revision: 1, contentHash: hash } });

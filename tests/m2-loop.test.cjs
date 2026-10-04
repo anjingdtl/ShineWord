@@ -1,12 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 
-const { runLlmTurn } = require('../dist/application/game/llmTurn');
+// P8-6: the V1 contract-authoring chain (runLlmTurn) is deleted. This loop
+// now runs the current V2 chain — the scripted planner emits the restricted
+// proposal and the LOCAL compiler authors the contract.
+const { runV2Turn } = require('../dist/application/game/v2Turn');
 const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
 const { SqliteNarrativeStore } = require('../dist/infra/sqlite/sqliteNarrativeStore');
 
@@ -59,7 +60,7 @@ function setupDb() {
     `INSERT INTO actor_states
       (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run('branch-a', 'actor-player', 0, 'start', JSON.stringify({ stamina: 10 }), '[]');
+  ).run('branch-a', 'actor-player', 0, 'scene', JSON.stringify({ stamina: 10 }), '[]');
   db.prepare(
     `INSERT INTO snapshots
       (branch_id, state_version, snapshot_json, state_hash, created_at)
@@ -67,35 +68,52 @@ function setupDb() {
   ).run(
     'branch-a',
     0,
-    JSON.stringify({ branchId: 'branch-a', stateVersion: 0, clockMinutes: 0 }),
+    JSON.stringify({
+      branchId: 'branch-a', stateVersion: 0, clockSeconds: 0,
+      actors: {
+        'actor-player': { actorId: 'actor-player', locationId: 'scene', resources: { stamina: 10 }, conditions: [] },
+      },
+      itemOwners: {},
+      abilitiesUsed: {},
+    }),
     '2026-09-26T00:00:00.000Z',
   );
   return db;
 }
 
-function contract(turnId, stateVersion, risk) {
-  const clause = (summary) => ({ achieved: true, publicSummary: summary, effects: [] });
+function makeCard() {
   return {
-    protocolVersion: '1.0',
-    turnId,
-    expectedStateVersion: stateVersion,
     actorId: 'actor-player',
-    actionType: risk ? 'investigate' : 'move',
-    targetId: 'scene',
-    ...(risk ? { skillId: 'investigation', difficultyBand: 'normal' } : {}),
-    evidenceIds: ['fixture-fact'],
-    requiresRoll: risk,
-    intent: `执行 ${turnId}`,
-    timeCostMinutes: 1,
-    resourcePreconditions: [],
-    outcomes: {
-      full_success: clause('充分成功'),
-      success: clause('成功'),
-      failure: { achieved: false, publicSummary: '失败', effects: [] },
-      severe_failure: { achieved: false, publicSummary: '严重失败', effects: [] },
-    },
+    name: '玩家',
+    kind: 'original',
+    controller: 'player',
+    attributes: { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 2, social: 2 },
+    skills: { investigation: 'trained' },
+    abilities: [],
+    preparedAbilities: [],
+    resourceMax: { stamina: 10, hp: 10 },
+    defense: 10,
+    powerTier: 'ordinary',
+    rulesetId: 'shineword-core',
+    rulesetVersion: '0.3.0',
+    worldId: 'w-fixture',
+    worldPackageRevision: 1,
+    cardRevision: 1,
   };
 }
+
+const catalog = {
+  investigation: {
+    name: '调查', description: '仔细检查线索', attribute: 'insight', allowUntrained: false,
+    requirements: [], powerTier: 'ordinary', usage: 'knowledge',
+  },
+};
+
+const scenes = [{
+  sceneId: 'scene', name: '场景', description: '测试地点', locationId: 'scene',
+  zones: [{ zoneId: 'z', name: '中央', cover: false, exits: [] }],
+  actors: [], visibleItems: [], hazards: [], clues: [],
+}];
 
 class ScriptedProvider {
   constructor(options = {}) {
@@ -110,11 +128,18 @@ class ScriptedProvider {
 
     if (request.role === 'Planner') {
       const index = Number(payload.turnId.split('-').pop());
-      return {
-        text: JSON.stringify(
-          contract(payload.turnId, payload.expectedStateVersion, index % 3 === 0),
-        ),
+      const risky = index % 3 === 0;
+      const proposal = {
+        proposalVersion: '2.0',
+        turnId: payload.turnId,
+        expectedStateVersion: payload.expectedStateVersion,
+        actorId: 'actor-player',
+        actionKind: risky ? 'skill_check' : 'move',
+        ...(risky ? { skillId: 'investigation', difficultyBand: 'normal' } : { destinationId: 'scene' }),
+        evidenceIds: ['fixture-fact'],
+        intent: `执行 ${payload.turnId}`,
       };
+      return { text: JSON.stringify(proposal) };
     }
 
     if (request.role === 'Narrator') {
@@ -135,7 +160,8 @@ class ScriptedProvider {
   }
 }
 
-function runInput(store, narratives, provider, turnId, random = new ConstantRandom()) {
+function runInput(store, narratives, provider, turnId, random = new ConstantRandom(), stateVersion = null) {
+  const expected = stateVersion ?? Number(turnId.split('-').pop()) - 1;
   return {
     provider,
     store,
@@ -146,13 +172,25 @@ function runInput(store, narratives, provider, turnId, random = new ConstantRand
     playerIntent: `玩家意图 ${turnId}`,
     hashProvider,
     random,
+    actingCard: makeCard(),
+    cards: [makeCard()],
+    catalog,
+    abilities: new Map(),
+    scenes,
     resolveRollSpec() {
       return { attribute: 2, skillRank: 'trained', difficulty: 4 };
     },
+    reasoningTier: 'low',
+    plannerReasoningReserveTokens: null,
+    narratorReasoningReserveTokens: null,
+    reasoningPolicyVersion: 'reasoning-policy-1',
+    plannerWireOutputTokens: 2048,
+    narratorWireOutputTokens: 2048,
     now: (() => {
       let n = 0;
       return () => `2026-09-26T00:00:${String(n++).padStart(2, '0')}.000Z`;
     })(),
+    voidExpected: expected,
   };
 }
 
@@ -166,7 +204,7 @@ test('M2 scripted Planner/Narrator loop completes 30 committed turns', async () 
 
     for (let i = 1; i <= 30; i += 1) {
       const turnId = `turn-${String(i).padStart(3, '0')}`;
-      const result = await runLlmTurn(runInput(store, narratives, provider, turnId));
+      const result = await runV2Turn(runInput(store, narratives, provider, turnId));
       assert.equal(result.stateVersion, i);
       assert.equal(result.narrative.status, 'Committed');
       assert.ok(result.requestCount <= 2);
@@ -174,7 +212,6 @@ test('M2 scripted Planner/Narrator loop completes 30 committed turns', async () 
 
     const state = await store.getState('branch-a');
     assert.equal(state.stateVersion, 30);
-    assert.equal(state.clockMinutes, 30);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM turns WHERE status='Committed'").get().count, 30);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM turn_narratives WHERE status='Committed'").get().count, 30);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM roll_records').get().count, 10);
@@ -202,12 +239,12 @@ test('offline narrator failure resumes frozen contract and persisted dice withou
     const narratives = new SqliteNarrativeStore(adapter);
     const failing = new ScriptedProvider({ failNarratorFor: 'turn-003' });
 
-    await runLlmTurn(runInput(firstStore, narratives, failing, 'turn-001'));
-    await runLlmTurn(runInput(firstStore, narratives, failing, 'turn-002'));
+    await runV2Turn(runInput(firstStore, narratives, failing, 'turn-001'));
+    await runV2Turn(runInput(firstStore, narratives, failing, 'turn-002'));
 
     await assert.rejects(
-      runLlmTurn(runInput(firstStore, narratives, failing, 'turn-003')),
-      /offline narrator failure/,
+      runV2Turn(runInput(firstStore, narratives, failing, 'turn-003')),
+      /simulated offline narrator failure/,
     );
 
     assert.equal(
@@ -219,7 +256,7 @@ test('offline narrator failure resumes frozen contract and persisted dice withou
 
     const restartedStore = new SqliteTurnStore(adapter);
     const recoveryProvider = new ScriptedProvider();
-    const recovered = await runLlmTurn(
+    const recovered = await runV2Turn(
       runInput(
         restartedStore,
         new SqliteNarrativeStore(adapter),

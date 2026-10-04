@@ -425,16 +425,30 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
     case 'ability': {
       requireString('name');
       requireString('attribute');
+      // P8-6 capability closure (B12/A29): publication accepts only effect
+      // ops the execution compiler implements. A definition that passes the
+      // schema but would be refused at play time must fail HERE, at publish
+      // time, with a per-entry diagnostic — not on some future turn.
       const EFFECT_OPS = new Set([
-        'damage', 'heal', 'apply_condition', 'remove_condition', 'move_self', 'move_target',
-        'consume_resource', 'restore_resource', 'reveal_information', 'grant_bonus_dice', 'change_distance',
+        'damage', 'heal', 'apply_condition', 'remove_condition',
+        'consume_resource', 'restore_resource',
       ]);
+      const UNSUPPORTED_EFFECT_OPS: Record<string, string> = {
+        move_self: 'movement effects belong to the exploration_discovery module actions, not ability effects',
+        move_target: 'movement effects belong to the exploration_discovery module actions, not ability effects',
+        reveal_information: 'information reveal is an investigation outcome, not an executable ability effect',
+        grant_bonus_dice: 'dice modifiers are not part of the stable roll protocol',
+        change_distance: 'distance changes belong to the combat_zones module, not ability effects',
+      };
       if (!Array.isArray(def.effects) || def.effects.length === 0) {
         errors.push('ability: effects must be a non-empty array.');
       } else {
         for (const effect of def.effects as Array<Record<string, unknown>>) {
-          if (!EFFECT_OPS.has(String(effect.op))) {
-            errors.push(`ability: unknown effect op ${String(effect.op)}.`);
+          const op = String(effect.op);
+          if (UNSUPPORTED_EFFECT_OPS[op]) {
+            errors.push(`ability: effect op '${op}' is not executable in this build (${UNSUPPORTED_EFFECT_OPS[op]}); publish cannot accept it.`);
+          } else if (!EFFECT_OPS.has(op)) {
+            errors.push(`ability: unknown effect op ${op}.`);
           }
         }
       }

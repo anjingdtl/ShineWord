@@ -390,7 +390,7 @@ export class CampaignSession {
     const turnId = `system-${input.actionType}-${String(state.stateVersion + 1).padStart(6, '0')}`;
     const emptyOutcome = { achieved: true, publicSummary: input.intent, effects: [] };
     const contract: ActionContract = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: input.actorId,
@@ -2649,7 +2649,7 @@ export class CampaignSession {
 
     const turnId = `rest-${options.kind}-${summary.state.stateVersion + 1}`;
     const contract: ActionContract = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId,
       expectedStateVersion: summary.state.stateVersion,
       actorId: playerCard.actorId,
@@ -2761,7 +2761,7 @@ export class CampaignSession {
 
     const turnId = `train-${storedSkillKey}-v${state.stateVersion + 1}`;
     const contract: ActionContract = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: options.actorId,
@@ -2858,7 +2858,7 @@ export class CampaignSession {
     const turnId = `milestone-${options.encounterId}-${options.actorId}-${storedSkillKey}`;
     const awarded = awardPractice(progress, options.encounterId, 'milestone');
     const contract: ActionContract = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: options.actorId,

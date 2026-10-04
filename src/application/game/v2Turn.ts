@@ -17,7 +17,6 @@ import { BudgetInfeasibleError } from '../llm/requestPlan';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { parseStrictJsonObject } from '../llm/json';
 import { parseStructuredOutput } from '../llm/structuredOutput';
-import { ACTION_FIELD_ALIASES } from './llmTurn';
 import { TurnRequestBudget } from '../llm/requestBudget';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
@@ -31,6 +30,15 @@ import { contentDependencyBinding } from '../worldPackage/contentManifest';
 import { describeWorldClock } from '../../domain/state/worldClock';
 import { fitGuidanceNarratorRequest } from '../guidance/requestBudget';
 import { verifyFinalWireRequest, type FinalWireBudget } from '../llm/finalWireVerifier';
+
+/** Model-dialect field aliases accepted when parsing the restricted proposal. */
+export const ACTION_FIELD_ALIASES: Record<string, string> = {
+  skill: 'skillId',
+  ability: 'abilityId',
+  target: 'targetId',
+  destination: 'destinationId',
+  action: 'actionKind',
+};
 
 export interface NarrativeCandidate {
   turnId: string;

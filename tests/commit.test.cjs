@@ -44,7 +44,7 @@ function initialState(branchId) {
 function contract(turnId = 'turn-001', expectedStateVersion = 12) {
   const base = (achieved, publicSummary, effects = []) => ({ achieved, publicSummary, effects });
   return {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     turnId,
     expectedStateVersion,
     actorId: 'actor-player',

@@ -86,7 +86,7 @@ function seedBranch(db, branchId, campaignId = 'camp-1', stateVersion = 0) {
 
 function moveContract(turnId, expectedStateVersion, locationId) {
   return {
-    protocolVersion: '1.0', turnId, expectedStateVersion,
+    protocolVersion: '2.0', turnId, expectedStateVersion,
     actorId: 'actor-player', actionType: 'move', evidenceIds: ['e'],
     requiresRoll: false, intent: 'move on', timeCostMinutes: 5, resourcePreconditions: [],
     outcomes: {

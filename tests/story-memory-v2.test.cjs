@@ -559,7 +559,7 @@ test('fork: branch-B inherits patches <= fork version and never the source futur
   await adapter.execute(
     `INSERT INTO campaigns (campaign_id, world_id, title, ruleset_id, ruleset_version,
         world_mapping_version, opening_json, created_at)
-     VALUES ('c1', 'w1', '测试战役', 'shineword', '0.2.0', '1', '{}', '2026-09-30T00:00:00Z')`,
+     VALUES ('c1', 'w1', '测试战役', 'shineword', '0.3.0', '1', '{}', '2026-09-30T00:00:00Z')`,
   );
   await adapter.execute(
     `INSERT INTO branches (branch_id, campaign_id, parent_branch_id, fork_turn_id, state_version, created_at)

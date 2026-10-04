@@ -58,7 +58,7 @@ function seedBranch(adapter) {
     INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at)
       VALUES ('w1','T','h',10,'n','c','ready','now','now');
     INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at)
-      VALUES ('c1','w1','T','shineword-core','0.2.0','m','{}','now');
+      VALUES ('c1','w1','T','shineword-core','0.3.0','m','{}','now');
     INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('b1','c1',1,'now');
     INSERT INTO snapshots (branch_id,state_version,snapshot_json,state_hash,created_at)
       VALUES ('b1',1,'${JSON.stringify({
@@ -102,7 +102,7 @@ test('turn store round-trips situation state through the atomic commit', async (
     seedBranch(adapter);
     const store = new SqliteTurnStore(adapter);
     const contract = {
-      protocolVersion: '1.0', turnId: 'turn-0002', expectedStateVersion: 1,
+      protocolVersion: '2.0', turnId: 'turn-0002', expectedStateVersion: 1,
       actorId: 'actor-player', actionType: 'observe', evidenceIds: [], requiresRoll: false,
       intent: '观察废院', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {
@@ -184,7 +184,7 @@ test('situation rows are replaced (not accumulated) across commits', async () =>
     seedBranch(adapter);
     const store = new SqliteTurnStore(adapter);
     const mkContract = turnId => ({
-      protocolVersion: '1.0', turnId, expectedStateVersion: Number(turnId.slice(5)) - 1,
+      protocolVersion: '2.0', turnId, expectedStateVersion: Number(turnId.slice(5)) - 1,
       actorId: 'actor-player', actionType: 'observe', evidenceIds: [], requiresRoll: false,
       intent: '观察', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {

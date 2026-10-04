@@ -57,7 +57,7 @@ function actorCard(overrides = {}) {
     defense: 2,
     powerTier: 'ordinary',
     rulesetId: 'shineword-core',
-    rulesetVersion: '0.2.0',
+    rulesetVersion: '0.3.0',
     worldId: 'world-1',
     worldPackageRevision: 1,
     cardRevision: 1,

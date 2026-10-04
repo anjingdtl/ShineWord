@@ -226,7 +226,7 @@ test('T5 ruleMappings land through the production extract->commit path with hone
     assert.equal(mapping.targetEntityId, expectedTarget);
     assert.equal(mapping.mappingKind, 'skill');
     assert.equal(mapping.status, 'active');
-    assert.equal(mapping.rulesetVersion, '0.2.0');
+    assert.equal(mapping.rulesetVersion, '0.3.0');
     assert.deepEqual(mapping.mapping, { skillId: 'sword', rank: 'trained' });
     assert.equal(mapping.evidenceRefs.length, 1);
     // Stable idempotent identity derived from world+target+kind+token.
@@ -405,7 +405,7 @@ test('WorldMapper V2: resident maps all facts in ONE whole-book request and land
     assert.equal(mappings[0].targetEntityId, 'chen');
     assert.equal(mappings[0].mappingKind, 'skill');
     assert.equal(mappings[0].status, 'active');
-    assert.equal(mappings[0].rulesetVersion, '0.2.0');
+    assert.equal(mappings[0].rulesetVersion, '0.3.0');
     assert.deepEqual(mappings[0].evidenceRefs, ['fact-0']);
 
     // The mapped skill still passed the unchanged cleanSkill/validate gates.

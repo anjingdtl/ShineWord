@@ -100,7 +100,7 @@ test('fixed world completes three deterministic turns without any LLM', async ()
     const store = new SqliteTurnStore(new NodeSqliteAdapter(db));
 
     const sneak = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId: 'turn-001',
       expectedStateVersion: 0,
       actorId: 'actor-player',
@@ -143,7 +143,7 @@ test('fixed world completes three deterministic turns without any LLM', async ()
     });
 
     const search = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId: 'turn-002',
       expectedStateVersion: 1,
       actorId: 'actor-player',
@@ -184,7 +184,7 @@ test('fixed world completes three deterministic turns without any LLM', async ()
     });
 
     const leave = {
-      protocolVersion: '1.0',
+      protocolVersion: '2.0',
       turnId: 'turn-003',
       expectedStateVersion: 2,
       actorId: 'actor-player',

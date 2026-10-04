@@ -168,7 +168,7 @@ test('migration 15 creates append-only progressive content projections without r
     await adapter.execute(`INSERT INTO world_packages
       (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version, mapping_version,
        status, content_hash, validation_json, build_scope_json, created_at)
-      VALUES ('w-before-m15', 1, 'world-package-2', ?, 'shineword-core', '0.2.0', 'old', 'published', ?, '{}', '{}', 't0')`,
+      VALUES ('w-before-m15', 1, 'world-package-2', ?, 'shineword-core', '0.3.0', 'old', 'published', ?, '{}', '{}', 't0')`,
     ['a'.repeat(64), 'b'.repeat(64)]);
     for (const sql of BUILTIN_MIGRATIONS[14].sql.split(';').map(item => item.trim()).filter(Boolean)) db.exec(sql);
     const old = await store.getWorldPackage('w-before-m15', 1);

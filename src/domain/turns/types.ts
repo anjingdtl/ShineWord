@@ -50,7 +50,7 @@ export interface OutcomeClause {
 }
 
 export interface ActionContract {
-  protocolVersion: '1.0';
+  protocolVersion: '2.0';
   turnId: string;
   expectedStateVersion: number;
   /** Optional on pre-progressive contracts; when present it is frozen into
@@ -78,4 +78,17 @@ export interface ActionContract {
    * transitions bound to the method apply only through the local reducer.
    */
   methodRef?: { situationId: string; methodId: string };
+  /**
+   * P8-6: the immutable rule binding this contract was compiled under
+   * (core version, configuration hash, module versions, capability-table
+   * hash). Stamped by the LOCAL compiler from the campaign's locked
+   * configuration; frozen into the contract hash (plan §8.4).
+   */
+  ruleBinding?: {
+    coreId: string;
+    coreVersion: string;
+    configurationHash: string;
+    moduleVersions: ReadonlyArray<{ moduleId: string; version: string }>;
+    executableCapabilitiesHash: string;
+  };
 }

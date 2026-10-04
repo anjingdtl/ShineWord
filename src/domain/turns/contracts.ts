@@ -146,7 +146,7 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
     findForbiddenKeys(contract, 'contract', errors);
   }
 
-  if (contract.protocolVersion !== '1.0') errors.push('protocolVersion must be 1.0.');
+  if (contract.protocolVersion !== '2.0') errors.push('protocolVersion must be 2.0.');
   if (!nonEmpty(contract.turnId)) errors.push('turnId is required.');
   if (!Number.isInteger(contract.expectedStateVersion) || contract.expectedStateVersion < 0) {
     errors.push('expectedStateVersion must be a non-negative integer.');

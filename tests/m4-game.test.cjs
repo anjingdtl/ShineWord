@@ -13,7 +13,7 @@ const { forkBranch } = require('../dist/application/branch/fork');
 const { retrieveContext, shouldSummarize, buildSummaryRequest, SUMMARY_INTERVAL_TURNS } = require('../dist/application/memory/retrieval');
 const { exportSave, validateSaveJson, SAVE_SCHEMA_VERSION } = require('../dist/application/export/saveFile');
 const sha256HexForSave = input => sha.sha256Hex(input);
-const { runLlmTurn } = require('../dist/application/game/llmTurn');
+const { runV2Turn } = require('../dist/application/game/v2Turn');
 const { commitResolvedTurn } = require('../dist/application/turns/commitTurn');
 
 class NodeSqliteAdapter {
@@ -145,7 +145,7 @@ test('fork at an earlier snapshot restores the historical state (rewind)', async
 
     // Commit a turn to reach stateVersion 1 with a different location.
     const contract = {
-      protocolVersion: '1.0', turnId: 'turn-0001', expectedStateVersion: 0,
+      protocolVersion: '2.0', turnId: 'turn-0001', expectedStateVersion: 0,
       actorId: 'actor-player', actionType: 'move', evidenceIds: ['e'],
       requiresRoll: false, intent: 'move on', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {
@@ -306,28 +306,19 @@ class ScriptedProvider {
     const payload = JSON.parse(request.user);
     if (request.role === 'Planner') {
       const risky = Number(payload.turnId.split('-').pop()) % 3 !== 0;
-      const clause = summary => ({ achieved: true, publicSummary: summary, effects: [{ op: 'advanceClock', minutes: 1 }] });
-      const contract = {
-        protocolVersion: '1.0',
+      // P8-6: the planner emits the restricted proposal; the local compiler
+      // authors the contract (V2 chain).
+      const proposal = {
+        proposalVersion: '2.0',
         turnId: payload.turnId,
         expectedStateVersion: payload.expectedStateVersion,
         actorId: 'actor-player',
-        actionType: risky ? 'investigate' : 'observe',
-        targetId: 'scene',
+        actionKind: risky ? 'skill_check' : 'observe',
+        ...(risky ? { skillId: 'sword', difficultyBand: 'normal' } : {}),
         evidenceIds: ['demo'],
-        requiresRoll: risky,
         intent: payload.playerIntent,
-        timeCostMinutes: 1,
-        resourcePreconditions: [],
-        outcomes: {
-          full_success: clause('full'),
-          success: clause('ok'),
-          failure: { achieved: false, publicSummary: 'fail', effects: [] },
-          severe_failure: { achieved: false, publicSummary: 'bad', effects: [] },
-        },
       };
-      if (risky) { contract.skillId = 'sword'; contract.difficultyBand = 'normal'; }
-      return { text: JSON.stringify(contract) };
+      return { text: JSON.stringify(proposal) };
     }
     return {
       text: JSON.stringify({ turnId: payload.turnId, outcomeGrade: payload.outcomeGrade, text: `叙事 ${payload.turnId}` }),
@@ -335,13 +326,33 @@ class ScriptedProvider {
   }
 }
 
+function makeCard() {
+  return {
+    actorId: 'actor-player', name: '玩家', kind: 'original', controller: 'player',
+    attributes: { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 2, social: 2 },
+    skills: { sword: 'trained' },
+    abilities: [], preparedAbilities: [],
+    resourceMax: { stamina: 10, hp: 10 },
+    defense: 10, powerTier: 'ordinary',
+    rulesetId: 'shineword-core', rulesetVersion: '0.3.0',
+    worldId: 'w-fixture', worldPackageRevision: 1, cardRevision: 1,
+  };
+}
+
+const FIXTURE_CATALOG = {
+  sword: {
+    name: '剑术', description: '近战格斗', attribute: 'physique', allowUntrained: false,
+    requirements: [], powerTier: 'ordinary', usage: 'attack',
+  },
+};
+
 const RNG = { nextIntInclusive: (min, max) => max };
 
 async function runTurn(adapter, branchId, index, turnIdOverride) {
   const turnStore = new SqliteTurnStore(adapter);
   const narratives = new SqliteNarrativeStore(adapter);
   const turnId = turnIdOverride ?? `turn-${String(index).padStart(4, '0')}`;
-  return runLlmTurn({
+  return runV2Turn({
     provider: new ScriptedProvider(),
     store: turnStore,
     journal: turnStore,
@@ -351,7 +362,22 @@ async function runTurn(adapter, branchId, index, turnIdOverride) {
     playerIntent: `行动 ${index}`,
     hashProvider: sha,
     random: RNG,
+    actingCard: makeCard(),
+    cards: [makeCard()],
+    catalog: FIXTURE_CATALOG,
+    abilities: new Map(),
+    scenes: [{
+      sceneId: 'scene', name: '场景', description: '测试地点', locationId: 'scene',
+      zones: [{ zoneId: 'z', name: '中央', cover: false, exits: [] }],
+      actors: [], visibleItems: [], hazards: [], clues: [],
+    }],
     resolveRollSpec() { return { attribute: 2, skillRank: 'trained', difficulty: 4 }; },
+    reasoningTier: 'low',
+    plannerReasoningReserveTokens: null,
+    narratorReasoningReserveTokens: null,
+    reasoningPolicyVersion: 'reasoning-policy-1',
+    plannerWireOutputTokens: 2048,
+    narratorWireOutputTokens: 2048,
     now: (() => {
       let n = 0;
       return () => new Date(Date.UTC(2026, 8, 27, 0, 0, n++)).toISOString();
@@ -375,7 +401,7 @@ test('100-turn long-range campaign stays consistent; rewind keeps original branc
     const turnStore = new SqliteTurnStore(adapter);
     const state = await turnStore.getState('main-100');
     assert.equal(state.stateVersion, 100);
-    assert.equal(state.clockMinutes, 200); // 1 contract timeCost + 1 advanceClock per turn
+    assert.equal(state.clockMinutes, 835); // deterministic V2 minutes: 67 skill_check x10 + 33 observe x5
     const committed = db.prepare("SELECT COUNT(*) AS n FROM turns WHERE branch_id = 'main-100' AND status = 'Committed'").get();
     assert.equal(committed.n, 100);
     const narratives = db.prepare("SELECT COUNT(*) AS n FROM turn_narratives WHERE branch_id = 'main-100' AND status = 'Committed'").get();

@@ -56,7 +56,7 @@ function branchState(overrides = {}) {
 function healContract() {
   const outcome = (achieved, summary, effects) => ({ achieved, publicSummary: summary, effects });
   return {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     turnId: 'turn-0005',
     expectedStateVersion: 4,
     actorId: 'actor-player',
@@ -85,7 +85,7 @@ async function setupBranch() {
 function rollFor(grade, contractHash) {
   return {
     rulesetId: 'shineword-core',
-    rulesetVersion: '0.2.0',
+    rulesetVersion: '0.3.0',
     turnId: 'turn-0005',
     rollIndex: 0,
     contractHash,

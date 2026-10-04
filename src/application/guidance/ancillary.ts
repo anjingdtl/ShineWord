@@ -138,7 +138,7 @@ export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): Turn
 
 function syntheticContract(turnId: string, state: GameStateSnapshot): ActionContract {
   return {
-    protocolVersion: '1.0',
+    protocolVersion: '2.0',
     turnId,
     expectedStateVersion: state.stateVersion - 1,
     actorId: '',
