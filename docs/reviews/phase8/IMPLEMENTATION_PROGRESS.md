@@ -2,7 +2,8 @@
 
 | 日期 | 施工包 | 内容 | 检查结果 | Commit |
 |---|---|---|---|---|
-| 2026-10-04 | P8-0 | 基线复核（四子系统探索 + P7 收尾边界）；协议登记冻结（PROTOCOL_BASELINE.md）；六类最小回归建立（tests/phase8-gaps.test.cjs，开工 RED）；验收矩阵脚手架 | 见下 | （见 git log） |
+| 2026-10-04 | P8-0 | 基线复核（四子系统探索 + P7 收尾边界）；协议登记冻结（PROTOCOL_BASELINE.md）；六类最小回归建立（tests/phase8-gaps.test.cjs，开工 RED）；验收矩阵脚手架 | 见下 | 4f289a3 |
+| 2026-10-04 | P8-1 | `turn-material-1` 类型化材料合同 + `turnMaterialCollector`（未知标签→诊断，G1 转绿）；`storyMemoryEligibility` 判别式检查点资格（未来/异支/脏/无指纹/覆盖缺口拒绝，G2 转绿）；`pendingBridge` 覆盖枚举与渲染；session 读门禁替换为资格+补桥；`listCommittedTurnsAfter` 分页读取；`planMemoryCoverage` 委托共享实现 | typecheck PASS；858 项测试 854 过 / 4 RED（G3–G6，归属 P8-3/4/5）；新增 phase8-p8-1 九项全过 | （见 git log） |
 
 ## P8-0 基线复核结论
 

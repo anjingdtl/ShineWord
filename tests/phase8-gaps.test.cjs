@@ -118,7 +118,7 @@ test('G2: a checkpoint with future coverage is rejected, not returned as usable 
     memoryState: cleanMemoryState('branch-a', 20),
     branchId: 'branch-a',
     currentStateVersion: 15,
-    committedTurnIds: [],
+    committedTurnVersions: [],
   });
   assert.equal(verdict.usable, false, 'future memory must not be usable');
   assert.ok(verdict.code, 'rejection must carry a diagnostic code');

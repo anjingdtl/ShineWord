@@ -24,12 +24,14 @@ import {
 import type { FrozenModelCapabilities } from '../llm/requestPlan';
 import {
   buildCandidate,
-  candidatesFromParts,
 } from '../context/candidateCollector';
+import { collectTypedCandidates } from '../context/turnMaterialCollector';
 import type { ContextCandidate } from '../context/contextTypes';
 import { planTurnContext } from '../context/contextPlanner';
 import { renderFrozenContext } from '../context/contextRenderer';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
+import { evaluateCheckpointEligibility } from '../memory/storyMemoryEligibility';
+import { buildPendingBridge, renderPendingBridge } from '../memory/pendingBridge';
 import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
 import { packageIndexes } from '../game/v2Compile';
@@ -1161,16 +1163,53 @@ export class CampaignSession {
       model: this.profile.model,
     };
 
-    const plannerCandidates = candidatesFromParts(input.parts, queryText);
+    // P8-1 typed collection (plan §9): every part becomes a candidate or an
+    // auditable diagnostic - unknown labels are never silently dropped (B02).
+    const collection = collectTypedCandidates({ parts: input.parts, queryText });
+    const plannerCandidates = collection.candidates;
+    const collectionDiagnostics = collection.diagnostics.map(item => `${item.code}: ${item.detail}`);
 
-    // Story Memory V2 read gate (plan §99): only a clean state with recent
-    // enough coverage replaces the legacy summary track.
+    // Story memory eligibility (P8-1, plan §14.2): a discriminating verdict
+    // replaces the crude clean+lag gate. Rejected checkpoints contribute no
+    // body; the pending bridge carries (through, current] continuity instead.
     let storyMemoryText = '';
+    let pendingBridgeText = '';
+    let bridgeFromVersion = 0;
     if (this.deps.storyMemory) {
       const memoryState = await this.deps.storyMemory.store.getState(input.branchId);
-      if (memoryState && memoryState.metadata.status === 'clean'
-        && memoryState.throughStateVersion >= input.stateVersion - 8) {
-        storyMemoryText = compilePreviousMemoryView(memoryState);
+      const maxAppliedPatch = await this.deps.storyMemory.store.listPatches(input.branchId)
+        .then(patches => patches
+          .filter(patch => patch.status === 'applied' && patch.toStateVersion <= input.stateVersion)
+          .reduce((max, patch) => Math.max(max, patch.toStateVersion), 0));
+      const verdict = evaluateCheckpointEligibility({
+        memoryState,
+        branchId: input.branchId,
+        currentStateVersion: input.stateVersion,
+        committedTurnVersions: undefined,
+      });
+      if (verdict.usable) {
+        storyMemoryText = compilePreviousMemoryView(verdict.checkpoint);
+        bridgeFromVersion = verdict.checkpoint.throughStateVersion;
+      } else {
+        // Fail visibly: the rejection reason rides the frozen context.
+        collectionDiagnostics.push(`story_memory_ineligible:${verdict.code}`);
+        // Bridge from the last provably applied patch, or the branch seed.
+        bridgeFromVersion = Math.min(maxAppliedPatch, input.stateVersion);
+      }
+      if (bridgeFromVersion < input.stateVersion) {
+        const committedAfter = await this.deps.turns.listCommittedTurnsAfter(input.branchId, bridgeFromVersion);
+        const bridge = buildPendingBridge({
+          committedTurns: committedAfter.map(turn => ({
+            turnId: turn.turnId,
+            stateVersion: turn.stateVersion,
+            publicSummary: turn.publicSummary ?? '',
+          })),
+          fromStateVersion: bridgeFromVersion,
+          toStateVersion: input.stateVersion,
+        });
+        if (bridge.commits.length > 0 || bridge.gaps.length > 0) {
+          pendingBridgeText = renderPendingBridge(bridge);
+        }
       }
     }
     if (storyMemoryText) {
@@ -1181,6 +1220,21 @@ export class CampaignSession {
         text: storyMemoryText,
         priority: 90,
         provenance: { sourceType: 'story_memory_v2', sourceId: input.branchId, stateVersion: input.stateVersion },
+      }, queryText);
+      if (candidate) plannerCandidates.push(candidate);
+    }
+    if (pendingBridgeText) {
+      const candidate = buildCandidate({
+        id: 'pending-bridge',
+        board: 'storyMemory',
+        heading: '未整理补桥',
+        text: pendingBridgeText,
+        priority: 88,
+        provenance: {
+          sourceType: 'pending_bridge',
+          sourceId: input.branchId,
+          stateVersion: input.stateVersion,
+        },
       }, queryText);
       if (candidate) plannerCandidates.push(candidate);
     }
@@ -1238,6 +1292,7 @@ export class CampaignSession {
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
       reasoningPolicy,
+      collectionDiagnostics,
     });
 
     // Narrator context (plan §59): scene + party + recent story + memory.
@@ -1272,6 +1327,7 @@ export class CampaignSession {
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
       reasoningPolicy,
+      collectionDiagnostics,
     });
 
     // A reasoning_only response gets one application-level retry. Its frozen
@@ -1287,6 +1343,7 @@ export class CampaignSession {
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
       reasoningPolicy: recoveryPolicy,
+      collectionDiagnostics,
     });
     const narratorRecoveryPlan = planTurnContext({
       requestKind: 'narrator', branchId: input.branchId, stateVersion: input.stateVersion,
@@ -1294,6 +1351,7 @@ export class CampaignSession {
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
       reasoningPolicy: recoveryPolicy,
+      collectionDiagnostics,
     });
     const plannerReasoningRecovery = !plannerRecoveryPlan.context.legacyFallback
       && typeof plannerRecoveryPlan.context.reasoning?.reserveTokens === 'number'

@@ -7,6 +7,8 @@
  * range.
  */
 
+import { buildPendingBridge } from './pendingBridge';
+
 export type MemoryTriggerReason =
   | 'interval'
   | 'high_importance_event'
@@ -89,6 +91,9 @@ export interface MemoryGapPlan {
  * No-stall planner (plan §29): memory may lag while raw committed turns are
  * intact (safe_lag); missing/corrupt history in the gap is a hard_gap and the
  * caller must fail closed instead of fabricating continuity.
+ *
+ * Delegates the per-version enumeration to buildPendingBridge (P8-1) so the
+ * production read path and this policy share one coverage implementation.
  */
 export function planMemoryCoverage(input: {
   currentStateVersion: number;
@@ -97,18 +102,22 @@ export function planMemoryCoverage(input: {
   committedTurns: ReadonlyArray<{ stateVersion: number; turnId: string }>;
 }): MemoryGapPlan {
   const through = Math.min(input.memoryThroughVersion, input.currentStateVersion);
-  const bridge = input.committedTurns.filter(turn => turn.stateVersion > through);
-  if (through >= input.currentStateVersion) {
+  const bridge = buildPendingBridge({
+    committedTurns: input.committedTurns.map(turn => ({ ...turn, publicSummary: '' })),
+    fromStateVersion: through,
+    toStateVersion: input.currentStateVersion,
+  });
+  if (bridge.commits.length === 0 && bridge.gaps.length === 0) {
     return { mode: 'clean', memoryThroughVersion: through, bridgeTurns: [] };
   }
-  // Every version in (through, current] must exist in committed history.
-  const covered = new Set(bridge.map(turn => turn.stateVersion));
-  for (let version = through + 1; version <= input.currentStateVersion; version += 1) {
-    if (!covered.has(version)) {
-      return { mode: 'hard_gap', memoryThroughVersion: through, bridgeTurns: [] };
-    }
+  if (bridge.gaps.length > 0) {
+    return { mode: 'hard_gap', memoryThroughVersion: through, bridgeTurns: [] };
   }
-  return { mode: 'safe_lag', memoryThroughVersion: through, bridgeTurns: bridge };
+  return {
+    mode: 'safe_lag',
+    memoryThroughVersion: through,
+    bridgeTurns: bridge.commits.map(commit => ({ stateVersion: commit.stateVersion, turnId: commit.turnId })),
+  };
 }
 
 export type MemorySignalSource = {

@@ -302,6 +302,63 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     });
   }
 
+  /**
+   * P8-1 paged read (plan §23.2): only commits after `afterStateVersion`, so
+   * eligibility checks and Pending Bridges stop scanning the whole branch
+   * history every turn.
+   */
+  async listCommittedTurnsAfter(branchId: string, afterStateVersion: number): Promise<CommittedTurnHistoryEntry[]> {
+    const rows = await this.db.queryAll<CommittedTurnHistoryRow>(
+      `SELECT t.branch_id, t.turn_id, t.expected_state_version, t.committed_state_version,
+              t.outcome_grade, t.public_summary, t.effects_json, t.committed_at,
+              n.text AS narrative_text, n.status AS narrative_status,
+              r.ruleset_id, r.ruleset_version, r.roll_index, r.contract_hash, r.dice_count,
+              r.die_sides, r.rolls_json, r.highest, r.difficulty, r.margin, r.grade,
+              r.created_at AS roll_created_at
+         FROM turns t
+         LEFT JOIN turn_narratives n
+           ON n.branch_id = t.branch_id AND n.turn_id = t.turn_id
+         LEFT JOIN roll_records r
+           ON r.branch_id = t.branch_id AND r.turn_id = t.turn_id AND r.roll_index = 0
+        WHERE t.branch_id = ? AND t.status = 'Committed' AND t.committed_state_version > ?
+        ORDER BY t.committed_state_version ASC`,
+      [branchId, afterStateVersion],
+    );
+    return rows.map(row => {
+      const roll = hasRollColumns(row)
+        ? rollFromRow({
+            ruleset_id: row.ruleset_id,
+            ruleset_version: row.ruleset_version,
+            turn_id: row.turn_id,
+            roll_index: row.roll_index,
+            contract_hash: row.contract_hash,
+            dice_count: row.dice_count,
+            die_sides: row.die_sides,
+            rolls_json: row.rolls_json,
+            highest: row.highest,
+            difficulty: row.difficulty,
+            margin: row.margin,
+            grade: row.grade,
+            created_at: row.roll_created_at,
+          })
+        : null;
+      return {
+        branchId: row.branch_id,
+        turnId: row.turn_id,
+        stateVersion: row.committed_state_version,
+        outcomeGrade: row.outcome_grade as CommittedTurnHistoryEntry['outcomeGrade'],
+        publicSummary: row.public_summary,
+        narrativeText: row.narrative_text,
+        narrativeStatus: row.narrative_status === null
+          ? null
+          : (row.narrative_status as NarrativeStatus),
+        rollRecord: roll,
+        effects: parseJson<EffectOperation[]>(row.effects_json, 'turns.effects_json'),
+        committedAt: row.committed_at,
+      };
+    });
+  }
+
   /** UI-only history: keep snapshot reads out of the LLM/memory history path. */
   async listStoryEntries(branchId: string): Promise<Array<StoryEntry & {
     stateVersion: number; rollRecord: RollRecord | null;

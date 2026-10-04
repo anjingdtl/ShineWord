@@ -33,6 +33,8 @@ export interface TurnContextPlanInput {
   reasoningReserveTokens?: number;
   reasoningPolicy?: LlmRequestPlanningInput['reasoningPolicy'];
   providerWireMaxOutputTokens?: number;
+  /** P8-1: collector refusals frozen onto the context for audit. */
+  collectionDiagnostics?: readonly string[];
 }
 
 export interface TurnContextPlanResult {
@@ -134,6 +136,7 @@ export function planTurnContext(input: TurnContextPlanInput): TurnContextPlanRes
     included,
     droppedCandidateIds: dropped,
     estimatedTokens: estimatedTotal,
+    collectionDiagnostics: input.collectionDiagnostics,
   });
   return {
     context,
@@ -173,6 +176,7 @@ function renderLegacy(input: TurnContextPlanInput, fallbackReason?: string): Tur
     estimatedTokens: included.reduce((sum, item) => sum + estimateTokens(item.text), 0),
     legacyFallback: true,
     fallbackReason,
+    collectionDiagnostics: input.collectionDiagnostics,
   });
   return {
     context,
