@@ -829,7 +829,7 @@ test('A05: legacy v2 saves are refused with the documented upgrade policy', asyn
   legacy.manifest.payloadSha256 = sha.sha256Hex(JSON.stringify({ legacy: true }));
   const validation = await validateSaveJson(JSON.stringify(legacy), sha.sha256Hex);
   assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some(e => /Legacy shineword-save-2/.test(e)), validation.errors.join('; '));
+  assert.ok(validation.errors.some(e => /save-2/.test(e) && /single protocol/.test(e)), validation.errors.join('; '));
   db.close();
 });
 

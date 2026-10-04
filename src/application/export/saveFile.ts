@@ -4,6 +4,7 @@ import { validatePhase6Bundle, validatePortableProjectStyle, type PortableProjec
   type ProjectStyleArchivePortV1 } from './phase6Bundle';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import { validateGuidanceRecord } from '../guidance/types';
+import { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
 import {
   canonicalStringify,
   type CanonicalJson,
@@ -17,24 +18,28 @@ import { createBaseContentManifest, isBranchContentManifestStructure, isProgress
   verifyContentManifest, verifyDeltaPackage } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
-export const SAVE_SCHEMA_VERSION = 'shineword-save-8';
-/** Save-7 adds nothing over save-6 structurally; P7 saves may carry guidance. */
-export const PRE_PHASE7_SAVE_SCHEMA_VERSION = 'shineword-save-7';
-export const PRE_PHASE6_SAVE_SCHEMA_VERSION = 'shineword-save-6';
-const hasContentManifestSchema = (schema: unknown): boolean =>
-  schema === SAVE_SCHEMA_VERSION || schema === PRE_PHASE7_SAVE_SCHEMA_VERSION || schema === PRE_PHASE6_SAVE_SCHEMA_VERSION;
+/**
+ * P8-8 single-protocol save (plan §17.2/§18.2): `shineword-save-9` is the
+ * ONLY registered schema. Historical save-2..8 are development-legacy
+ * identifiers kept solely to RECOGNIZE and REFUSE with a per-version reason
+ * — there is no reader, converter or default-field filler for them.
+ */
+export const SAVE_SCHEMA_VERSION = 'shineword-save-9';
+/** Development-legacy identifiers, refused with an explicit upgrade reason. */
+export const REFUSED_SAVE_SCHEMA_VERSIONS: Readonly<Record<string, string>> = {
+  'shineword-save-8': 'save-8 predates the phase-8 single protocol (story-memory-v3, handoff coverage, rule binding); start a new campaign on the current protocol.',
+  'shineword-save-7': 'save-7 predates the phase-8 single protocol; start a new campaign.',
+  'shineword-save-6': 'save-6 predates the phase-8 single protocol; start a new campaign.',
+  'shineword-save-5': 'save-5 predates the phase-8 single protocol; start a new campaign.',
+  'shineword-save-4': 'save-4 predates the phase-8 single protocol; start a new campaign.',
+  'shineword-save-3': 'save-3 predates the phase-8 single protocol; start a new campaign.',
+  'shineword-save-2': 'save-2 predates complete card/contract/roll capture and the phase-8 single protocol; start a new campaign.',
+};
+const hasContentManifestSchema = (schema: unknown): boolean => schema === SAVE_SCHEMA_VERSION;
 export const SAVE_FILE_EXTENSION = '.shineword-save.json';
-/** Previous full-save schema with rewind history, before branch content manifests. */
-export const PREVIOUS_SAVE_SCHEMA_VERSION = 'shineword-save-5';
-/** Earlier full-save schema; it contains encounters but no rewind history. */
-export const OLDER_SAVE_SCHEMA_VERSION = 'shineword-save-4';
-/** Save schema that predates encounter snapshots. */
-export const OLDER_V3_SAVE_SCHEMA_VERSION = 'shineword-save-3';
-/** Legacy schema that predates complete card/contract/roll round-trips. */
-export const LEGACY_SAVE_SCHEMA_VERSION = 'shineword-save-2';
 
 export interface SaveManifest {
-  schemaVersion: typeof SAVE_SCHEMA_VERSION | typeof PRE_PHASE7_SAVE_SCHEMA_VERSION | typeof PRE_PHASE6_SAVE_SCHEMA_VERSION | typeof PREVIOUS_SAVE_SCHEMA_VERSION | typeof OLDER_SAVE_SCHEMA_VERSION | typeof OLDER_V3_SAVE_SCHEMA_VERSION;
+  schemaVersion: typeof SAVE_SCHEMA_VERSION;
   createdAt: string;
   campaignId: string;
   /** Optional for older saves; preserves the user-facing campaign name. */
@@ -118,8 +123,32 @@ export interface SaveFile {
   rewardLedger: Array<{ encounterId: string; actorId: string; skillId: string; rewardKind: string; grantedAt: string }>;
   /** Immutable branch event log (audit + derived-projection rebuild input). */
   branchEvents: Array<{ eventSeq: number; turnId: string; stateVersion: number; eventType: string; payloadJson: string }>;
-  /** P7 (save-8): committed decision-point guidance; absent on save-7 files. */
+  /** P7 decision-point guidance. */
   guidance?: import('../guidance/types').TurnGuidanceV1[];
+  /**
+   * P8 (save-9): Story Memory checkpoint + applied patch chain. The episodic
+   * index is NOT carried — it is rebuilt locally from committed evidence
+   * without any LLM call (plan §17.2).
+   */
+  storyMemory?: {
+    state: import('../memory/storyMemoryTypes').StoryMemoryState | null;
+    appliedPatches: Array<{
+      patchId: string;
+      fromStateVersion: number;
+      toStateVersion: number;
+      baseFingerprint: string;
+      patch: import('../memory/storyMemoryTypes').StoryMemoryPatch;
+      createdAt: string;
+      appliedAt: string | null;
+    }>;
+  };
+  /** P8 (save-9): post-processing coverage (succeeded ranges + open gaps). */
+  postprocessCoverage?: Array<{
+    handoffId: string;
+    turnId: string;
+    committedStateVersion: number;
+    status: string;
+  }>;
 }
 
 const FORBIDDEN_SAVE_KEYS = new Set(['apikey', 'api_key', 'key', 'secret', 'token', 'authorization']);
@@ -179,6 +208,11 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
   if (save.segmentArtifacts !== undefined) payload.segmentArtifacts = save.segmentArtifacts as unknown as CanonicalJson;
   if (save.projectStyle !== undefined) payload.projectStyle = save.projectStyle as unknown as CanonicalJson;
   if (save.guidance !== undefined) payload.guidance = save.guidance as unknown as CanonicalJson;
+  // P8 (save-9): story memory and post-processing coverage are part of the
+  // integrity payload — tampering with memory or coverage must break the
+  // digest just like tampering with state.
+  if (save.storyMemory !== undefined) payload.storyMemory = save.storyMemory as unknown as CanonicalJson;
+  if (save.postprocessCoverage !== undefined) payload.postprocessCoverage = save.postprocessCoverage as unknown as CanonicalJson;
   return payload;
 }
 
@@ -478,6 +512,49 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
     // Guidance is derived content; export proceeds without it.
   }
 
+  // P8 (save-9): story memory checkpoint + applied patch chain travel with
+  // the save; the episodic index stays local-only (rebuilt without LLM calls
+  // on import, plan section 17.2). Refused diagnostics never export.
+  try {
+    const memoryStore = new SqliteStoryMemoryStore(db);
+    const memoryState = await memoryStore.getState(input.branchId);
+    const appliedPatches = (await memoryStore.listPatches(input.branchId))
+      .filter(patch => patch.status === 'applied')
+      .map(patch => ({
+        patchId: patch.patchId,
+        fromStateVersion: patch.fromStateVersion,
+        toStateVersion: patch.toStateVersion,
+        baseFingerprint: patch.baseFingerprint,
+        patch: patch.patch,
+        createdAt: patch.createdAt,
+        appliedAt: patch.appliedAt,
+      }));
+    (payload as { storyMemory?: unknown }).storyMemory = {
+      state: memoryState,
+      appliedPatches,
+    };
+  } catch {
+    // Story memory export is additive; export proceeds without it when the
+    // branch has no memory tables (legacy dev databases are refused at import).
+  }
+  // P8 (save-9): post-processing coverage (succeeded handoffs) rides along so
+  // the imported campaign knows what is already consumed versus pending.
+  try {
+    const coverageRows = await db.queryAll<{ handoff_id: string; turn_id: string; committed_state_version: number; status: string }>(
+      'SELECT handoff_id, turn_id, committed_state_version, status FROM frozen_turn_postprocess_outbox WHERE branch_id = ? ORDER BY committed_state_version ASC',
+      [input.branchId],
+    );
+    (payload as { postprocessCoverage?: unknown }).postprocessCoverage = coverageRows.map(row => ({
+      handoffId: row.handoff_id,
+      turnId: row.turn_id,
+      committedStateVersion: row.committed_state_version,
+      status: row.status,
+    }));
+  } catch {
+    // Coverage table may be absent on legacy dev databases; import refuses
+    // those anyway under the current protocol.
+  }
+
   const payloadSha256 = await input.sha256Hex(canonicalStringify(payloadForHash(payload)));
 
   const manifest: SaveManifest = {
@@ -553,21 +630,14 @@ export async function validateSaveJsonBytes(
     return { ok: false, errors: ['Save file is not valid JSON.'] };
   }
   const schemaVersion = parsed.manifest?.schemaVersion;
-  const isSave8 = schemaVersion === SAVE_SCHEMA_VERSION;
-  const isSave7 = schemaVersion === PRE_PHASE7_SAVE_SCHEMA_VERSION;
-  if (!isSave8 && !isSave7 && schemaVersion !== PRE_PHASE6_SAVE_SCHEMA_VERSION && schemaVersion !== PREVIOUS_SAVE_SCHEMA_VERSION &&
-      schemaVersion !== OLDER_SAVE_SCHEMA_VERSION && schemaVersion !== OLDER_V3_SAVE_SCHEMA_VERSION) {
-    if (schemaVersion === LEGACY_SAVE_SCHEMA_VERSION) {
-      return {
-        ok: false,
-        errors: [
-          `Legacy ${LEGACY_SAVE_SCHEMA_VERSION} saves predate complete card/contract/roll capture ` +
-            'and cannot be continued faithfully. Keep the original device data or start a new campaign ' +
-            '(plan §15.3: unverifiable history is never fabricated).',
-        ],
-      };
-    }
-    errors.push(`Unsupported schemaVersion: ${String(schemaVersion)}.`);
+  // P8-8 (A33): the ONLY accepted schema is the current one. Every historical
+  // version is refused with its own reason; unknown versions are refused too.
+  if (schemaVersion !== SAVE_SCHEMA_VERSION) {
+    const refusal = typeof schemaVersion === 'string' ? REFUSED_SAVE_SCHEMA_VERSIONS[schemaVersion] : undefined;
+    return {
+      ok: false,
+      errors: [refusal ?? `Unsupported schemaVersion: ${String(schemaVersion)}. The current protocol is ${SAVE_SCHEMA_VERSION}; old saves are never converted.`],
+    };
   }
   if (!parsed.manifest?.branchId || !parsed.manifest?.campaignId) {
     errors.push('Manifest requires campaignId and branchId.');
@@ -585,26 +655,23 @@ export async function validateSaveJsonBytes(
   if (!parsed.state?.branchId || typeof parsed.state.stateVersion !== 'number') {
     errors.push('Save state snapshot is malformed.');
   }
-  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
-      !Array.isArray(parsed.state?.encounters)) {
+  if (!Array.isArray(parsed.state?.encounters)) {
     errors.push('Save is missing complete encounter and battlefield snapshots.');
   }
-  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
-      (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0)) {
+  if (!Array.isArray(parsed.snapshotHistory) || parsed.snapshotHistory.length === 0) {
     errors.push('Save is missing the full branch snapshot history required for rewind and combat recovery.');
   }
   if (parsed.manifest?.title !== undefined && typeof parsed.manifest.title !== 'string') {
     errors.push('Manifest title must be text when present.');
   }
-  if (hasContentManifestSchema(schemaVersion) && !Array.isArray(parsed.contentDeltas)) {
-    errors.push('Save v6 is missing its immutable progressive content package list.');
+  if (!Array.isArray(parsed.contentDeltas)) {
+    errors.push('Save is missing its immutable progressive content package list.');
   }
-  if (hasContentManifestSchema(schemaVersion) && Array.isArray(parsed.contentDeltas) &&
+  if (Array.isArray(parsed.contentDeltas) &&
       parsed.contentDeltas.some(delta => !isProgressiveDeltaPackageStructure(delta))) {
-    errors.push('Save v6 contains a malformed progressive content package.');
+    errors.push('Save contains a malformed progressive content package.');
   }
-  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) &&
-      Array.isArray(parsed.snapshotHistory) && parsed.snapshotHistory.some(item =>
+  if (Array.isArray(parsed.snapshotHistory) && parsed.snapshotHistory.some(item =>
         !item || typeof item !== 'object' || Array.isArray(item) ||
         !('snapshot' in item) || !item.snapshot || typeof item.snapshot !== 'object' || Array.isArray(item.snapshot))) {
     errors.push('Save snapshot history contains a malformed entry.');
@@ -626,34 +693,8 @@ export async function validateSaveJsonBytes(
   }
   if (!Array.isArray(parsed.rewardLedger)) errors.push('rewardLedger must be an array.');
   if (!Array.isArray(parsed.branchEvents)) errors.push('branchEvents must be an array.');
-  if (schemaVersion === OLDER_V3_SAVE_SCHEMA_VERSION && !Array.isArray(parsed.state?.encounters)) {
-    const containsTemporaryActor = Array.isArray(parsed.cards) && parsed.cards.some(card => {
-      try {
-        const value = JSON.parse(card.cardJson) as { controller?: string };
-        return value.controller === 'gm';
-      } catch {
-        return false;
-      }
-    });
-    if (containsTemporaryActor) {
-        errors.push('This v3 save contains temporary GM actors but no encounter history; resume it on the source device or export a current save.');
-    }
-  }
-  if ((isSave8 || isSave7) && !Array.isArray(parsed.segmentArtifacts)) errors.push('Save v7 requires segmentArtifacts.');
-  // P7: guidance sections only ride save-8; situation snapshots likewise.
-  if (!isSave8) {
-    if (parsed.guidance !== undefined) errors.push('Phase7 guidance requires save v8.');
-    const hasSituations = (value: unknown): boolean => {
-      if (Array.isArray(value)) return value.some(hasSituations);
-      return value !== null && typeof value === 'object'
-        && Object.entries(value as Record<string, unknown>).some(([key, nested]) =>
-          key === 'situations' || key === 'causalWorldTimeOrder' || hasSituations(nested));
-    };
-    if (hasSituations(parsed.state) || hasSituations(parsed.snapshotHistory)) {
-      errors.push('Phase7 situation state requires save v8.');
-    }
-  }
-  if (isSave8 && parsed.guidance !== undefined) {
+  if (!Array.isArray(parsed.segmentArtifacts)) errors.push('Save requires segmentArtifacts.');
+  if (parsed.guidance !== undefined) {
     if (!Array.isArray(parsed.guidance)) errors.push('guidance must be an array.');
     else {
       for (const [index, record] of parsed.guidance.entries()) {
@@ -668,20 +709,22 @@ export async function validateSaveJsonBytes(
       }
     }
   }
-  if (!isSave8 && !isSave7) {
-    const phase6Keys = new Set(['segmentContentBinding', 'styleSnapshot', 'artifactIds', 'artifactManifestHash']);
-    const hasPhase6 = (value: unknown): boolean => {
-      if (Array.isArray(value)) return value.some(hasPhase6);
-      return value !== null && typeof value === 'object'
-        && Object.entries(value as Record<string, unknown>).some(([key, nested]) => phase6Keys.has(key) || hasPhase6(nested));
-    };
-    let containsPhase6Contract = false;
-    for (const turn of Array.isArray(parsed.turns) ? parsed.turns : []) {
-      try { containsPhase6Contract ||= hasPhase6(JSON.parse(turn.actionContractJson)); }
-      catch { errors.push('Invalid frozen contract JSON.'); }
+  // P8 (save-9): story memory, when present, must be structurally complete.
+  if (parsed.storyMemory !== undefined) {
+    const memory = parsed.storyMemory;
+    if (!memory || typeof memory !== 'object' || Array.isArray(memory)
+      || (memory.state !== null && (typeof memory.state !== 'object' || Array.isArray(memory.state)))
+      || !Array.isArray(memory.appliedPatches)) {
+      errors.push('storyMemory must be { state | null, appliedPatches[] }.');
+    } else if (memory.appliedPatches.some(patch => !patch || typeof patch !== 'object'
+      || typeof patch.patchId !== 'string' || typeof patch.patch !== 'object')) {
+      errors.push('storyMemory.appliedPatches contains a malformed patch row.');
     }
-    if (parsed.segmentArtifacts !== undefined || parsed.projectStyle !== undefined || hasPhase6(parsed.state)
-      || hasPhase6(parsed.snapshotHistory) || containsPhase6Contract) errors.push('Phase6 content requires save v7.');
+  }
+  if (parsed.postprocessCoverage !== undefined && (!Array.isArray(parsed.postprocessCoverage)
+    || parsed.postprocessCoverage.some(item => !item || typeof item !== 'object'
+      || typeof item.handoffId !== 'string' || typeof item.turnId !== 'string'))) {
+    errors.push('postprocessCoverage contains a malformed entry.');
   }
   if (errors.length > 0) {
     try {
@@ -698,7 +741,7 @@ export async function validateSaveJsonBytes(
   if (parsed.state.stateVersion !== parsed.manifest.stateVersion) {
     errors.push('Snapshot stateVersion does not match the manifest.');
   }
-  if ((hasContentManifestSchema(schemaVersion) || schemaVersion === PREVIOUS_SAVE_SCHEMA_VERSION) && Array.isArray(parsed.snapshotHistory)) {
+  if (Array.isArray(parsed.snapshotHistory)) {
     let previousVersion = -1;
     for (const [index, item] of parsed.snapshotHistory.entries()) {
       if (!Number.isInteger(item.stateVersion) || item.stateVersion < 0 || item.stateVersion <= previousVersion) {
@@ -725,7 +768,7 @@ export async function validateSaveJsonBytes(
       const head = parsed.snapshotHistory.find(item => item.stateVersion === parsed.manifest.stateVersion);
     if (!head) {
       errors.push('Snapshot history does not include the manifest stateVersion.');
-    } else if (schemaVersion === SAVE_SCHEMA_VERSION && (JSON.stringify(head.snapshot.segmentContentBinding ?? null) !== JSON.stringify(parsed.state.segmentContentBinding ?? null)
+    } else if ((JSON.stringify(head.snapshot.segmentContentBinding ?? null) !== JSON.stringify(parsed.state.segmentContentBinding ?? null)
       || JSON.stringify(head.snapshot.styleSnapshot ?? null) !== JSON.stringify(parsed.state.styleSnapshot ?? null))) {
       errors.push('Phase6 head bindings differ from the current snapshot history entry.');
     }
@@ -812,7 +855,7 @@ export async function validateSaveJsonBytes(
   } catch (error) {
     errors.push(`Payload digest could not be computed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (schemaVersion === SAVE_SCHEMA_VERSION) errors.push(...await validatePhase6Bundle({
+  errors.push(...await validatePhase6Bundle({
     worldId: parsed.manifest.worldRef.worldId, baseRevision: parsed.manifest.packageRevision,
     baseHash: parsed.manifest.worldRef.packageContentHash ?? '', artifacts: parsed.segmentArtifacts ?? [],
     snapshots: [parsed.state, ...(parsed.snapshotHistory ?? []).map(s => s.snapshot)],
@@ -1185,6 +1228,58 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
             record.decisionPoint.stateVersion,
             record.severity,
             JSON.stringify(rebound),
+            input.createdAt,
+            input.createdAt,
+          ],
+        );
+      }
+    }
+    // P8 (save-9): story memory restores checkpoint + applied chain (one
+    // transaction with everything else); the episodic index is NOT restored —
+    // the post-processing worker rebuilds it locally from committed events.
+    if (save.storyMemory) {
+      const memoryStore = new SqliteStoryMemoryStore(tx);
+      if (save.storyMemory.state) {
+        // Branch identity rebinds like every other row (same meaning, new
+        // branch); patch rows rebind via INSERT below.
+        await memoryStore.saveState({ ...save.storyMemory.state, branchId: input.newBranchId });
+      }
+      for (const patch of save.storyMemory.appliedPatches) {
+        await tx.execute(
+          `INSERT OR IGNORE INTO story_memory_patches
+            (patch_id, branch_id, from_state_version, to_state_version, base_fingerprint,
+             patch_json, status, created_at, applied_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'applied', ?, ?)`,
+          [
+            patch.patchId,
+            input.newBranchId,
+            patch.fromStateVersion,
+            patch.toStateVersion,
+            patch.baseFingerprint,
+            JSON.stringify(patch.patch),
+            patch.createdAt,
+            patch.appliedAt ?? input.createdAt,
+          ],
+        );
+      }
+    }
+    // P8 (save-9): post-processing coverage rows restore so succeeded ranges
+    // are known; pending/failed rows are re-derivable from committed evidence.
+    if (Array.isArray(save.postprocessCoverage)) {
+      for (const item of save.postprocessCoverage) {
+        await tx.execute(
+          `INSERT OR IGNORE INTO frozen_turn_postprocess_outbox
+            (handoff_id, campaign_id, branch_id, turn_id, committed_state_version,
+             public_evidence_hash, body_revision_hash, has_body, task_schema, status,
+             attempts, physical_http_count, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'restored', NULL, 0, 'turn-postprocess-handoff-1', ?, 0, 0, ?, ?)`,
+          [
+            item.handoffId.replace(/^.*:/, `${input.newBranchId}:`),
+            input.newCampaignId,
+            input.newBranchId,
+            item.turnId,
+            item.committedStateVersion,
+            item.status === 'succeeded' ? 'succeeded' : 'pending',
             input.createdAt,
             input.createdAt,
           ],

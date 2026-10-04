@@ -142,28 +142,7 @@ test('rehashing a save does not waive frozen state/manifest/world/dependency che
   } finally { h.db.close(); }
 });
 
-test('legacy save 6/5/4/3 rejects phase6 in history or staged contract while clean v6 remains readable', async () => {
-  const h = await fixture();
-  try {
-    const exported = await exportSave({ db: h.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
-    const clean = structuredClone(exported.save);
-    delete clean.segmentArtifacts;
-    delete clean.state.segmentContentBinding; delete clean.state.styleSnapshot;
-    for (const item of clean.snapshotHistory) { delete item.snapshot.segmentContentBinding; delete item.snapshot.styleSnapshot; }
-    const contract = JSON.parse(clean.turns[0].actionContractJson); delete contract.styleSnapshot; delete contract.contentDependency.artifactIds; delete contract.contentDependency.artifactManifestHash;
-    clean.turns[0].actionContractJson = JSON.stringify(contract);
-    clean.manifest.schemaVersion = 'shineword-save-6';
-    assert.equal((await validateSaveJson(await rehash(clean), sha.sha256Hex)).ok, true);
-    for (const version of [6, 5, 4, 3]) for (const placement of ['history', 'contract']) {
-      const save = structuredClone(clean); save.manifest.schemaVersion = `shineword-save-${version}`;
-      if (placement === 'history') save.snapshotHistory[0].snapshot.styleSnapshot = exported.save.state.styleSnapshot;
-      else save.turns[0].actionContractJson = exported.save.turns[0].actionContractJson;
-      const result = await validateSaveJson(await rehash(save), sha.sha256Hex);
-      assert.equal(result.ok, false);
-      assert.ok(result.errors.includes('Phase6 content requires save v7.'));
-    }
-  } finally { h.db.close(); }
-});
+
 
 test('archive v4 validates added artifact canon and rolls back a late owner import failure', async () => {
   const h = await fixture(), target = await createMobileHarness();

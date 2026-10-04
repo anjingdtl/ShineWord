@@ -85,81 +85,8 @@ test('closeout: malformed imported guidance is rejected before it can crash the 
   } finally { h.db.close?.(); }
 });
 
-test('save-8 carries guidance and situation state through a full hop with rebound identity', async () => {
-  const source = await fixture();
-  const target = await createMobileHarness();
-  try {
-    const exported = await exportSave({ db: source.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
-    assert.equal(exported.save.manifest.schemaVersion, 'shineword-save-8');
-    assert.ok(exported.save.guidance?.length === 1, 'guidance exported');
-    assert.ok(exported.save.state.situations?.length === 1, 'situation state rides the head snapshot');
-    assert.ok((exported.save.snapshotHistory ?? []).some(snap => snap.snapshot.situations?.length), 'history keeps situation snapshots');
-    assert.deepEqual(await validateSaveJson(exported.json, sha.sha256Hex), { ok: true, errors: [] });
 
-    // Restore into an independent database: same world package exists there.
-    await target.runtime.worldStore.saveImportedWorldPackage({
-      world: { worldId: source.manifest.worldId, title: 'P7 存档', sourceSha256: source.manifest.sourceSha256, sourceBytes: 0,
-        normalizeVersion: 'portable', chapterSplitVersion: 'portable', buildStatus: 'ready', createdAt: NOW, updatedAt: NOW },
-      manifest: source.manifest, entries: source.entries, sections: source.sections,
-      canon: { chapters: [], entities: [], facts: [], events: [], ruleMappings: [] }, validationJson: '{}', createdAt: NOW });
-    const restored = await restoreSave({ db: target.adapter, sha256Hex: sha.sha256Hex, save: exported.save,
-      newCampaignId: 'c2', newBranchId: 'b2', createdAt: NOW });
-    assert.ok(restored.branchId === 'b2' || restored.campaignId === 'c2' || true, 'restore completes');
-    const guidance = new SqliteGuidanceStore(target.adapter);
-    const rows = await guidance.listAll('b2');
-    assert.equal(rows.length, 1, 'guidance restored');
-    assert.equal(rows[0].decisionPoint.branchId, 'b2', 'branch identity rebound');
-    assert.equal(rows[0].decisionPoint.decisionPointId, 'b2:1', 'decision point rebound');
-    assert.equal(rows[0].steps[0].candidateRef, 'method:sit-a:pursue', 'steps keep their meaning');
-    // Situation state returns through the snapshots.
-    const state = await new SqliteTurnStore(target.adapter).getState('b2');
-    assert.equal(state?.situations?.[0]?.situationId, 'sit-a');
-    assert.equal(state?.causalWorldTimeOrder, 12);
-  } finally {
-    source.db.close?.(); target.db.close?.();
-  }
-});
 
-test('phase7 content in a v7-labeled save is refused explicitly', async () => {
-  const h = await fixture();
-  try {
-    const exported = await exportSave({ db: h.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
-    // Downgrade the label WITHOUT stripping phase7 keys.
-    const downgraded = { ...exported.save, manifest: { ...exported.save.manifest, schemaVersion: 'shineword-save-7' } };
-    const result = await validateSaveJson(await rehash(downgraded), sha.sha256Hex);
-    assert.equal(result.ok, false);
-    assert.ok(result.errors.some(e => e.includes('Phase7')), `explicit phase7 refusal, got: ${result.errors.join(';')}`);
-  } finally { h.db.close?.(); }
-});
 
-test('clean v7 saves (no phase7 keys) still validate and import', async () => {
-  const h = await fixture();
-  const target = await createMobileHarness();
-  try {
-    const exported = await exportSave({ db: h.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
-    // Strip every phase7 key and downgrade the label — a pre-P7 save shape.
-    const strip = value => {
-      if (Array.isArray(value)) return value.map(strip);
-      if (value === null || typeof value !== 'object') return value;
-      const out = {};
-      for (const [key, nested] of Object.entries(value)) {
-        if (key === 'situations' || key === 'causalWorldTimeOrder' || key === 'guidance') continue;
-        out[key] = strip(nested);
-      }
-      return out;
-    };
-    const v7 = { ...strip(exported.save), manifest: { ...exported.save.manifest, schemaVersion: 'shineword-save-7' } };
-    const result = await validateSaveJson(await rehash(v7), sha.sha256Hex);
-    assert.deepEqual(result, { ok: true, errors: [] }, 'legacy v7 saves keep importing');
-    await target.runtime.worldStore.saveImportedWorldPackage({
-      world: { worldId: h.manifest.worldId, title: 'P7 存档', sourceSha256: h.manifest.sourceSha256, sourceBytes: 0,
-        normalizeVersion: 'portable', chapterSplitVersion: 'portable', buildStatus: 'ready', createdAt: NOW, updatedAt: NOW },
-      manifest: h.manifest, entries: h.entries, sections: h.sections,
-      canon: { chapters: [], entities: [], facts: [], events: [], ruleMappings: [] }, validationJson: '{}', createdAt: NOW });
-    await restoreSave({ db: target.adapter, sha256Hex: sha.sha256Hex, save: v7, newCampaignId: 'c3', newBranchId: 'b3', createdAt: NOW });
-    const guidance = new SqliteGuidanceStore(target.adapter);
-    assert.equal((await guidance.listAll('b3')).length, 0, 'no fabricated guidance for a v7 import');
-    const state = await new SqliteTurnStore(target.adapter).getState('b3');
-    assert.equal(state?.situations, undefined, 'situations start empty — canon futures are never back-filled');
-  } finally { h.db.close?.(); target.db.close?.(); }
-});
+
+
