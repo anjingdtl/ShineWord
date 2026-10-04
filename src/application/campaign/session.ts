@@ -9,8 +9,6 @@ import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
 import type { LlmRequestLedgerStore } from '../ports/llmLedger';
 import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
 import type { SqliteEpisodicStore } from '../memory/episodicStore';
-import { episodicRecordFromTurn } from '../memory/episodicStore';
-import { runStoryMemoryMaintenance, shouldRunMaintenance } from '../memory/storyMemoryMaintenance';
 import { recallEpisodes, renderEpisodicRecall } from '../memory/episodicRetriever';
 import { compilePreviousMemoryView } from '../memory/storyMemoryCompiler';
 import { resolveModelCapabilities } from '../llm/capabilityResolver';
@@ -36,6 +34,7 @@ import { buildPendingBridge, renderPendingBridge } from '../memory/pendingBridge
 import { compileMemoryMaterialCandidates } from '../memory/storyMemoryCompiler';
 import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
+import { TurnPostProcessingCoordinator } from '../game/turnPostProcessing';
 import { packageIndexes } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
@@ -197,6 +196,8 @@ export interface PlayTurnOptions {
 export class CampaignSession {
   /** Encounter scheduling (G01) shares the session's stores and provider. */
   readonly encounters: EncounterService;
+  /** P8-4: durable post-processing worker over the commit-transaction outbox. */
+  private readonly postProcessing: TurnPostProcessingCoordinator;
   /**
    * Provider as used by every internal LLM call: wrapped with the durable
    * ledger when deps supply a store, the raw provider otherwise.
@@ -220,6 +221,25 @@ export class CampaignSession {
         modelProfileFingerprint: llmModelProfileFingerprint(profile),
       })
       : provider;
+    // P8-4: single branch-serial post-processing worker over the durable
+    // outbox written by commitAtomic (plan §13.1).
+    this.postProcessing = new TurnPostProcessingCoordinator({
+      db: deps.db,
+      turns: deps.turns,
+      storyMemory: deps.storyMemory,
+      episodic: deps.episodic,
+      provider: this.provider,
+      capabilities: this.turnCapabilities(),
+      reasoningPolicy: {
+        tier: normalizeReasoningTier(profile.reasoningTier ?? profile.reasoningEffort),
+        providerDialect: profile.reasoningDialect ?? reasoningDialectForModel(profile.model),
+        model: profile.model,
+      },
+      loadActors: async branchId => {
+        const cards = await this.loadAllCards(branchId);
+        return cards.map(card => ({ actorId: card.actorId, name: card.name }));
+      },
+    });
   }
 
   async listCampaigns(): Promise<Array<{ campaignId: string; title: string; worldId: string; status: string; createdAt: string }>> {
@@ -2576,50 +2596,16 @@ export class CampaignSession {
       }
     }
 
-    // Story Memory V2 dual-track maintenance (infrastructure plan M3) +
-    // episodic index write (M4): return-first - the cadence gate, the index
-    // row write and any checkpoint LLM run in the background and can never
-    // block or fail this committed turn.
-    void (async () => {
-      try {
-        const committed = await this.deps.turns.listCommittedTurns(options.branchId);
-        const latest = committed.find(turn => turn.stateVersion === result.stateVersion);
-        if (latest && this.deps.episodic) {
-          const record = episodicRecordFromTurn({ entry: latest });
-          const namesById = new Map(plannerCards.map(card => [card.actorId, card.name]));
-          record.keywords = record.actorIds
-            .map(actorId => namesById.get(actorId))
-            .filter((name): name is string => Boolean(name));
-          await this.deps.episodic.store.saveTurnRecord(record);
-        }
-        if (this.deps.storyMemory) {
-          const decision = await shouldRunMaintenance({
-            store: this.deps.storyMemory.store,
-            turnStore: this.deps.turns,
-            branchId: options.branchId,
-            currentStateVersion: result.stateVersion,
-          });
-          if (decision.should) {
-            await runStoryMemoryMaintenance({
-              provider: this.provider,
-              store: this.deps.storyMemory.store,
-              turnStore: this.deps.turns,
-              branchId: options.branchId,
-              currentStateVersion: result.stateVersion,
-              actors: plannerCards.map(card => ({ actorId: card.actorId, name: card.name })),
-              capabilities: this.turnCapabilities(),
-              reasoningPolicy: {
-                tier: normalizeReasoningTier(this.profile.reasoningTier ?? this.profile.reasoningEffort),
-                providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model),
-                model: this.profile.model,
-              },
-            });
-          }
-        }
-      } catch {
-        // Background memory/index maintenance must never fail a played turn.
-      }
-    })();
+    // P8-4 (plan §13): the durable handoff was written inside the commit
+    // transaction. The coordinator claims it (lease + fencing), indexes the
+    // turn locally and runs memory maintenance — return-first, so it can
+    // never block or fail this committed turn. Rest/training/encounter and
+    // lifecycle commits reach the same worker through the same outbox.
+    void this.postProcessing.processBranch(options.branchId, { maxWaves: 2 }).catch(() => {
+      // Background post-processing must never fail a played turn; the
+      // handoff rows stay durable and a later wave (or cold-start resume)
+      // picks them up.
+    });
 
     return {
       turnId,

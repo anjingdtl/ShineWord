@@ -231,6 +231,7 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
   }
 
   private situationTablesAvailable: boolean | null = null;
+  private postprocessOutboxAvailable: boolean | null = null;
 
   private async hasSituationTables(reader: Pick<SqliteTransaction, 'queryOne'> = this.db): Promise<boolean> {
     if (this.situationTablesAvailable === null) {
@@ -577,8 +578,112 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
         input.committedTurn.committedAt,
       );
       await this.persistCommittedTurn(tx, input);
+      // P8-4 single commit boundary (I02, plan §12.3): adopting the narrative
+      // candidate and enqueueing the post-processing handoff happen in THIS
+      // transaction. An outbox failure aborts state, events, rewards and the
+      // turn row together — a commit can never exist without its handoff.
+      await this.adoptNarrativeInTransaction(tx, input.branchId, input.turnId);
+      await this.insertPostprocessHandoff(tx, branch.campaign_id, input);
       return input.committedTurn;
     });
+  }
+
+  /** Marks the persisted narrative candidate as the adopted revision. */
+  private async adoptNarrativeInTransaction(
+    tx: SqliteTransaction,
+    branchId: string,
+    turnId: string,
+  ): Promise<void> {
+    try {
+      await tx.execute(
+        `UPDATE turn_narratives SET status = 'Committed'
+          WHERE branch_id = ? AND turn_id = ? AND status = 'Candidate'`,
+        [branchId, turnId],
+      );
+    } catch {
+      // turn_narratives may be absent on legacy partial fixtures; the
+      // narrative adoption is then managed by the narrative store as before.
+    }
+  }
+
+  /**
+   * Inserts the unique durable handoff for this committed turn
+   * (`turn-postprocess-handoff-1`). The handoff id binds the committed turn
+   * and its adopted revision; the public evidence hash covers exactly the
+   * material the memory worker will consume.
+   */
+  private async insertPostprocessHandoff(
+    tx: SqliteTransaction,
+    campaignId: string,
+    input: AtomicCommitInput,
+  ): Promise<void> {
+    const outboxReady = await this.ensurePostprocessOutboxTable(tx);
+    if (!outboxReady) {
+      throw new Error(
+        'Post-processing outbox table is missing; run the current-protocol migrations before committing turns.',
+      );
+    }
+    let bodyRevisionHash: string | null = null;
+    try {
+      const narrative = await tx.queryOne<{ text: string }>(
+        'SELECT text FROM turn_narratives WHERE branch_id = ? AND turn_id = ?',
+        [input.branchId, input.turnId],
+      );
+      if (narrative?.text) bodyRevisionHash = this.stableIdentityHash(narrative.text);
+    } catch {
+      bodyRevisionHash = null;
+    }
+    const publicEvidenceHash = this.stableIdentityHash(JSON.stringify({
+      summary: input.committedTurn.publicSummary ?? '',
+      effects: input.committedTurn.effects ?? [],
+      events: input.events ?? [],
+      stateVersion: input.committedTurn.stateVersion,
+    }));
+    const now = input.committedTurn.committedAt;
+    await tx.execute(
+      `INSERT INTO frozen_turn_postprocess_outbox
+        (handoff_id, campaign_id, branch_id, turn_id, committed_state_version,
+         public_evidence_hash, body_revision_hash, has_body, task_schema, status,
+         attempts, physical_http_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'turn-postprocess-handoff-1', 'pending', 0, 0, ?, ?)`,
+      [
+        `${input.branchId}:${input.turnId}:v${input.committedTurn.stateVersion}`,
+        campaignId,
+        input.branchId,
+        input.turnId,
+        input.committedTurn.stateVersion,
+        publicEvidenceHash,
+        bodyRevisionHash,
+        bodyRevisionHash ? 1 : 0,
+        now,
+        now,
+      ],
+    );
+  }
+
+  /** Capability probe for the outbox table (cached after first check). */
+  private async ensurePostprocessOutboxTable(tx: SqliteTransaction): Promise<boolean> {
+    if (this.postprocessOutboxAvailable !== null) return this.postprocessOutboxAvailable;
+    const row = await tx.queryOne<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'frozen_turn_postprocess_outbox'",
+    );
+    this.postprocessOutboxAvailable = (row?.n ?? 0) === 1;
+    return this.postprocessOutboxAvailable;
+  }
+
+  /**
+   * Deterministic 64-bit identity fingerprint (FNV-1a, hex) for handoff
+   * evidence and body-revision identity. Identity/dedupe purpose only —
+   * cryptographic content hashes live in the frozen-materials store.
+   */
+  private stableIdentityHash(input: string): string {
+    let hash = 0xcbf29ce484222325n;
+    const prime = 0x100000001b3n;
+    for (let i = 0; i < input.length; i += 1) {
+      hash ^= BigInt(input.charCodeAt(i));
+      hash = (hash * prime) & 0xffffffffffffffffn;
+    }
+    return `fnv1a-${hash.toString(16).padStart(16, '0')}`;
   }
 
   /**

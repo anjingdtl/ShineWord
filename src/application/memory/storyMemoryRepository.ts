@@ -51,6 +51,14 @@ interface PatchRow extends SqliteRow {
   applied_at: string | null;
 }
 
+/** P8-4 (I09): raised when a CAS-guarded checkpoint write loses the race. */
+export class StoryMemoryCasConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StoryMemoryCasConflictError';
+  }
+}
+
 export class SqliteStoryMemoryStore {
   constructor(private readonly db: SqliteDbOrTx) {}
 
@@ -96,6 +104,67 @@ export class SqliteStoryMemoryStore {
         state.metadata.lastAppliedPatchId,
         state.metadata.updatedAt,
       ],
+    );
+  }
+
+  /**
+   * P8-4 CAS write (I09): the update only lands when the stored fingerprint
+   * still equals `expectedFingerprint`. A stale worker's write is refused
+   * with StoryMemoryCasConflictError instead of clobbering a newer checkpoint.
+   */
+  async saveStateCas(
+    state: StoryMemoryState,
+    options: { expectedFingerprint: string | null },
+  ): Promise<void> {
+    const expected = options.expectedFingerprint;
+    const changes = await this.db.execute(
+      `UPDATE story_memory_states SET
+         through_state_version = ?,
+         state_json = ?,
+         state_fingerprint = ?,
+         status = ?,
+         dirty_from_state_version = ?,
+         last_applied_patch_id = ?,
+         updated_at = ?
+       WHERE branch_id = ? AND state_fingerprint ${expected === null ? 'IS NULL' : '= ?'}`,
+      expected === null
+        ? [
+            state.throughStateVersion,
+            JSON.stringify(state),
+            state.metadata.fingerprint,
+            state.metadata.status,
+            state.metadata.dirtyFromStateVersion,
+            state.metadata.lastAppliedPatchId,
+            state.metadata.updatedAt,
+            state.branchId,
+          ]
+        : [
+            state.throughStateVersion,
+            JSON.stringify(state),
+            state.metadata.fingerprint,
+            state.metadata.status,
+            state.metadata.dirtyFromStateVersion,
+            state.metadata.lastAppliedPatchId,
+            state.metadata.updatedAt,
+            state.branchId,
+            expected,
+          ],
+    );
+    if (changes > 0) return;
+    const existing = await this.getState(state.branchId);
+    if (!existing) {
+      // Absent row and no expected fingerprint: first write is legitimate.
+      if (expected === null || expected === 'seed' || expected === '') {
+        await this.saveState(state);
+        return;
+      }
+      throw new StoryMemoryCasConflictError(
+        `Story memory CAS refused: branch ${state.branchId} has no checkpoint but expected fingerprint '${expected}'.`,
+      );
+    }
+    throw new StoryMemoryCasConflictError(
+      `Story memory CAS refused: branch ${state.branchId} checkpoint fingerprint '${existing.metadata.fingerprint}'`
+        + ` does not match expected '${expected ?? 'null'}'; the stale write must not overwrite the newer checkpoint.`,
     );
   }
 

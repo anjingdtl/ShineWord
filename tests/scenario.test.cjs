@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 
 const { executeDeterministicTurn } = require('../dist/application/turns/executeDeterministicTurn');
 const { SqliteTurnStore } = require('../dist/infra/sqlite/sqliteTurnStore');
@@ -60,7 +61,11 @@ function outcome(achieved, publicSummary, effects = []) {
 
 function setup() {
   const db = new DatabaseSync(':memory:');
-  db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '001_core.sql'), 'utf8'));
+  // P8-4: current-protocol schema (all builtin migrations) so every
+  // authoritative commit can write its post-processing handoff.
+  for (const migration of BUILTIN_MIGRATIONS) {
+    for (const statement of migration.sql.split(';').map(s => s.trim()).filter(Boolean)) db.exec(statement);
+  }
   db.prepare(
     'INSERT INTO branches (branch_id, campaign_id, state_version, created_at) VALUES (?, ?, ?, ?)',
   ).run('branch-main', 'campaign-demo', 0, '2026-09-26T00:00:00.000Z');

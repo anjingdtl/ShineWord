@@ -217,7 +217,7 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
     }),
     '2026-10-04T00:00:00.000Z',
   );
-  const store = new SqliteTurnStore(db, hashProvider);
+  const store = new SqliteTurnStore(new NodeSqliteAdapter(db));
   const contract = {
     protocolVersion: '1.0',
     turnId: 'turn-1',
@@ -236,10 +236,19 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
   await store.commitAtomic({
     branchId: 'branch-a',
     turnId: 'turn-1',
-    contract,
-    contractHash: hashProvider.sha256Hex(JSON.stringify(contract)),
-    narrative: { publicSummary: '观察了四周', effects: [] },
-    settlement: {},
+    expectedStateVersion: 0,
+    actionContractJson: JSON.stringify(contract),
+    actionContractHash: hashProvider.sha256Hex(JSON.stringify(contract)),
+    committedTurn: {
+      branchId: 'branch-a',
+      turnId: 'turn-1',
+      previousStateVersion: 0,
+      stateVersion: 1,
+      outcomeGrade: 'success',
+      publicSummary: '观察了四周',
+      effects: [],
+      committedAt: '2026-10-04T00:00:00.000Z',
+    },
     nextState: {
       branchId: 'branch-a',
       stateVersion: 1,
@@ -251,7 +260,7 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
       abilitiesUsed: {},
     },
   });
-  const outboxRows = db.prepare('SELECT COUNT(*) AS n FROM turn_postprocess_outbox').get();
+  const outboxRows = db.prepare('SELECT COUNT(*) AS n FROM frozen_turn_postprocess_outbox').get();
   assert.equal(outboxRows.n, 1, 'an authoritative commit must leave exactly one handoff row');
 
   // Fault injection: an outbox write failure must abort the whole commit.
@@ -282,16 +291,25 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
     '2026-10-04T00:00:00.000Z',
   );
   // Drop the outbox table so the in-transaction insert fails.
-  db2.exec('DROP TABLE turn_postprocess_outbox');
-  const store2 = new SqliteTurnStore(db2, hashProvider);
+  db2.exec('DROP TABLE frozen_turn_postprocess_outbox');
+  const store2 = new SqliteTurnStore(new NodeSqliteAdapter(db2));
   await assert.rejects(
     () => store2.commitAtomic({
       branchId: 'branch-a',
       turnId: 'turn-2',
-      contract,
-      contractHash: hashProvider.sha256Hex(JSON.stringify(contract)),
-      narrative: { publicSummary: '观察了四周', effects: [] },
-      settlement: {},
+      expectedStateVersion: 0,
+      actionContractJson: JSON.stringify(contract),
+      actionContractHash: hashProvider.sha256Hex(JSON.stringify(contract)),
+      committedTurn: {
+        branchId: 'branch-a',
+        turnId: 'turn-2',
+        previousStateVersion: 0,
+        stateVersion: 1,
+        outcomeGrade: 'success',
+        publicSummary: '观察了四周',
+        effects: [],
+        committedAt: '2026-10-04T00:00:00.000Z',
+      },
       nextState: {
         branchId: 'branch-a',
         stateVersion: 1,
@@ -317,22 +335,22 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
 // checkpoint. P8-5 adds the CAS repository.
 test('G5: story memory state writes are CAS-guarded; a stale fingerprint is refused', async () => {
   const { SqliteStoryMemoryStore } = requireModule(
-    '../dist/application/memory/storyMemoryCasRepository',
+    '../dist/application/memory/storyMemoryRepository',
     'P8-5',
   );
   const db = await setupStoryMemoryDb();
-  const store = new SqliteStoryMemoryStore(db, hashProvider);
+  const store = new SqliteStoryMemoryStore(new NodeSqliteAdapter(db), hashProvider);
   const first = cleanMemoryState('branch-a', 8);
   first.metadata.fingerprint = 'fp-1';
-  await store.saveState('branch-a', first);
+  await store.saveState(first);
   const second = cleanMemoryState('branch-a', 16);
   second.metadata.fingerprint = 'fp-2';
-  await store.saveStateCas('branch-a', second, { expectedFingerprint: 'fp-1' });
+  await store.saveStateCas(second, { expectedFingerprint: 'fp-1' });
   // A stale writer still holding fp-1 must be refused, not clobber fp-2.
   const stale = cleanMemoryState('branch-a', 10);
   stale.metadata.fingerprint = 'fp-stale';
   await assert.rejects(
-    () => store.saveStateCas('branch-a', stale, { expectedFingerprint: 'fp-1' }),
+    () => store.saveStateCas(stale, { expectedFingerprint: 'fp-1' }),
     error => /fingerprint|CAS|stale/i.test(String(error && error.message)),
   );
   const current = await store.getState('branch-a');
