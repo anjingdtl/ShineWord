@@ -3,6 +3,7 @@
 > 实施日期：2026-10-05 · 基线：`76654f5`（方案基线 242b0f9 之上、含 agent prompt 文档提交）
 > 合同文档：[docs/AVATAR_SYSTEM_UI_PLAN.md](../AVATAR_SYSTEM_UI_PLAN.md)
 > 结论：**40 瓦片素材 + 注册表/状态/选择器 + 游玩页常驻头像全部落地；自动化三项全绿；模拟器 8 项手检 8 过 0 未验**。版本升至 `0.9.0`（versionCode 90000）。
+> 2026-10-05 独立复验收（§8）：门禁重跑全绿 + 模拟器端到端活体抽检通过 + **release APK 已签名构建并验证**（`dist/apk/release/ShineWord-V0.9.0-release.apk`）。
 
 ---
 
@@ -101,7 +102,7 @@ testID → avatar-option-ink-m-1 … avatar-option-ink-f-5、avatar-option-none
 ## 6. 未验项与遗留
 
 - **模拟器项：无未验**（8/8 执行，其中队伍条带成员形态按 §5.4 口径判定）。
-- Release 通道：本轮仅构建 debug（任务范围）；release 构建与签名验收未执行。
+- ~~Release 通道：本轮仅构建 debug（任务范围）；release 构建与签名验收未执行。~~ → **已由 §8 独立复验收关闭（2026-10-05）**。
 - 真机（arm64）实机走查未执行（模拟器为 x86_64 镜像；WebP 在 minSdk 24+ 由 Fresco 原生解码，无平台差异风险）。
 - 方案 §6.3 明确不做项（PartyStrip 字牌替换、首启头像步骤、头像入存档/LLM 上下文等）维持范围外。
 
@@ -114,3 +115,36 @@ testID → avatar-option-ink-m-1 … avatar-option-ink-f-5、avatar-option-none
 5. `chore(release): 0.9.0` — 根/移动 `package.json`、`package-lock.json`、`build.gradle`、`version.json`、`CHANGELOG.md`、`README.md`（`npm run verify:version` 门禁通过）
 
 未跟踪保留：`.workbuddy/`（任务前即存在，不动）。
+
+---
+
+## 8. 独立复验收与 0.9.0 发版（2026-10-05，验收人 ≠ 施工方）
+
+### 8.1 门禁重跑（全部独立复跑，全绿）
+
+| 命令 | 结果 |
+|---|---|
+| `npm --prefix mobile run typecheck` | 零错误（exit 0） |
+| `npm run verify:core`（根） | **922 pass / 0 fail**（9.6s） |
+| `npm run verify:version` | OK version=0.9.0 versionCode=90000 |
+
+### 8.2 代码复核
+
+四个新模块 + 三处挂载编辑逐行复核：与方案 §4–§7 一致；白名单合规（diff 仅含 §7 清单文件）；`avatarRegistry` 40 条字面量 require、`AvatarContext` 防御语义（hydration 防回写 / 非法值归一化 null / removeItem 清空）、`AvatarCard` 双通道选中态（描边 + ✓ 角标）、`PlayHeader` 32dp 非交互头像均符合合同。未发现 BUG。
+
+### 8.3 模拟器活体抽检（emulator-5554，装 debug 0.9.0，uiautomator dump 实测）
+
+1. **游玩页**（`30-indep-play-ink-m1.png`）：`play-avatar` 命中 1 处，bounds 787-871×111-195 = 84px = 精确 32dp@420dpi，位于「子时五刻」时钟与「☰ 信息」之间，content-desc「玩家头像：东方武侠 · 男 · 侠客」。
+2. **选择器**：`我的` 页 RadioButton 共 15（avatar 11 + theme-skin 4）；`avatar-theme-tabs.{ink,fantasy,manga,scifi}` 四页签齐全；`avatar-option-ink-m-1` `selected="true"` 且 label 缀「（当前）」。
+3. **页签切换**：点赛博页签 → 可见瓦片变为 `avatar-option-scifi-{m,f}-{1..5}` + `avatar-option-none`。
+4. **改选传导（端到端）**：选 `scifi-f-3` → 选中态迁移（`selected="true"`，label「赛博科幻 · 女 · 骇客（当前）」，`31-indep-picker-scifi-f3.png`）→ 返回战役「继续冒险」进游玩页 → `play-avatar` content-desc 变为「玩家头像：赛博科幻 · 女 · 骇客」（`32-indep-play-scifi-f3.png`）——选择即时传导，无重启、无崩溃。
+5. **恢复现场**：改回 `ink-m-1` 并复确认 `selected="true"`（`33-indep-picker-restored.png`）；视觉抽查（AI 视觉复核）确认瓦片为真实人物插画、选中描边 + ✓ 角标清晰、四皮肤下无 UI 破损。
+6. **设备数据**：全程未卸载/清档；QA 战役与既有 API 配置保留。
+
+### 8.4 Release 发版（关闭 §6 遗留项）
+
+- 命令：`powershell -NoProfile -ExecutionPolicy Bypass -File .\mobile\scripts\build-release-apk.ps1`（User 级 `SHINE_WRITER_RELEASE_*` 四变量在位，keystore 在仓库外）。
+- 构建：`BUILD SUCCESSFUL in 55s`；脚本内置验签通过——**证书 SHA-256 匹配固定指纹 `017b3fbed4001083f2f70a0c51e8e463322df66b095e1c3a476fdd0d86dc2a0a`、单签名者、APK Signature Scheme v2、zip 对齐**。
+- 产物：`dist/apk/release/ShineWord-V0.9.0-release.apk`，49,723,358 字节（47.42 MB；较 0.8.1 release 48,396,678 字节 **+1,326,680 ≈ +1.27 MB**，与素材总量一致）。
+- 独立复核：APK SHA-256 `d28775ad39797b96a692321f91b648c283ceeb98d542a84f8fc687204986235f`；aapt badging `package: name='com.shineword.app' versionCode='90000' versionName='0.9.0'`、`sdkVersion:'24'`。
+- release 未在模拟器安装实拍：设备上是 debug 签名包，覆盖安装会因签名冲突失败，卸载重装会清掉 QA 战役与 Keychain 中的 API 配置（用户数据），不值得为冒烟冒此风险；release 与 debug 的 JS/资源一致（minify/shrink 均关闭），差异仅在签名与打包，签名已验证。如实记录为「release 静态验证完成、未装机实拍」。

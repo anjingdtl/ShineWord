@@ -15,6 +15,7 @@
 - **选择卡**（「我的」页，`AvatarCard`）：四题材 SegmentedControl 页签（序 = THEME_ORDER，初始 = 当前皮肤题材，不随换肤联动）+ 男女各 5 个 56dp 圆形瓦片（radio 语义、`avatar-option-{id}` testID、label 缀「（当前）」）+ 选中态主题描边加粗 + 右下角 ✓ 角标（双通道非颜色单一指示）+「不使用头像（默认字牌）」回退行；页首副标题加「头像」。
 - **游玩页常驻头像**（`PlayHeader`）：世界时钟与「☰ 信息」之间 32dp 圆形头像（容器描边随当前皮肤 `accent.primary`、`testID="play-avatar"`、a11y「玩家头像：{label}」）；未设置时不渲染，布局与改造前一致；头像为 App 级身份，进入世界 ThemeScope 换肤时本体不变、容器描边随世界皮肤。
 - 4 套皮肤全覆盖走查 + 8 项模拟器手检（默认未设置/持久化/四皮切换/世界覆盖/清除回退/非法值归一化/逐屏回归/radio 语义 dump）全部通过；证据见 [验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
+- **发版（独立复验收后）**：门禁重跑全绿（typecheck 0 错、verify:core 922/922、verify:version OK）+ 模拟器端到端活体抽检（选择器改选 scifi-f-3 即时传导至游玩页 `play-avatar`）+ 代码复核零缺陷后，构建签名 release：`dist/apk/release/ShineWord-V0.9.0-release.apk`（49,723,358 字节，较 0.8.1 release +1.27 MB；SHA-256 `d28775ad…86235f`；证书指纹与 0.8.x 一致 `017b3fbe…dc2a0a`，v2 签名单签名者）。证据见验收报告 §8。
 
 ## [0.8.1] - 2026-10-05
 
