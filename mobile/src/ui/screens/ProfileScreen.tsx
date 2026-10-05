@@ -21,6 +21,7 @@ import { PRODUCT_AUTHOR } from '../brand';
 import { AboutCard } from '../features/profile/AboutCard';
 import { ProfileFormCard } from '../features/profile/ProfileFormCard';
 import { ThemeSkinCard } from '../features/profile/ThemeSkinCard';
+import { AvatarCard } from '../features/avatar';
 import versionJson from '../../version.json';
 import { useProfileForm } from '../features/profile/useProfileForm';
 import { useTheme } from '../theme/ThemeContext';
@@ -34,13 +35,14 @@ export function ProfileScreen(): React.JSX.Element {
     <ScreenShell>
       <Header
         title="我的"
-        subtitle="模型端点 · 密钥 · 主题皮肤 · 关于"
+        subtitle="模型端点 · 密钥 · 头像 · 主题皮肤 · 关于"
         // Debug-only: the theme self-check gallery is reached by a long press
         // and is not registered in release builds (plan §6.5).
         onTitleLongPress={__DEV__ ? () => navigation.navigate('ThemeGallery') : undefined}
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}>
         <ThemeSkinCard />
+        <AvatarCard />
         <ProfileFormCard form={form} submitLabel="保存" onSaved={() => undefined} />
         <AboutCard />
       </ScrollView></KeyboardAvoidingView>

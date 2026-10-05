@@ -16,6 +16,7 @@ import React from 'react';
 import { ActivityIndicator, Button, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from './src/ui/theme';
+import { AvatarProvider } from './src/ui/features/avatar';
 import { typeStyle } from './src/ui/components/typography';
 import { ScreenShell } from './src/ui/components/ScreenShell';
 import { BrandLockup } from './src/ui/brand';
@@ -26,11 +27,13 @@ import { FirstRunScreen } from './src/ui/screens/ProfileScreen';
 export default function App(): React.JSX.Element {
   return (
     <ThemeProvider>
-      <SafeAreaProvider>
-        <AppSessionProvider>
-          <AppRoot />
-        </AppSessionProvider>
-      </SafeAreaProvider>
+      <AvatarProvider>
+        <SafeAreaProvider>
+          <AppSessionProvider>
+            <AppRoot />
+          </AppSessionProvider>
+        </SafeAreaProvider>
+      </AvatarProvider>
     </ThemeProvider>
   );
 }
