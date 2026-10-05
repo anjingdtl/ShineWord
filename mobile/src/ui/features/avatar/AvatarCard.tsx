@@ -7,9 +7,15 @@
  * current skin's theme but does not follow later reskins) and two gender rows
  * of five 56dp circular tiles. Selection is outlined *and* badged so it never
  * relies on colour alone (§30).
+ *
+ * Both the four four-character theme tabs and a 5×64dp gender row exceed the
+ * ~304dp of card content on a 360dp phone (they fit the 411dp emulator, which
+ * is why only real devices clipped). The tile diameter is fixed by plan §6.1,
+ * so overflow scrolls horizontally instead of shrinking; when the row fits it
+ * still spreads edge-to-edge via space-between.
  */
 import React, { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Card } from '../../components/Card';
 import { SectionHeader } from '../../components/SectionHeader';
 import { SegmentedControl } from '../../components/SegmentedControl';
@@ -52,13 +58,21 @@ export function AvatarCard(): React.JSX.Element {
         options={THEME_ORDER.map((id: ThemeId) => ({ value: id, label: AVATAR_THEME_LABEL[id] }))}
         value={activeTheme}
         onChange={setActiveTheme}
+        scrollable
       />
       {GENDER_ROWS.map(([gender, genderLabel]) => (
         <View key={gender} style={{ marginTop: theme.space.md, gap: theme.space.xs }}>
           <Text style={[typeStyle(theme, theme.type.label), { color: theme.onRaised.secondary }]}>
             {genderLabel}
           </Text>
-          <View style={[styles.row, { gap: theme.space.xs }]}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            alwaysBounceHorizontal={false}
+            contentContainerStyle={[
+              styles.row,
+              { flexGrow: 1, gap: theme.space.xs, paddingVertical: theme.space.xs },
+            ]}>
             {AVATAR_PRESETS.filter(preset => preset.theme === activeTheme && preset.gender === gender).map(
               preset => (
                 <AvatarTile
@@ -69,7 +83,7 @@ export function AvatarCard(): React.JSX.Element {
                 />
               ),
             )}
-          </View>
+          </ScrollView>
         </View>
       ))}
       <Pressable
