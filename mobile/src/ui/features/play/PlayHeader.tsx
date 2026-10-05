@@ -6,11 +6,12 @@
  * authoritative value is always `clockSeconds`; only the rendering differs.
  */
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Header } from '../../components/Header';
 import { typeStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import type { ThemeId } from '../../theme/tokens';
+import { findAvatar, useAvatar } from '../avatar';
 
 const SHICHEN = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
 const KE_NUMERALS = ['一', '二', '三', '四', '五', '六', '七', '八'];
@@ -47,6 +48,8 @@ export function PlayHeader(props: {
   busy?: boolean;
 }): React.JSX.Element {
   const { theme } = useTheme();
+  const { avatarId } = useAvatar();
+  const avatar = findAvatar(avatarId);
   const clock = props.clockSeconds === null ? null : formatWorldClock(theme.id, props.clockSeconds);
   return (
     <Header
@@ -64,6 +67,23 @@ export function PlayHeader(props: {
               {props.busy ? '正在结算…' : clock ?? ''}
             </Text>
           </View>
+          {avatar ? (
+            <View
+              accessible
+              accessibilityLabel={`玩家头像：${avatar.label}`}
+              testID="play-avatar"
+              style={[
+                styles.avatar,
+                {
+                  borderColor: theme.accent.primary,
+                  borderRadius: theme.radius.pill,
+                  width: theme.space.xxl,
+                  height: theme.space.xxl,
+                },
+              ]}>
+              <Image source={avatar.source} style={styles.avatarImage} resizeMode="cover" />
+            </View>
+          ) : null}
           {props.onMenu ? (
             <Pressable
               onPress={props.onMenu}
@@ -95,4 +115,8 @@ const styles = StyleSheet.create({
   meta: { alignItems: 'flex-end' },
   actions: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
   menu: { borderWidth: 1 },
+  // 32dp circled identity display (plan §6.2, PartyStrip player-plate idiom);
+  // non-interactive, so no touch-target floor applies.
+  avatar: { borderWidth: 1, overflow: 'hidden' },
+  avatarImage: { width: '100%', height: '100%' },
 });
