@@ -1,13 +1,15 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.9.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V0.9.1-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.9.0** · versionCode 90000。V0.9.0 新增玩家头像系统：四题材（东方武侠/欧洲奇幻/日系二次元/赛博科幻）× 男女 × 5 职业共 40 个预设头像（WebP ≈1.24 MB），「我的」页头像选择卡（题材页签 + 男女瓦片 + 不使用头像回退），游玩页右上角常驻 32dp 圆形头像；头像为 App 级玩家身份，随四套皮肤自适应描边/角标但不随世界换肤，存储键 `shineword.ui.avatar.v1`，非法值归一化为未设置。核心回归 922 项全绿；证据见 [头像系统验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
+> 当前版本：**V0.9.1** · versionCode 90100。V0.9.1 修复 360dp 级真机「我的 → 玩家头像」选择卡横向溢出：四题材页签与男女头像行在窄屏装不下时改为横向滑动（56dp 瓦片直径不变），「赛博科幻」页签与第 5 个头像可滑入完整点选；宽屏（411dp）布局与 V0.9.0 一致不变。`SegmentedControl` 新增 `scrollable` 选项，其他调用处不受影响。证据见 [CHANGELOG](CHANGELOG.md)。
+>
+> V0.9.0 新增玩家头像系统：四题材（东方武侠/欧洲奇幻/日系二次元/赛博科幻）× 男女 × 5 职业共 40 个预设头像（WebP ≈1.24 MB），「我的」页头像选择卡（题材页签 + 男女瓦片 + 不使用头像回退），游玩页右上角常驻 32dp 圆形头像；头像为 App 级玩家身份，随四套皮肤自适应描边/角标但不随世界换肤，存储键 `shineword.ui.avatar.v1`，非法值归一化为未设置。核心回归 922 项全绿；证据见 [头像系统验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
 >
 > V0.8.1 为 0.8.0 之后的加固与复验收尾（无新能力）：可移植 SHA-256 请求/缓存身份、稳定存档门禁（拒绝未完成冻结回合与在途/未批准未知请求）、世界规则配置硬化（伪造哈希/非安全整数/未类型化约束拒绝）、数据库单基线 version 100（旧/不完整库显式拒绝且不静默修复）、移动端记忆状态诚实呈现（结果未知横幅 + 计费告知的恢复入口）。验收矩阵 A01–A36 全部闭合（**PASS 36 / NOT RUN 0 / FAIL 0**，真机与 2 项产品决策项为开放项），核心回归 922 项全绿；证据见 [收尾轮报告](docs/reviews/phase8/CLOSEOUT_ROUND2_2026-10-05.md)。
 >
@@ -31,7 +33,7 @@
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.9.0`，`versionCode=90000`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.9.1`，`versionCode=90100`。
 
 ## 安全与隐私
 
