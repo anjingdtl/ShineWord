@@ -50,9 +50,11 @@
   - A35（移动端 composition root 同组合验证）：mobile `database.ts` 已接线 SqliteStoryMemoryStore/SqliteEpisodicStore/llmLedger，session 内部协调器在两端同代码路径；但未做"设备上专门验证协调器批次数"的独立取证。
   - A36（故障后 UI 诚实性）：核心/账本层证据齐全（outcome_unknown 不显示为成功，账本-DB 对照见 §4）；设备 UI 层的错误呈现走查未执行。
 
-按方案 §21 规则：NOT RUN 不计入通过。**最终结论：32 PASS / 1 部分 / 3 NOT RUN，无 FAIL。**
+按方案 §21 规则：NOT RUN 不计入通过。**最终结论（历史快照，2026-10-04）：32 PASS / 1 部分 / 3 NOT RUN，无 FAIL。** 该计数为第八阶段收尾时点；后续两轮已校准，**逐项状态一律以 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md) 为准**（见下方两段更新）。
 
 > **2026-10-05 重验收轮更新**：上文计数为第八阶段收尾时的快照。随后的“重验收与引擎加固轮”（见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)“重验收轮证据”与 CHANGELOG [Unreleased]）补足并校准了逐项状态：A10（恢复一致性）、A27（三世界组合与关闭战斗）、A34（新空库/旧开发库，含设备 Maestro 走查）转 PASS；A36 核心与 UI 实现证据齐备但设备端“故障后”横幅未单独截图，保留 NOT RUN；A05/A09/A11/A30 仍无独立端到端证据，保留 NOT RUN。**以逐项矩阵为准：PASS 31 / NOT RUN 5（A05/A09/A11/A30/A36）/ FAIL 0。**
+
+> **2026-10-05 收尾轮（Round 2）更新**：再一轮“补齐 5 项 NOT RUN”在 `tests/phase8-closeout-round2.test.cjs`（6 用例）+ 设备走查下完成：A05（对抗泄漏样本）、A09（Narrator+Prepared+repair 组合超窗）、A11（冻结后不漂移）、A30（确定性重放）转 PASS；A36（设备端“故障后”横幅与恢复入口）经 emulator-5554 实机走查转 PASS。**以逐项矩阵为准：PASS 36 / NOT RUN 0 / FAIL 0**；核心回归 922 项（`916 → 922`）。真机与两项产品决策项仍为开放项（见 §7 与 closeout）。
 
 ## 4. 真实 LLM 旅程证据（P8-9b）
 

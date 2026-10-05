@@ -8,11 +8,13 @@
 
 开发期单协议政策已落地：`shineword-core@0.3.0`、ActionContract 2.0、save-9（save-2..8 逐版本拒绝）、story-memory 观察协议、迁移 33。无旧规则适配器、无旧存档转换、无双轨运行时、无 legacy 全量上下文回退。
 
+> **时间标注（2026-10-05 收尾轮补注）**：上句中的“迁移 33”是 **0.8.0 发布时点**的数据库迁移链版本，为历史叙述，保留不改。其后“重验收与加固轮”已将数据库政策收敛为**单基线 version 100**（新空库一次装全、旧/不完整库显式拒绝且绝不静默修复）；**现行政策以 version 100 为准**，详见本文件「重验收与加固轮」段与 `ACCEPTANCE_MATRIX.md` 的 P8-RA 节。
+
 ## 真实模型与设备证据
 
 - 真实 GLM（GLM-5.3-Flash，授权 coding 端点，测试配置窗口 128K/输出 8192）：三组合旅程合计约 175 次物理 HTTP，全部入 `llm_request_attempts` 账本；fantasy 的 sent→outcome_unknown→人工批准→租约过期接管→重放成功是 A16/A17/A18 的完整真实链；daily 的修复轮两连拒绝→failed→dirty 重建是诚实失败样本。密钥未输出；私有脚本与旅程数据库在忽略目录 `.tmp/`。
 - 累积规模（本地确定性）：100/300/1000 回合单分支连续累积，handoff 覆盖 100%，下一回合分页读取 1000 回合 3ms。
-- 设备（emulator-5554，Medium_Phone，API 37.1）：安装 `ShineWord-V0.8.0-debug.apk`（SHA-256 `8ed7afe30b3ba6a354ebf6c4f0f9208d41ceff611e23ba0cf42b1379c17f8818`）。验证：启动无崩溃；强停+冷启动恢复；增量迁移至 33 且 P7 项目数据与记忆保留；真实设备回合 turn-0018（camp-mutegp5i）的 Planner/Narrator/记忆批次 v9-17 全部 succeeded，冻结根与 outbox handoff（episodic_indexed=1）落库；p7-novel-excerpt 项目新回合 turn-0018 同样留下冻结根+pending handoff。
+- 设备（emulator-5554，Medium_Phone，API 37.1）：安装 `ShineWord-V0.8.0-debug.apk`（SHA-256 `8ed7afe30b3ba6a354ebf6c4f0f9208d41ceff611e23ba0cf42b1379c17f8818`）。验证：启动无崩溃；强停+冷启动恢复；增量迁移至 33 且 P7 项目数据与记忆保留（**2026-10-04 证据，早于单基线政策**；该“增量迁移至 33”路径已随单基线 version 100 收敛为旧库显式拒绝 + 新建库，见本文件「重验收与加固轮」）；真实设备回合 turn-0018（camp-mutegp5i）的 Planner/Narrator/记忆批次 v9-17 全部 succeeded，冻结根与 outbox handoff（episodic_indexed=1）落库；p7-novel-excerpt 项目新回合 turn-0018 同样留下冻结根+pending handoff。
 
 ## 施工中修复的真实缺陷（旅程/设备发现）
 
@@ -48,3 +50,13 @@
 - **真实旅程复测**（替换此前被 `fetch failed` 中断的残缺样本）：三组合各 24 回合、0 失败、记忆 clean、账本全入账；明细见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)“重验收轮证据”。
 - **新关闭验收项**：A10、A27、A34（A36 保留 NOT RUN）。校准后 **PASS 31 / NOT RUN 5（A05/A09/A11/A30/A36）/ FAIL 0**。
 - **私有资产**（不入库）：`.tmp/phase8-reacceptance-20261005/`（真实旅程驱动、设备 dump、metrics、SQLite 快照）。
+
+## 收尾轮（2026-10-05 Round 2：补齐 5 项 NOT RUN）
+
+日期：2026-10-05（Asia/Shanghai）。基线：`main@501bf20` 工作副本之上；本轮新增 `tests/phase8-closeout-round2.test.cjs`（6 用例）与设备走查，逐项报告见 [CLOSEOUT_ROUND2_2026-10-05.md](CLOSEOUT_ROUND2_2026-10-05.md)。
+
+- **工程门禁**：`npm run verify:core` **922/922**（`916 → 922`）；移动端严格类型检查 0；`npm run verify:version` PASS（0.8.0 / 80000）；`git diff --check` 0 行；Debug APK 独立构建 BUILD SUCCESSFUL。
+- **NOT RUN 清零**：A05（对抗泄漏样本）、A09（Narrator+Prepared+repair 组合超窗）、A11（冻结后不漂移）、A30（确定性重放）新增独立用例转 PASS；A36（设备端“故障后”横幅与恢复入口）经 emulator-5554（API 37）实机走查转 PASS。
+- **校准后汇总**：PASS **36** / NOT RUN **0** / FAIL **0**（以 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md) 逐项为准）。
+- **仍开放项（不冒充完成）**：真机 NOT RUN；小说自动映射质量未评分；同源多项目语义未定；BUG-SCHED-1（结算等待无进度反馈，产品决策）；设备旧项目政策（新协议战役须新建项目）。
+- **私有资产**（不入库）：`.tmp/closeout-round2/`（A36 设备截图/UI dump、设备库回拉快照、夹具与流程脚本）。
