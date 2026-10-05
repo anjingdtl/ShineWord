@@ -255,30 +255,17 @@ test('opening preparation failures expose a desensitized stage code for each fai
   }
 });
 
-test('migration 14 upgrades an existing v2 package without changing its manifest semantics', async () => {
-  const db = new DatabaseSync(':memory:');
-  const adapter = new NodeSqliteAdapter(db);
+test('current world reader refuses historical package protocols', async () => {
+  const db = new DatabaseSync(':memory:'); const adapter = new NodeSqliteAdapter(db);
   try {
-    await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(0, 13), () => 'before');
-    const worldStore = new SqliteWorldStore(adapter);
-    await worldStore.createWorld({ worldId: 'w-legacy-package', title: '旧包', sourceSha256: 'a'.repeat(64),
-      sourceBytes: 1, normalizeVersion: 'old', chapterSplitVersion: 'old', buildStatus: 'ready',
-      createdAt: 'before', updatedAt: 'before' });
-    db.prepare(`INSERT INTO world_packages
-      (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-       mapping_version, status, content_hash, validation_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run('w-legacy-package', 1, 'world-package-2', 'a'.repeat(64), 'shineword-core', '0.3.0',
-        'legacy', 'published', 'b'.repeat(64), '{}', 'before');
-    await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.slice(13), () => 'after');
-    const pkg = await worldStore.getWorldPackage('w-legacy-package', 1);
-    assert.equal(pkg.manifest.schemaVersion, 'world-package-2');
-    assert.equal(pkg.manifest.buildScope, undefined);
-    assert.equal(pkg.manifest.contentHash, 'b'.repeat(64));
-  } finally {
-    db.close();
-  }
+    for(const migration of BUILTIN_MIGRATIONS) db.exec(migration.sql);
+    const store = new SqliteWorldStore(adapter);
+    await store.createWorld({worldId:'old',title:'old',sourceSha256:'a'.repeat(64),sourceBytes:1,normalizeVersion:'old',chapterSplitVersion:'old',buildStatus:'ready',createdAt:'t',updatedAt:'t'});
+    db.prepare("INSERT INTO world_packages(world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES('old',1,'world-package-2',?,'shineword-core','0.2.0','old','published',?,'{}','t')").run('a'.repeat(64),'b'.repeat(64));
+    await assert.rejects(() => store.getWorldPackage('old',1), /Unsupported world package schema/);
+  } finally {db.close();}
 });
+
 
 test('progressive opening compiles, publishes with a hashed partial scope, creates a character and survives archive import', async () => {
   const db = dbWithSchema();
@@ -304,7 +291,7 @@ test('progressive opening compiles, publishes with a hashed partial scope, creat
     usage: { inputTokens: 200, outputTokens: 150, reasoningTokens: 30, estimated: false },
     extractionMs: 130, createdAt: 'now',
   });
-  assert.equal(published.manifest.schemaVersion, 'world-package-4'); // P7: opening situation promotes the schema
+  assert.equal(published.manifest.schemaVersion, 'shineword-world-package-5'); // P7: opening situation promotes the schema
   assert.equal(published.manifest.status, 'published');
   assert.equal(published.manifest.buildScope.strategy, 'progressive');
   assert.equal(published.manifest.buildScope.scope, 'opening');
@@ -393,65 +380,5 @@ test('anchor-less world setup still exposes the compiled opening location and lo
   assert.ok(setup.locations.includes('opening-location'));
   assert.ok(setup.lore.some(item => item.name === '开局资料'));
 
-  // Model an already-imported package produced before the D3 fix. The opening
-  // facts remain immutable on disk; read projection and campaign creation
-  // must recover the playable opening without deleting or re-importing it.
-  db.prepare("UPDATE canon_facts SET reveal_at = '1' WHERE world_id = ? AND fact_id IN (?, ?, ?, ?)").run(
-    'w-anchorless',
-    'fact-w-anchorless-opening-location',
-    'fact-w-anchorless-opening-setting',
-    'fact-w-anchorless-opening-situation',
-    'fact-w-anchorless-opening-goal',
-  );
-  const legacySetup = await session.getWorldSetup('w-anchorless');
-  assert.ok(legacySetup.locations.includes('opening-location'));
-  assert.ok(legacySetup.lore.some(item => item.name === '开局资料'));
-  assert.equal(db.prepare("SELECT reveal_at FROM canon_facts WHERE world_id = ? AND fact_id = ?").get(
-    'w-anchorless', 'fact-w-anchorless-opening-location',
-  ).reveal_at, '1', 'compatibility must not rewrite immutable legacy facts');
-
-  const legacyCampaign = await createCampaign({
-    db: adapter, worldStore, campaignId: 'camp-legacy-opening', title: '旧格式开局',
-    worldId: 'w-anchorless', packageRevision: published.manifest.revision,
-    anchor: { worldTimeOrder: 0, locationId: 'opening-location' },
-    protagonist: { actorId: 'actor-legacy', kind: 'original', name: '旅人',
-      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 },
-      initialSkills: ['skill-observation'] },
-    goal: '寻找巷口脚步声的来源',
-    createdAt: 'later',
-  });
-  assert.equal(legacyCampaign.snapshot.actors['actor-legacy'].locationId, 'opening-location');
-  assert.equal(db.prepare("SELECT reveal_at FROM canon_facts WHERE world_id = ? AND fact_id = ?").get(
-    'w-anchorless', 'fact-w-anchorless-opening-location',
-  ).reveal_at, '1', 'campaign recovery must preserve the original fact row');
-
-  // A v3 archive rebinds only the owning world id. Legacy opening identities
-  // and immutable reveal times must remain playable after that handoff too.
-  const { exportPortableCanon } = require('../dist/application/export/portableCanon');
-  const { projectLegacyAnchorlessOpeningFacts } = require('../dist/application/worldPackage/openingCompatibility');
-  const sourcePackage = await worldStore.getWorldPackage('w-anchorless', published.manifest.revision);
-  const locationFact = (await worldStore.listFacts('w-anchorless')).find(f => f.predicate === 'opening_location');
-  await worldStore.saveFact({ ...locationFact, factId: 'unrelated-future-fact', predicate: 'opening_goal' }, 'now');
-  const canon = await exportPortableCanon(worldStore, sourcePackage.manifest, sourcePackage.entries, sha.sha256Hex);
-  const archive = await encodeWorldPackageArchive({ title: '旧开局完整资料', ...sourcePackage, canon }, sha.sha256Hex);
-  await importPortableWorldPackage({ worldStore, archive, sha256Hex: sha.sha256Hex,
-    newWorldId: 'portable-anchorless', createdAt: 'later' });
-  const copySetup = await session.getWorldSetup('portable-anchorless');
-  assert.ok(copySetup.locations.includes('opening-location'));
-  const copyPackage = await worldStore.getWorldPackage('portable-anchorless', published.manifest.revision);
-  const copyFacts = await worldStore.listFacts('portable-anchorless');
-  const projected = projectLegacyAnchorlessOpeningFacts('portable-anchorless', copyPackage.manifest, copyFacts, true);
-  assert.equal(projected.find(f => f.factId === 'unrelated-future-fact').revealAt, '1');
-  const copyCampaign = await createCampaign({
-    db: adapter, worldStore, campaignId: 'camp-portable-opening', title: '导入旧开局',
-    worldId: 'portable-anchorless', packageRevision: published.manifest.revision,
-    anchor: { worldTimeOrder: 0, locationId: 'opening-location' },
-    protagonist: { actorId: 'actor-copy', kind: 'original', name: '旅人',
-      attributes: { physique: 1, agility: 1, insight: 1, knowledge: 1, willpower: 1, social: 1 },
-      initialSkills: ['skill-observation'] }, goal: '观察巷口', createdAt: 'later',
-  });
-  assert.equal(copyCampaign.snapshot.actors['actor-copy'].locationId, 'opening-location');
-  assert.equal(copyFacts.find(f => f.factId === 'fact-w-anchorless-opening-location').revealAt, '1');
-  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
   db.close();
 });

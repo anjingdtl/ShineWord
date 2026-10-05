@@ -174,7 +174,7 @@ async function playableEvidence(h){
     sources:[{chapterId:'opening',startOffset:range.startCp,endOffset:range.endCp,quote:sourceText,quoteSha256:range.rangeContentHash}]}));
   const entries=facts.map(f=>lore(`lore-${f.factId}`,[f.factId]));
   entries.push({...lore('npc-a',['fact-0']),kind:'actor_template',provenance:{kind:'rule_mapping',sourceFactIds:['fact-0'],rationale:'有事实依据的规则映射'},
-    definition:{name:'甲',hp:10,defense:2}});
+    definition:{name:'甲',category:'human',description:'守门人',hp:10,defense:2,stamina:5,attributes:{},skills:{},attacks:[],abilities:[],behavior:{goal:'守门',morale:'steady',retreatThreshold:0.2},lootPolicy:'none'}});
   entries.push({...lore('scene-a',['fact-19']),kind:'scene',visibility:'public',dependencyIds:['npc-a'],definition:{name:'城门',locationId:'location-a',
     zones:[{zoneId:'gate',name:'城门',cover:false,exits:[]}],actors:['npc-a'],visibleItems:[],hazards:[],clues:[]}});
   const events=[{worldId:h.worldId,eventId:'event-a',title:'有人到来',summary:'来人现身',worldTimeOrder:0,narrativeChapterId:'opening',validFrom:null,

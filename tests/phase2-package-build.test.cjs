@@ -104,7 +104,7 @@ const VALID_PROPOSAL = {
   }],
   constraints: [{
     id: 'no-flying', name: '凡人不能飞', description: '世界无飞行能力。',
-    enforcement: 'block_action', provenanceKind: 'inferred',
+    enforcement: 'audit', provenanceKind: 'inferred',
     evidenceFactIds: ['fact-0'], rationale: '原著为低武世界。',
   }],
   actorTemplates: [{

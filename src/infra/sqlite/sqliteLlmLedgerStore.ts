@@ -18,6 +18,9 @@ import type { BuildRunStatus } from '../../application/ports/worldBuildStore';
 import { revivePlanState } from '../../application/worldBuild/runConfig';
 
 interface AttemptRow extends SqliteRow {
+  request_fingerprint: string | null;
+  response_json: string | null;
+  response_hash: string | null;
   attempt_id: string;
   logical_request_id: string;
   request_kind: string;
@@ -48,6 +51,9 @@ interface AttemptRow extends SqliteRow {
 
 function toRecord(row: AttemptRow): LlmRequestAttemptRecord {
   return {
+    requestFingerprint: row.request_fingerprint,
+    responseJson: row.response_json,
+    responseHash: row.response_hash,
     attemptId: row.attempt_id,
     logicalRequestId: row.logical_request_id,
     requestKind: row.request_kind,
@@ -83,7 +89,7 @@ const COLUMN_LIST = `attempt_id, logical_request_id, request_kind, campaign_id, 
   state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
   reasoning_policy_version, wire_output_tokens, attempt_no, status, failure_class, error_code, http_status,
   provider_request_id, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
-  estimated_usage, started_at, finished_at, replay_approved_at`;
+  estimated_usage, started_at, finished_at, replay_approved_at, request_fingerprint, response_json, response_hash`;
 
 // Extraction is linked to an exact unit, not a potentially overlapping run-id
 // prefix. Mapping jobs may be shared by compatible segments of this world.
@@ -262,6 +268,34 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
     });
   }
 
+  async acknowledgeMemoryReplay(input: Parameters<LlmReplayApprovalPort['acknowledgeMemoryReplay']>[0]): Promise<void> {
+    if (!input.attemptIds.length || input.attemptIds.length > 128 || new Set(input.attemptIds).size !== input.attemptIds.length) {
+      throw new Error('请选择本次展示的未知记忆请求。');
+    }
+    await this.db.transaction(async tx => {
+      const branch = await tx.queryOne('SELECT branch_id FROM branches WHERE branch_id=? AND campaign_id=?', [input.branchId, input.campaignId]);
+      if (!branch) throw new Error('战役分支不存在。');
+      const inFlight = await tx.queryOne(`SELECT attempt_id FROM llm_request_attempts WHERE branch_id=?
+        AND request_kind IN ('memory_checkpoint','memory_repair') AND status IN ('prepared','sent')`, [input.branchId]);
+      if (inFlight) throw new Error('记忆请求仍在发送，请稍后核对。');
+      for (const id of input.attemptIds) {
+        const attempt = await tx.queryOne(`SELECT attempt_id FROM llm_request_attempts WHERE attempt_id=? AND branch_id=?
+          AND request_kind IN ('memory_checkpoint','memory_repair') AND status='outcome_unknown' AND replay_approved_at IS NULL`, [id, input.branchId]);
+        if (!attempt) throw new Error('这条请求不属于当前展示的未知记忆请求。');
+      }
+      const now = Date.now(), nowIso = new Date(now).toISOString();
+      for (const id of input.attemptIds) await tx.execute('UPDATE llm_request_attempts SET replay_approved_at=? WHERE attempt_id=?', [now, id]);
+      const remaining = await tx.queryOne(`SELECT attempt_id FROM llm_request_attempts WHERE branch_id=?
+        AND request_kind IN ('memory_checkpoint','memory_repair') AND status='outcome_unknown' AND replay_approved_at IS NULL`, [input.branchId]);
+      if (remaining) throw new Error('未知请求列表已变化，请重新读取后确认。');
+      // Invalidate any old worker before releasing the explicitly approved batch.
+      await tx.execute(`UPDATE story_memory_worker_leases SET fencing_token=fencing_token+1,
+        lease_owner='manual-replay',lease_expires_at=? WHERE branch_id=?`, [nowIso, input.branchId]);
+      await tx.execute(`UPDATE frozen_turn_postprocess_outbox SET status='pending',lease_owner=NULL,
+        lease_expires_at=NULL,updated_at=? WHERE branch_id=? AND status='outcome_unknown'`, [nowIso, input.branchId]);
+    });
+  }
+
   async beginAttempt(
     input: NewLlmRequestAttempt,
     startedAt: number,
@@ -293,13 +327,25 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
         [input.logicalRequestId],
       );
       const attemptNo = (existing[0]?.attempt_no ?? 0) + 1;
+      if (input.physicalAttemptLimit !== undefined
+        && (!Number.isSafeInteger(input.physicalAttemptLimit) || input.physicalAttemptLimit < 1
+          || attemptNo > input.physicalAttemptLimit)) {
+        throw new Error('logical_request_physical_budget_exhausted');
+      }
+      if ((input.requestKind === 'planner' || input.requestKind === 'narrator')
+        && input.logicalRequestId.startsWith(`${input.requestKind}:`)) {
+        const turnIdentity = input.logicalRequestId.slice(input.requestKind.length + 1);
+        const total = await tx.queryAll<{ n: number }>(`SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id IN (?,?)`,
+          [`planner:${turnIdentity}`, `narrator:${turnIdentity}`]);
+        if ((total[0]?.n ?? 0) >= 4) throw new Error('turn_physical_budget_exhausted');
+      }
       const attemptId = `${input.logicalRequestId}#a${attemptNo}`;
       await tx.execute(
         `INSERT INTO llm_request_attempts
           (attempt_id, logical_request_id, request_kind, campaign_id, branch_id, world_id,
            state_version, model_profile_fingerprint, reasoning_tier, reasoning_reserve_tokens,
-           reasoning_policy_version, wire_output_tokens, attempt_no, status, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
+           reasoning_policy_version, wire_output_tokens, attempt_no, status, started_at, request_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)`,
         [
           attemptId,
           input.logicalRequestId,
@@ -315,6 +361,7 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
           input.wireOutputTokens ?? null,
           attemptNo,
           startedAt,
+          input.requestFingerprint ?? null,
         ],
       );
       const rows = await tx.queryAll<AttemptRow>(
@@ -335,6 +382,8 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
       params.push(value);
     };
     if (patch.status !== undefined) push('status', patch.status);
+    if (patch.responseJson !== undefined) push('response_json', patch.responseJson);
+    if (patch.responseHash !== undefined) push('response_hash', patch.responseHash);
     if (patch.failureClass !== undefined) push('failure_class', patch.failureClass);
     if (patch.errorCode !== undefined) push('error_code', patch.errorCode);
     if (patch.httpStatus !== undefined) push('http_status', patch.httpStatus);

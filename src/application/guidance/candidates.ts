@@ -9,6 +9,7 @@ import type {
 import { evaluateCondition, snapshotConditionFacts } from '../../domain/situations/conditions';
 import type { AllowedCandidateV1 } from './types';
 import { SHORT_REST_MINUTES } from '../../domain/rules/restPolicy';
+import { assertRuleAction, requireCompiledRules } from '../content/runtimeRules';
 
 /**
  * Local candidate eligibility (P7 §3.6, plan §7.2): every displayed path is
@@ -52,6 +53,11 @@ export function assessMethod(
 ): AllowedCandidateV1 & { eligible: boolean; visible: boolean } {
   const { state, playerCard } = context;
   const blockers: string[] = [];
+  if (state.ruleConfiguration) {
+    requireCompiledRules(state.ruleConfiguration);
+    try { assertRuleAction(state, method.firstStep.actionKind, playerCard.actorId); }
+    catch (error) { blockers.push(error instanceof Error ? error.message : String(error)); }
+  }
   const player = state.actors[playerCard.actorId];
   if (!player || player.lifeStatus === 'critical' || player.lifeStatus === 'dead'
     || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) blockers.push('需要先得到援救并恢复行动能力');
@@ -240,7 +246,11 @@ export function baseActionCandidates(state: GameStateSnapshot, playerCard: Actor
   if (!player || player.lifeStatus === 'critical' || player.lifeStatus === 'dead' || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) {
     for (const candidate of candidates) { candidate.availability = 'needs_preparation'; candidate.blockers = ['需要先得到援救并恢复行动能力']; }
   }
-  return candidates;
+  if (state.ruleConfiguration) requireCompiledRules(state.ruleConfiguration);
+  return candidates.filter(candidate => {
+    try { assertRuleAction(state, candidate.actionId ?? candidate.actionKind, playerCard.actorId); return true; }
+    catch { return false; }
+  });
 }
 
 /**

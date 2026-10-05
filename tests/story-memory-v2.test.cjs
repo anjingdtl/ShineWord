@@ -76,7 +76,7 @@ function scriptedProvider(responses) {
 
 function patchFor(range, extra = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     range,
     characterUpdates: [],
     relationshipUpdates: [],
@@ -85,6 +85,8 @@ function patchFor(range, extra = {}) {
     foreshadowingChanges: [],
     completedBeats: [],
     ...extra,
+    ...(extra.narrative ? { narrative: { ...extra.narrative,
+      evidenceTurnIds: extra.narrative.evidenceTurnIds ?? [`t-${range.toStateVersion}`] } } : {}),
   };
 }
 
@@ -276,7 +278,7 @@ test('validator: valid patch passes with normalized fields', () => {
 
 test('validator: omitted sections mean no changes (real-provider tolerance)', () => {
   const patch = validateStoryMemoryPatch({
-    schemaVersion: 2,
+    schemaVersion: 3,
     range: { fromStateVersion: 0, toStateVersion: 3 },
     characterUpdates: [{
       actorId: 'player', action: 'upsert', emotionalState: '平静', evidenceTurnIds: ['t-1'],
@@ -290,7 +292,7 @@ test('validator: omitted sections mean no changes (real-provider tolerance)', ()
   // Wrong types are still errors.
   assert.throws(
     () => validateStoryMemoryPatch({
-      schemaVersion: 2,
+      schemaVersion: 3,
       range: { fromStateVersion: 0, toStateVersion: 3 },
       characterUpdates: 'nope',
     }, validationContext()),
@@ -590,7 +592,7 @@ test('fork: branch-B inherits patches <= fork version and never the source futur
 test('migration 20 creates story memory tables', async () => {
   const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-  assert.ok(applied.includes(20));
+  assert.ok(applied.includes(100));
   const tables = await adapter.queryAll(
     "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('story_memory_states','story_memory_patches')",
   );

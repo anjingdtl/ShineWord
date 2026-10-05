@@ -144,6 +144,8 @@ export interface LlmRequest {
    */
   ledger?: {
     logicalRequestId: string;
+    /** Durable aggregate cap for this logical request, including repairs. */
+    physicalAttemptLimit?: number;
     requestKind: string;
     campaignId?: string;
     branchId?: string;

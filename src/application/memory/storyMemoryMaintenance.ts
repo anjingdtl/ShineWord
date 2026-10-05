@@ -8,7 +8,7 @@
  * never summarizes turns it cannot read.
  */
 
-import type { LlmProvider } from '../llm/types';
+import type { LlmProvider, LlmResponse } from '../llm/types';
 import {
   REASONING_ONLY_RESERVE_MULTIPLIER,
   type ReasoningPolicySelection,
@@ -19,7 +19,8 @@ import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKern
 import { classifyLlmFailure } from '../llm/requestLedger';
 import { parseStructuredOutput } from '../llm/structuredOutput';
 import { estimateTokens } from '../context/tokenEstimate';
-import type { SqliteStoryMemoryStore } from './storyMemoryRepository';
+import type { SqliteStoryMemoryStore, MemoryWorkerFence } from './storyMemoryRepository';
+import { stableFingerprint } from '../llm/requestPlan';
 import type { CommittedTurnHistoryEntry } from '../../infra/sqlite/sqliteTurnStore';
 import { emptyStoryMemoryState, type StoryMemoryState } from './storyMemoryTypes';
 import { validateStoryMemoryPatch } from './storyMemoryValidator';
@@ -46,6 +47,8 @@ export interface MemoryCheckpointRunInput {
   maxAttempts?: number;
   capabilities: FrozenModelCapabilities;
   reasoningPolicy: ReasoningPolicySelection;
+  workerFence?: MemoryWorkerFence;
+  renewWorkerLease?: () => Promise<void>;
 }
 
 export interface MemoryCheckpointRunResult {
@@ -105,7 +108,8 @@ export async function runStoryMemoryMaintenance(
     if (gap) {
       result.status = 'hard_gap';
       result.error = `Committed history is missing versions after v${base.throughStateVersion}; refusing to summarize an incomplete timeline.`;
-      await input.store.markStatus(input.branchId, 'failed', {
+      if (!input.workerFence) await input.store.markStatus(input.branchId, 'failed', {
+        expectedFingerprint: base.metadata.fingerprint,
         dirtyFromStateVersion: base.throughStateVersion + 1,
         updatedAt: now(),
       });
@@ -122,6 +126,8 @@ export async function runStoryMemoryMaintenance(
       const from = base.throughStateVersion;
       const to = lastBatchTurn.stateVersion;
       checkpoint = await runSingleCheckpoint({
+        workerFence: input.workerFence,
+        renewWorkerLease: input.renewWorkerLease,
         provider: input.provider,
         state: base,
         actors: input.actors,
@@ -144,7 +150,8 @@ export async function runStoryMemoryMaintenance(
       result.status = 'failed';
       result.error = checkpoint?.error ?? 'Story memory batch could not be planned.';
       result.throughStateVersion = base.throughStateVersion;
-      await input.store.markStatus(input.branchId, 'failed', {
+      if (!input.workerFence) await input.store.markStatus(input.branchId, 'failed', {
+        expectedFingerprint: base.metadata.fingerprint,
         dirtyFromStateVersion: base.throughStateVersion + 1,
         updatedAt: now(),
       });
@@ -154,7 +161,8 @@ export async function runStoryMemoryMaintenance(
       result.status = 'failed';
       result.error = checkpoint.error;
       result.throughStateVersion = base.throughStateVersion;
-      await input.store.markStatus(input.branchId, 'failed', {
+      if (!input.workerFence) await input.store.markStatus(input.branchId, 'failed', {
+        expectedFingerprint: base.metadata.fingerprint,
         dirtyFromStateVersion: base.throughStateVersion + 1,
         updatedAt: now(),
       });
@@ -189,6 +197,8 @@ interface SingleCheckpointInput {
   repairRounds: number;
   capabilities: FrozenModelCapabilities;
   reasoningPolicy: ReasoningPolicySelection;
+  workerFence?: MemoryWorkerFence;
+  renewWorkerLease?: () => Promise<void>;
 }
 
 type SingleCheckpointResult =
@@ -197,12 +207,21 @@ type SingleCheckpointResult =
   | { status: 'rejected'; error: string };
 
 async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<SingleCheckpointResult> {
+  let physicalCalls = 0;
+  const complete = async (request: Parameters<LlmProvider['complete']>[0]) => {
+    if (physicalCalls >= 3) throw new Error('logical_request_physical_budget_exhausted');
+    physicalCalls += 1;
+    await input.renewWorkerLease?.();
+    const response = await input.provider.complete(request);
+    await input.store.saveBatchResponse(patchId, response);
+    return response;
+  };
   const patchId = `smp:${input.branchId}:${input.fromStateVersion}-${input.toStateVersion}`;
-  const compiled = compileMemoryCheckpointRequest({
+  const freshCompiled = compileMemoryCheckpointRequest({
     fromStateVersion: input.fromStateVersion,
     toStateVersion: input.toStateVersion,
     actors: input.actors,
-    previousMemory: compilePreviousMemoryView(input.state),
+    previousMemory: compilePreviousMemoryView(input.state, { actorIds: input.actors.map(a => a.actorId), queryText: input.batch.map(t => t.publicSummary).join(' ') }),
     turns: input.batch.map(turn => ({
       turnId: turn.turnId,
       stateVersion: turn.stateVersion,
@@ -212,6 +231,15 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       effects: turn.effects ?? [],
     })),
   });
+  const frozen = await input.store.freezeBatchRequest({ batchId: patchId, branchId: input.branchId,
+    from: input.fromStateVersion, to: input.toStateVersion, baseFingerprint: input.state.metadata.fingerprint,
+    payload: { compiled: freshCompiled, evidenceHash: stableFingerprint(input.batch),
+      capabilities: input.capabilities, reasoningPolicy: input.reasoningPolicy } });
+  if (frozen.evidenceHash !== stableFingerprint(input.batch)) {
+    return { status: 'rejected', error: 'Frozen memory evidence changed; refusing live reassembly.' };
+  }
+  const compiled = frozen.compiled;
+  let savedResponse = await input.store.loadBatchResponse<LlmResponse>(patchId);
 
   let repairErrors: string[] | undefined;
   for (let round = 0; round <= input.repairRounds; round += 1) {
@@ -220,7 +248,7 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       ? compiled.user + `\nYour previous patch was rejected: ${repairErrors.join('; ')}. Return the corrected complete patch only.`
       : compiled.user;
     const planRequest = (reasoningPolicy: ReasoningPolicySelection) => planLlmRequest({
-        capabilities: input.capabilities,
+        capabilities: frozen.capabilities,
         requestKind,
         estimatedMandatoryInputTokens: estimateTokens(compiled.system) + 96,
         businessOutputDemand: DEFAULT_OUTPUT_DEMANDS[requestKind],
@@ -234,7 +262,7 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       });
     let plan;
     try {
-      plan = planRequest(input.reasoningPolicy);
+      plan = planRequest(frozen.reasoningPolicy);
     } catch (error) {
       if (round === 0 && error instanceof BudgetInfeasibleError) {
         return { status: 'too_large', error: error.message };
@@ -255,6 +283,7 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       requestKind,
       ledger: {
         logicalRequestId: `memory:${input.branchId}:v${input.fromStateVersion}-${input.toStateVersion}`,
+        physicalAttemptLimit: 3,
         requestKind,
         branchId: input.branchId,
         stateVersion: input.toStateVersion,
@@ -263,15 +292,16 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
 
     let response;
     try {
-      response = await input.provider.complete(makeRequest(plan));
+      response = savedResponse ?? await complete(makeRequest(plan));
+      savedResponse = null;
     } catch (error) {
       if (classifyLlmFailure(error) !== 'reasoning_only') {
-        return { status: 'rejected', error: error instanceof Error ? error.message : String(error) };
+        return { status: 'rejected', error: `${classifyLlmFailure(error)}: ${error instanceof Error ? error.message : String(error)}` };
       }
       let boostedPlan;
       try {
         boostedPlan = planRequest({
-          ...input.reasoningPolicy,
+          ...frozen.reasoningPolicy,
           reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
         });
       } catch (retryError) {
@@ -284,9 +314,9 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
         return { status: 'rejected', error: 'Reasoning-only retry cannot increase the reserve within the declared capability ceiling.' };
       }
       try {
-        response = await input.provider.complete(makeRequest(boostedPlan));
+        response = await complete(makeRequest(boostedPlan));
       } catch (retryError) {
-        return { status: 'rejected', error: retryError instanceof Error ? retryError.message : String(retryError) };
+        return { status: 'rejected', error: `${classifyLlmFailure(retryError)}: ${retryError instanceof Error ? retryError.message : String(retryError)}` };
       }
     }
 
@@ -336,15 +366,20 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       const compiled = compileObservations({
         branchId: input.branchId,
         evidence,
-        rawObservationText: response.text,
+        rawObservationText: JSON.stringify(parsed),
         knownChangePolicy: { requireKnownChangeCoverage: true },
       });
-      if (!compiled.accepted) {
+      if (!compiled.accepted || !compiled.advanceCheckpoint || compiled.rejected.length > 0) {
         repairErrors = compiled.diagnostics.map(d => `${d.code}: ${d.detail}`)
           .concat(compiled.rejected.flatMap(item => item.diagnostics.map(d => `${d.code}: ${d.detail}`)));
         continue;
       }
       const turnVersions = new Map(input.batch.map(turn => [turn.turnId, turn.stateVersion]));
+      patch.evidenceVersions = Object.fromEntries(turnVersions);
+      patch.evidenceAnchors = Object.fromEntries(input.batch.map(turn => {
+        const anchor = { summary: turn.publicSummary ?? '', narrative: (turn.narrativeText ?? '').slice(0,800), effects: turn.effects ?? [] };
+        return [turn.turnId, { ...anchor, contentHash: stableFingerprint(anchor) }];
+      }));
       const next = mergeStoryMemoryPatch(input.state, {
         patch,
         patchId,
@@ -352,6 +387,7 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
         turnVersions,
         now: input.now(),
       });
+      await input.renewWorkerLease?.();
       // P8-5 atomic application (B09): patch row + CAS state write + applied
       // marker in ONE transaction — no three-step non-atomic persistence.
       await input.store.applyCheckpointAtomically({
@@ -363,6 +399,7 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
           patch,
         },
         nextState: next,
+        workerFence: input.workerFence,
       });
       return { status: 'applied', patchId, state: next };
     } catch (error) {

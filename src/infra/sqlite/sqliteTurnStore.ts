@@ -843,6 +843,9 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       itemOwners: {},
     };
     if (snapshotPayload?.cards) state.cards = snapshotPayload.cards;
+    if (snapshotPayload?.ruleConfiguration) state.ruleConfiguration = snapshotPayload.ruleConfiguration;
+    if (snapshotPayload?.worldRuleFlags) state.worldRuleFlags = snapshotPayload.worldRuleFlags;
+    if (snapshotPayload?.pressureTracks) state.pressureTracks = snapshotPayload.pressureTracks;
     if (snapshotPayload?.party) state.party = snapshotPayload.party;
     if (snapshotPayload?.itemSources) state.itemSources = snapshotPayload.itemSources;
     if (snapshotPayload?.encounters) state.encounters = snapshotPayload.encounters;

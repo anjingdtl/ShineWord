@@ -6,6 +6,7 @@
  */
 
 import type { StoryMemoryState } from './storyMemoryTypes';
+import { STORY_MEMORY_SCHEMA_VERSION, storyMemoryContentHash } from './storyMemoryTypes';
 
 export type CheckpointRejectionCode =
   | 'no_checkpoint'
@@ -78,10 +79,16 @@ export function evaluateCheckpointEligibility(
   input: EvaluateCheckpointEligibilityInput,
 ): CheckpointEligibility {
   const { memoryState, branchId, currentStateVersion } = input;
+  if (!Number.isSafeInteger(currentStateVersion) || currentStateVersion < 0) {
+    return { usable: false, code: 'coverage_gap', diagnostics: ['invalid current state version'] };
+  }
   if (!memoryState) {
     return { usable: false, code: 'no_checkpoint', diagnostics: ['branch has no story memory checkpoint yet'] };
   }
-  const expectedSchema = input.expectedSchemaVersion ?? memoryState.schemaVersion;
+  if (!Number.isSafeInteger(memoryState.throughStateVersion) || memoryState.throughStateVersion < 0) {
+    return { usable: false, code: 'coverage_gap', diagnostics: ['invalid checkpoint coverage version'] };
+  }
+  const expectedSchema = input.expectedSchemaVersion ?? STORY_MEMORY_SCHEMA_VERSION;
   if (memoryState.schemaVersion !== expectedSchema) {
     return {
       usable: false,
@@ -118,6 +125,10 @@ export function evaluateCheckpointEligibility(
   const fingerprint = memoryState.metadata.fingerprint;
   if (!fingerprint || fingerprint === 'seed') {
     return { usable: false, code: 'fingerprint_invalid', diagnostics: ['clean checkpoint lacks a chained fingerprint'] };
+  }
+  if (memoryState.metadata.contentHash
+    && memoryState.metadata.contentHash !== storyMemoryContentHash(memoryState)) {
+    return { usable: false, code: 'fingerprint_invalid', diagnostics: ['checkpoint content hash mismatch'] };
   }
   const coverage = buildCoverageManifest({
     throughStateVersion: memoryState.throughStateVersion,

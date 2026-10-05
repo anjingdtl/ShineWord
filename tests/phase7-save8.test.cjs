@@ -27,7 +27,7 @@ async function fixture() {
   const h = await createMobileHarness();
   const entries = [lore('base-rule')], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
-  const manifest = { schemaVersion: 'world-package-2', worldId: 'p7-world', revision: 1,
+  const manifest = { schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('p7-world', 1), worldId: 'p7-world', revision: 1,
     sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   await h.runtime.worldStore.saveImportedWorldPackage({

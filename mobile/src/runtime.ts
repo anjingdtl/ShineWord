@@ -1,3 +1,4 @@
+import type { WorldRuleConfiguration } from '../../src/domain/rules/worldRuleConfiguration';
 import { RejectionSamplingRandomSource } from '../../src/domain/rules/random';
 // Static imports: runtime module groups must ship in the initial bundle, not
 // lazy-fetch at play time (lazy group requests can fail on device networks).
@@ -33,6 +34,9 @@ export async function clearPlayIntentDraft(branchId: string, version: number) {
 }
 export async function acknowledgePlayReplay(campaignId: string, branchId: string, version: number, ids: string[]) {
   return playRecovery.acknowledgePlayReplay((await getDatabaseRuntime()).llmLedger, campaignId, branchId, version, ids);
+}
+export async function acknowledgeMemoryReplay(campaignId: string, branchId: string, attemptIds: readonly string[]) {
+  return (await getDatabaseRuntime()).llmLedger.acknowledgeMemoryReplay({ campaignId, branchId, attemptIds });
 }
 
 export type { PlayTurnResult };
@@ -410,11 +414,12 @@ export async function saveWorldPackageDraft(input: {
   baseRevision: number;
   entries: ContentEntry[];
   sections: BookSection[];
+  ruleConfiguration?: WorldRuleConfiguration;
 }): Promise<void> {
   const runtime = await getDatabaseRuntime();
   await new SqliteWorldStore(runtime.db).saveWorldPackageDraft({
     ...input,
-    draftJson: JSON.stringify({ entries: input.entries, sections: input.sections }),
+    draftJson: JSON.stringify({ entries: input.entries, sections: input.sections, ruleConfiguration: input.ruleConfiguration }),
     updatedAt: new Date().toISOString(),
   });
 }
@@ -433,6 +438,7 @@ export async function publishWorldPackageDraft(input: {
   baseRevision: number;
   entries: ContentEntry[];
   sections: BookSection[];
+  ruleConfiguration?: WorldRuleConfiguration;
 }): Promise<{ manifest: WorldPackageManifest; warnings: string[] }> {
   const runtime = await getDatabaseRuntime();
   const worldStore = new SqliteWorldStore(runtime.db);
@@ -451,6 +457,7 @@ export async function publishWorldPackageDraft(input: {
     entries: input.entries,
     sections: input.sections,
     buildScope: base.manifest.buildScope,
+    ruleConfiguration: input.ruleConfiguration,
     createdAt: new Date().toISOString(),
   });
   await worldStore.clearWorldPackageDraft(input.worldId, input.baseRevision);

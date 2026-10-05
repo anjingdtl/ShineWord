@@ -68,7 +68,9 @@ export interface CompiledWorldRuleConfiguration {
 }
 
 function canonicalConfigurationWithoutHash(config: WorldRuleConfiguration): Record<string, unknown> {
-  return { ...config, configHash: '' };
+  // Local import may rebind a world id. Mechanisms and revision retain their
+  // semantic identity; the manifest validates the local world association.
+  return { ...config, worldId: '', configHash: '' };
 }
 
 export function computeWorldRuleConfigurationHash(config: WorldRuleConfiguration): string {
@@ -119,10 +121,18 @@ export function compileWorldRuleConfiguration(
     return { ok: false, binding: null, capabilityTable: null, publicProjection: null, diagnostics };
   }
 
-  const configurationHash = config.configHash || computeWorldRuleConfigurationHash(config);
+  const configurationHash = computeWorldRuleConfigurationHash(config);
+  if (config.configHash && config.configHash !== configurationHash) {
+    diagnostics.push({ code: 'configuration_hash_mismatch', detail: 'Configuration content does not match its declared hash.' });
+    return { ok: false, binding: null, capabilityTable: null, publicProjection: null, diagnostics };
+  }
   const composition = resolveModuleComposition(config.modules);
   const capabilities = composition.ordered.flatMap(module => module.capabilities);
-  const actionKinds = ['observe', 'talk', 'interact', 'move', 'skill_check', 'ability'];
+  const enabled = new Set(composition.ordered.map(module => module.moduleId));
+  const actionKinds = ['observe', 'interact', 'ability',
+    ...(enabled.has('social_relationships') ? ['talk'] : []),
+    ...(enabled.has('exploration_discovery') ? ['move'] : []),
+    ...(enabled.has('skill_actions') ? ['skill_check'] : [])];
   const capabilityTable: ExecutableCapabilityTable = {
     coreId: SHINEWORD_RULESET_ID,
     coreVersion,

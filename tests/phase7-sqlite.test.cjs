@@ -85,7 +85,7 @@ test('migration 32 creates branch_situations and branch_decision_guidance', asyn
   const { db, adapter } = openDb();
   try {
     const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-    assert.equal(applied[applied.length - 1], 33);
+    assert.equal(applied[applied.length - 1], 100);
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('branch_situations','branch_decision_guidance')").all()
       .map(row => row.name).sort();
     assert.deepEqual(tables, ['branch_decision_guidance', 'branch_situations']);

@@ -96,6 +96,9 @@ export interface ActorState {
 }
 
 export interface GameStateSnapshot {
+  /** Immutable rules adopted at new-campaign creation. */
+  ruleConfiguration?: import('../rules/worldRuleConfiguration').WorldRuleConfiguration;
+  worldRuleFlags?: Record<string, boolean>;
   branchId: string;
   stateVersion: number;
   /** World clock in seconds (plan §10.3). Authoritative when present. */
@@ -180,6 +183,7 @@ function cloneEncounter(entry: EncounterSnapshotEntry): EncounterSnapshotEntry {
 
 export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
   const cloned: GameStateSnapshot = {
+    ...(state.ruleConfiguration ? { ruleConfiguration: JSON.parse(JSON.stringify(state.ruleConfiguration)) } : {}),
     branchId: state.branchId,
     stateVersion: state.stateVersion,
     clockSeconds: state.clockSeconds ?? state.clockMinutes * 60,
@@ -249,6 +253,7 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
     ...(entry.processedEventIds ? { processedEventIds: [...entry.processedEventIds] } : {}),
   }));
   if (state.questRewards) cloned.questRewards = state.questRewards.map(entry => ({ ...entry }));
+  if (state.worldRuleFlags) cloned.worldRuleFlags = { ...state.worldRuleFlags };
   // pressure_track module state (P8-7) travels with every clone.
   if (state.pressureTracks) {
     cloned.pressureTracks = Object.fromEntries(

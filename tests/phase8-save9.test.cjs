@@ -23,7 +23,7 @@ async function fixture() {
   const h = await createMobileHarness();
   const entries = [], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
-  const manifest = { schemaVersion: 'world-package-2', worldId: 'p8-world', revision: 1,
+  const manifest = { schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('p8-world', 1), worldId: 'p8-world', revision: 1,
     sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   await h.runtime.worldStore.saveImportedWorldPackage({
@@ -38,7 +38,7 @@ async function fixture() {
   const contentManifest = createBaseContentManifest({ worldId: manifest.worldId, branchId: 'b', stateVersion: 0,
     basePackage: { revision: 1, contentHash: hash } });
   // Snapshot carries P7 situation state + causal order (round-trip territory).
-  const state = { branchId: 'b', stateVersion: 1, clockSeconds: 1800, clockMinutes: 30, actors: {
+  const state = { ruleConfiguration: manifest.ruleConfiguration, branchId: 'b', stateVersion: 1, clockSeconds: 1800, clockMinutes: 30, actors: {
     'pc': { actorId: 'pc', locationId: 'l1', resources: { hp: 8 }, conditions: [] },
   }, itemOwners: {}, encounters: [], contentManifest,
     situations: [{ situationId: 'sit-a', status: 'active', counters: { heat: 1 }, processedEventKeys: [],

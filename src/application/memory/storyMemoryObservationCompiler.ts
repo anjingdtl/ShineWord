@@ -141,29 +141,29 @@ function deriveObservationsFromPatch(document: Record<string, unknown>): Array<R
     }
   };
   pushAll('characterUpdates', item => ({
-    kind: 'character', action: 'upsert', actorId: item.actorId, evidenceTurnIds: item.evidenceTurnIds ?? [],
+    ...item, kind: 'character', action: 'upsert', actorId: item.actorId, evidenceTurnIds: item.evidenceTurnIds ?? [],
   }));
   pushAll('relationshipUpdates', item => ({
-    kind: 'relationship', action: item.action ?? 'upsert', fromActorId: item.fromActorId, toActorId: item.toActorId,
+    ...item, kind: 'relationship', action: item.action ?? 'upsert', fromActorId: item.fromActorId, toActorId: item.toActorId,
     evidenceTurnIds: item.evidenceTurnIds ?? [],
   }));
   pushAll('conflictChanges', item => ({
-    kind: 'conflict', action: item.action ?? 'open', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
+    ...item, kind: 'conflict', action: item.action ?? 'open', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
   }));
   pushAll('threadChanges', item => ({
-    kind: 'thread', action: item.action ?? 'open', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
+    ...item, kind: 'thread', action: item.action ?? 'open', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
   }));
   pushAll('foreshadowingChanges', item => ({
-    kind: 'foreshadowing', action: item.action ?? 'plant', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
+    ...item, kind: 'foreshadowing', action: item.action ?? 'plant', title: item.title, evidenceTurnIds: item.evidenceTurnIds ?? [],
   }));
   pushAll('completedBeats', item => ({
-    kind: 'beat', action: 'upsert', title: item.summary, evidenceTurnIds: item.turnId ? [item.turnId] : [],
+    ...item, kind: 'beat', action: 'upsert', title: item.summary, evidenceTurnIds: item.turnId ? [item.turnId] : [],
   }));
   const narrative = document.narrative;
   if (narrative && typeof narrative === 'object' && !Array.isArray(narrative)) {
     const narrativeRecord = narrative as Record<string, unknown>;
-    if (narrativeRecord.currentObjective !== undefined || narrativeRecord.currentArc !== undefined) {
-      derived.push({ kind: 'objective', action: 'upsert', evidenceTurnIds: [] });
+    if (narrativeRecord.currentObjective !== undefined || narrativeRecord.currentArc !== undefined || narrativeRecord.archiveDigestAppend !== undefined) {
+      derived.push({ ...narrativeRecord, kind: 'objective', action: 'upsert', evidenceTurnIds: narrativeRecord.evidenceTurnIds ?? [] });
     }
   }
   return derived;
@@ -248,9 +248,7 @@ export function compileObservations(input: CompileObservationsInput): Observatio
     const evidenceTurnIds = Array.isArray(observation.evidenceTurnIds)
       ? (observation.evidenceTurnIds as unknown[]).map(id => String(id))
       : [];
-    // Objective changes are narrative-level; the batch itself is their
-    // evidence, so no per-turn anchor is required.
-    if (evidenceTurnIds.length === 0 && kind !== 'objective') {
+    if (evidenceTurnIds.length === 0) {
       itemDiagnostics.push({ code: 'unknown_evidence_ref', detail: 'observation cites no evidence turns' });
     }
     const versions: number[] = [];
@@ -306,6 +304,30 @@ export function compileObservations(input: CompileObservationsInput): Observatio
       detail: 'batch evidence contains deterministic known changes but no accepted observation covers them',
     });
     return result;
+  }
+
+  if (input.knownChangePolicy?.requireKnownChangeCoverage !== false) {
+    const uncovered = evidence.filter(item => hasDeterministicKnownChange([item])
+      && !result.acceptedObservations.some(observation => {
+        if (!observation.evidenceTurnIds.includes(item.turnId)) return false;
+        const nested = item.eventType === 'recordEvent' ? item.payload : {};
+        const eventType = String(nested.eventType ?? item.eventType);
+        const payload = (nested.payload && typeof nested.payload === 'object' ? nested.payload : item.payload) as Record<string, unknown>;
+        if (eventType.includes('relationship')) return observation.kind === 'relationship'
+          && observation.fromActorId === payload.fromActorId && observation.toActorId === payload.toActorId;
+        const actorId = payload.actorId ?? payload.toActorId;
+        if (typeof actorId === 'string' && ['grantItem', 'transferItem', 'applyCondition', 'removeCondition'].includes(eventType)) {
+          return observation.kind === 'character' && observation.actorId === actorId
+            || observation.kind === 'beat' && typeof observation.payload.summary === 'string'
+              && observation.payload.summary.includes(String(payload.itemId ?? payload.conditionId ?? actorId));
+        }
+        return true;
+      }));
+    if (uncovered.length > 0) {
+      result.diagnostics.push({ code: 'known_change_missing',
+        detail: `Accepted observations omit critical evidence turns: ${[...new Set(uncovered.map(item => item.turnId))].join(', ')}.` });
+      return result;
+    }
   }
 
   result.accepted = true;

@@ -13,7 +13,8 @@ import type { ActionContract } from '../../domain/turns/types';
 import type { ContentDependencyBinding } from '../../domain/content/types';
 import type { LlmProvider, LlmRequest, ReasoningTier } from '../llm/types';
 import { classifyLlmFailure } from '../llm/requestLedger';
-import { BudgetInfeasibleError } from '../llm/requestPlan';
+import { requireCompiledRules, assertRuleAction } from '../content/runtimeRules';
+import { BudgetInfeasibleError, stableFingerprint } from '../llm/requestPlan';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { parseStrictJsonObject } from '../llm/json';
 import { parseStructuredOutput } from '../llm/structuredOutput';
@@ -317,6 +318,9 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       'persisted ActionContract',
     );
     const currentBinding = state.segmentContentBinding ?? (state.contentManifest ? contentDependencyBinding(state.contentManifest) : undefined);
+    if (await hashActionContract(contract, input.hashProvider) !== staged.actionContractHash) throw new Error('Frozen action contract hash mismatch; refusing dispatch.');
+    if (state.ruleConfiguration && stableFingerprint(contract.ruleBinding) !== stableFingerprint(requireCompiledRules(state.ruleConfiguration).binding)) throw new Error('Frozen rule binding mismatch; refusing dispatch.');
+    assertRuleAction(state, contract.actionType, contract.actorId);
     if (contract.contentDependency && (!currentBinding || canonicalStringify(contract.contentDependency as unknown as CanonicalJson) !== canonicalStringify(currentBinding as unknown as CanonicalJson))) {
       throw new Error('Frozen turn content dependency no longer matches the branch; recovery must keep the original content.');
     }
@@ -361,6 +365,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         requestKind: 'planner',
         ledger: {
           logicalRequestId: `planner:${input.branchId}:${input.turnId}`,
+          physicalAttemptLimit: 3,
           requestKind: 'planner',
           branchId: input.branchId,
           stateVersion: state.stateVersion,
@@ -500,9 +505,9 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     ): LlmRequest => ({
       role: 'Narrator',
       system: narratorSystem(packet !== null),
-      user: JSON.stringify({
+      user: canonicalStringify({
         turnId: input.turnId,
-        playerIntent: resumed ? compiled.contract.intent : input.playerIntent,
+        playerIntent: input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
         worldClock: {
@@ -521,7 +526,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
               difficulty: rollRecord.difficulty,
             }
           : null,
-      }),
+      } as unknown as CanonicalJson),
       maxOutputTokens,
       ...(input.narratorReasoningRecovery ? { maxPhysicalRequests: 1 } : {}),
       jsonMode: true,
@@ -531,6 +536,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       requestKind: 'narrator',
       ledger: {
         logicalRequestId: `narrator:${input.branchId}:${input.turnId}`,
+          physicalAttemptLimit: 3,
         requestKind: 'narrator',
         branchId: input.branchId,
         stateVersion: contract.expectedStateVersion,
@@ -598,11 +604,28 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         maxPhysicalRequests: 1,
       }), recovery.finalWire ?? input.narratorFinalWire));
     }
-    const candidate = parseStructuredOutput<NarrativeCandidate>(narrated.text, {
-      label: 'Narrator candidate',
-    }).value;
     recordUsage(input, 'Narrator', narrated);
-    validateNarrative(candidate, input.turnId, grade);
+    const parseCandidate = (text: string): NarrativeCandidate => {
+      const value = parseStructuredOutput<NarrativeCandidate>(text, { label: 'Narrator candidate' }).value;
+      validateNarrative(value, input.turnId, grade);
+      return value;
+    };
+    let candidate: NarrativeCandidate;
+    try { candidate = parseCandidate(narrated.text); }
+    catch (error) {
+      // Repair only a received, invalid candidate. An uncertain HTTP outcome
+      // exits above and is never automatically sent again. Recovery reuses
+      // the retained primary and repaired responses under the same identities.
+      budget.consume('Narrator');
+      const request = makeNarratorRequest(input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens);
+      const payload = JSON.parse(request.user) as Record<string, unknown>;
+      payload.repairInstructions = `Your received candidate was invalid: ${error instanceof Error ? error.message : String(error)}. Return corrected complete JSON with turnId=${input.turnId}, outcomeGrade=${grade} and nonempty text. Preserve the frozen outcome; the previous candidate is unadopted and cannot establish facts.`;
+      payload.previousCandidate = narrated.text;
+      const repaired = await input.provider.complete(checkNarratorWire(
+        prepareNarratorRequest({ ...request, user: canonicalStringify(payload as CanonicalJson), maxPhysicalRequests: 1 }), input.narratorFinalWire));
+      recordUsage(input, 'Narrator', repaired);
+      candidate = parseCandidate(repaired.text);
+    }
     extractedGuidance = extractGuidancePayload(candidate);
     narrative = await input.narratives.saveCandidate({
       branchId: input.branchId,

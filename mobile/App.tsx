@@ -13,7 +13,7 @@
  * P3.1: the loading screen is now the branded splash lockup (plan §6.3).
  */
 import React from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Button, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from './src/ui/theme';
 import { typeStyle } from './src/ui/components/typography';
@@ -36,8 +36,13 @@ export default function App(): React.JSX.Element {
 }
 
 function AppRoot(): React.JSX.Element {
-  const { loading, profile } = useAppSession();
+  const { loading, profile, databaseError, createFreshDatabase } = useAppSession();
   if (loading) return <BootstrapScreen />;
+  if (databaseError) return <ScreenShell><View style={{ flex: 1, justifyContent: 'center', padding: 24, gap: 20 }}>
+    <Text accessibilityRole="header">需要新的开发数据基线</Text>
+    <Text>{databaseError}</Text>
+    <Button title="创建新的开发数据库" onPress={() => { void createFreshDatabase(); }} />
+  </View></ScreenShell>;
   if (!profile) return <FirstRunScreen />;
   return <AppNavigator />;
 }

@@ -39,6 +39,14 @@ export function applyEffects(
   }
 
   const next = cloneGameState(current);
+  if (current.ruleConfiguration) {
+    const enabled = new Set(current.ruleConfiguration.modules.map(m => m.moduleId));
+    for (const effect of effects) {
+      const required = effect.op === 'raisePressure' || effect.op === 'relievePressure' ? 'pressure_track'
+        : effect.op === 'changeLocation' ? 'exploration_discovery' : null;
+      if (required && !enabled.has(required)) throw new Error(`Effect ${effect.op} requires disabled module ${required}.`);
+    }
+  }
   next.clockSeconds = effectiveClockSeconds(current) + baseTimeCostMinutes * 60;
 
   for (const effect of effects) {

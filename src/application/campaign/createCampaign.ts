@@ -9,7 +9,7 @@ import { buildOpening, isFactVisibleAtAnchor } from '../world/opening';
 import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAtAnchor, openingRelationshipFor } from './recruitment';
 import { createBaseContentManifest } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest } from '../worldPackage/branchContentStore';
-import { projectLegacyAnchorlessOpeningFacts } from '../worldPackage/openingCompatibility';
+import { requireCompiledRules } from '../content/runtimeRules';
 
 export interface OpeningAnchor {
   /** World-time order the game starts at (canon events after this diverge). */
@@ -95,6 +95,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   }
   const pkg = await input.worldStore.getWorldPackage(input.worldId, input.packageRevision);
   if (!pkg) throw new Error(`World package not found: ${input.worldId} r${input.packageRevision}.`);
+  const rules = requireCompiledRules(pkg.manifest.ruleConfiguration);
   if (pkg.manifest.status !== 'published') {
     throw new Error(`World package r${input.packageRevision} is ${pkg.manifest.status}, not published.`);
   }
@@ -121,12 +122,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   if (!world) throw new Error(`Unknown world: ${input.worldId}.`);
   const entities = await input.worldStore.listEntities(input.worldId);
   const facts = await input.worldStore.listFacts(input.worldId);
-  const projectionFacts = projectLegacyAnchorlessOpeningFacts(
-    input.worldId,
-    pkg.manifest,
-    facts,
-    anchorEvents.length === 0 && !input.anchor.anchorEventId,
-  );
+  const projectionFacts = facts;
   const visibleSceneEntries = pkg.entries.filter(entry => entry.kind === 'scene'
     && entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, projectionFacts, input.anchor.worldTimeOrder));
   const visibleCanonLocations = entities.filter(entity => entity.type === 'location'
@@ -144,6 +140,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   if (!allowedLocations.has(input.anchor.locationId)) {
     throw new Error(`开局地点「${input.anchor.locationId}」不属于锁定世界包或原著地点。`);
   }
+  if ((input.companions?.length ?? 0) > 0 && !pkg.manifest.ruleConfiguration.modules.some(m => m.moduleId === 'social_relationships')) throw new Error('Initial companions require social_relationships.');
   // Opening projections and server-side factories share the same player-safe
   // catalog. A client cannot name a GM-only skill directly in createCampaign.
   const skillEntries = pkg.entries.filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
@@ -343,6 +340,14 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     if (!templateEntry) continue; // Non-template scene actor IDs can be canon references.
     if (!isEntryVisibleAtAnchor(templateEntry, projectionFacts, input.anchor.worldTimeOrder)
       || !isTemplateValidAtAnchor(templateEntry, input.anchor.worldTimeOrder)) continue;
+    // A canon protagonist and their public template represent the same person.
+    const templateName = (templateEntry.definition as ActorTemplateDefinition).name;
+    const supportedSubjects = new Set(templateEntry.provenance.sourceFactIds.flatMap(id => {
+      const fact = projectionFacts.find(f => f.factId === id);
+      return fact?.subjectEntityId ? [fact.subjectEntityId] : [];
+    }));
+    if (protagonistCard.entityId && supportedSubjects.size === 1 && supportedSubjects.has(protagonistCard.entityId)
+      && templateName === protagonistCard.name) continue;
     const actorId = `npc-${templateId}`;
     if (cards.some(card => card.actorId === actorId) || actorId === input.protagonist.actorId) {
       throw new Error(`开局场景 NPC 角色 ID 冲突：${actorId}。`);
@@ -382,9 +387,19 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
 
   const partyCards = cards.filter(card => card.controller === 'player' || card.kind === 'companion');
 
+  const resourceParameters = pkg.manifest.ruleConfiguration.modules.find(m => m.moduleId === 'resources_conditions')?.parameters;
+  for (const card of cards) {
+    if (typeof resourceParameters?.hpMax === 'number') card.resourceMax.hp = resourceParameters.hpMax;
+    if (typeof resourceParameters?.staminaMax === 'number') card.resourceMax.stamina = resourceParameters.staminaMax;
+  }
+
   const snapshot: GameStateSnapshot = {
     branchId,
     stateVersion: 0,
+    ruleConfiguration: JSON.parse(JSON.stringify(pkg.manifest.ruleConfiguration)),
+    ...(rules.binding.moduleVersions.some(m => m.moduleId === 'pressure_track') ? {
+      pressureTracks: { tension: { level: 0, maxLevel: Number(pkg.manifest.ruleConfiguration.modules.find(m => m.moduleId === 'pressure_track')?.parameters.maxLevel ?? 4) } },
+    } : {}),
     clockSeconds: 0,
     clockMinutes: 0,
     actors: {},

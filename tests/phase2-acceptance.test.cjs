@@ -442,7 +442,7 @@ test('A11: recruitment, relationship, party lifecycle, knowledge and item lineag
   let state = await turnStore.getState('camp-s-main');
   const makeEngineContract = (turnId, actorId, effect) => {
     const outcome = { achieved: true, publicSummary: 'test engine state', effects: effect ? [effect] : [] };
-    return { protocolVersion: '2.0', turnId, expectedStateVersion: state.stateVersion, actorId,
+    return { protocolVersion: '2.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules(state.ruleConfiguration).binding, turnId, expectedStateVersion: state.stateVersion, actorId,
       actionType: 'test_state', evidenceIds: [], requiresRoll: false, intent: 'test state', timeCostMinutes: 0,
       resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } };
   };
@@ -789,7 +789,7 @@ test('A05: a rolled-but-uncommitted turn resumes after import with its own dice'
   await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: 'sneak' });
   const turnStore = new SqliteTurnStore(adapter);
   const contractJson = JSON.stringify({
-    protocolVersion: '2.0', turnId: 'turn-0002', expectedStateVersion: 1, actorId: 'actor-shen',
+    protocolVersion: '2.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules((await turnStore.getState('camp-s-main')).ruleConfiguration).binding, turnId: 'turn-0002', expectedStateVersion: 1, actorId: 'actor-shen',
     actionType: 'skill_check', skillId: 'stealth', difficultyBand: 'challenging',
     evidenceIds: [], requiresRoll: true, intent: 'interrupted', timeCostMinutes: 10,
     resourcePreconditions: [],
@@ -800,7 +800,7 @@ test('A05: a rolled-but-uncommitted turn resumes after import with its own dice'
       severe_failure: { achieved: false, publicSummary: 'bad', effects: [] },
     },
   });
-  const contractHash = sha.sha256Hex(contractJson);
+  const contractHash = sha.sha256Hex(require('../dist/domain/turns/canonical').serializeActionContract(JSON.parse(contractJson)));
   await turnStore.stageRollTurn({ branchId: 'camp-s-main', turnId: 'turn-0002', expectedStateVersion: 1, actionContractJson: contractJson, actionContractHash: contractHash, createdAt: 't', status: 'AwaitRoll' });
   await turnStore.recordRoll('camp-s-main', {
     rulesetId: 'shineword-core', rulesetVersion: '0.1.0', turnId: 'turn-0002', rollIndex: 0,
@@ -2263,7 +2263,7 @@ test('portable package identity restores a combat save after local world-id rema
   chainedDb.close();
 });
 
-test('portable archive preserves builder and draft content-hash basis across immutable revisions', async () => {
+test('portable archive hashes exactly its immutable current revision', async () => {
   const db = setupDb();
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
@@ -2279,14 +2279,14 @@ test('portable archive preserves builder and draft content-hash basis across imm
   // The canon builder emits revision 0, while the immutable DB row stores r1.
   // The ZIP records which input revision the legacy manifest hash covered.
   assert.ok(built.entries.every(item => item.revision === 1));
-  assert.notEqual(
+  assert.equal(
     await computePackageContentHash(built.entries, built.sections, sha.sha256Hex),
     built.manifest.contentHash,
     'the stored revision differs from the builder revision covered by the hash',
   );
   const firstArchive = await encodeWorldPackageArchive({ title: '版本哈希测试世界', ...built }, sha.sha256Hex);
   const firstDecoded = await decodeWorldPackageArchive(firstArchive, sha.sha256Hex);
-  assert.equal(firstDecoded.contentHashBasisRevision, 0);
+  assert.equal(firstDecoded.schemaVersion, 'shineword-world-archive-5');
 
   // An editor draft starts from the stored r1 entries and publishes r2. The
   // hash basis must remain r1, and portable import must preserve the immutable r2 lock.
@@ -2308,7 +2308,7 @@ test('portable archive preserves builder and draft content-hash basis across imm
   }, sha.sha256Hex);
   const decoded = await decodeWorldPackageArchive(archive, sha.sha256Hex);
   assert.equal(decoded.manifest.revision, 2);
-  assert.equal(decoded.contentHashBasisRevision, 1);
+  assert.equal(await computePackageContentHash(decoded.entries, decoded.sections, sha.sha256Hex), decoded.manifest.contentHash);
 
   const imported = await importPortableWorldPackage({
     worldStore, sha256Hex: sha.sha256Hex, archive, newWorldId: 'w-revision-hash-copy', createdAt: 't-import',
@@ -2318,7 +2318,7 @@ test('portable archive preserves builder and draft content-hash basis across imm
   assert.equal(copy.manifest.contentHash, stored.manifest.contentHash);
   assert.ok(copy.entries.every(item => item.revision === 2));
   const copyArchive = await encodeWorldPackageArchive({ title: '版本哈希副本', ...copy }, sha.sha256Hex);
-  assert.equal((await decodeWorldPackageArchive(copyArchive, sha.sha256Hex)).contentHashBasisRevision, 1);
+  assert.equal((await decodeWorldPackageArchive(copyArchive, sha.sha256Hex)).schemaVersion, 'shineword-world-archive-5');
   db.close();
 });
 

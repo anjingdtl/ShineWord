@@ -9,7 +9,7 @@
  * keep the original envelope for diagnostics.
  */
 
-import type { SqliteDatabase } from '../ports/sqlite';
+import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
 import type { FrozenTurnContext } from './contextSnapshot';
 import type { FinalWireBudget } from '../llm/finalWireVerifier';
 import type { ReasoningTier } from '../llm/types';
@@ -68,6 +68,8 @@ export interface FrozenRootSnapshot {
    * counts as frozen — ids and DB query parameters do not (plan §11.1).
    */
   payload: {
+    identity?: { campaignId: string; branchId: string; turnId: string; logicalRequestId: string;
+      role: string; stage: string; attempt: number; createdAt: string };
     turnBundle?: {
       plannerText: string;
       plannerWireOutputTokens: number;
@@ -97,6 +99,18 @@ export interface FrozenRootSnapshot {
       };
     };
     stateBaseline: { branchId: string; expectedStateVersion: number };
+    executionMaterials?: {
+      playerIntent: string;
+      modelFingerprint: string;
+      sourceFingerprint: string;
+      state: import('../../domain/state/types').GameStateSnapshot;
+      entries: readonly import('../../domain/content/types').ContentEntry[];
+      authoritativeEntries: readonly import('../../domain/content/types').ContentEntry[];
+      plannerCards: readonly import('../../domain/characters/card').ActorCard[];
+      methods: readonly import('../../domain/situations/types').MethodTemplateV1[];
+      methodSituations: readonly string[];
+      styleSnapshot?: import('../../domain/style/types').EffectiveStyleSnapshotV1;
+    };
     capabilitiesFingerprint: string;
     collectionDiagnostics?: string[];
   };
@@ -130,7 +144,13 @@ function sortDeep(value: unknown): unknown {
   return value;
 }
 
-async function parseRootRow(row: { payload_json: string; content_hash: string; root_id: string }, hashProvider: FreezeHashProvider): Promise<FrozenRootSnapshot> {
+interface FrozenRootRow extends SqliteRow {
+  payload_json: string; content_hash: string; root_id: string; campaign_id: string;
+  branch_id: string; turn_id: string; logical_request_id: string; role: string;
+  stage: string; attempt: number; created_at: string;
+}
+
+async function parseRootRow(row: FrozenRootRow, hashProvider: FreezeHashProvider): Promise<FrozenRootSnapshot> {
   let payload: FrozenRootSnapshot['payload'];
   try {
     payload = JSON.parse(row.payload_json) as FrozenRootSnapshot['payload'];
@@ -149,7 +169,15 @@ async function parseRootRow(row: { payload_json: string; content_hash: string; r
       row.root_id,
     );
   }
-  if (!payload || typeof payload !== 'object' || !payload.stateBaseline?.branchId) {
+  const identity = payload?.identity;
+  if (!payload || typeof payload !== 'object' || !payload.stateBaseline?.branchId
+    || !Number.isSafeInteger(payload.stateBaseline.expectedStateVersion)
+    || payload.stateBaseline.expectedStateVersion < 0 || !identity
+    || identity.campaignId !== row.campaign_id || identity.branchId !== row.branch_id
+    || identity.turnId !== row.turn_id || identity.logicalRequestId !== row.logical_request_id
+    || identity.role !== row.role || identity.stage !== row.stage || identity.attempt !== row.attempt
+    || identity.createdAt !== row.created_at || payload.stateBaseline.branchId !== row.branch_id
+    || rootSnapshotIdFor(row.branch_id, row.turn_id, row.logical_request_id) !== row.root_id) {
     throw new FrozenMaterialsCorruptedError(
       `Frozen turn materials are missing required fields for root ${row.root_id}.`,
       'missing_field',
@@ -158,16 +186,9 @@ async function parseRootRow(row: { payload_json: string; content_hash: string; r
   }
   return {
     schemaVersion: FROZEN_TURN_MATERIALS_SCHEMA,
-    campaignId: '',
-    branchId: payload.stateBaseline.branchId,
-    turnId: '',
-    logicalRequestId: '',
-    role: '',
-    stage: '',
-    attempt: 1,
+    ...identity,
     payload,
     contentHash: row.content_hash,
-    createdAt: '',
   };
 }
 
@@ -186,13 +207,29 @@ export class RootFrozenMaterialsStore {
     snapshot: Omit<FrozenRootSnapshot, 'schemaVersion' | 'contentHash'> & { contentHash?: string },
   ): Promise<string> {
     const rootId = rootSnapshotIdFor(snapshot.branchId, snapshot.turnId, snapshot.logicalRequestId);
-    const contentHash = snapshot.contentHash
-      ?? await computeRootSnapshotContentHash(snapshot.payload, this.hashProvider);
-    const existing = await this.db.queryOne<{ root_id: string }>(
-      'SELECT root_id FROM frozen_turn_material_roots WHERE root_id = ?',
+    if (snapshot.payload.stateBaseline.branchId !== snapshot.branchId) {
+      throw new FrozenMaterialsCorruptedError('Frozen branch identity mismatch.', 'missing_field', rootId);
+    }
+    const payload = { ...snapshot.payload, identity: {
+      campaignId: snapshot.campaignId, branchId: snapshot.branchId, turnId: snapshot.turnId,
+      logicalRequestId: snapshot.logicalRequestId, role: snapshot.role, stage: snapshot.stage,
+      attempt: snapshot.attempt, createdAt: snapshot.createdAt,
+    } };
+    const contentHash = await computeRootSnapshotContentHash(payload, this.hashProvider);
+    if (snapshot.contentHash && snapshot.contentHash !== contentHash) {
+      throw new FrozenMaterialsCorruptedError('Frozen content hash mismatch.', 'hash_mismatch', rootId);
+    }
+    const existing = await this.db.queryOne<FrozenRootRow>(
+      'SELECT * FROM frozen_turn_material_roots WHERE root_id = ?',
       [rootId],
     );
-    if (existing) return rootId;
+    if (existing) {
+      await parseRootRow(existing, this.hashProvider);
+      if (existing.content_hash !== contentHash) {
+        throw new FrozenMaterialsCorruptedError('Existing frozen root cannot be replaced with different materials.', 'hash_mismatch', rootId);
+      }
+      return rootId;
+    }
     await this.db.execute(
       `INSERT INTO frozen_turn_material_roots
         (root_id, campaign_id, branch_id, turn_id, logical_request_id, role, stage, attempt,
@@ -207,7 +244,7 @@ export class RootFrozenMaterialsStore {
         snapshot.role,
         snapshot.stage,
         snapshot.attempt,
-        JSON.stringify(snapshot.payload),
+        JSON.stringify(payload),
         contentHash,
         snapshot.createdAt,
       ],
@@ -221,13 +258,13 @@ export class RootFrozenMaterialsStore {
     logicalRequestId: string,
   ): Promise<FrozenRootSnapshot | null> {
     const rootId = rootSnapshotIdFor(branchId, turnId, logicalRequestId);
-    const row = await this.db.queryOne<{ payload_json: string; content_hash: string; root_id: string }>(
-      'SELECT payload_json, content_hash, root_id FROM frozen_turn_material_roots WHERE root_id = ?',
+    const row = await this.db.queryOne<FrozenRootRow>(
+      'SELECT * FROM frozen_turn_material_roots WHERE root_id = ?',
       [rootId],
     );
     if (!row) return null;
     const parsed = await parseRootRow(row, this.hashProvider);
-    return { ...parsed, turnId, logicalRequestId, branchId };
+    return parsed;
   }
 
   async hasRootSnapshot(branchId: string, turnId: string, logicalRequestId: string): Promise<boolean> {

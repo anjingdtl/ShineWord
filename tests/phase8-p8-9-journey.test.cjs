@@ -140,7 +140,7 @@ async function runJourney(totalTurns) {
   for (let from = 0; from < totalTurns; from += 8) {
     const to = Math.min(from + 8, totalTurns);
     const patch = {
-      schemaVersion: 2, range: { fromStateVersion: from, toStateVersion: to },
+      schemaVersion: 3, range: { fromStateVersion: from, toStateVersion: to },
       narrative: { currentObjective: `抵达北境（第${to}批次时）` },
       characterUpdates: [{
         actorId: 'actor-player', action: 'upsert',

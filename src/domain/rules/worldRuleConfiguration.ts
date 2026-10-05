@@ -43,7 +43,7 @@ export const MODULE_PARAMETER_SCHEMAS: Readonly<Record<string, ModuleParameterSc
   'skill_actions.params-1': {
     schemaId: 'skill_actions.params-1',
     parameters: [
-      { key: 'untrainedPolicy', type: 'string', enumValues: ['allow', 'forbid'], required: false },
+      { key: 'untrainedPolicy', type: 'string', enumValues: ['forbid'], required: false },
     ],
   },
   'exploration_discovery.params-1': { schemaId: 'exploration_discovery.params-1', parameters: [] },
@@ -123,7 +123,8 @@ export interface RuleConfigDiagnostic {
     | 'module_error'
     | 'parameter_invalid'
     | 'constraint_untyped'
-    | 'constraint_unknown_target';
+    | 'constraint_unknown_target'
+    | 'configuration_hash_mismatch';
   detail: string;
 }
 
@@ -143,7 +144,7 @@ export function validateModuleParameters(
       continue;
     }
     if (spec.type === 'number') {
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
+      if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
         diagnostics.push({ code: 'parameter_invalid', detail: `module '${moduleId}' parameter '${spec.key}' must be a finite number` });
         continue;
       }
@@ -175,6 +176,13 @@ export function validateWorldRuleConfiguration(
   coreVersion: string,
 ): { ok: boolean; diagnostics: RuleConfigDiagnostic[]; moduleVersions: ReadonlyArray<{ moduleId: string; version: string }> } {
   const diagnostics: RuleConfigDiagnostic[] = [];
+  if (!config || typeof config !== 'object' || !config.core || !Array.isArray(config.modules)
+    || !Array.isArray(config.constraints) || !Array.isArray(config.provenance) || !config.vocabulary
+    || !Number.isSafeInteger(config.revision) || config.revision < 1 || typeof config.worldId !== 'string' || !config.worldId.trim()
+    || config.modules.some(m => !m || typeof m.moduleId !== 'string' || !m.parameters || typeof m.parameters !== 'object')
+    || config.constraints.some(c => !c || typeof c.constraintId !== 'string' || !['block_action', 'audit'].includes(c.enforcement))) {
+    return { ok: false, diagnostics: [{ code: 'schema_version', detail: 'Malformed world rule configuration.' }], moduleVersions: [] };
+  }
   if (config.schemaVersion !== WORLD_RULE_CONFIG_SCHEMA) {
     diagnostics.push({ code: 'schema_version', detail: `configuration schema '${String(config.schemaVersion)}' is not '${WORLD_RULE_CONFIG_SCHEMA}'` });
   }
@@ -191,6 +199,11 @@ export function validateWorldRuleConfiguration(
     diagnostics.push(...validateModuleParameters(module.moduleId, manifest.parameterSchemaId, module.parameters));
   }
   for (const constraint of config.constraints) {
+    if (constraint.conditionRef && (!['resource_minimum', 'condition_present', 'flag'].includes(constraint.conditionRef.kind)
+      || !constraint.conditionRef.key?.trim() || (constraint.conditionRef.kind === 'resource_minimum'
+        && (!Number.isFinite(constraint.conditionRef.minimum) || Number(constraint.conditionRef.minimum) < 0)))) {
+      diagnostics.push({ code: 'constraint_untyped', detail: `constraint '${constraint.constraintId}' has invalid conditionRef` });
+    }
     if (!constraint.targetKinds || constraint.targetKinds.length === 0) {
       diagnostics.push({ code: 'constraint_untyped', detail: `constraint '${constraint.constraintId}' has no typed targetKinds; text-only blocking is not executable` });
       continue;

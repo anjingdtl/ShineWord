@@ -1,3 +1,8 @@
+import { assertMemoryCheckpointChain } from '../memory/storyMemoryChain';
+import { emptyStoryMemoryState, storyMemoryContentHash } from '../memory/storyMemoryTypes';
+import { mergeStoryMemoryPatch } from '../memory/storyMemoryMerger';
+import { requireCompiledRules } from '../content/runtimeRules';
+import { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
 import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
 import { validatePhase6Bundle, validatePortableProjectStyle, type PortableProjectStyleV1,
@@ -137,6 +142,7 @@ export interface SaveFile {
       fromStateVersion: number;
       toStateVersion: number;
       baseFingerprint: string;
+      resultFingerprint: string | null;
       patch: import('../memory/storyMemoryTypes').StoryMemoryPatch;
       createdAt: string;
       appliedAt: string | null;
@@ -226,7 +232,28 @@ export interface ExportSaveInput {
 }
 
 export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFile; json: string; jsonByteLength: number }> {
+  // Capture external style defaults before entering SQLite's snapshot transaction.
+  const owner = await input.db.queryOne<{world_id: string}>('SELECT world_id FROM campaigns WHERE campaign_id = ?', [input.campaignId]);
+  const style = owner ? await input.projectStyleArchive?.exportProjectStyle(owner.world_id) : null;
+  return input.db.transaction(tx => exportSaveSnapshot({ ...input,
+    projectStyleArchive: input.projectStyleArchive ? { ...input.projectStyleArchive, exportProjectStyle: async () => style ?? null } : undefined,
+    db: { execute: tx.execute.bind(tx), queryOne: tx.queryOne.bind(tx), queryAll: tx.queryAll.bind(tx), transaction: work => work(tx) } }));
+}
+
+async function exportSaveSnapshot(input: ExportSaveInput): Promise<{ save: SaveFile; json: string; jsonByteLength: number }> {
   const { db } = input;
+  const owner = await db.queryOne<{campaign_id: string}>('SELECT campaign_id FROM branches WHERE branch_id = ?', [input.branchId]);
+  if (owner?.campaign_id !== input.campaignId) throw new Error('Save branch does not belong to the campaign.');
+  const unfinished = await db.queryOne<{n:number}>(`SELECT COUNT(*) n FROM turns t JOIN frozen_turn_material_roots r
+    ON r.branch_id=t.branch_id AND r.turn_id=t.turn_id WHERE t.branch_id=? AND t.status <> 'Committed'
+    AND NOT EXISTS (SELECT 1 FROM abandoned_turns a WHERE a.branch_id=t.branch_id AND a.turn_id=t.turn_id)`, [input.branchId]);
+  if ((unfinished?.n ?? 0) > 0) throw new Error('Resolve the unfinished LLM turn before exporting; its frozen request remains recoverable in this database.');
+  const unsettled = await db.queryOne<{n:number}>(`SELECT COUNT(*) n FROM llm_request_attempts
+    WHERE branch_id=? AND (status IN ('prepared','sent') OR (status='outcome_unknown' AND replay_approved_at IS NULL))`, [input.branchId]);
+  if ((unsettled?.n ?? 0) > 0) throw new Error('Resolve the pending or outcome-unknown physical request before exporting a stable save.');
+  const activeMemory = await db.queryOne<{n:number}>(`SELECT COUNT(*) n FROM frozen_turn_postprocess_outbox
+    WHERE branch_id=? AND status IN ('running','outcome_unknown')`, [input.branchId]);
+  if ((activeMemory?.n ?? 0) > 0) throw new Error('Wait for running story-memory work, or resolve its unknown outcome, before exporting a stable save.');
   const campaign = await db.queryOne<{
     world_id: string;
     title: string;
@@ -515,7 +542,7 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
   // P8 (save-9): story memory checkpoint + applied patch chain travel with
   // the save; the episodic index stays local-only (rebuilt without LLM calls
   // on import, plan section 17.2). Refused diagnostics never export.
-  try {
+  {
     const memoryStore = new SqliteStoryMemoryStore(db);
     const memoryState = await memoryStore.getState(input.branchId);
     const appliedPatches = (await memoryStore.listPatches(input.branchId))
@@ -525,21 +552,20 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
         fromStateVersion: patch.fromStateVersion,
         toStateVersion: patch.toStateVersion,
         baseFingerprint: patch.baseFingerprint,
+        resultFingerprint: patch.resultFingerprint,
         patch: patch.patch,
         createdAt: patch.createdAt,
         appliedAt: patch.appliedAt,
       }));
+    assertMemoryCheckpointChain(memoryState, appliedPatches, input.branchId, state.stateVersion, new Map(turns.filter(t => t.committedStateVersion !== null).map(t => [t.turnId, t.committedStateVersion!])));
     (payload as { storyMemory?: unknown }).storyMemory = {
       state: memoryState,
       appliedPatches,
     };
-  } catch {
-    // Story memory export is additive; export proceeds without it when the
-    // branch has no memory tables (legacy dev databases are refused at import).
   }
   // P8 (save-9): post-processing coverage (succeeded handoffs) rides along so
   // the imported campaign knows what is already consumed versus pending.
-  try {
+  {
     const coverageRows = await db.queryAll<{ handoff_id: string; turn_id: string; committed_state_version: number; status: string }>(
       'SELECT handoff_id, turn_id, committed_state_version, status FROM frozen_turn_postprocess_outbox WHERE branch_id = ? ORDER BY committed_state_version ASC',
       [input.branchId],
@@ -550,9 +576,6 @@ export async function exportSave(input: ExportSaveInput): Promise<{ save: SaveFi
       committedStateVersion: row.committed_state_version,
       status: row.status,
     }));
-  } catch {
-    // Coverage table may be absent on legacy dev databases; import refuses
-    // those anyway under the current protocol.
   }
 
   const payloadSha256 = await input.sha256Hex(canonicalStringify(payloadForHash(payload)));
@@ -720,6 +743,11 @@ export async function validateSaveJsonBytes(
       || typeof patch.patchId !== 'string' || typeof patch.patch !== 'object')) {
       errors.push('storyMemory.appliedPatches contains a malformed patch row.');
     }
+  }
+  if (parsed.storyMemory && Array.isArray(parsed.storyMemory.appliedPatches)) {
+    try { assertMemoryCheckpointChain(parsed.storyMemory.state, parsed.storyMemory.appliedPatches,
+      parsed.manifest.branchId, parsed.manifest.stateVersion, new Map((parsed.turns ?? []).filter(t => t.status === 'Committed' && t.committedStateVersion !== null).map(t => [t.turnId, t.committedStateVersion!]))); }
+    catch (error) { errors.push(`Story memory integrity: ${error instanceof Error ? error.message : String(error)}`); }
   }
   if (parsed.postprocessCoverage !== undefined && (!Array.isArray(parsed.postprocessCoverage)
     || parsed.postprocessCoverage.some(item => !item || typeof item !== 'object'
@@ -1012,6 +1040,10 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
   const playerName = typeof playerCard?.name === 'string' ? playerCard.name : '旅人';
   const restoredTitle = manifest.title?.trim() || `${restoredWorld?.title ?? '导入的冒险'} · ${playerName}`;
 
+  const lockedRulesPackage = await new SqliteWorldStore(db).getWorldPackage(resolvedWorldId, resolvedRevision);
+  if (!lockedRulesPackage) throw new Error('Current published world rule package is missing.');
+  const rules = requireCompiledRules(lockedRulesPackage.manifest.ruleConfiguration);
+  if (requireCompiledRules(save.state.ruleConfiguration).binding.configurationHash !== rules.binding.configurationHash) throw new Error('Save rules differ from the installed world configuration.');
   await db.transaction(async tx => {
     await tx.execute(
       `INSERT INTO campaigns
@@ -1066,6 +1098,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
 
     const state: GameStateSnapshot = {
       ...save.state,
+      ...(save.state.ruleConfiguration ? { ruleConfiguration: { ...save.state.ruleConfiguration, worldId: resolvedWorldId } } : {}),
       branchId: input.newBranchId,
       encounters: save.state.encounters ?? [],
       ...(save.state.segmentContentBinding ? { segmentContentBinding: { ...save.state.segmentContentBinding, branchId: input.newBranchId } } : {}),
@@ -1094,6 +1127,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
       const restoredSnapshot: GameStateSnapshot = item.stateVersion === state.stateVersion
         ? state
         : { ...item.snapshot, branchId: input.newBranchId,
+            ...(item.snapshot.ruleConfiguration ? { ruleConfiguration: { ...item.snapshot.ruleConfiguration, worldId: resolvedWorldId } } : {}),
             ...(item.snapshot.segmentContentBinding ? { segmentContentBinding: { ...item.snapshot.segmentContentBinding, branchId: input.newBranchId } } : {}),
             ...(item.snapshot.contentManifest ? {
               contentManifest: rebindBranchContentManifest(item.snapshot.contentManifest, input.newBranchId,
@@ -1239,29 +1273,18 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
     // the post-processing worker rebuilds it locally from committed events.
     if (save.storyMemory) {
       const memoryStore = new SqliteStoryMemoryStore(tx);
-      if (save.storyMemory.state) {
-        // Branch identity rebinds like every other row (same meaning, new
-        // branch); patch rows rebind via INSERT below.
-        await memoryStore.saveState({ ...save.storyMemory.state, branchId: input.newBranchId });
+      let memory = emptyStoryMemoryState(input.newBranchId, input.createdAt);
+      for (const link of save.storyMemory.appliedPatches) {
+        const patchId = `smp:${input.newBranchId}:${link.fromStateVersion}-${link.toStateVersion}`;
+        const baseFingerprint = memory.metadata.fingerprint;
+        memory = mergeStoryMemoryPatch(memory, { patch: link.patch, patchId, baseFingerprint,
+          turnVersions: new Map(Object.entries(link.patch.evidenceVersions!)), now: input.createdAt });
+        await memoryStore.insertPatch({ ...link, patchId, branchId: input.newBranchId, baseFingerprint });
+        await memoryStore.markPatchApplied(patchId, memory.metadata.fingerprint, input.createdAt);
+        await tx.execute('INSERT INTO story_memory_checkpoints(branch_id,through_state_version,state_json,content_hash,created_at) VALUES(?,?,?,?,?)',
+          [input.newBranchId, memory.throughStateVersion, JSON.stringify(memory), storyMemoryContentHash(memory), input.createdAt]);
       }
-      for (const patch of save.storyMemory.appliedPatches) {
-        await tx.execute(
-          `INSERT OR IGNORE INTO story_memory_patches
-            (patch_id, branch_id, from_state_version, to_state_version, base_fingerprint,
-             patch_json, status, created_at, applied_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'applied', ?, ?)`,
-          [
-            patch.patchId,
-            input.newBranchId,
-            patch.fromStateVersion,
-            patch.toStateVersion,
-            patch.baseFingerprint,
-            JSON.stringify(patch.patch),
-            patch.createdAt,
-            patch.appliedAt ?? input.createdAt,
-          ],
-        );
-      }
+      if (save.storyMemory.state) await memoryStore.saveState(memory);
     }
     // P8 (save-9): post-processing coverage rows restore so succeeded ranges
     // are known; pending/failed rows are re-derivable from committed evidence.

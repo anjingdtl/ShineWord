@@ -8,6 +8,7 @@
 
 import type { LlmProvider, LlmRequest, LlmResponse } from './types';
 import { LlmRequestFailure } from './types';
+import { stableFingerprint } from './requestPlan';
 import type {
   LlmAttemptPatch,
   LlmFailureClass,
@@ -124,9 +125,22 @@ export class LedgeredProvider implements LlmProvider {
     }
 
     const now = this.options.clock ?? Date.now;
+    const requestFingerprint = stableFingerprint({ system: request.system, user: request.user, role: request.role,
+      maxOutputTokens: request.maxOutputTokens, jsonMode: request.jsonMode, reasoningTier: request.reasoningTier,
+      reasoningReserveTokens: request.reasoningReserveTokens, model: this.options.modelProfileFingerprint });
+    if (['planner', 'narrator'].includes(meta.requestKind)) {
+      const retained = prior.find(a => a.status === 'succeeded' && a.requestFingerprint === requestFingerprint && a.responseJson);
+      if (retained?.responseJson) {
+        const response = JSON.parse(retained.responseJson) as LlmResponse;
+        if (stableFingerprint(response) !== retained.responseHash) throw new Error('Retained LLM response hash mismatch; refusing dispatch.');
+        return response;
+      }
+    }
     const attempt = await this.store.beginAttempt(
       {
         logicalRequestId: meta.logicalRequestId,
+        requestFingerprint,
+        physicalAttemptLimit: meta.physicalAttemptLimit,
         allowOutcomeUnknownReplay: this.options.allowOutcomeUnknownReplay,
         requestKind: meta.requestKind,
         campaignId: meta.campaignId ?? null,
@@ -146,9 +160,11 @@ export class LedgeredProvider implements LlmProvider {
     await this.store.updateAttempt(attempt.attemptId, { status: 'sent' });
 
     try {
-      const response = await this.inner.complete(request);
+      const response = await this.inner.complete({ ...request, maxPhysicalRequests: 1 });
       const patch: LlmAttemptPatch = {
         status: 'succeeded',
+        responseJson: JSON.stringify(response),
+        responseHash: stableFingerprint(response),
         providerRequestId: response.requestId ?? null,
         inputTokens: response.usage?.inputTokens ?? null,
         outputTokens: response.usage?.outputTokens ?? null,

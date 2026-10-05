@@ -1,3 +1,6 @@
+import type { WorldRuleConfiguration } from '../../../../../src/domain/rules/worldRuleConfiguration';
+import { requireCompiledRules } from '../../../../../src/application/content/runtimeRules';
+import { renderRulePreview } from '../../../../../src/application/content/ruleConfigCompiler';
 /**
  * WorldBooksPanel — 世界详情 · 三宝书 (plan §10.2).
  *
@@ -114,6 +117,8 @@ export function WorldBooksPanel(props: {
   const [packageEntries, setPackageEntries] = useState<ContentEntry[]>([]);
   const [baseEntries, setBaseEntries] = useState<ContentEntry[]>([]);
   const [packageSections, setPackageSections] = useState<BookSection[]>([]);
+  const [ruleConfiguration, setRuleConfiguration] = useState<WorldRuleConfiguration | null>(null);
+  const [rulePreview, setRulePreview] = useState('');
   const [packageRevision, setPackageRevision] = useState<number | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [contentInfo, setContentInfo] = useState<string | null>(null);
@@ -163,6 +168,10 @@ export function WorldBooksPanel(props: {
         const runtime = await getDatabaseRuntime();
         const pkg = await runtime.worldStore.getWorldPackage(props.worldId, revision);
         if (!pkg || cancelled) return;
+        let nextRules = pkg.manifest.ruleConfiguration;
+        const compiled = requireCompiledRules(nextRules);
+        setRulePreview(renderRulePreview(compiled.publicProjection, compiled.capabilityTable).join('\n')
+          + '\n规则配置属于设计补全；只有标注原文证据的事实才来自小说。');
         let nextEntries = pkg.entries;
         let nextSections = pkg.sections;
         if (!editMode) {
@@ -185,10 +194,11 @@ export function WorldBooksPanel(props: {
           const draft = await loadWorldPackageDraft(props.worldId);
           if (draft && draft.baseRevision === revision) {
             try {
-              const parsed = JSON.parse(draft.draftJson) as { entries?: ContentEntry[]; sections?: BookSection[] };
+              const parsed = JSON.parse(draft.draftJson) as { entries?: ContentEntry[]; sections?: BookSection[]; ruleConfiguration?: WorldRuleConfiguration };
               if (Array.isArray(parsed.entries) && Array.isArray(parsed.sections)) {
                 nextEntries = parsed.entries;
                 nextSections = parsed.sections;
+                if (parsed.ruleConfiguration) nextRules = parsed.ruleConfiguration;
               }
             } catch {
               setDraftNotice('已保存的草稿无法读取，原发布版本仍安全保留。');
@@ -197,6 +207,7 @@ export function WorldBooksPanel(props: {
             setDraftNotice(`发现基于 r${draft.baseRevision} 的旧草稿；当前发布版本是 r${revision}，需要人工核对后再编辑。`);
           }
         }
+        setRuleConfiguration(nextRules);
         setPackageEntries(nextEntries);
         setBaseEntries(pkg.entries);
         setPackageSections(nextSections);
@@ -291,6 +302,7 @@ export function WorldBooksPanel(props: {
         onChange={setMode}
         testID="books-mode"
       />
+      {rulePreview ? <Card><SectionHeader title="当前世界规则" /><Text selectable style={{ color: theme.onRaised.primary }}>{rulePreview}</Text></Card> : null}
       {mode === 'player' ? (
         <StatusBanner
           tone="info"
@@ -381,6 +393,7 @@ export function WorldBooksPanel(props: {
           <WorldBooksEditor
             worldId={props.worldId}
             baseRevision={packageRevision}
+            ruleConfiguration={ruleConfiguration}
             entries={packageEntries}
             sections={packageSections}
             baseEntries={baseEntries}
@@ -390,7 +403,7 @@ export function WorldBooksPanel(props: {
               setPackageEntries(entries);
               setBooks(assembleBookViews(entries, packageSections, true, discoveredEntryIds));
             }}
-            onPublished={() => setMode('player')}
+            onPublished={() => { setRefreshVersion(v => v + 1); setMode('player'); }}
           />
         ) : null}
 

@@ -15,8 +15,8 @@ import { ExistingBuildExecutor } from '../../src/application/segmentBuild/existi
 import { SegmentBuildService } from '../../src/application/segmentBuild/segmentBuildService';
 import { SqliteOpeningSurveyStore } from '../../src/infra/sqlite/sqliteOpeningSurveyStore';
 import SQLite from 'react-native-sqlite-storage';
-import { BUILTIN_MIGRATIONS } from '../../src/infra/sqlite/builtinMigrations';
-import { applySqliteMigrations } from '../../src/infra/sqlite/migrations';
+import { installBaselineSchema } from '../../src/application/project/dbBaseline';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ReactNativeSqliteAdapter, type ReactNativeSqliteDatabase } from '../../src/infra/sqlite/reactNativeSqliteAdapter';
 import { SqliteNarrativeStore } from '../../src/infra/sqlite/sqliteNarrativeStore';
 import { SqliteGuidanceStore } from '../../src/infra/sqlite/sqliteGuidanceStore';
@@ -62,16 +62,18 @@ export interface MobileDatabaseRuntime {
 }
 
 let singleton: Promise<MobileDatabaseRuntime> | null = null;
+const DATABASE_SELECTION_KEY = 'shineword.currentDevelopmentDatabase';
 
 async function createRuntime(): Promise<MobileDatabaseRuntime> {
   const nativeDb = await SQLite.openDatabase({
-    name: 'shineword.db',
+    name: await AsyncStorage.getItem(DATABASE_SELECTION_KEY) ?? 'shineword.db',
     location: 'default',
   });
   const db = new ReactNativeSqliteAdapter(
     nativeDb as unknown as ReactNativeSqliteDatabase,
   );
-  await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
+  try { await installBaselineSchema(db); }
+  catch (error) { await nativeDb.close(); throw error; }
   const fts5 = await probeFts5(db);
   const worldStore = new SqliteWorldStore(db);
   const sourceStore = new SqliteSourceStore(db);
@@ -135,4 +137,11 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
 export function getDatabaseRuntime(): Promise<MobileDatabaseRuntime> {
   if (!singleton) singleton = createRuntime();
   return singleton;
+}
+
+/** Explicit reset selects a new file; keys and old data are preserved. */
+export async function createFreshDevelopmentDatabase(): Promise<MobileDatabaseRuntime> {
+  await AsyncStorage.setItem(DATABASE_SELECTION_KEY, `shineword-baseline-${Date.now()}.db`);
+  singleton = null;
+  return getDatabaseRuntime();
 }

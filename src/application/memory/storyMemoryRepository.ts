@@ -8,8 +8,15 @@
  */
 
 import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
-import { emptyStoryMemoryState, type StoryMemoryPatch, type StoryMemoryState, type StoryMemoryStatus } from './storyMemoryTypes';
+import { emptyStoryMemoryState, storyMemoryContentHash, type StoryMemoryPatch, type StoryMemoryState, type StoryMemoryStatus } from './storyMemoryTypes';
 import { mergeStoryMemoryPatch } from './storyMemoryMerger';
+import { stableFingerprint } from '../llm/requestPlan';
+
+export interface MemoryWorkerFence {
+  owner: string; token: number; branchId: string;
+  checkedAt?: string;
+  handoffs: ReadonlyArray<{ handoffId: string; fencingToken: number }>;
+}
 
 /** Anything that can run SQL: a database connection or an open transaction. */
 type SqliteDbOrTx = Pick<SqliteDatabase, 'execute' | 'queryAll'>;
@@ -70,6 +77,7 @@ export class SqliteStoryMemoryStore {
     const row = rows[0];
     if (!row) return null;
     const state = JSON.parse(row.state_json) as StoryMemoryState;
+    if (state.schemaVersion !== 3) throw new Error('Unsupported story memory schema; current protocol is V3.');
     // Columns are authoritative over the JSON blob's metadata copy.
     state.metadata.status = row.status as StoryMemoryStatus;
     state.metadata.dirtyFromStateVersion = row.dirty_from_state_version;
@@ -77,10 +85,14 @@ export class SqliteStoryMemoryStore {
     state.metadata.lastAppliedPatchId = row.last_applied_patch_id;
     state.metadata.updatedAt = row.updated_at;
     state.throughStateVersion = row.through_state_version;
+    if ((state.metadata.status === 'clean' && !state.metadata.contentHash) || state.metadata.contentHash && state.metadata.contentHash !== storyMemoryContentHash(state)) {
+      throw new Error('Story memory checkpoint content hash mismatch.');
+    }
     return state;
   }
 
   async saveState(state: StoryMemoryState): Promise<void> {
+    state.metadata.contentHash = storyMemoryContentHash(state);
     await this.db.execute(
       `INSERT INTO story_memory_states
         (branch_id, through_state_version, state_json, state_fingerprint, status,
@@ -107,6 +119,50 @@ export class SqliteStoryMemoryStore {
     );
   }
 
+  async getCheckpointAt(branchId: string, maxVersion: number): Promise<StoryMemoryState | null> {
+    const rows = await this.db.queryAll<{ state_json: string; content_hash: string }>(
+      `SELECT state_json, content_hash FROM story_memory_checkpoints
+       WHERE branch_id = ? AND through_state_version <= ? ORDER BY through_state_version DESC LIMIT 1`,
+      [branchId, maxVersion]);
+    if (!rows[0]) return null;
+    const state = JSON.parse(rows[0].state_json) as StoryMemoryState;
+    if (state.schemaVersion !== 3 || state.branchId !== branchId
+      || storyMemoryContentHash(state) !== rows[0].content_hash) throw new Error('Story checkpoint integrity mismatch.');
+    return state;
+  }
+
+  async freezeBatchRequest<T>(input: { batchId: string; branchId: string; from: number; to: number;
+    baseFingerprint: string; payload: T }): Promise<T> {
+    await this.db.execute(`INSERT OR IGNORE INTO story_memory_batch_requests
+      (batch_id,branch_id,from_state_version,to_state_version,base_fingerprint,payload_json,content_hash,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`, [input.batchId, input.branchId, input.from, input.to,
+      input.baseFingerprint, JSON.stringify(input.payload), stableFingerprint(input.payload), new Date().toISOString()]);
+    const rows = await this.db.queryAll<{ payload_json: string; content_hash: string; base_fingerprint: string }>(
+      'SELECT payload_json,content_hash,base_fingerprint FROM story_memory_batch_requests WHERE batch_id = ?', [input.batchId]);
+    if (!rows[0]) throw new Error('Frozen memory batch is missing.');
+    const payload = JSON.parse(rows[0].payload_json) as T;
+    if (stableFingerprint(payload) !== rows[0].content_hash || rows[0].base_fingerprint !== input.baseFingerprint) {
+      throw new Error('Frozen memory batch integrity/base mismatch; refusing live reassembly.');
+    }
+    return payload;
+  }
+
+  async saveBatchResponse(batchId: string, response: unknown): Promise<void> {
+    const rows = await this.db.queryAll<{ n: number }>(
+      'SELECT COALESCE(MAX(response_no),0)+1 AS n FROM story_memory_batch_responses WHERE batch_id=?', [batchId]);
+    await this.db.execute('INSERT INTO story_memory_batch_responses VALUES (?,?,?,?,?)',
+      [batchId, rows[0]!.n, JSON.stringify(response), stableFingerprint(response), new Date().toISOString()]);
+  }
+
+  async loadBatchResponse<T>(batchId: string): Promise<T | null> {
+    const rows = await this.db.queryAll<{ response_json: string; content_hash: string }>(
+      'SELECT response_json,content_hash FROM story_memory_batch_responses WHERE batch_id=? ORDER BY response_no DESC LIMIT 1', [batchId]);
+    if (!rows[0]) return null;
+    const response = JSON.parse(rows[0].response_json) as T;
+    if (stableFingerprint(response) !== rows[0].content_hash) throw new Error('Memory response integrity mismatch.');
+    return response;
+  }
+
   /**
    * P8-4 CAS write (I09): the update only lands when the stored fingerprint
    * still equals `expectedFingerprint`. A stale worker's write is refused
@@ -117,6 +173,7 @@ export class SqliteStoryMemoryStore {
     options: { expectedFingerprint: string | null },
   ): Promise<void> {
     const expected = options.expectedFingerprint;
+    state.metadata.contentHash = storyMemoryContentHash(state);
     const changes = await this.db.execute(
       `UPDATE story_memory_states SET
          through_state_version = ?,
@@ -184,6 +241,7 @@ export class SqliteStoryMemoryStore {
       patch: StoryMemoryPatch;
     };
     nextState: StoryMemoryState;
+    workerFence?: MemoryWorkerFence;
   }): Promise<void> {
     const now = new Date().toISOString();
     const db = this.db as SqliteDbOrTx & { transaction?: SqliteDatabase['transaction'] };
@@ -191,6 +249,16 @@ export class SqliteStoryMemoryStore {
       throw new Error('Atomic checkpoint application requires a transactional story-memory store.');
     }
     await db.transaction(async tx => {
+      if (input.workerFence) {
+        const fence = input.workerFence;
+        const leases = await tx.queryAll<{ fencing_token: number; lease_owner: string; lease_expires_at: string }>(
+          'SELECT fencing_token,lease_owner,lease_expires_at FROM story_memory_worker_leases WHERE branch_id = ?', [fence.branchId]);
+        const lease = leases[0];
+        if (!lease || lease.fencing_token !== fence.token || lease.lease_owner !== fence.owner
+          || lease.lease_expires_at <= (fence.checkedAt ?? now) || fence.branchId !== input.nextState.branchId) {
+          throw new StoryMemoryCasConflictError('Memory worker lease/fence expired.');
+        }
+      }
       const txStore = new SqliteStoryMemoryStore(tx);
       await txStore.insertPatch({
         patchId: input.patchRow.patchId,
@@ -205,20 +273,33 @@ export class SqliteStoryMemoryStore {
         expectedFingerprint: input.patchRow.baseFingerprint,
       });
       await txStore.markPatchApplied(input.patchRow.patchId, input.nextState.metadata.fingerprint, now);
+      await tx.execute(`INSERT INTO story_memory_checkpoints
+        (branch_id,through_state_version,state_json,content_hash,created_at) VALUES (?,?,?,?,?)`,
+        [input.nextState.branchId, input.nextState.throughStateVersion, JSON.stringify(input.nextState),
+          storyMemoryContentHash(input.nextState), now]);
+      for (const handoff of input.workerFence?.handoffs ?? []) {
+        await tx.execute(`UPDATE frozen_turn_postprocess_outbox SET status='succeeded',lease_owner=NULL,lease_expires_at=NULL,updated_at=?,
+          physical_http_count=(SELECT COUNT(*) FROM llm_request_attempts a WHERE a.branch_id=frozen_turn_postprocess_outbox.branch_id
+            AND a.state_version=frozen_turn_postprocess_outbox.committed_state_version AND a.request_kind IN ('memory_checkpoint','memory_repair') AND a.status<>'prepared')
+          WHERE handoff_id=? AND status='running' AND lease_owner=? AND fencing_token=?
+          AND committed_state_version <= ?`, [now, handoff.handoffId, input.workerFence!.owner,
+          handoff.fencingToken, input.nextState.throughStateVersion]);
+      }
     });
   }
 
   async markStatus(
     branchId: string,
     status: StoryMemoryStatus,
-    options: { dirtyFromStateVersion?: number | null; updatedAt: string } ,
+    options: { dirtyFromStateVersion?: number | null; updatedAt: string; expectedFingerprint?: string } ,
   ): Promise<void> {
     const current = await this.getState(branchId);
     if (!current) return;
+    if (options.expectedFingerprint && current.metadata.fingerprint !== options.expectedFingerprint) return;
     current.metadata.status = status;
     current.metadata.dirtyFromStateVersion = options.dirtyFromStateVersion ?? null;
     current.metadata.updatedAt = options.updatedAt;
-    await this.saveState(current);
+    await this.saveStateCas(current, { expectedFingerprint: options.expectedFingerprint ?? current.metadata.fingerprint });
   }
 
   async insertPatch(row: {
@@ -317,32 +398,23 @@ export async function forkStoryMemory(
     .filter(row => row.status === 'applied');
 
   let state = emptyStoryMemoryState(input.targetBranchId, input.createdAt);
+  let sourceState = emptyStoryMemoryState(input.sourceBranchId, input.createdAt);
   const store = new SqliteStoryMemoryStore(db);
   for (const row of sourcePatches) {
+    if (!row.patch.evidenceVersions) throw new Error('Memory patch lacks its exact evidence version manifest.');
+    const turnVersions = new Map(Object.entries(row.patch.evidenceVersions));
+    if ([...turnVersions.values()].some(v => !Number.isSafeInteger(v) || v <= row.fromStateVersion || v > row.toStateVersion)) throw new Error('Memory evidence version manifest is invalid.');
+    sourceState = mergeStoryMemoryPatch(sourceState, { patch: row.patch, patchId: row.patchId,
+      baseFingerprint: row.baseFingerprint, turnVersions, now: input.createdAt });
+    if (sourceState.metadata.fingerprint !== row.resultFingerprint) throw new Error('Memory source patch chain integrity mismatch.');
     const patchId = `smp:${input.targetBranchId}:${row.fromStateVersion}-${row.toStateVersion}`;
-    await db.execute(
-      `INSERT INTO story_memory_patches
-        (patch_id, branch_id, from_state_version, to_state_version, base_fingerprint,
-         patch_json, status, created_at, applied_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'applied', ?, ?)`,
-      [
-        patchId,
-        input.targetBranchId,
-        row.fromStateVersion,
-        row.toStateVersion,
-        row.baseFingerprint,
-        JSON.stringify(row.patch),
-        row.createdAt,
-        row.appliedAt ?? input.createdAt,
-      ],
-    );
-    state = mergeStoryMemoryPatch(state, {
-      patch: row.patch,
-      patchId,
-      baseFingerprint: state.metadata.fingerprint,
-      turnVersions: new Map(row.patch.completedBeats.map(beat => [beat.turnId, beat.stateVersion])),
-      now: input.createdAt,
-    });
+    const baseFingerprint = state.metadata.fingerprint;
+    state = mergeStoryMemoryPatch(state, { patch: row.patch, patchId, baseFingerprint, turnVersions, now: input.createdAt });
+    await store.insertPatch({ patchId, branchId: input.targetBranchId, fromStateVersion: row.fromStateVersion,
+      toStateVersion: row.toStateVersion, baseFingerprint, patch: row.patch, createdAt: row.createdAt });
+    await store.markPatchApplied(patchId, state.metadata.fingerprint, input.createdAt);
+    await db.execute(`INSERT INTO story_memory_checkpoints(branch_id,through_state_version,state_json,content_hash,created_at)
+      VALUES (?,?,?,?,?)`, [input.targetBranchId, state.throughStateVersion, JSON.stringify(state), storyMemoryContentHash(state), input.createdAt]);
   }
   state.metadata.status = sourcePatches.length > 0 ? 'clean' : 'empty';
   await store.saveState(state);

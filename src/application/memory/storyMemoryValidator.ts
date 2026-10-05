@@ -33,6 +33,7 @@ export function validateStoryMemoryPatch(
     throw new Error('Memory patch must be a JSON object.');
   }
   const patch = value as Record<string, unknown>;
+  if (patch.schemaVersion !== 3) errors.push('schemaVersion must be 3; historical memory protocols are unsupported');
 
   const range = patch.range as { fromStateVersion?: unknown; toStateVersion?: unknown } | undefined;
   const from = Number(range?.fromStateVersion);
@@ -60,7 +61,7 @@ export function validateStoryMemoryPatch(
   const stringArrayOr = (v: unknown): string[] | undefined => {
     if (!Array.isArray(v)) return undefined;
     const list = v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-    return list.length > 0 ? list : undefined;
+    return list;
   };
 
   const characterUpdates: StoryMemoryPatch['characterUpdates'] = [];
@@ -102,6 +103,7 @@ export function validateStoryMemoryPatch(
       if (typeof toId !== 'string' || !context.allowedActorIds.has(toId)) {
         errors.push(`relationshipUpdates[${index}] toActorId ${String(toId)} is unknown`);
       }
+      if (fromId === toId) errors.push(`relationshipUpdates[${index}] cannot invent a self relationship`);
       if (action !== 'upsert' && action !== 'remove') {
         errors.push(`relationshipUpdates[${index}] action must be upsert|remove`);
       }
@@ -190,6 +192,8 @@ export function validateStoryMemoryPatch(
       errors.push('narrative must be an object when present');
     } else {
       narrative = {};
+      checkEvidence(rawNarrative, 'narrative', 0);
+      narrative.evidenceTurnIds = (rawNarrative as { evidenceTurnIds?: string[] }).evidenceTurnIds;
       const arc = (rawNarrative as { currentArc?: unknown }).currentArc;
       if (arc !== undefined) {
         if (arc === null) narrative.currentArc = null;
@@ -204,7 +208,11 @@ export function validateStoryMemoryPatch(
           errors.push('narrative.currentArc must be {title,summary} or null');
         }
       }
-      narrative.currentObjective = stringOr((rawNarrative as { currentObjective?: unknown }).currentObjective);
+      const objective = (rawNarrative as { currentObjective?: unknown }).currentObjective;
+      if (objective !== undefined) {
+        if (typeof objective !== 'string') errors.push('narrative.currentObjective must be a string');
+        else narrative.currentObjective = objective.trim();
+      }
       narrative.archiveDigestAppend = stringOr((rawNarrative as { archiveDigestAppend?: unknown }).archiveDigestAppend);
     }
   }
@@ -216,7 +224,7 @@ export function validateStoryMemoryPatch(
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     range: { fromStateVersion: from, toStateVersion: to },
     narrative,
     characterUpdates,

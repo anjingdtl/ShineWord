@@ -7,7 +7,7 @@ const ts = require('typescript');
 const { DatabaseSync } = require('node:sqlite');
 const root = path.resolve(__dirname, '../..');
 const { BUILTIN_MIGRATIONS } = require(path.join(root, 'dist/infra/sqlite/builtinMigrations'));
-const { applySqliteMigrations } = require(path.join(root, 'dist/infra/sqlite/migrations'));
+const { installBaselineSchema } = require(path.join(root, 'dist/application/project/dbBaseline'));
 const { SqliteWorldStore } = require(path.join(root, 'dist/infra/sqlite/sqliteWorldStore'));
 const { SqliteBuildRunStore } = require(path.join(root, 'dist/infra/sqlite/sqliteBuildRunStore'));
 const { SqliteLlmLedgerStore } = require(path.join(root, 'dist/infra/sqlite/sqliteLlmLedgerStore'));
@@ -80,7 +80,7 @@ const sha = {
 async function createMobileHarness({ bytes, dbPath, coordinator, transport, secrets, serviceStart = async () => false, nativeControl, moduleMocks = {} } = {}) {
   const db = new DatabaseSync(dbPath ?? ':memory:');
   const adapter = new NodeSqliteAdapter(db);
-  await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
+  await installBaselineSchema(adapter);
   const runtime = { db: adapter, worldStore: new SqliteWorldStore(adapter), llmLedger: new SqliteLlmLedgerStore(adapter) };
   const staged = { bytes };
   const defaultTransport = { async post() { throw new Error('unexpected network request'); } };

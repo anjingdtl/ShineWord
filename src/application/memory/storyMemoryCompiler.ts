@@ -39,64 +39,46 @@ export interface MemoryRequestPayload {
     summary: string;
     narrative: string;
     grade: string | null;
-    effects: string[];
+    effects: ReadonlyArray<{ op: string }>;
   }>;
   patchProtocol: string[];
 }
 
 /** Narrative-heavy state the checkpoint model needs; compact and bounded. */
-export function compilePreviousMemoryView(state: StoryMemoryState): string {
-  if (state.metadata.status === 'empty' && state.throughStateVersion === 0) {
-    return '(empty - first checkpoint)';
+export function compilePreviousMemoryView(state: StoryMemoryState, options: {
+  queryText?: string; actorIds?: readonly string[]; maxCharacters?: number;
+} = {}): string {
+  const limit = Math.max(1000, Math.min(12000, options.maxCharacters ?? 12000));
+  const participants = new Set(options.actorIds ?? []);
+  const score = (ids: readonly string[], text: string) => (ids.some(id => participants.has(id)) ? 10 : 0)
+    + textRelevance(options.queryText ?? '', text);
+  const candidates = compileMemoryMaterialCandidates(state, options.queryText ?? '')
+    .map(material => ({ material, text: typeof material.payload.text === 'string' ? material.payload.text : '' }))
+    .sort((a, b) => Number(b.material.retention === 'mandatory') - Number(a.material.retention === 'mandatory')
+      || score(b.material.entityIds ?? [], b.text) - score(a.material.entityIds ?? [], a.text)
+      || a.material.id.localeCompare(b.material.id));
+  const lines = [`through v${state.throughStateVersion}`];
+  let used = lines[0]!.length;
+  for (const candidate of candidates) {
+    // Whole entity facts are selected independently; no clipping mid-promise.
+    if (used + candidate.text.length + 1 > limit) continue;
+    lines.push(candidate.text); used += candidate.text.length + 1;
   }
-  const lines: string[] = [`through v${state.throughStateVersion}`];
-  if (state.narrative.currentArc) {
-    lines.push(`arc: ${state.narrative.currentArc.title} - ${state.narrative.currentArc.summary}`);
-  }
-  if (state.narrative.currentObjective) lines.push(`objective: ${state.narrative.currentObjective}`);
-  for (const character of Object.values(state.characters)) {
-    lines.push(
-      `[${character.actorId}] ${character.stableIdentitySummary}` +
-        ` | goal: ${character.currentNarrativeState.currentGoal}` +
-        ` | mood: ${character.currentNarrativeState.emotionalState}` +
-        (character.currentNarrativeState.promises.length > 0
-          ? ` | promises: ${character.currentNarrativeState.promises.join('；')}`
-          : '')
-        + (character.currentNarrativeState.secretsKnownToPlayer.length > 0
-          ? ` | player-known secrets: ${character.currentNarrativeState.secretsKnownToPlayer.join('；')}`
-          : ''),
-    );
-  }
-  for (const relationship of Object.values(state.relationships)) {
-    lines.push(
-      `[${relationship.fromActorId}->${relationship.toActorId}] ${relationship.relationType}` +
-        ` | ${relationship.currentNarrativeState} | trust: ${relationship.trustNarrative}` +
-        ` | status: ${relationship.publicStatus}`,
-    );
-  }
-  for (const conflict of Object.values(state.narrative.activeConflicts)) {
-    lines.push(`conflict(open): ${conflict.title} - ${conflict.description} | stakes: ${conflict.stakes}`);
-  }
-  for (const thread of Object.values(state.narrative.openThreads)) {
-    lines.push(`thread(open): ${thread.title} - ${thread.description}`);
-  }
-  for (const seed of Object.values(state.narrative.foreshadowing)) {
-    lines.push(`foreshadowing(${seed.status}): ${seed.title} - ${seed.description}`);
-  }
-  if (state.narrative.archiveDigest) lines.push(`archive: ${state.narrative.archiveDigest}`);
   return lines.join('\n');
 }
 
 export const MEMORY_PATCH_PROTOCOL: readonly string[] = [  'Return ONLY one JSON object: a StoryMemoryPatch for the declared range.',
-  'shape: {"schemaVersion":2,"range":{"fromStateVersion":F,"toStateVersion":T},',
+  'shape: {"schemaVersion":3,"range":{"fromStateVersion":F,"toStateVersion":T},',
   '  "characterUpdates":[{"actorId":"...","stableIdentitySummary":"...","emotionalState":"...","currentGoal":"...","concerns":[],"promises":[],"secretsKnownToPlayer":[],"importantExperiences":[],"evidenceTurnIds":["..."]}],',
   '  "relationshipUpdates":[{"fromActorId":"...","toActorId":"...","action":"upsert|remove","relationType":"...","currentNarrativeState":"...","trustNarrative":"...","importantPromises":[],"unresolvedTensions":[],"publicStatus":"public|secret|misunderstood","evidenceTurnIds":["..."]}],',
   '  "conflictChanges":[{"title":"...","action":"open|resolve|update","description":"...","stakes":"...","resolution":"...","evidenceTurnIds":["..."]}],',
   '  "threadChanges":[{"title":"...","action":"open|resolve|update","description":"...","resolution":"...","evidenceTurnIds":["..."]}],',
   '  "foreshadowingChanges":[{"title":"...","action":"plant|payoff|update","description":"...","payoff":"...","evidenceTurnIds":["..."]}],',
   '  "completedBeats":[{"turnId":"...","summary":"..."}],',
-  '  "narrative":{"currentArc":{"title":"...","summary":"..."},"currentObjective":"...","archiveDigestAppend":"..."}}',
+  '  "narrative":{"currentArc":{"title":"...","summary":"..."},"currentObjective":"...","archiveDigestAppend":"...","evidenceTurnIds":["..."]}}',
   'Rules: actorId/fromActorId/toActorId MUST be exact ids from actors table. Every item MUST cite >=1 evidenceTurnIds from this batch. Lists you send REPLACE the previous list (send the merged full list). Never invent numbers, HP, inventory or locations - narrative state only. Omit optional sections you do not change.',
+  'Promise semantics: promises and importantPromises contain only an explicit undertaking by the speaker to do something in the future. Advice, warnings, recommendations, information, hopes and inferred intentions are NOT promises. Preserve an unresolved actual promise until committed evidence proves fulfillment, abandonment or invalidation. Do not turn a suggestion into a commitment.',
+  'Lifecycle semantics: use open for newly established conflicts or threads, update for evidenced progress, and resolve only when the adopted story establishes closure. A completed beat is not automatically a completed goal. Keep currentObjective tied to the player\'s established pursuit; a new clue alone does not replace it.',
 ];
 
 /**
@@ -178,6 +160,7 @@ export function compileMemoryMaterialCandidates(
   }
 
   for (const relationship of Object.values(state.relationships)) {
+    if (relationship.publicStatus === 'secret') continue;
     const lines: string[] = [
       `关系【${relationship.fromActorId} → ${relationship.toActorId}】${relationship.relationType}`,
       `状态：${relationship.currentNarrativeState}`,
@@ -262,7 +245,7 @@ export function compileMemoryCheckpointRequest(input: {
       summary: turn.publicSummary,
       narrative: (turn.narrativeText ?? '').slice(0, 800),
       grade: turn.outcomeGrade,
-      effects: turn.effects.map(effect => effect.op),
+      effects: turn.effects,
     })),
     patchProtocol: [...MEMORY_PATCH_PROTOCOL],
   };

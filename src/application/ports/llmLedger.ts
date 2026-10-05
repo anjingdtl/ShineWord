@@ -41,6 +41,9 @@ export type LlmFailureClass =
   | 'unknown';
 
 export interface LlmRequestAttemptRecord {
+  requestFingerprint?: string | null;
+  responseJson?: string | null;
+  responseHash?: string | null;
   attemptId: string;
   logicalRequestId: string;
   requestKind: string;
@@ -71,6 +74,8 @@ export interface LlmRequestAttemptRecord {
 }
 
 export interface NewLlmRequestAttempt {
+  requestFingerprint?: string;
+  physicalAttemptLimit?: number;
   /** Explicit operator replay only; never inferred from elapsed time. */
   allowOutcomeUnknownReplay?: boolean;
   logicalRequestId: string;
@@ -87,6 +92,8 @@ export interface NewLlmRequestAttempt {
 }
 
 export interface LlmAttemptPatch {
+  responseJson?: string;
+  responseHash?: string;
   status?: LlmAttemptStatus;
   failureClass?: LlmFailureClass | null;
   errorCode?: string | null;
@@ -139,5 +146,7 @@ export interface LlmBuildRecoveryPort {
 
 export interface LlmReplayApprovalPort {
   acknowledgePlayReplay(input: { campaignId: string; branchId: string; expectedStateVersion: number;
+    attemptIds: readonly string[] }): Promise<void>;
+  acknowledgeMemoryReplay(input: { campaignId: string; branchId: string;
     attemptIds: readonly string[] }): Promise<void>;
 }

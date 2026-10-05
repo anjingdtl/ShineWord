@@ -64,7 +64,7 @@ class NodeSqliteAdapter {
 
 function cleanMemoryState(branchId, throughStateVersion) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     branchId,
     throughStateVersion,
     characters: {

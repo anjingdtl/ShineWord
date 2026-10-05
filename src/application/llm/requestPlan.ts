@@ -5,6 +5,7 @@
  * provider can actually grant and freezes the decision into a plan.
  */
 
+import { sha256Hex } from '../../domain/identity/sha256';
 import type { ContextDemand, ElasticAllocationResult } from '../context/contextTypes';
 import type { RequestEnvelope } from '../context/modelEnvelope';
 import type { LlmRequestKind, ReasoningDialect, ReasoningTier } from './types';
@@ -103,15 +104,9 @@ export interface FrozenLlmRequestPlan {
   trace: RequestBudgetTrace;
 }
 
-/** FNV-1a 32-bit hash over a canonical JSON serialization. */
+/** SHA-256 over actual canonical content, shared across both runtimes. */
 export function stableFingerprint(value: unknown): string {
-  const canonical = canonicalize(value);
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < canonical.length; i += 1) {
-    hash ^= canonical.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
+  return sha256Hex(canonicalize(value));
 }
 
 function canonicalize(value: unknown): string {

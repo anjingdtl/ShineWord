@@ -138,7 +138,7 @@ test('final wire verifier accepts a fitting request and rejects an overflowing o
 
 function memoryStateFor(branchId) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     branchId,
     throughStateVersion: 8,
     characters: {

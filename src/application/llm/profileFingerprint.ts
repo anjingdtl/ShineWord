@@ -12,8 +12,8 @@ export function llmModelProfileFingerprint(profile: Pick<
     profileId: profile.id,
     endpointFingerprint: stableFingerprint(profile.endpoint),
     model: profile.model,
-    contextWindow: profile.capabilities.contextWindow ?? null,
-    maxOutputTokens: profile.capabilities.maxOutputTokens ?? null,
+    contextWindow: profile.capabilities?.contextWindow ?? null,
+    maxOutputTokens: profile.capabilities?.maxOutputTokens ?? null,
     reasoningDialect: profile.reasoningDialect ?? reasoningDialectForModel(profile.model),
   });
 }

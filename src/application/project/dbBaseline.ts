@@ -1,79 +1,55 @@
-/**
- * Development database baseline (P8-8, plan §18.3): new empty databases
- * install the full current schema in ONE pass — no upgrade-chain replay —
- * and legacy dev schemas are detected and refused with an explicit reset
- * hint (A34). API/keychain configuration is a separate scope and is never
- * touched by a world/campaign reset (plan §18.3.4).
- */
-
 import { BUILTIN_MIGRATIONS } from '../../infra/sqlite/builtinMigrations';
+import { splitSqlStatements } from '../../infra/sqlite/migrations';
 import type { SqliteDatabase } from '../ports/sqlite';
 
 export const DB_BASELINE_VERSION = 'shineword-db-baseline-1';
-/** First migration version of the phase-8 baseline (frozen-turn tables). */
-export const PHASE8_BASELINE_FIRST_VERSION = 33;
-
-export interface LegacyDatabaseCheck {
-  legacy: boolean;
-  reason: string;
+export const PHASE8_BASELINE_FIRST_VERSION = 100;
+export interface LegacyDatabaseCheck { legacy: boolean; reason: string }
+export class LegacyDevelopmentDatabaseError extends Error {
+  constructor(message: string) { super(message); this.name = 'LegacyDevelopmentDatabaseError'; }
 }
 
-/**
- * Detects a legacy development database: a populated pre-phase-8 schema (any
- * migration history below the phase-8 baseline while old tables exist).
- * Fresh empty databases (no tables at all) are NOT legacy — they install the
- * baseline directly.
- */
+/** Refuse historical schemas before executing DDL or touching data. */
 export async function detectLegacyDevelopmentDatabase(db: SqliteDatabase): Promise<LegacyDatabaseCheck> {
-  const migrationRow = await db.queryOne<{ max_version: number }>(
-    'SELECT MAX(version) AS max_version FROM schema_migrations',
-  ).catch(() => null);
-  if (!migrationRow) {
-    // No migration bookkeeping at all — could be an empty file or a foreign
-    // database. Distinguish by looking for a known old table.
-    const oldTable = await db.queryOne<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'llm_requests')",
-    ).catch(() => null);
-    if (oldTable && oldTable.n > 0) {
-      return {
-        legacy: true,
-        reason: '数据库包含旧开发协议的表但没有当前协议的迁移记录；它不适用于当前协议（无转换路径）。请在开发设置中执行开发重置或创建新项目。',
-      };
+  const tables = await db.queryAll<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'android_metadata'");
+  if (tables.length === 0) return { legacy: false, reason: 'empty database' };
+  if (tables.some(t => t.name === 'shineword_baseline')) {
+    const marker = await db.queryOne<{ baseline_version: string }>('SELECT baseline_version FROM shineword_baseline');
+    const history = await db.queryAll<{ version: number }>('SELECT version FROM schema_migrations').catch(() => []);
+    if (marker?.baseline_version === DB_BASELINE_VERSION && history.length === 1 && history[0]?.version === PHASE8_BASELINE_FIRST_VERSION) {
+      // A marker alone does not prove that the fresh baseline finished installing.
+      // Verify every declared table and column without modifying the database.
+      const installed = new Set(tables.map(table => table.name));
+      let complete = true;
+      for (const statement of splitSqlStatements(BUILTIN_MIGRATIONS[0]!.sql)) {
+        const declaration = /^CREATE TABLE (\w+)\s*\(([\s\S]*)\)$/i.exec(statement.trim());
+        if (!declaration) continue;
+        const name = declaration[1]!;
+        if (!installed.has(name)) { complete = false; break; }
+        const columns = await db.queryAll<{ name: string }>(`PRAGMA table_info(${name})`);
+        const names = new Set(columns.map(column => column.name));
+        const expected = [...declaration[2]!.matchAll(/(?:^|,)\s*(\w+)\s+(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b/gi)].map(match => match[1]!);
+        if (expected.some(column => !names.has(column))) { complete = false; break; }
+      }
+      if (complete) return { legacy: false, reason: 'current protocol' };
     }
-    return { legacy: false, reason: 'empty or unknown database' };
   }
-  const maxVersion = migrationRow.max_version ?? 0;
-  if (maxVersion < PHASE8_BASELINE_FIRST_VERSION) {
-    return {
-      legacy: true,
-      reason: `数据库迁移历史停留在 v${maxVersion}（低于第八阶段基线 v${PHASE8_BASELINE_FIRST_VERSION}）；旧开发数据不转换（plan §18.3.2）。请执行开发重置或创建新项目；API 配置与安全密钥链不受影响。`,
-    };
-  }
-  return { legacy: false, reason: 'current protocol' };
+  return { legacy: true, reason: '这是旧版或不完整的开发数据库。当前版本只接受新的第八阶段数据基线；请创建新的开发数据库。原数据库、API 配置和安全密钥保留。' };
 }
 
-export interface BaselineInstallResult {
-  appliedVersions: number[];
-  baselineVersion: string;
-}
-
-/**
- * Installs the full current schema on a NEW database. Implementation-wise it
- * replays the builtin migration list once (each migration is idempotent DDL
- * guarded by IF NOT EXISTS / recorded versions), then stamps the baseline
- * marker so future runs can distinguish baseline installs from upgrades.
- */
+export interface BaselineInstallResult { appliedVersions: number[]; baselineVersion: string }
 export async function installBaselineSchema(db: SqliteDatabase): Promise<BaselineInstallResult> {
-  const { applySqliteMigrations } = await import('../../infra/sqlite/migrations');
-  const appliedVersions = await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
-  const existing = await db.queryOne<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM sqlite_master WHERE type = \'table\' AND name = \'shineword_baseline\'',
-  );
-  if (existing && existing.n > 0) {
-    await db.execute(
-      'INSERT OR REPLACE INTO shineword_baseline (baseline_version, installed_at) VALUES (?, ?)',
-      [DB_BASELINE_VERSION, new Date().toISOString()],
-    );
-  }
-  return { appliedVersions, baselineVersion: DB_BASELINE_VERSION };
+  const check = await detectLegacyDevelopmentDatabase(db);
+  if (check.legacy) throw new LegacyDevelopmentDatabaseError(check.reason);
+  if (check.reason === 'current protocol') return { appliedVersions: [], baselineVersion: DB_BASELINE_VERSION };
+  await db.execute('PRAGMA foreign_keys = ON');
+  await db.transaction(async tx => {
+    await tx.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+    const baseline = BUILTIN_MIGRATIONS[0]!;
+    for (const sql of splitSqlStatements(baseline.sql)) await tx.execute(sql);
+    const now = new Date().toISOString();
+    await tx.execute('INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)', [baseline.version, baseline.name, now]);
+    await tx.execute('INSERT INTO shineword_baseline(baseline_version,installed_at) VALUES (?,?)', [DB_BASELINE_VERSION, now]);
+  });
+  return { appliedVersions: [PHASE8_BASELINE_FIRST_VERSION], baselineVersion: DB_BASELINE_VERSION };
 }

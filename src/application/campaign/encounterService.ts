@@ -1,3 +1,4 @@
+import { assertModuleEnabled, bindRuleContract } from '../content/runtimeRules';
 import type { RollGrade, RollRecord } from '../../domain/rules/types';
 import type { ActionContract } from '../../domain/turns/types';
 import { cloneGameState, type EncounterSnapshotEntry, type GameStateSnapshot } from '../../domain/state/types';
@@ -297,6 +298,7 @@ export class EncounterService {
       eventType: 'encounter_started',
       summary: `遭遇 ${encounterId} 开始`,
     });
+    Object.assign(contract, bindRuleContract(contract, state));
     const result = await commitResolvedTurn({
       store: this.deps.turns,
       branchId: input.branchId,
@@ -382,6 +384,7 @@ export class EncounterService {
       eventType: 'encounter_actor_join_queued',
       summary: `${card.name} 将在下一轮加入遭遇`,
     });
+    Object.assign(contract, bindRuleContract(contract, ctx.state));
     const nextEncounter = cloneEncounter(ctx.encounter);
     nextEncounter.pendingActorIds = [...(nextEncounter.pendingActorIds ?? []), input.actorId];
     const existingEntry = (ctx.state.encounters ?? []).find(entry => entry.state.encounterId === input.encounterId);
@@ -500,6 +503,7 @@ export class EncounterService {
     contract.turnId = requestTurnId(input.encounterId, input.requestId) ?? contract.turnId;
     const rollRecord = await this.stageAndRoll(input.branchId, contract, actorCard, catalog, skillId);
     const settlement = await buildTurnSettlement({
+      ruleConfiguration: ctx.state.ruleConfiguration!,
       gameStore: this.deps.game,
       branchId: input.branchId,
       turnId: contract.turnId,
@@ -699,6 +703,7 @@ export class EncounterService {
     const rollRecord = await this.stageAndRoll(input.branchId, contract, attacker.card, catalog, skillId);
     const settlement = actorCard.controller === 'companion'
       ? await buildTurnSettlement({
+          ruleConfiguration: ctx.state.ruleConfiguration!,
           gameStore: this.deps.game,
           branchId: input.branchId,
           turnId: contract.turnId,
@@ -975,6 +980,7 @@ export class EncounterService {
     if (!row) throw new Error(`Branch ${branchId} does not belong to campaign ${campaignId}.`);
     const state = await this.deps.turns.getState(branchId);
     if (!state) throw new Error(`Branch has no state: ${branchId}.`);
+    assertModuleEnabled(state, 'combat_zones');
     return {
       worldId: String(row.world_id),
       packageRevision: row.package_revision === null || row.package_revision === undefined ? 0 : Number(row.package_revision),
@@ -1055,6 +1061,9 @@ export class EncounterService {
     catalog: SkillCatalog,
     skillId: string,
   ): Promise<RollRecord> {
+    const state = await this.deps.turns.getState(branchId);
+    if (!state) throw new Error('Branch state missing.');
+    Object.assign(contract, bindRuleContract(contract, state));
     const contractHash = await this.deps.hashProvider.sha256Hex(JSON.stringify(contract));
     await this.deps.turns.stageRollTurn({
       branchId,
@@ -1087,6 +1096,7 @@ export class EncounterService {
     settlement: Parameters<typeof commitResolvedTurn>[0]['settlement'],
     economy: ActionEconomy,
   ): Promise<{ encounter: EncounterState; zones: ZoneNode[]; exits: string[]; zoneMap: Record<string, string>; cards: ActorCard[]; stateVersion: number }> {
+    contract = bindRuleContract(contract, ctx.state);
     const grade: RollGrade = rollRecord?.grade ?? 'success';
     const outcome = contract.outcomes[grade];
     let projected = applyEffects(ctx.state, outcome.effects, 0);
@@ -1114,6 +1124,7 @@ export class EncounterService {
       if (!livingHostiles || !livingParty) terminalStatus = livingParty ? 'resolved' : 'wiped';
     }
 
+    const maximumRounds = Number(ctx.state.ruleConfiguration?.modules.find(m => m.moduleId === 'combat_zones')?.parameters.maxRoundCount ?? 64);
     let roundClockSeconds = 0;
     let newlyJoinedActorIds: string[] = [];
     if (!economy.endStatus && economy.advanceActor && Object.values(nextEncounter.actors).some(actor => actor.hp > 0)) {
@@ -1182,6 +1193,10 @@ export class EncounterService {
     if (nextEncounter.status !== 'active' && (nextEncounter.pendingActorIds?.length ?? 0) > 0) {
       for (const actorId of nextEncounter.pendingActorIds ?? []) delete ctx.zoneMap[actorId];
       nextEncounter.pendingActorIds = [];
+    }
+    if (nextEncounter.round > maximumRounds && !terminalStatus) {
+      nextEncounter.round = maximumRounds;
+      terminalStatus = 'escaped';
     }
     projected = applyEffects(ctx.state, outcome.effects, contract.timeCostMinutes);
     if (economy.retreatActorId) markActorRetreated(projected, economy.retreatActorId);

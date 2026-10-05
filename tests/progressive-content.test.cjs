@@ -155,29 +155,18 @@ async function publishDelta(fixture, input) {
   });
 }
 
-test('migration 15 creates append-only progressive content projections without rewriting v2 package meaning', async () => {
-  const db = new DatabaseSync(':memory:');
-  const adapter = new NodeSqliteAdapter(db);
+test('current content schema creates append-only projections and refuses old packages', async () => {
+  const db = new DatabaseSync(':memory:'); const adapter = new NodeSqliteAdapter(db);
   try {
-    for (const migration of BUILTIN_MIGRATIONS.slice(0, 14)) {
-      for (const sql of migration.sql.split(';').map(item => item.trim()).filter(Boolean)) db.exec(sql);
-    }
+    for (const migration of BUILTIN_MIGRATIONS) db.exec(migration.sql);
     const store = new SqliteWorldStore(adapter);
-    await store.createWorld({ worldId: 'w-before-m15', title: '旧世界', sourceSha256: 'a'.repeat(64), sourceBytes: 1,
-      normalizeVersion: 'old', chapterSplitVersion: 'old', buildStatus: 'ready', createdAt: 't0', updatedAt: 't0' });
-    await adapter.execute(`INSERT INTO world_packages
-      (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version, mapping_version,
-       status, content_hash, validation_json, build_scope_json, created_at)
-      VALUES ('w-before-m15', 1, 'world-package-2', ?, 'shineword-core', '0.3.0', 'old', 'published', ?, '{}', '{}', 't0')`,
-    ['a'.repeat(64), 'b'.repeat(64)]);
-    for (const sql of BUILTIN_MIGRATIONS[14].sql.split(';').map(item => item.trim()).filter(Boolean)) db.exec(sql);
-    const old = await store.getWorldPackage('w-before-m15', 1);
-    assert.equal(old.manifest.schemaVersion, 'world-package-2');
-    assert.equal(old.manifest.buildScope, undefined);
-    assert.ok(await adapter.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='branch_content_manifests'"));
-    assert.ok(await adapter.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name='progressive_world_deltas'"));
+    await store.createWorld({worldId:'old',title:'old',sourceSha256:'a'.repeat(64),sourceBytes:1,normalizeVersion:'old',chapterSplitVersion:'old',buildStatus:'ready',createdAt:'t',updatedAt:'t'});
+    db.prepare("INSERT INTO world_packages(world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES('old',1,'world-package-2',?,'shineword-core','0.2.0','old','published',?,'{}','t')").run('a'.repeat(64),'b'.repeat(64));
+    await assert.rejects(() => store.getWorldPackage('old',1), /Unsupported world package schema/);
+    assert.ok(await adapter.queryOne("SELECT name FROM sqlite_master WHERE name='branch_content_manifests'"));
   } finally { db.close(); }
 });
+
 
 test('explicit whole-source lookup publishes exact discoverable quotes and records knowledge on the branch', async () => {
   const fixture = await makeFixture();
@@ -385,7 +374,7 @@ test('branch delta publication, frozen Planner dependency, fork/save/archive res
     const archiveBytes = await encodeWorldPackageArchive({ title: '渐进内容测试', ...fixture.pkg,
       branchContent: { manifest: first.activeManifest, deltas: [first.delta] } }, sha.sha256Hex);
     const archive = await decodeWorldPackageArchive(archiveBytes, sha.sha256Hex);
-    assert.equal(archive.schemaVersion, 'shineword-world-archive-2');
+    assert.equal(archive.schemaVersion, 'shineword-world-archive-5');
     assert.equal(archive.branchContent.deltas[0].deltaId, 'delta-public-1');
 
     const copy = await createCampaign({ ...fixture.opening, campaignId: 'camp-progressive-content-copy' });

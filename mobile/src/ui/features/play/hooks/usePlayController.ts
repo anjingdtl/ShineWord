@@ -29,6 +29,7 @@ import {
   savePlayIntentDraft,
   clearPlayIntentDraft,
   acknowledgePlayReplay,
+  acknowledgeMemoryReplay,
   type PlayRecovery,
   type EncounterView,
   type TurnView,
@@ -73,6 +74,7 @@ export interface PlayController {
   busy: boolean;
   recovery: PlayRecovery | null;
   recoverTurn: () => Promise<void>;
+  retryStoryMemory: (attemptIds: readonly string[]) => Promise<void>;
   error: string | null;
   notice: string | null;
   setError: (value: string | null) => void;
@@ -211,6 +213,12 @@ export function usePlayController(): PlayController {
     }, 5000);
     return () => { active = false; clearInterval(timer); };
   }, [projection?.worldId, projection?.stateVersion, recovery?.intent, busy, campaignId, branchId, refresh]);
+
+  useEffect(() => {
+    if (!profile) return;
+    void (async () => { const session = await createSession(profile, await buildProvider(profile));
+      await session.resumePostProcessing(branchId); })().catch(() => { /* durable outbox owns diagnostics */ });
+  }, [campaignId, branchId, profile]);
 
   // Recruitment eligibility is derived from current location, quests and
   // relationships, so it re-reads after every committed state change.
@@ -502,6 +510,7 @@ export function usePlayController(): PlayController {
     try {
       const session = await createSession(profile, await buildProvider(profile));
       await action(session);
+      void session.resumePostProcessing(branchId).catch(() => undefined);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -518,6 +527,7 @@ export function usePlayController(): PlayController {
     try {
       const session = await createSession(profile, await buildProvider(profile));
       const view = await work(session);
+      void session.resumePostProcessing(branchId).catch(() => undefined);
       setEncounter(view);
       if (view.status === 'active' && !view.currentActorIsPlayer) {
         setNotice('同伴与对手正在行动…');
@@ -698,6 +708,18 @@ export function usePlayController(): PlayController {
     void submit(step.firstStepIntent, false, choice);
   };
 
+  async function retryStoryMemory(attemptIds: readonly string[]) {
+    if (!profile || busy || actionInFlight.current) return;
+    setBusy(true);
+    try {
+      await acknowledgeMemoryReplay(campaignId, branchId, attemptIds);
+      const session = await createSession(profile, await buildProvider(profile));
+      await session.resumePostProcessing(branchId);
+      setNotice('已处理本次记忆恢复请求；覆盖进度以游戏信息中的实际状态为准。');
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  }
+
   return {
     campaignId,
     branchId,
@@ -708,6 +730,7 @@ export function usePlayController(): PlayController {
     busy,
     recovery,
     recoverTurn,
+    retryStoryMemory,
     submitGuidanceStep,
     attachNpcBoundaryGuidance,
     error,

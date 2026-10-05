@@ -12,6 +12,7 @@ import type {
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
 import { resolveMethodActor } from '../guidance/candidates';
 import type { AllowedCandidateV1 } from '../guidance/types';
+import { assertRuleAction, bindRuleContract } from '../content/runtimeRules';
 import { SHORT_REST_MINUTES, SHORT_REST_STAMINA_RESTORE } from '../../domain/rules/restPolicy';
 import { distanceBetweenZones, rangeCoversBand } from '../campaign/encounterFlow';
 import {
@@ -121,6 +122,29 @@ function automaticOutcome(
  * names things the world or the card does not support.
  */
 export function compileProposal(input: CompileProposalInput): CompiledAction {
+  const skillModule = input.state.ruleConfiguration?.modules.find(m => m.moduleId === 'skill_actions');
+  if (input.proposal.actionKind === 'skill_check' && skillModule?.parameters.untrainedPolicy === 'forbid'
+    && !resolveSkillKey(input.actingCard, input.proposal.skillId!)) throw new SkillNotTrainedError(input.proposal.skillId!);
+  const compiled = compileSelectedProposal(input);
+  assertRuleAction(input.state, compiled.contract.actionType, input.actingCard.actorId);
+  compiled.contract = bindRuleContract(compiled.contract, input.state);
+  if (input.state.ruleConfiguration?.modules.some(m => m.moduleId === 'pressure_track') && compiled.contract.requiresRoll) {
+    for (const grade of ['failure', 'severe_failure'] as const) {
+      compiled.contract.outcomes[grade] = { ...compiled.contract.outcomes[grade], effects: [
+        ...compiled.contract.outcomes[grade].effects, { op: 'raisePressure', trackId: 'tension', amount: grade === 'severe_failure' ? 2 : 1,
+          maxLevel: Number(input.state.ruleConfiguration.modules.find(m => m.moduleId === 'pressure_track')!.parameters.maxLevel) },
+      ] };
+    }
+  }
+  const pressure = input.state.ruleConfiguration?.modules.find(m => m.moduleId === 'pressure_track');
+  if (pressure && ['short_rest','long_rest'].includes(compiled.contract.actionType)) {
+    for (const outcome of Object.values(compiled.contract.outcomes)) outcome.effects = [...outcome.effects,
+      { op: 'relievePressure', trackId: 'tension', amount: Number(pressure.parameters.reliefAmount) }];
+  }
+  return compiled;
+}
+
+function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   const methods = input.methods ?? [];
   const requestedIntent = input.requestedIntent ?? input.proposal.intent;
   const normalize = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');

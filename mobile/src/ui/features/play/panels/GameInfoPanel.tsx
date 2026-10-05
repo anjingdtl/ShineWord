@@ -1,3 +1,5 @@
+import { getDatabaseRuntime } from '../../../../database';
+import { StatusBanner } from '../../../components/StatusBanner';
 /**
  * GameInfoPanel — the tabbed game information sheet (plan §24).
  *
@@ -10,7 +12,7 @@
  * names the tabbed host `GameInfoPanel`, so the two never collide.
  */
 import React, { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 import { Button } from '../../../components/Button';
 import { Card } from '../../../components/Card';
 import { SegmentedControl } from '../../../components/SegmentedControl';
@@ -43,9 +45,39 @@ export function GameInfoPanel(props: {
   onClose: () => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
+  const [memoryStatus, setMemoryStatus] = useState('');
+  const [memoryBlocked, setMemoryBlocked] = useState(false);
+  const [memoryUnknownIds, setMemoryUnknownIds] = useState<readonly string[]>([]);
   const [tab, setTab] = useState<PanelTab>('character');
   const [actorId, setActorId] = useState<string | null>(null);
   const { projection, encounter, busy, trainSkill, partyCall, campaignId, branchId } = props.controller;
+
+  useEffect(() => {
+    if (!props.visible || !projection) return;
+    let active = true;
+    const load = async () => {
+      try {
+        const runtime = await getDatabaseRuntime();
+        const rows = await runtime.db.queryAll<{status:string;n:number}>('SELECT status,COUNT(*) n FROM frozen_turn_postprocess_outbox WHERE branch_id=? GROUP BY status',[branchId]);
+        const count = (status:string) => rows.find(r => r.status===status)?.n ?? 0;
+        const checkpoint = await runtime.storyMemory.getState(branchId);
+        const unknownAttempts = await runtime.db.queryAll<{attempt_id:string}>(`SELECT attempt_id FROM llm_request_attempts WHERE branch_id=?
+          AND request_kind IN ('memory_checkpoint','memory_repair') AND status='outcome_unknown' AND replay_approved_at IS NULL ORDER BY started_at`, [branchId]);
+        const through = checkpoint?.throughStateVersion ?? 0;
+        const unknown = count('outcome_unknown'), blocked = count('blocked'), running=count('running'), pending=count('pending')+count('retryable_failed');
+        if (active) {
+          setMemoryBlocked(unknown+blocked>0);
+          setMemoryUnknownIds(unknown > 0 ? unknownAttempts.map(a => a.attempt_id) : []);
+          setMemoryStatus(`故事记忆已覆盖 ${through}/${projection.stateVersion} 回合。`
+            + (running ? ` 正在整理 ${running} 项。` : '') + (pending ? ` 待整理 ${pending} 项；近期经历仍由已提交记录补足。` : '')
+            + (unknown ? ` ${unknown} 项请求结果未知，已停止自动重发；可能已计费。` : '')
+            + (blocked ? ` ${blocked} 项整理受阻，保留原检查点与已提交故事。` : ''));
+        }
+      } catch { if (active) { setMemoryBlocked(true);setMemoryStatus('故事记忆校验未通过，未标记为整理完成。'); } }
+    };
+    void load();const timer=setInterval(() => { void load(); },3000);
+    return () => { active=false;clearInterval(timer); };
+  }, [props.visible, branchId, projection?.stateVersion]);
 
   const roster = [
     ...(projection?.player ? [projection.player] : []),
@@ -77,6 +109,12 @@ export function GameInfoPanel(props: {
           testID="game-info-tab"
         />
       }>
+      {memoryStatus ? <View testID="story-memory-status"><StatusBanner tone={memoryBlocked ? 'warning' : 'info'} message={memoryStatus} /></View> : null}
+      {memoryUnknownIds.length ? <Button label="恢复未知结果的记忆整理" disabled={busy} testID="story-memory-replay"
+        onPress={() => Alert.alert('确认再次发送记忆请求', '先前请求可能已经计费。恢复会再次发送请求，原账本保留，累计最多三次物理请求。', [
+          { text: '暂不恢复', style: 'cancel' },
+          { text: '确认恢复', onPress: () => { void props.controller.retryStoryMemory(memoryUnknownIds); } },
+        ])} /> : null}
       {tab === 'character' ? (
         <View style={{ gap: theme.space.md }}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>

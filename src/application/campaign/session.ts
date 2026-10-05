@@ -1,3 +1,6 @@
+import { hashActionContract } from '../../domain/turns/canonical';
+import { stableFingerprint } from '../llm/requestPlan';
+import { requireCompiledRules } from '../content/runtimeRules';
 import { SqliteInteractionOperationJournal } from './interactionOrchestrator';
 import { RejectionSamplingRandomSource } from '../../domain/rules/random';
 import type { DifficultyBand, RollGrade, SkillRank } from '../../domain/rules/types';
@@ -35,7 +38,7 @@ import { compileMemoryMaterialCandidates } from '../memory/storyMemoryCompiler';
 import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
 import { TurnPostProcessingCoordinator } from '../game/turnPostProcessing';
-import { packageIndexes } from '../game/v2Compile';
+import { packageIndexes, ProposalRejectedError } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { RandomSource } from '../../domain/rules/random';
@@ -111,7 +114,6 @@ import { canonicalStringify } from '../../domain/turns/canonical';
 import { forkBranch } from '../branch/fork';
 import { hasBranchContentManifestTable, ensureBaseBranchContentManifest } from '../worldPackage/branchContentStore';
 import { contentDependencyBinding, createBaseContentManifest, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
-import { projectLegacyAnchorlessOpeningFacts } from '../worldPackage/openingCompatibility';
 import { publishSourceEvidenceExcerptDelta } from '../worldPackage/progressiveDelta';
 import {
   EncounterService,
@@ -237,9 +239,42 @@ export class CampaignSession {
       },
       loadActors: async branchId => {
         const cards = await this.loadAllCards(branchId);
-        return cards.map(card => ({ actorId: card.actorId, name: card.name }));
+        const state = await deps.turns.getState(branchId);
+        const campaign = await deps.db.queryOne<{ world_id:string; package_revision:number; anchor_json:string }>(
+          'SELECT c.world_id,c.package_revision,c.anchor_json FROM campaigns c JOIN branches b ON b.campaign_id=c.campaign_id WHERE b.branch_id=?',[branchId]);
+        if (!state || !campaign) return [];
+        const pkg = await deps.worldStore.getWorldPackage(campaign.world_id,campaign.package_revision);
+        const facts = await deps.worldStore.listFacts(campaign.world_id);
+        const anchor = JSON.parse(campaign.anchor_json) as {worldTimeOrder?:number};
+        const order = Math.max(anchor.worldTimeOrder ?? 0,state.causalWorldTimeOrder ?? 0);
+        const templates = (pkg?.entries ?? []).filter(e => e.kind === 'actor_template' && e.visibility === 'public'
+          && isEntryVisibleAtAnchor(e,facts,order) && isTemplateValidAtAnchor(e,order));
+        const hints = cards.filter(c => state.party?.some(p => p.actorId === c.actorId)
+          || templates.some(t => t.entryId === c.templateId)).map(c => ({actorId:c.actorId,name:c.name}));
+        for (const entry of templates) {
+          const subjects = new Set(entry.provenance.sourceFactIds.flatMap(id => {
+            const fact = facts.find(f => f.factId === id); return fact?.subjectEntityId ? [fact.subjectEntityId] : [];
+          }));
+          if (cards.some(c => c.entityId && subjects.size === 1 && subjects.has(c.entityId) && c.name === (entry.definition as ActorTemplateDefinition).name)) continue;
+          if (!cards.some(c => c.templateId === entry.entryId)) hints.push({actorId:`npc-${entry.entryId}`,name:(entry.definition as ActorTemplateDefinition).name});
+        }
+        return hints;
       },
     });
+  }
+
+  /** A definitive local refusal abandons an unrolled logical turn without deleting frozen audit material. */
+  private async nextPlayerTurnId(branchId: string, stateVersion: number): Promise<string> {
+    const base = `turn-${String(stateVersion + 1).padStart(4, '0')}`;
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const id = attempt ? `${base}-retry-${attempt}` : base;
+      if (!await this.deps.db.queryOne('SELECT turn_id FROM abandoned_turns WHERE branch_id = ? AND turn_id = ?', [branchId, id])) return id;
+    }
+    throw new Error('Too many abandoned actions at this decision point.');
+  }
+
+  async resumePostProcessing(branchId: string): Promise<void> {
+    await this.postProcessing.processBranch(branchId, { maxWaves: 4 });
   }
 
   async listCampaigns(): Promise<Array<{ campaignId: string; title: string; worldId: string; status: string; createdAt: string }>> {
@@ -286,6 +321,8 @@ export class CampaignSession {
     await this.assertCampaignBranch(campaignId, branchId);
     const state = await this.deps.turns.getState(branchId);
     if (!state) throw new Error(`Branch has no state: ${branchId}.`);
+    const pkg = await this.deps.worldStore.getWorldPackage(String(row.world_id), Number(row.package_revision));
+    if (!pkg || !state.ruleConfiguration || requireCompiledRules(state.ruleConfiguration).binding.configurationHash !== requireCompiledRules(pkg.manifest.ruleConfiguration).binding.configurationHash || String(row.ruleset_version) !== pkg.manifest.ruleset.version) throw new Error('战役规则协议与当前世界不一致，请创建当前协议的新项目。');
     const allCards = await this.loadAllCards(branchId);
     const leaderId = (state.party ?? []).find(member => member.role === 'protagonist')?.actorId;
     const viewerGroupId = (state.party ?? []).find(member => member.actorId === leaderId)?.groupId ?? 'main';
@@ -391,6 +428,7 @@ export class CampaignSession {
     const emptyOutcome = { achieved: true, publicSummary: input.intent, effects: [] };
     const contract: ActionContract = {
       protocolVersion: '2.0',
+      ruleBinding: requireCompiledRules(state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: input.actorId,
@@ -419,7 +457,7 @@ export class CampaignSession {
       store: this.deps.turns,
       branchId: input.branchId,
       contract,
-      contractHash: await this.deps.hashProvider.sha256Hex(JSON.stringify(contract)),
+      contractHash: await hashActionContract(contract, this.deps.hashProvider),
       contractOrigin: 'engine',
       coordinationFence: input.coordinationFence,
       outcomeGrade: 'success',
@@ -1197,19 +1235,22 @@ export class CampaignSession {
     // replaces the crude clean+lag gate. Rejected checkpoints contribute no
     // body; the pending bridge carries (through, current] continuity instead.
     let pendingBridgeText = '';
-    let bridgeFromVersion = 0;
+    const origin = await this.deps.db.queryOne<{ version: number }>(
+      'SELECT MIN(state_version) AS version FROM snapshots WHERE branch_id = ?', [input.branchId]);
+    let bridgeFromVersion = origin?.version ?? 0;
     if (this.deps.storyMemory) {
       const memoryState = await this.deps.storyMemory.store.getState(input.branchId);
-      const maxAppliedPatch = await this.deps.storyMemory.store.listPatches(input.branchId)
-        .then(patches => patches
-          .filter(patch => patch.status === 'applied' && patch.toStateVersion <= input.stateVersion)
-          .reduce((max, patch) => Math.max(max, patch.toStateVersion), 0));
-      const verdict = evaluateCheckpointEligibility({
+      let verdict = evaluateCheckpointEligibility({
         memoryState,
         branchId: input.branchId,
         currentStateVersion: input.stateVersion,
         committedTurnVersions: undefined,
       });
+      if (!verdict.usable) {
+        const earlier = await this.deps.storyMemory.store.getCheckpointAt(input.branchId, input.stateVersion);
+        if (earlier) verdict = evaluateCheckpointEligibility({ memoryState: earlier,
+          branchId: input.branchId, currentStateVersion: input.stateVersion });
+      }
       if (verdict.usable) {
         // P8-2 compact per-entity projection (plan §10.3): the objective is
         // mandatory, characters/relationships compete per entity (B05).
@@ -1223,8 +1264,8 @@ export class CampaignSession {
       } else {
         // Fail visibly: the rejection reason rides the frozen context.
         collectionDiagnostics.push(`story_memory_ineligible:${verdict.code}`);
-        // Bridge from the last provably applied patch, or the branch seed.
-        bridgeFromVersion = Math.min(maxAppliedPatch, input.stateVersion);
+        // With no usable body, bridge from the seed. A patch number alone
+        // cannot replace the history represented by the rejected body.
       }
       if (bridgeFromVersion < input.stateVersion) {
         const committedAfter = await this.deps.turns.listCommittedTurnsAfter(input.branchId, bridgeFromVersion);
@@ -1237,6 +1278,7 @@ export class CampaignSession {
           fromStateVersion: bridgeFromVersion,
           toStateVersion: input.stateVersion,
         });
+        if (bridge.gaps.length > 0) throw new Error('Committed history coverage gap; refusing an incomplete context.');
         if (bridge.commits.length > 0 || bridge.gaps.length > 0) {
           pendingBridgeText = renderPendingBridge(bridge);
         }
@@ -1248,6 +1290,8 @@ export class CampaignSession {
         board: 'storyMemory',
         heading: '未整理补桥',
         text: pendingBridgeText,
+        requirement: 'mandatory',
+        clipMode: 'whole_item',
         priority: 88,
         provenance: {
           sourceType: 'pending_bridge',
@@ -1984,9 +2028,9 @@ export class CampaignSession {
       }
       const state = await this.deps.turns.getState(options.branchId);
       if (!state) throw new Error('Unknown branch.');
-      const turnId = options.turnIdOverride ?? `turn-${String(state.stateVersion+1).padStart(4,'0')}`;
+      const turnId = options.turnIdOverride ?? await this.nextPlayerTurnId(options.branchId, state.stateVersion);
       return await new SqliteInteractionOperationJournal(this.deps.db).guardTurn({ ...options, turnId,
-        expectedStateVersion: state.stateVersion }, fence => this.playTurnInForeground({ ...options, coordinationFence: fence }));
+        expectedStateVersion: state.stateVersion }, fence => this.playTurnInForeground({ ...options, turnIdOverride: turnId, coordinationFence: fence }));
     } finally {
       this.deps.progressiveTurnContext?.setForegroundBusy(false);
       this.deps.onForegroundActivity?.(false);
@@ -2054,6 +2098,17 @@ export class CampaignSession {
   }
 
   private async playTurnInForeground(options: PlayTurnOptions): Promise<PlayTurnResult> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    if (options.turnIdOverride) {
+      const committed = await this.deps.turns.getCommittedTurn(options.branchId, options.turnIdOverride);
+      if (committed) {
+        const narrative = await this.deps.narratives.get(options.branchId, options.turnIdOverride);
+        if (!narrative) throw new Error('Committed turn is missing its narrative.');
+        return { turnId: options.turnIdOverride, text: narrative.text, grade: committed.rollRecord?.grade ?? 'automatic',
+          dice: committed.rollRecord ? `${committed.rollRecord.diceCount}d${committed.rollRecord.dieSides}: [${committed.rollRecord.rolls.join(', ')}]` : undefined,
+          resumed: true, stateVersion: committed.stateVersion, practiceAwarded: false };
+      }
+    }
     await this.assertNoActiveEncounter(options.branchId);
     const summary = await this.getSummary(options.campaignId, options.branchId);
     if (options.guidanceChoice) await this.assertGuidanceChoiceCurrent(options.branchId, options.guidanceChoice, options.intent);
@@ -2123,12 +2178,7 @@ export class CampaignSession {
     const worldTimeOrder = Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0, catalogCausalFloor);
     const anchorEvents = (await this.deps.worldStore.listEvents(summary.worldId))
       .filter(event => event.status === 'canon' && event.worldTimeOrder !== null);
-    const projectionFacts = projectLegacyAnchorlessOpeningFacts(
-      summary.worldId,
-      basePackage.manifest,
-      facts,
-      !anchor.anchorEventId && anchorEvents.length === 0,
-    );
+    const projectionFacts = facts;
     const knownEntryIds = new Set((summary.state.discoveries ?? [])
       .filter(item => item.actorId === playerCard.actorId).map(item => item.entryId));
     const entries = projectPlayerEntriesAtAnchor(allEntries, projectionFacts, worldTimeOrder, knownEntryIds);
@@ -2216,12 +2266,10 @@ export class CampaignSession {
       }
     }
 
-    const stateVersion = options.turnIdOverride
-      ? Number.parseInt(options.turnIdOverride.replace(/^turn-/, ''), 10)
-      : summary.state.stateVersion + 1;
+    const stateVersion = summary.state.stateVersion + 1;
     const turnId = options.turnIdOverride ?? `turn-${String(stateVersion).padStart(4, '0')}`;
     const recentHistory = await this.deps.turns.listCommittedTurns(options.branchId);
-    const memories = await this.deps.game.listMemories(options.branchId);
+    const memories: Awaited<ReturnType<SqliteGameStore['listMemories']>> = [];
     const contextParts = this.collectWorldContextParts(
       entries, plannerCards, summary.state, summary.goal, recentHistory, memories, options.intent, playerCard.actorId,
       worldTimeOrder, projectionFacts,
@@ -2238,18 +2286,12 @@ export class CampaignSession {
         .join('\n');
       contextParts.push(`【当前局面】${situation.definition.summary}（压力：${situation.definition.pressure.description}）\n可选介入办法（均为首步尝试，玩家也可能自行描述其他做法）：\n${methodLines}`);
     }
-    // Legal skill ids for skill_check proposals (plan §40 mandatory): the
-    // planner may only reference skills the actor actually knows.
-    const actorSkillIds = Object.keys(playerCard.skills ?? {});
-    if (actorSkillIds.length > 0) {
-      const skillSummary = actorSkillIds
-        .map(key => {
-          const definition = catalog[key] ?? catalog[key.replace(/^skill-/, '')];
-          return definition ? `${key}(${definition.name})` : key;
-        })
-        .join('、');
-      contextParts.push(`【可用技能】${skillSummary}。skill_check 的 skillId 只能从中选择。`);
-    }
+    const skillPolicy = summary.state.ruleConfiguration?.modules.find(m => m.moduleId === 'skill_actions');
+    const legalSkills = entries.filter(e => e.kind === 'skill' && skillPolicy
+      && (resolveSkillKey(playerCard,e.entryId) || ((e.definition as SkillDefinition).allowUntrained && skillPolicy.parameters.untrainedPolicy !== 'forbid')));
+    contextParts.push(`【可用技能】${legalSkills.length ? legalSkills.map(e => `${e.entryId}(${(e.definition as SkillDefinition).name})`).join('、') : '无'}。skill_check 的 skillId 只能逐字从清单选择，禁止自造英文别名。无合适技能时使用 observe 或 interact，不得改写用户意图。`);
+    const rules = requireCompiledRules(summary.state.ruleConfiguration);
+    contextParts.push(`【世界规则】可用行动：${rules.capabilityTable.actionKinds.join('、')}。未启用机制的行动不可执行。`);
     const visibleSourceRanges = visibleEvidenceRanges(entries, projectionFacts, worldTimeOrder, knownEntryIds);
     let sourceHash: string | null = null;
     let safeSourceContext = '';
@@ -2325,9 +2367,20 @@ export class CampaignSession {
     // root fails explicitly with zero LLM calls and keeps the envelope.
     const frozenStore = new RootFrozenMaterialsStore(this.deps.db, this.deps.hashProvider);
     const frozenRoot = await frozenStore.loadRootSnapshot(options.branchId, turnId, 'turn:context');
+    const sourceFingerprint = stableFingerprint({ state: summary.state, entries, authoritativeEntries, plannerCards,
+      methods: activeMethods, methodSituations: activeMethodSituations });
+    const modelFingerprint = stableFingerprint({ profile: llmModelProfileFingerprint(this.profile), capabilities: this.turnCapabilities() });
     let turnBundle;
-    if (frozenRoot?.payload.turnBundle
-      && frozenRoot.payload.stateBaseline.expectedStateVersion === summary.state.stateVersion) {
+    if (frozenRoot && (!frozenRoot.payload.turnBundle
+      || frozenRoot.campaignId !== options.campaignId
+      || frozenRoot.payload.stateBaseline.expectedStateVersion !== summary.state.stateVersion)) {
+      throw new Error('Frozen turn baseline mismatch; refusing to reassemble live materials.');
+    }
+    if (frozenRoot?.payload.turnBundle) {
+      const execution = frozenRoot.payload.executionMaterials;
+      if (!execution || execution.playerIntent !== options.intent || execution.modelFingerprint !== modelFingerprint
+        || execution.sourceFingerprint !== sourceFingerprint) throw new Error('Frozen turn input/source/model mismatch; refusing dispatch.');
+      styleSnapshot = execution.styleSnapshot;
       turnBundle = frozenRoot.payload.turnBundle;
     } else {
       turnBundle = await this.buildTurnContextBundle({
@@ -2351,6 +2404,9 @@ export class CampaignSession {
         attempt: 1,
         payload: {
           turnBundle,
+          executionMaterials: { playerIntent: options.intent, modelFingerprint, sourceFingerprint,
+            state: summary.state, entries, authoritativeEntries, plannerCards, methods: activeMethods,
+            methodSituations: activeMethodSituations, styleSnapshot },
           stateBaseline: { branchId: options.branchId, expectedStateVersion: summary.state.stateVersion },
           capabilitiesFingerprint: this.cachedTurnCapabilities
             ? `${this.cachedTurnCapabilities.contextWindowTokens}/${this.cachedTurnCapabilities.maxOutputTokens}`
@@ -2375,12 +2431,13 @@ export class CampaignSession {
         ? (resolveSkillKey(actingCard, contract.skillId) ?? contract.skillId)
         : contract.skillId;
       let plan: TurnSettlementPlan;
-      if (!contract.requiresRoll || !storedSkillKey) {
+      if (!contract.requiresRoll || !storedSkillKey || !summary.state.ruleConfiguration?.modules.some(m => m.moduleId === 'growth_rest' && m.parameters.awardPolicy !== 'milestone_only')) {
         plan = emptySettlement(options.encounterId ?? `auto-${options.branchId}-${turnId}`);
       } else {
         const challengeId = options.encounterId
           ?? await deriveChallengeId(gameStore, options.branchId, actingActorId ?? actorId, storedSkillKey);
         plan = await buildTurnSettlement({
+          ruleConfiguration: summary.state.ruleConfiguration!,
           gameStore,
           branchId: options.branchId,
           turnId,
@@ -2562,11 +2619,13 @@ export class CampaignSession {
       // with NO persisted roll may be abandoned cleanly: no dice existed, so
       // nothing is re-rolled. The staged contract is discarded and the user
       // gets an actionable explanation instead of a stuck turn.
-      if (error instanceof SkillNotDefinedError || error instanceof SkillNotTrainedError) {
+      if (error instanceof SkillNotDefinedError || error instanceof SkillNotTrainedError || error instanceof ProposalRejectedError) {
         const rolled = await this.deps.turns.getRollRecord(options.branchId, turnId, 0);
         if (!rolled) {
           await this.deps.turns.discardUnrolledTurn(options.branchId, turnId);
-          const reason = error instanceof SkillNotDefinedError
+          await this.deps.db.execute('INSERT OR IGNORE INTO abandoned_turns(branch_id,turn_id,reason,created_at) VALUES(?,?,?,?)',
+            [options.branchId, turnId, error.name, new Date().toISOString()]);
+          const reason = error instanceof ProposalRejectedError ? error.message : error instanceof SkillNotDefinedError
             ? `提议的技能「${error.skillId}」在这个世界不存在`
             : `角色尚未掌握技能「${error.skillId}」，且它不允许无训练尝试`;
           throw new Error(
@@ -2650,6 +2709,7 @@ export class CampaignSession {
     const turnId = `rest-${options.kind}-${summary.state.stateVersion + 1}`;
     const contract: ActionContract = {
       protocolVersion: '2.0',
+      ruleBinding: requireCompiledRules(summary.state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: summary.state.stateVersion,
       actorId: playerCard.actorId,
@@ -2666,12 +2726,15 @@ export class CampaignSession {
         severe_failure: restOutcome(playerCard.actorId, staminaRestore, hpRestore, minutes, staminaMax, playerCard.resourceMax.hp ?? 10),
       },
     };
+    const pressure = summary.state.ruleConfiguration?.modules.find(m => m.moduleId === 'pressure_track');
+    if (pressure) for (const outcome of Object.values(contract.outcomes)) outcome.effects = [...outcome.effects,
+      { op: 'relievePressure', trackId: 'tension', amount: Number(pressure.parameters.reliefAmount) }];
     const applySituations = await this.localSituationReducer(options.campaignId, options.branchId, summary.state, turnId, playerCard.actorId);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
-      contractHash: await this.deps.hashProvider.sha256Hex(`${turnId}:rest`),
+      contractHash: await hashActionContract(contract, this.deps.hashProvider),
       applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
@@ -2762,6 +2825,7 @@ export class CampaignSession {
     const turnId = `train-${storedSkillKey}-v${state.stateVersion + 1}`;
     const contract: ActionContract = {
       protocolVersion: '2.0',
+      ruleBinding: requireCompiledRules(summary.state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: options.actorId,
@@ -2785,7 +2849,7 @@ export class CampaignSession {
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
-      contractHash: await this.deps.hashProvider.sha256Hex(`${turnId}:train`),
+      contractHash: await hashActionContract(contract, this.deps.hashProvider),
       applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
@@ -2859,6 +2923,7 @@ export class CampaignSession {
     const awarded = awardPractice(progress, options.encounterId, 'milestone');
     const contract: ActionContract = {
       protocolVersion: '2.0',
+      ruleBinding: requireCompiledRules(state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,
       actorId: options.actorId,
@@ -2879,7 +2944,7 @@ export class CampaignSession {
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
-      contractHash: await this.deps.hashProvider.sha256Hex(`${turnId}:milestone`),
+      contractHash: await hashActionContract(contract, this.deps.hashProvider),
       contractOrigin: 'engine',
       outcomeGrade: 'success',
       settlement: {
@@ -2935,12 +3000,7 @@ export class CampaignSession {
     const anchorEvents = await this.deps.worldStore.listEvents(worldId);
     const hasCanonTimeAnchor = anchorEvents.some(event => event.status === 'canon' && event.worldTimeOrder !== null);
     const rawFacts = await this.deps.worldStore.listFacts(worldId);
-    const facts = projectLegacyAnchorlessOpeningFacts(
-      worldId,
-      pkg?.manifest ?? null,
-      rawFacts,
-      worldTimeOrder === undefined && !hasCanonTimeAnchor,
-    );
+    const facts = rawFacts;
     const skills = entries
       .filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
         && isEntryVisibleAtAnchor(entry, facts, worldTimeOrder))
@@ -3132,13 +3192,9 @@ export class CampaignSession {
     catch { return []; }
     const events = await this.deps.worldStore.listEvents(summary.worldId);
     const hasCanonTimeAnchor = events.some(event => event.status === 'canon' && event.worldTimeOrder !== null);
-    const facts = projectLegacyAnchorlessOpeningFacts(
-      summary.worldId,
-      pkg.manifest,
-      await this.deps.worldStore.listFacts(summary.worldId),
-      summary.anchorWorldTimeOrder === null && !anchorEventId && !hasCanonTimeAnchor,
-    );
+    const facts = await this.deps.worldStore.listFacts(summary.worldId);
     const templates = new Map(entries.filter(entry => entry.kind === 'actor_template').map(entry => [entry.entryId, entry]));
+    if (!summary.state.ruleConfiguration?.modules.some(m => m.moduleId === 'combat_zones')) return [];
     const visibleScenes = entries.filter(entry => entry.kind === 'scene' && entry.visibility === 'public'
       && isEntryVisibleAtAnchor(entry, facts, summary.anchorWorldTimeOrder ?? undefined))
       .filter(entry => (entry.definition as SceneDefinition).locationId === locationId)
@@ -3387,6 +3443,7 @@ async function deriveChallengeId(
  * while a genuinely achieved pursuit opens the next challenge.
  */
 export async function buildTurnSettlement(input: {
+  ruleConfiguration: NonNullable<GameStateSnapshot['ruleConfiguration']>;
   gameStore: SqliteGameStore;
   branchId: string;
   turnId: string;
@@ -3403,7 +3460,8 @@ export async function buildTurnSettlement(input: {
     rewardLedger: [],
     relationships: [],
   };
-  if (!input.skillId) return plan;
+  if (!input.skillId || !input.ruleConfiguration.modules.some(module =>
+    module.moduleId === 'growth_rest' && module.parameters.awardPolicy !== 'milestone_only')) return plan;
 
   const existing = await input.gameStore.getSkillProgress(input.branchId, input.actorId, input.skillId);
   const progress: SkillProgress = existing ?? {

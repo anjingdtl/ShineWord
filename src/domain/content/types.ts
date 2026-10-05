@@ -51,7 +51,8 @@ export type BookName = 'player_handbook' | 'gm_guide' | 'monster_manual';
 export interface WorldPackageManifest {
   worldId: string;
   revision: number;
-  schemaVersion: 'world-package-2' | 'world-package-3' | 'world-package-4';
+  schemaVersion: 'shineword-world-package-5';
+  ruleConfiguration: import('../rules/worldRuleConfiguration').WorldRuleConfiguration;
   sourceSha256: string;
   ruleset: { id: string; version: string };
   mappingVersion: string;
@@ -468,11 +469,23 @@ export function validateDefinition(kind: EntryKind, definition: unknown): string
     }
     case 'actor_template': {
       requireString('name');
-      if (typeof def.hp !== 'number' || (def.hp as number) <= 0) {
+      if (typeof def.hp !== 'number' || !Number.isFinite(def.hp) || (def.hp as number) <= 0) {
         errors.push('actor_template: hp must be a positive number.');
       }
-      if (typeof def.defense !== 'number' || (def.defense as number) <= 0) {
+      if (typeof def.defense !== 'number' || !Number.isFinite(def.defense) || (def.defense as number) <= 0) {
         errors.push('actor_template: defense must be a positive number.');
+      }
+      if (typeof def.stamina !== 'number' || !Number.isFinite(def.stamina) || def.stamina < 0) errors.push('actor_template: stamina must be a non-negative finite number.');
+      for (const key of ['attributes', 'skills']) {
+        if (!def[key] || typeof def[key] !== 'object' || Array.isArray(def[key])) errors.push(`actor_template: ${key} must be an object.`);
+      }
+      for (const key of ['attacks', 'abilities']) if (!Array.isArray(def[key])) errors.push(`actor_template: ${key} must be an array.`);
+      const behavior = def.behavior as Record<string, unknown> | undefined;
+      if (!behavior || typeof behavior !== 'object' || typeof behavior.goal !== 'string'
+        || !['low', 'steady', 'fierce'].includes(String(behavior.morale))
+        || typeof behavior.retreatThreshold !== 'number' || !Number.isFinite(behavior.retreatThreshold)
+        || behavior.retreatThreshold < 0 || behavior.retreatThreshold > 1) {
+        errors.push('actor_template: behavior needs goal, valid morale and retreatThreshold in [0,1].');
       }
       if (def.startingItems !== undefined && (!Array.isArray(def.startingItems)
         || def.startingItems.some(itemId => typeof itemId !== 'string' || itemId.trim() === ''))) {

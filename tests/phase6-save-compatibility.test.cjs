@@ -26,7 +26,7 @@ async function fixture() {
   h.style = styleOwner(h);
   const entries = [lore('base-rule')], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
-  const manifest = { schemaVersion: 'world-package-2', worldId: 'portable-world', revision: 1,
+  const manifest = { schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('portable-world', 1), worldId: 'portable-world', revision: 1,
     sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   const quoteHash = await sha.sha256Hex(TEXT);
@@ -68,7 +68,7 @@ async function fixture() {
     sceneKind: 'dialogue', participantIds: [], tokenAllowance: 1600 });
   const binding = { manifestHash: contentManifest.manifestHash, contentVersion: 0, branchId: 'b', stateVersion: 0,
     basePackageRevision: 1, deltaIds: [], artifactIds: [artifact.artifactId], artifactManifestHash: overlay.artifactManifestHash };
-  const state = { branchId: 'b', stateVersion: 0, clockMinutes: 0, actors: {}, itemOwners: {}, encounters: [],
+  const state = { ruleConfiguration: manifest.ruleConfiguration, branchId: 'b', stateVersion: 0, clockMinutes: 0, actors: {}, itemOwners: {}, encounters: [],
     contentManifest, segmentContentBinding: binding, styleSnapshot };
   await h.adapter.execute("INSERT INTO snapshots(branch_id,state_version,snapshot_json,state_hash,created_at) VALUES ('b',0,?,NULL,?)", [JSON.stringify(state), NOW]);
   await h.adapter.execute("INSERT INTO actor_cards(branch_id,actor_id,card_json,created_at,updated_at,updated_state_version) VALUES ('b','pc',?,?,?,0)", [JSON.stringify({ actorId: 'pc', name: '旅人', controller: 'player' }), NOW, NOW]);

@@ -12,7 +12,7 @@
 
 import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
 import type { SqliteTurnStore, CommittedTurnHistoryEntry } from '../../infra/sqlite/sqliteTurnStore';
-import type { SqliteStoryMemoryStore } from '../memory/storyMemoryRepository';
+import type { SqliteStoryMemoryStore, MemoryWorkerFence } from '../memory/storyMemoryRepository';
 import type { SqliteEpisodicStore } from '../memory/episodicStore';
 import { episodicRecordFromTurn } from '../memory/episodicStore';
 import {
@@ -104,6 +104,7 @@ export interface ProcessBranchResult {
 
 const DEFAULT_LEASE_MS = 120_000;
 const DEFAULT_MAX_BATCH_HANDOFFS = 8;
+let workerSequence = 0;
 
 export class TurnPostProcessingCoordinator {
   constructor(private readonly input: CoordinatorInput) {}
@@ -211,7 +212,10 @@ export class TurnPostProcessingCoordinator {
   ): Promise<boolean> {
     const changes = await this.input.db.execute(
       `UPDATE frozen_turn_postprocess_outbox SET
-         status = ?, physical_http_count = physical_http_count + ?, diagnostics_json = ?, updated_at = ?
+         status = ?, lease_owner = NULL, lease_expires_at = NULL,
+         physical_http_count = MAX(physical_http_count + ?, (SELECT COUNT(*) FROM llm_request_attempts a
+           WHERE a.branch_id=frozen_turn_postprocess_outbox.branch_id AND a.state_version=frozen_turn_postprocess_outbox.committed_state_version
+             AND a.request_kind IN ('memory_checkpoint','memory_repair') AND a.status<>'prepared')), diagnostics_json = ?, updated_at = ?
        WHERE handoff_id = ? AND status = 'running' AND lease_owner = ? AND fencing_token = ?`,
       [status, physicalHttpDelta, diagnostics, this.now().toISOString(), handoffId, owner, fencingToken],
     );
@@ -228,8 +232,62 @@ export class TurnPostProcessingCoordinator {
     );
   }
 
+  private readonly runningBranches = new Map<string, Promise<ProcessBranchResult>>();
+
   async processBranch(branchId: string, options?: { maxWaves?: number }): Promise<ProcessBranchResult> {
-    const owner = `worker:${branchId}:local`;
+    const existing = this.runningBranches.get(branchId);
+    if (existing) return existing;
+    const run = this.processBranchUnderLease(branchId, options);
+    this.runningBranches.set(branchId, run);
+    const release = () => { if (this.runningBranches.get(branchId) === run) this.runningBranches.delete(branchId); };
+    void run.then(release, release);
+    return run;
+  }
+
+  private async processBranchUnderLease(branchId: string, options?: { maxWaves?: number }): Promise<ProcessBranchResult> {
+    const owner = `worker:${branchId}:${this.now().getTime()}:${++workerSequence}`;
+    const now = this.now().toISOString();
+    const expires = new Date(this.now().getTime() + (this.input.leaseDurationMs ?? DEFAULT_LEASE_MS)).toISOString();
+    const lease = await this.input.db.transaction(async tx => {
+      const changes = await tx.execute(`INSERT INTO story_memory_worker_leases
+        (branch_id,lease_owner,fencing_token,lease_expires_at) VALUES (?,?,1,?)
+        ON CONFLICT(branch_id) DO UPDATE SET lease_owner=excluded.lease_owner,
+          fencing_token=story_memory_worker_leases.fencing_token+1,lease_expires_at=excluded.lease_expires_at
+        WHERE story_memory_worker_leases.lease_expires_at <= ?`, [branchId, owner, expires, now]);
+      if (changes === 0) return null;
+      return tx.queryOne<{ fencing_token: number }>('SELECT fencing_token FROM story_memory_worker_leases WHERE branch_id=?', [branchId]);
+    });
+    if (!lease) return { claimed: 0, indexed: 0, memoryStatus: 'skipped', unknownOutcome: false };
+    const fence: MemoryWorkerFence = { branchId, owner, token: lease.fencing_token, checkedAt: now, handoffs: [] };
+    try { return await this.processClaimedBranch(branchId, options, owner, fence); }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const unknown = /outcome_unknown|network_unknown|timeout_unknown/.test(detail);
+      await this.input.db.execute(`UPDATE frozen_turn_postprocess_outbox SET status=?, diagnostics_json=?,
+        lease_owner=NULL, lease_expires_at=NULL, updated_at=? WHERE branch_id=? AND status='running' AND lease_owner=?`,
+        [unknown ? 'outcome_unknown' : 'blocked', JSON.stringify({ error: detail }), this.now().toISOString(), branchId, owner]);
+      return { claimed: fence.handoffs.length, indexed: 0, memoryStatus: 'failed', unknownOutcome: unknown };
+    }
+    finally {
+      await this.input.db.execute(`UPDATE story_memory_worker_leases SET lease_expires_at=?
+        WHERE branch_id=? AND lease_owner=? AND fencing_token=?`, [this.now().toISOString(), branchId, owner, fence.token]);
+    }
+  }
+
+  private async renewLease(fence: MemoryWorkerFence): Promise<void> {
+    const now = this.now().toISOString();
+    const expires = new Date(this.now().getTime() + (this.input.leaseDurationMs ?? DEFAULT_LEASE_MS)).toISOString();
+    const changed = await this.input.db.execute(`UPDATE story_memory_worker_leases SET lease_expires_at=?
+      WHERE branch_id=? AND lease_owner=? AND fencing_token=? AND lease_expires_at>?`,
+      [expires, fence.branchId, fence.owner, fence.token, now]);
+    if (!changed) throw new Error('Memory worker lease/fence expired.');
+    fence.checkedAt = now;
+    await this.input.db.execute(`UPDATE frozen_turn_postprocess_outbox SET lease_expires_at=?
+      WHERE branch_id=? AND status='running' AND lease_owner=?`, [expires, fence.branchId, fence.owner]);
+  }
+
+  private async processClaimedBranch(branchId: string, options: { maxWaves?: number } | undefined,
+    owner: string, workerFence: MemoryWorkerFence): Promise<ProcessBranchResult> {
     const indexedTurnIds = new Set<string>();
     const maxWaves = options?.maxWaves ?? 1;
     const result: ProcessBranchResult = {
@@ -283,7 +341,7 @@ export class TurnPostProcessingCoordinator {
       }
 
       const state = await this.input.storyMemory.store.getState(branchId);
-      const currentStateVersion = handoffs[handoffs.length - 1]?.committedStateVersion ?? 0;
+      const currentStateVersion = Math.max(...handoffs.map(handoff => handoff.committedStateVersion));
       const cadence = await shouldRunMaintenance({
         store: this.input.storyMemory.store,
         turnStore: this.input.turns,
@@ -304,7 +362,11 @@ export class TurnPostProcessingCoordinator {
         continue;
       }
 
+      workerFence.handoffs = handoffs.map(h => ({ handoffId: h.handoffId, fencingToken: h.fencingToken ?? 0 }));
       const maintenance = await runStoryMemoryMaintenance({
+        workerFence,
+        renewWorkerLease: async () => this.renewLease(workerFence),
+        maxAttempts: 1,
         provider: this.input.provider,
         store: this.input.storyMemory.store,
         turnStore: this.input.turns,
@@ -319,6 +381,8 @@ export class TurnPostProcessingCoordinator {
         : maintenance.status as ProcessBranchResult['memoryStatus'];
       const afterState = await this.input.storyMemory.store.getState(branchId);
       const through = afterState?.throughStateVersion ?? 0;
+      const unknownOutcome = !/budget_exhausted|integrity|mismatch/.test(maintenance.error ?? '') && /outcome_unknown|network_unknown|timeout_unknown|^unknown:/.test(maintenance.error ?? '');
+      result.unknownOutcome ||= unknownOutcome;
       for (const handoff of handoffs) {
         if (handoff.committedStateVersion <= through) {
           await this.finishHandoff(handoff.handoffId, owner, handoff.fencingToken ?? 0, 'succeeded', null, 0);
@@ -327,7 +391,8 @@ export class TurnPostProcessingCoordinator {
             handoff.handoffId,
             owner,
             handoff.fencingToken ?? 0,
-            maintenance.status === 'hard_gap' ? 'blocked' : 'retryable_failed',
+            unknownOutcome ? 'outcome_unknown' : maintenance.status === 'hard_gap'
+              || /budget_exhausted|integrity|mismatch/.test(maintenance.error ?? '') ? 'blocked' : 'retryable_failed',
             maintenance.error ?? null,
             0,
           );
@@ -338,17 +403,6 @@ export class TurnPostProcessingCoordinator {
       if (maintenance.status !== 'clean' && maintenance.status !== 'skipped') break;
     }
     return result;
-  }
-
-  /** Marks a batch outcome_unknown after a sent-but-unconfirmed request (I14). */
-  async markUnknownOutcome(handoffIds: string[], reason: string): Promise<void> {
-    for (const handoffId of handoffIds) {
-      await this.input.db.execute(
-        `UPDATE frozen_turn_postprocess_outbox SET status = 'outcome_unknown', diagnostics_json = ?, updated_at = ?
-          WHERE handoff_id = ? AND status = 'running'`,
-        [reason, this.now().toISOString(), handoffId],
-      );
-    }
   }
 
   /** Lists handoffs for diagnostics/UI (coverage lag, blocked reasons). */

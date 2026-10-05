@@ -93,7 +93,7 @@ test('complete analysis -> archive v3 -> independent DB -> canon protagonist -> 
     const canon = await exportPortableCanon(source.runtime.worldStore, source.pkg.manifest, source.pkg.entries, sha.sha256Hex);
     const archive = await encodeWorldPackageArchive({ title: '开局链路测试', ...source.pkg, canon }, sha.sha256Hex);
     const decoded = await decodeWorldPackageArchive(archive, sha.sha256Hex);
-    assert.equal(decoded.schemaVersion, 'shineword-world-archive-3');
+    assert.equal(decoded.schemaVersion, 'shineword-world-archive-5');
     await importPortableWorldPackage({ worldStore: target.runtime.worldStore, sha256Hex: sha.sha256Hex,
       archive, newWorldId: 'imported-game', createdAt: 'later' });
     const setup = await session(target).getWorldSetup('imported-game');

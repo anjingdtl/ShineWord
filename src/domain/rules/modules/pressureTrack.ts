@@ -32,6 +32,7 @@ export function ensurePressureTrack(
   const existing = state.pressureTracks[trackId];
   if (existing) {
     existing.maxLevel = maxLevel;
+    existing.level = Math.max(0, Math.min(maxLevel, existing.level));
     return existing;
   }
   const created: PressureTrackState = { level: 0, maxLevel };
@@ -64,6 +65,7 @@ export function applyPressureChange(
   delta: number,
   stateVersion: number,
 ): { applied: number; crossedMax: boolean } {
+  if (!Number.isSafeInteger(delta) || !Number.isSafeInteger(stateVersion) || stateVersion < 0) throw new Error('pressure_track: change and version must be finite integers.');
   const track = state.pressureTracks?.[trackId];
   if (!track) {
     throw new Error(`pressure_track: unknown track '${trackId}'; the world configuration must enable pressure_track.`);
@@ -72,5 +74,5 @@ export function applyPressureChange(
   const applied = Math.max(0, Math.min(track.maxLevel, before + delta)) - before;
   track.level = before + applied;
   track.lastChangedStateVersion = stateVersion;
-  return { applied, crossedMax: track.level === track.maxLevel };
+  return { applied, crossedMax: before < track.maxLevel && track.level === track.maxLevel };
 }

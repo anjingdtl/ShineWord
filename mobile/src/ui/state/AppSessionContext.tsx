@@ -10,6 +10,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ApiProfile } from '../../../../src/application/llm/types';
 import { loadApiProfile } from '../../profileStore';
+import { getDatabaseRuntime, createFreshDevelopmentDatabase } from '../../database';
 
 export interface AppSessionValue {
   /** Saved API profile, or null before first-run setup. */
@@ -20,6 +21,8 @@ export interface AppSessionValue {
   error: string | null;
   setError: (value: string | null) => void;
   setProfile: (value: ApiProfile | null) => void;
+  databaseError: string | null;
+  createFreshDatabase: () => Promise<void>;
 }
 
 const AppSessionContext = createContext<AppSessionValue | null>(null);
@@ -28,6 +31,13 @@ export function AppSessionProvider(props: { children: React.ReactNode }): React.
   const [profile, setProfile] = useState<ApiProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const createFreshDatabase = useCallback(async () => {
+    setLoading(true);
+    try { await createFreshDevelopmentDatabase(); setDatabaseError(null); }
+    catch (e) { setDatabaseError(e instanceof Error ? e.message : String(e)); }
+    finally { setLoading(false); }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +45,8 @@ export function AppSessionProvider(props: { children: React.ReactNode }): React.
       try {
         const saved = await loadApiProfile();
         if (!cancelled && saved) setProfile(saved);
+        try { await getDatabaseRuntime(); }
+        catch (e) { if (!cancelled) setDatabaseError(e instanceof Error ? e.message : String(e)); }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -47,8 +59,8 @@ export function AppSessionProvider(props: { children: React.ReactNode }): React.
   }, []);
 
   const value = useMemo<AppSessionValue>(
-    () => ({ profile, loading, error, setError, setProfile }),
-    [profile, loading, error],
+    () => ({ profile, loading, error, setError, setProfile, databaseError, createFreshDatabase }),
+    [profile, loading, error, databaseError, createFreshDatabase],
   );
 
   return <AppSessionContext.Provider value={value}>{props.children}</AppSessionContext.Provider>;

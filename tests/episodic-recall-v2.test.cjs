@@ -296,7 +296,7 @@ test('fork: episodic rows <= fork version copy to the new branch', async () => {
 test('migration 21 creates episodic_turn_index', async () => {
   const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-  assert.ok(applied.includes(21));
+  assert.ok(applied.includes(100));
   const tables = await adapter.queryAll(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_turn_index'",
   );

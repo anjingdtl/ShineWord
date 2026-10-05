@@ -216,7 +216,7 @@ test('publication gate: blocking review issue stops publish; published revision 
   // Re-publishing the same revision is refused; content hash is stable.
   const { result: again } = await publishSamplePackage(worldStore, 'w-pkg');
   assert.equal(again.manifest.revision, 2, 'corrections ship as a new revision');
-  assert.equal(again.manifest.contentHash, result.manifest.contentHash, 'same content, same hash');
+  assert.notEqual(again.manifest.contentHash, result.manifest.contentHash, 'immutable revision is included in content identity');
 });
 
 test('three books reference the same entries with visibility filtering', async () => {
@@ -774,7 +774,7 @@ test('M5: unknown capabilities fail closed with zero HTTP (legacy fallback remov
   const adapter = new NodeSqliteAdapter(db);
   const worldStore = new SqliteWorldStore(adapter);
   await seedWorld(db, worldStore);
-  await createSampleCampaign(db, adapter, worldStore, 'camp-legacy');
+  await createSampleCampaign(db, adapter, worldStore, 'camp-s');
   const provider = new CapturingProvider();
   const session = new CampaignSession({
     db: adapter,
@@ -789,7 +789,7 @@ test('M5: unknown capabilities fail closed with zero HTTP (legacy fallback remov
   }, provider, { endpoint: 'https://x', model: 'stub', keyRef: 'kr' });
 
   await assert.rejects(
-    () => session.playTurn({ campaignId: 'camp-legacy', branchId: 'camp-legacy-main', intent: '潜行' }),
+    () => session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: '潜行' }),
     error => error instanceof BudgetInfeasibleError && error.code === 'context_window_unknown',
   );
   assert.equal(provider.requests.length, 0, 'zero HTTP dispatch on unknown capabilities');

@@ -122,40 +122,12 @@ const BUDGET = {
   reasoningEffort: 'low', supportsPromptCache: false, reserveTokens: 2_000,
 };
 
-test('schema 28 backfills world_sources for unified worlds', async () => {
-  // Simulate an upgrade: a schema-27 database already holding a unified
-  // world, then migration 28 lands and must register the founding source.
-  const db = setupDb(27);
-  try {
-    const adapter = new NodeSqliteAdapter(db);
-    const worldStore = new SqliteWorldStore(adapter);
-    const now = '2026-10-01T15:00:00.000Z';
-    db.prepare(
-      `INSERT INTO imported_sources(source_id, raw_sha256, normalized_tree_hash, normalize_tree_hash_version,
-         byte_length, code_point_count, encoding, normalize_version, chapter_split_version,
-         normalize_shard_scheme, split_strategy, file_name, title, status, created_at, updated_at)
-       VALUES ('src-backfill', 'hash-bf', '', 'normalize-hash-shard-tree-1', 10, 10, 'utf-8',
-         'normalize-1', 'chapter-split-1', 'normalize-shard-1', 'standard', 'x.txt', 'x', 'active', ?, ?)`,
-    ).run(now, now);
-    db.prepare(
-      `INSERT INTO worlds(world_id, title, source_sha256, source_bytes, normalize_version,
-         chapter_split_version, build_status, created_at, updated_at)
-       VALUES ('world-src-backfill', 't', 'hash-bf', 10, 'normalize-1', 'chapter-split-1',
-         'extracting', ?, ?)`,
-    ).run(now, now);
-    const migration28 = BUILTIN_MIGRATIONS.find(m => m.version === 28);
-    assert.ok(migration28, 'schema 28 migration exists');
-    for (const statement of migration28.sql.split(';').map(s => s.trim()).filter(Boolean)) {
-      db.exec(statement);
-    }
-    const memberships = await worldStore.listWorldSources('world-src-backfill');
-    assert.equal(memberships.length, 1);
-    assert.equal(memberships[0].sourceOrdinal, 1);
-    assert.equal(memberships[0].sourceId, 'src-backfill');
-  } finally {
-    db.close();
-  }
+test('current source catalog belongs to the single fresh schema', () => {
+  const db = setupDb();
+  try { assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='world_sources'").get()); }
+  finally { db.close(); }
 });
+
 
 test('part 2 mirrors with s2- prefix and continuing chapter indexes; both runs complete', async () => {
   const db = setupDb();

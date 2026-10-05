@@ -1,3 +1,5 @@
+import { requireCompiledRules, validateRuleEntryCapabilities } from '../content/runtimeRules';
+import { computeWorldRuleConfigurationHash } from '../content/ruleConfigCompiler';
 import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
 import { assertArtifactNoSecrets, verifySegmentArtifact } from '../segmentPublication/protocol';
 import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
@@ -13,25 +15,16 @@ import { insertBranchContentManifest, readBranchContentManifest, rebindBranchCon
 import { validatePortableCanon, type PortableCanon } from './portableCanon';
 import { validatePortableProjectStyle, type PortableProjectStyleV1, type ProjectStyleArchivePortV1 } from './phase6Bundle';
 
-const ARCHIVE_SCHEMA = 'shineword-world-archive-1';
-const CONTENT_ARCHIVE_SCHEMA = 'shineword-world-archive-2';
-const CANON_ARCHIVE_SCHEMA = 'shineword-world-archive-3';
-const PHASE6_ARCHIVE_SCHEMA = 'shineword-world-archive-4';
+const ARCHIVE_SCHEMA = 'shineword-world-archive-5';
 const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 15 * 1024 * 1024;
 
 export interface PortableWorldPackage {
-  schemaVersion: typeof ARCHIVE_SCHEMA | typeof CONTENT_ARCHIVE_SCHEMA | typeof CANON_ARCHIVE_SCHEMA | typeof PHASE6_ARCHIVE_SCHEMA;
+  schemaVersion: typeof ARCHIVE_SCHEMA;
   title: string;
   manifest: WorldPackageManifest;
   entries: ContentEntry[];
   sections: BookSection[];
-  /**
-   * Historical publishers hash the incoming entry revision, then persist the
-   * entries at the new immutable package revision. Preserve that hash basis
-   * in the portable envelope so old packages remain verifiable after export.
-   */
-  contentHashBasisRevision?: number;
   /** Evidence, entities and timeline required to open and play an imported world. */
   canon?: PortableCanon;
   segmentArtifacts?: SegmentArtifactV1[];
@@ -74,8 +67,7 @@ export async function encodeWorldPackageArchive(
   const payload = utf8Encode(JSON.stringify({
     ...input,
     ...(phase6 ? { segmentArtifacts: input.segmentArtifacts ?? [] } : {}),
-    schemaVersion: phase6 ? PHASE6_ARCHIVE_SCHEMA : input.canon ? CANON_ARCHIVE_SCHEMA : input.branchContent ? CONTENT_ARCHIVE_SCHEMA : ARCHIVE_SCHEMA,
-    contentHashBasisRevision,
+    schemaVersion: ARCHIVE_SCHEMA,
   }));
   if (payload.length > MAX_PACKAGE_JSON_BYTES) throw new Error('World package payload exceeds the portable archive limit.');
   const name = utf8Encode('package.json');
@@ -136,8 +128,7 @@ export async function decodeWorldPackageArchive(
   }
   const bundle = parsed as Partial<PortableWorldPackage>;
   assertArtifactNoSecrets(parsed);
-  if (bundle.schemaVersion !== ARCHIVE_SCHEMA && bundle.schemaVersion !== CONTENT_ARCHIVE_SCHEMA
-    && bundle.schemaVersion !== CANON_ARCHIVE_SCHEMA && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema.');
+  if (bundle.schemaVersion !== ARCHIVE_SCHEMA) throw new Error('Unsupported world package archive schema; only archive-5 is accepted.');
   if (typeof bundle.title !== 'string' || !bundle.title.trim() || bundle.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
@@ -145,40 +136,18 @@ export async function decodeWorldPackageArchive(
     throw new Error('World package archive is missing its manifest, entries or book sections.');
   }
   validatePortableInput({ title: bundle.title, manifest: bundle.manifest, entries: bundle.entries, sections: bundle.sections });
-  if (bundle.segmentArtifacts && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Segment artifacts require archive v4.');
-  if (bundle.projectStyle !== undefined && bundle.schemaVersion !== PHASE6_ARCHIVE_SCHEMA) throw new Error('Project style settings require archive v4.');
-  if (bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA) {
-    if (!Array.isArray(bundle.segmentArtifacts)) throw new Error('Archive v4 requires a segment artifact list.');
+  if (bundle.segmentArtifacts !== undefined) {
+    if (!Array.isArray(bundle.segmentArtifacts) || !bundle.canon) throw new Error('Artifact archives require their canon and artifact list.');
     await validateArtifactArchive(bundle.segmentArtifacts, bundle.manifest, sha256Hex);
-    if (bundle.projectStyle !== undefined && !await validatePortableProjectStyle(bundle.projectStyle, bundle.manifest.worldId, sha256Hex)) throw new Error('Invalid portable project style.');
   }
-  if (bundle.schemaVersion === CANON_ARCHIVE_SCHEMA || bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA) {
-    if (!bundle.canon) throw new Error('World archive v3 is missing its canon records.');
-    await validatePortableCanon(bundle.canon, bundle.manifest,
-      [...bundle.entries, ...(bundle.segmentArtifacts ?? []).flatMap(a => [...a.entries])], sha256Hex);
-    if (bundle.branchContent) await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
-  } else if (bundle.canon) {
-    throw new Error('Canon records require world archive v3.');
-  } else if (bundle.schemaVersion === CONTENT_ARCHIVE_SCHEMA) {
-    if (!bundle.branchContent) throw new Error('World archive v2 is missing its branch content bundle.');
-    await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
-  } else if (bundle.branchContent) {
-    throw new Error('World archive v1 cannot carry branch content.');
-  }
+  if (bundle.projectStyle !== undefined && (!bundle.canon || !await validatePortableProjectStyle(bundle.projectStyle, bundle.manifest.worldId, sha256Hex))) throw new Error('Invalid portable project style.');
+  if (bundle.canon) await validatePortableCanon(bundle.canon, bundle.manifest,
+    [...bundle.entries, ...(bundle.segmentArtifacts ?? []).flatMap(a => [...a.entries])], sha256Hex);
+  if (bundle.branchContent) await validateBranchContent(bundle.branchContent, bundle.manifest, sha256Hex);
   if (bundle.manifest.status !== 'published') throw new Error('Only a published world package can be imported for play.');
   const report = validatePackage(bundle.manifest, bundle.entries, bundle.sections);
   if (!report.ok) throw new Error(`World package validation failed:\n- ${report.errors.join('\n- ')}`);
-  const basisRevision = bundle.contentHashBasisRevision;
-  if (basisRevision !== undefined && (!Number.isSafeInteger(basisRevision) || basisRevision < 0)) {
-    throw new Error('World package hash basis revision is invalid.');
-  }
-  const verifiedBasis = await findContentHashBasisRevision(
-    bundle.manifest,
-    bundle.entries,
-    bundle.sections,
-    sha256Hex,
-    basisRevision,
-  );
+  const verifiedBasis = await findContentHashBasisRevision(bundle.manifest, bundle.entries, bundle.sections, sha256Hex);
   if (verifiedBasis === null) throw new Error('World package content hash verification failed.');
   return {
     schemaVersion: bundle.schemaVersion,
@@ -186,7 +155,6 @@ export async function decodeWorldPackageArchive(
     manifest: bundle.manifest,
     entries: bundle.entries,
     sections: bundle.sections,
-    contentHashBasisRevision: verifiedBasis,
     ...(bundle.canon ? { canon: bundle.canon } : {}),
     ...(bundle.segmentArtifacts ? { segmentArtifacts: bundle.segmentArtifacts } : {}),
     ...(bundle.projectStyle ? { projectStyle: bundle.projectStyle } : {}),
@@ -208,7 +176,7 @@ export async function importPortableWorldPackage(input: {
   if (bundle.branchContent) {
     throw new Error('This archive contains branch-bound deltas. Import its base package, then attach the delta bundle to its matching campaign branch.');
   }
-  const targetWorldId = bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA ? bundle.manifest.worldId : input.newWorldId;
+  const targetWorldId = bundle.segmentArtifacts !== undefined ? bundle.manifest.worldId : input.newWorldId;
   // Keep the published revision, entry revisions and content hash intact.
   // Campaign saves lock this immutable package version, and portable import
   // must not silently turn rN into a different local r1 package.
@@ -218,8 +186,10 @@ export async function importPortableWorldPackage(input: {
   const manifest: WorldPackageManifest = {
     ...bundle.manifest,
     worldId: targetWorldId,
+    ruleConfiguration: { ...bundle.manifest.ruleConfiguration, worldId: targetWorldId, configHash: '' },
     status: 'published',
   };
+  manifest.ruleConfiguration.configHash = computeWorldRuleConfigurationHash(manifest.ruleConfiguration);
   const world: WorldRecord = {
     worldId: targetWorldId,
     title: bundle.title,
@@ -237,7 +207,7 @@ export async function importPortableWorldPackage(input: {
     entries,
     sections: bundle.sections,
     canon: bundle.canon,
-    afterWrite: bundle.schemaVersion === PHASE6_ARCHIVE_SCHEMA ? async tx => {
+    afterWrite: bundle.segmentArtifacts !== undefined || bundle.projectStyle !== undefined ? async tx => {
       const store = new SqliteSegmentArtifactStore(input.worldStore.database, input.sha256Hex);
       for (const artifact of bundle.segmentArtifacts ?? []) await store.insertArtifact(tx, artifact);
       if (bundle.projectStyle) await input.projectStyleArchive!.restoreProjectStyle(tx, targetWorldId, bundle.projectStyle);
@@ -252,7 +222,6 @@ export async function importPortableWorldPackage(input: {
       importedFromWorldId: bundle.manifest.worldId,
       importedFromRevision: bundle.manifest.revision,
       importedFromContentHash: bundle.manifest.contentHash,
-      importedContentHashBasisRevision: bundle.contentHashBasisRevision,
     }),
     createdAt: input.createdAt,
   });
@@ -385,7 +354,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) {
     throw new Error('World package title is missing or too long.');
   }
-  if (!input.manifest || !['world-package-2', 'world-package-3', 'world-package-4'].includes(input.manifest.schemaVersion) ||
+  if (!input.manifest || input.manifest.schemaVersion !== 'shineword-world-package-5' ||
       typeof input.manifest.worldId !== 'string' || !input.manifest.worldId.trim() || input.manifest.worldId.length > 120 ||
       !Number.isSafeInteger(input.manifest.revision) || input.manifest.revision < 1) {
     throw new Error('World package manifest is invalid.');
@@ -393,7 +362,7 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
   if (!/^[a-f0-9]{64}$/i.test(input.manifest.contentHash) || !/^[a-f0-9]{64}$/i.test(input.manifest.sourceSha256)) {
     throw new Error('World package hashes must be SHA-256 hex strings.');
   }
-  if (input.manifest.schemaVersion === 'world-package-3' || input.manifest.schemaVersion === 'world-package-4') {
+  if (input.manifest.buildScope) {
     const scope = input.manifest.buildScope;
     if (!scope || !['progressive', 'full'].includes(scope.strategy)
       || !['opening', 'incremental', 'whole_source'].includes(scope.scope)
@@ -405,9 +374,11 @@ function validatePortableInput(input: Omit<PortableWorldPackage, 'schemaVersion'
         || range.endCodePoint <= range.startCodePoint || !/^[a-f0-9]{64}$/i.test(range.contentSha256))) {
       throw new Error('World package scope metadata is invalid.');
     }
-  } else if (input.manifest.buildScope) {
-    throw new Error('Legacy world packages cannot carry version 3 scope metadata.');
   }
+  const rules = requireCompiledRules(input.manifest.ruleConfiguration);
+  if (input.manifest.ruleConfiguration.worldId !== input.manifest.worldId || input.manifest.ruleConfiguration.revision !== input.manifest.revision || input.manifest.ruleConfiguration.configHash !== rules.binding.configurationHash) throw new Error('World rule configuration identity/hash mismatch.');
+  const capabilityErrors = validateRuleEntryCapabilities(input.entries, rules);
+  if (capabilityErrors.length) throw new Error(capabilityErrors.join('; '));
   if (!Array.isArray(input.entries) || input.entries.length === 0 || input.entries.length > 5000 ||
       !Array.isArray(input.sections) || input.sections.length > 500) {
     throw new Error('World package entry or section count is outside the allowed range.');
@@ -419,29 +390,10 @@ async function findContentHashBasisRevision(
   entries: readonly ContentEntry[],
   sections: readonly BookSection[],
   sha256Hex: Sha256HexProvider['sha256Hex'],
-  explicitBasisRevision?: number,
 ): Promise<number | null> {
-  const candidates = explicitBasisRevision === undefined
-    ? [...new Set([
-        manifest.revision,
-        Math.max(0, manifest.revision - 1),
-        0,
-        ...entries.map(entry => entry.revision),
-      ])]
-    : [explicitBasisRevision];
-  for (const revision of candidates) {
-    if (!Number.isSafeInteger(revision) || revision < 0) continue;
-    const candidateEntries = entries.map(entry => ({ ...entry, revision }));
-    if (await computePackageContentHash(
-      candidateEntries,
-      sections,
-      sha256Hex,
-      manifest.buildScope,
-    ) === manifest.contentHash) {
-      return revision;
-    }
-  }
-  return null;
+  if (entries.some(entry => entry.revision !== manifest.revision)) return null;
+  return await computePackageContentHash(entries, sections, sha256Hex, manifest.buildScope) === manifest.contentHash
+    ? manifest.revision : null;
 }
 
 function readStoredZipPackage(bytes: Uint8Array): Uint8Array {

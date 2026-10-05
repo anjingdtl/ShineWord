@@ -30,7 +30,7 @@ const VALID_EFFECT_OPS = new Set([
   'restoreResource',
   'recordEvent',
 ]);
-const VALID_ENGINE_EFFECT_OPS = new Set(['removeCondition', 'grantItem']);
+const VALID_ENGINE_EFFECT_OPS = new Set(['removeCondition', 'grantItem', 'raisePressure', 'relievePressure']);
 
 function nonEmpty(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
@@ -99,6 +99,11 @@ function validateEffect(effect: unknown, path: string, errors: string[], origin:
       if (!nonEmpty(e.actorId) || !nonEmpty(e.conditionId)) {
         errors.push(`${path}: actorId and conditionId are required.`);
       }
+      return;
+    case 'raisePressure':
+    case 'relievePressure':
+      if (!nonEmpty(e.trackId) || !Number.isSafeInteger(e.amount) || e.amount < 0 || e.amount > 1000) errors.push(`${path}: invalid pressure delta.`);
+      if (e.op === 'raisePressure' && (!Number.isSafeInteger(e.maxLevel) || e.maxLevel < 1 || e.maxLevel > 1000)) errors.push(`${path}: invalid pressure maximum.`);
       return;
     case 'grantItem':
       if (!nonEmpty(e.itemId) || !nonEmpty(e.actorId)) {

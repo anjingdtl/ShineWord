@@ -94,7 +94,7 @@ test('typed material conversion keeps content hash and renders trusted payload t
 
 function memoryState(branchId, through, status = 'clean', fingerprint = 'fp-chain') {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     branchId,
     throughStateVersion: through,
     characters: {},

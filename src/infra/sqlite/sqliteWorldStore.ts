@@ -24,6 +24,17 @@ import type {
 } from '../../application/ports/worldStore';
 import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
 import { sanitizeTokenFragment } from '../../application/world/extraction';
+import { requireCompiledRules, validateRuleEntryCapabilities } from '../../application/content/runtimeRules';
+
+function assertCurrentRuleManifest(manifest: WorldPackageManifest): void {
+  if (manifest.schemaVersion !== 'shineword-world-package-5') throw new Error('Unsupported world package schema; create a current development project.');
+  const rules = requireCompiledRules(manifest.ruleConfiguration);
+  if (manifest.ruleConfiguration.worldId !== manifest.worldId || manifest.ruleConfiguration.revision !== manifest.revision
+    || manifest.ruleConfiguration.configHash !== rules.binding.configurationHash
+    || manifest.ruleset.id !== rules.binding.coreId || manifest.ruleset.version !== rules.binding.coreVersion) {
+    throw new Error('World rule configuration differs from the immutable package binding.');
+  }
+}
 
 interface WorldRow extends SqliteRow {
   world_id: string;
@@ -1247,6 +1258,9 @@ export class SqliteWorldStore implements WorldStore {
     createdAt: string;
     assertCurrent?: (tx: SqliteTransaction) => Promise<void>;
   }): Promise<void> {
+    assertCurrentRuleManifest(input.manifest);
+    const errors = validateRuleEntryCapabilities(input.entries, requireCompiledRules(input.manifest.ruleConfiguration));
+    if (errors.length) throw new Error(errors.join('; '));
     await this.db.transaction(async tx => {
       await input.assertCurrent?.(tx);
       const existing = await tx.queryOne<SqliteRow>(
@@ -1262,8 +1276,8 @@ export class SqliteWorldStore implements WorldStore {
       await tx.execute(
         `INSERT INTO world_packages
           (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-           mapping_version, status, content_hash, validation_json, build_scope_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mapping_version, status, content_hash, validation_json, build_scope_json, rule_config_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.manifest.worldId,
           input.manifest.revision,
@@ -1276,6 +1290,7 @@ export class SqliteWorldStore implements WorldStore {
           input.manifest.contentHash,
           input.validationJson,
           JSON.stringify(input.manifest.buildScope ?? {}),
+          JSON.stringify(input.manifest.ruleConfiguration),
           input.createdAt,
         ],
       );
@@ -1329,6 +1344,9 @@ export class SqliteWorldStore implements WorldStore {
     canon?: WorldCanonSnapshot;
     afterWrite?(tx: SqliteTransaction): Promise<void>;
   }): Promise<void> {
+    assertCurrentRuleManifest(input.manifest);
+    const errors = validateRuleEntryCapabilities(input.entries, requireCompiledRules(input.manifest.ruleConfiguration));
+    if (errors.length) throw new Error(errors.join('; '));
     await this.db.transaction(async tx => {
       const existing = await tx.queryOne<SqliteRow>('SELECT world_id FROM worlds WHERE world_id = ?', [input.world.worldId]);
       if (existing) throw new Error(`World id already exists: ${input.world.worldId}.`);
@@ -1345,12 +1363,12 @@ export class SqliteWorldStore implements WorldStore {
       await tx.execute(
         `INSERT INTO world_packages
           (world_id, revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-           mapping_version, status, content_hash, validation_json, build_scope_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mapping_version, status, content_hash, validation_json, build_scope_json, rule_config_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [input.manifest.worldId, input.manifest.revision, input.manifest.schemaVersion, input.manifest.sourceSha256,
           input.manifest.ruleset.id, input.manifest.ruleset.version, input.manifest.mappingVersion,
           input.manifest.status, input.manifest.contentHash, input.validationJson,
-          JSON.stringify(input.manifest.buildScope ?? {}), input.createdAt],
+          JSON.stringify(input.manifest.buildScope ?? {}), JSON.stringify(input.manifest.ruleConfiguration), input.createdAt],
       );
       for (const entry of input.entries) {
         await tx.execute(
@@ -1418,7 +1436,7 @@ export class SqliteWorldStore implements WorldStore {
   ): Promise<{ manifest: WorldPackageManifest; entries: ContentEntry[]; sections: BookSection[] } | null> {
     const row = await reader.queryOne<SqliteRow>(
       `SELECT revision, schema_version, source_sha256, ruleset_id, ruleset_version,
-              mapping_version, status, content_hash, build_scope_json
+              mapping_version, status, content_hash, build_scope_json, rule_config_json
          FROM world_packages WHERE world_id = ? AND revision = ?`,
       [worldId, revision],
     );
@@ -1436,32 +1454,23 @@ export class SqliteWorldStore implements WorldStore {
     );
     const schemaVersion = String(row.schema_version);
     let buildScope: WorldPackageManifest['buildScope'];
-    if (schemaVersion === 'world-package-3' || schemaVersion === 'world-package-4') {
-      try {
-        const scopeText = row.build_scope_json == null ? '' : String(row.build_scope_json).trim();
-        const raw: WorldPackageManifest['buildScope'] | null = scopeText === '' || scopeText === '{}'
-          ? null : JSON.parse(scopeText) as WorldPackageManifest['buildScope'];
-        // Schema 3 REQUIRES its progressive scope; schema 4 (adds situations)
-        // tolerates scope-less legacy-shaped packages.
-        if (raw === null || raw === undefined) {
-          if (schemaVersion === 'world-package-3') throw new Error('missing scope');
-        } else if (!Array.isArray(raw.sourceRanges)) {
-          throw new Error('missing scope');
-        } else {
-          buildScope = raw;
-        }
-      } catch {
-        throw new Error(`World package ${worldId} r${revision} has invalid progressive scope metadata.`);
+    if (schemaVersion !== 'shineword-world-package-5') throw new Error(`Unsupported world package schema: ${schemaVersion}.`);
+    try {
+      const scope = JSON.parse(String(row.build_scope_json ?? '{}'));
+      if (Object.keys(scope).length) {
+        if (!Array.isArray(scope.sourceRanges)) throw new Error('missing scope ranges');
+        buildScope = scope;
       }
-    }
-    if (schemaVersion !== 'world-package-2' && schemaVersion !== 'world-package-3' && schemaVersion !== 'world-package-4') {
-      throw new Error(`Unsupported world package schema: ${schemaVersion}.`);
-    }
+    } catch { throw new Error(`World package ${worldId} r${revision} has invalid scope metadata.`); }
+    const ruleConfiguration = JSON.parse(String(row.rule_config_json ?? 'null'));
+    assertCurrentRuleManifest({ worldId, revision, schemaVersion, ruleConfiguration,
+      ruleset: { id: String(row.ruleset_id), version: String(row.ruleset_version) } } as WorldPackageManifest);
     return {
       manifest: {
         worldId,
         revision: Number(row.revision),
         schemaVersion,
+        ruleConfiguration,
         sourceSha256: String(row.source_sha256),
         ruleset: { id: String(row.ruleset_id), version: String(row.ruleset_version) },
         mappingVersion: String(row.mapping_version),

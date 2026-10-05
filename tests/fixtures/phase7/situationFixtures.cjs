@@ -113,12 +113,12 @@ const rescue = {
     contentEntry('npc-companion', 'actor_template', {
       category: 'human', name: '岳轻', attributes: { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 2, social: 2 },
       skills: {}, hp: 8, stamina: 6, defense: 2, attacks: [], abilities: [],
-      behavior: { goal: '养伤并夺回信物', retreatThreshold: 0.2, morale: 3 },
+      behavior: { goal: '养伤并夺回信物', retreatThreshold: 0.2, morale: 'steady' },
     }, { visibility: 'public', provenance: prov('explicit', ['fact-companion-injured'], 'fixture: 同伴') }),
     contentEntry('npc-helper', 'actor_template', {
       category: 'human', name: '柴掌柜', attributes: { physique: 1, agility: 1, insight: 3, knowledge: 3, willpower: 2, social: 3 },
       skills: { 'skill-medicine': 'trained' }, hp: 6, stamina: 4, defense: 2, attacks: [], abilities: [],
-      behavior: { goal: '照章程行医，护住旧交', retreatThreshold: 0.5, morale: 4 },
+      behavior: { goal: '照章程行医，护住旧交', retreatThreshold: 0.5, morale: 'steady' },
     }, { visibility: 'public', provenance: prov('explicit', ['fact-helper-known'], 'fixture: 援助者') }),
     contentEntry('scene-sect', 'scene', {
       name: '青云观废院', description: '遭袭后的道观废院', locationId: 'ent-sect',
@@ -318,7 +318,7 @@ const parley = {
     contentEntry('npc-quartermaster', 'actor_template', {
       category: 'human', name: '裴主事', attributes: { physique: 1, agility: 1, insight: 3, knowledge: 3, willpower: 4, social: 3 },
       skills: {}, hp: 6, stamina: 5, defense: 3, attacks: [], abilities: [],
-      behavior: { goal: '按章程办事，不出纰漏', retreatThreshold: 0.8, morale: 5 },
+      behavior: { goal: '按章程办事，不出纰漏', retreatThreshold: 0.8, morale: 'steady' },
     }, { visibility: 'public', provenance: prov('explicit', ['fact-quartermaster-duty'], 'fixture: 军需官') }),
     contentEntry('quest-restamp', 'quest', {
       name: '补办名册',

@@ -2,7 +2,6 @@ import type { WorldRecord } from '../ports/worldStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import { isFactVisibleAtAnchor } from '../world/opening';
 import { isEntryVisibleAtAnchor } from '../campaign/recruitment';
-import { projectLegacyAnchorlessOpeningFacts } from './openingCompatibility';
 
 /** Publication and opening readiness are separate for historical archives. */
 export async function hasPlayableOpening(store: SqliteWorldStore, worldId: string, revision: number): Promise<boolean> {
@@ -11,7 +10,7 @@ export async function hasPlayableOpening(store: SqliteWorldStore, worldId: strin
   const [rawFacts, entities, events] = await Promise.all([store.listFacts(worldId), store.listEntities(worldId), store.listEvents(worldId)]);
   const order = events.filter(event => event.status === 'canon' && event.worldTimeOrder !== null)
     .sort((a, b) => a.worldTimeOrder! - b.worldTimeOrder!)[0]?.worldTimeOrder ?? undefined;
-  const facts = projectLegacyAnchorlessOpeningFacts(worldId, pkg.manifest, rawFacts, order === undefined);
+  const facts = rawFacts;
   if (pkg.entries.some(entry => entry.kind === 'scene' && entry.visibility === 'public'
     && isEntryVisibleAtAnchor(entry, facts, order))) return true;
   return entities.some(entity => entity.type === 'location' && facts.some(fact => fact.subjectEntityId === entity.entityId

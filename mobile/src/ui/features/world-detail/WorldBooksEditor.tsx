@@ -1,3 +1,5 @@
+import type { WorldRuleConfiguration } from '../../../../../src/domain/rules/worldRuleConfiguration';
+import { createWorldRuleConfiguration, requireCompiledRules, validateRuleEntryCapabilities } from '../../../../../src/application/content/runtimeRules';
 /**
  * WorldBooksEditor — the GM edit surface of 三宝书 (plan §10.2).
  *
@@ -39,6 +41,7 @@ interface EditorStatus {
 export function WorldBooksEditor(props: {
   worldId: string;
   baseRevision: number;
+  ruleConfiguration: WorldRuleConfiguration | null;
   /** Entries of the currently loaded revision (or draft). */
   entries: ContentEntry[];
   sections: BookSection[];
@@ -60,6 +63,8 @@ export function WorldBooksEditor(props: {
   );
   const [diff, setDiff] = useState<string | null>(null);
   const [status, setStatus] = useState<EditorStatus | null>(null);
+  const [ruleJson, setRuleJson] = useState(JSON.stringify(props.ruleConfiguration, null, 2));
+  useEffect(() => { setRuleJson(JSON.stringify(props.ruleConfiguration, null, 2)); }, [props.ruleConfiguration]);
   const [busy, setBusy] = useState(false);
 
   // Reset the form only when a *different* entry is selected; a draft save must
@@ -95,7 +100,13 @@ export function WorldBooksEditor(props: {
     setStatus(null);
     try {
       const { entries, parsed } = withEditedEntry();
+      const ruleConfiguration = { ...JSON.parse(ruleJson), worldId: props.worldId, revision: props.baseRevision + 1, configHash: '' } as WorldRuleConfiguration;
+      const compiled = requireCompiledRules(ruleConfiguration);
+      ruleConfiguration.configHash = compiled.binding.configurationHash;
+      const mechanismErrors = validateRuleEntryCapabilities(entries, compiled);
+      if (mechanismErrors.length) throw new Error(mechanismErrors.join('\n'));
       const draft = {
+        ruleConfiguration,
         worldId: props.worldId,
         baseRevision: props.baseRevision,
         entries,
@@ -200,6 +211,13 @@ export function WorldBooksEditor(props: {
         title={`世界编辑草稿 · 基于 r${props.baseRevision}`}
         subtitle="修改只写入草稿；发布后生成不可变新版本，已运行战役继续使用锁定版本。"
       />
+      <SectionHeader title="世界规则配置" subtitle="预设与参数属于设计补全。发布会校验机制依赖、能力和限制，现有战役仍锁定原版本。" />
+      <View style={{ flexDirection: 'row', gap: theme.space.sm }}>
+        {(['fantasy','suspense','daily'] as const).map(preset => <Button key={preset}
+          label={{ fantasy: '奇幻', suspense: '悬疑', daily: '日常' }[preset]} variant="chip" testID={`rule-preset-${preset}`}
+          onPress={() => setRuleJson(JSON.stringify(createWorldRuleConfiguration(props.worldId,props.baseRevision+1,preset),null,2))} />)}
+      </View>
+      <TextField label="机制、参数、词汇与限制（JSON）" value={ruleJson} onChangeText={setRuleJson} multiline testID="world-rule-json" />
       <View style={[styles.wrap, { gap: theme.space.sm }]}>
         {props.entries.map(entry => (
           <Button

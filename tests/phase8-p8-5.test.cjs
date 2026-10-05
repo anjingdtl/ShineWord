@@ -103,7 +103,7 @@ test('A22: entity change time comes from the cited evidence, not the batch end',
   const base = baseState();
   base.throughStateVersion = 0;
   const patch = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     range: { fromStateVersion: 0, toStateVersion: 8 },
     characterUpdates: [
       // Cites turn-2 (v2): must be stamped v2 even though the batch ends at v8.
@@ -168,7 +168,7 @@ test('A19: a CAS conflict aborts the whole atomic checkpoint application', async
         patchId: 'p-cas', fromStateVersion: 0, toStateVersion: 2,
         baseFingerprint: 'fp-base',
         patch: {
-          schemaVersion: 2, range: { fromStateVersion: 0, toStateVersion: 2 },
+          schemaVersion: 3, range: { fromStateVersion: 0, toStateVersion: 2 },
           characterUpdates: [], relationshipUpdates: [], conflictChanges: [],
           threadChanges: [], foreshadowingChanges: [], completedBeats: [],
         },

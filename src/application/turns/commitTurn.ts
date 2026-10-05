@@ -5,6 +5,8 @@ import { serializeActionContract } from '../../domain/turns/canonical';
 import type { ActionContract } from '../../domain/turns/types';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { CommittedTurn, TurnStore, TurnSettlementPlan } from '../ports/turnStore';
+import { assertRuleAction, requireCompiledRules } from '../content/runtimeRules';
+import { stableFingerprint } from '../llm/requestPlan';
 
 export interface CommitResolvedTurnInput {
   store: TurnStore;
@@ -70,6 +72,11 @@ export interface ReduceTurnResolutionInput {
 export function reduceTurnResolution(input: ReduceTurnResolutionInput): ReducedTurnResolution {
   const { state, contract, contractHash, outcomeGrade, rollRecord } = input;
   assertValidActionContract(contract, input.contractOrigin ?? 'planner');
+  assertRuleAction(state, contract.actionType, contract.actorId);
+  if (state.ruleConfiguration) {
+    const binding = requireCompiledRules(state.ruleConfiguration).binding;
+    if (!contract.ruleBinding || stableFingerprint(contract.ruleBinding) !== stableFingerprint(binding)) throw new Error('Action contract does not match the locked rule binding.');
+  }
   if (contract.contentDependency && contract.contentDependency.branchId !== state.branchId) {
     throw new Error('Frozen content dependency belongs to a different campaign branch.');
   }

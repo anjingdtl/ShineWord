@@ -163,67 +163,29 @@ function populateLegacyBuilds(db) {
   runInsert.run('E', 'canceled', 69, 0, now, now, now);
 }
 
-test('populated v23 -> v24 preserves every build field, counters, commits, fencing and FK integrity', async () => {
+test('current baseline refuses historical schema 23 without mutation', async () => {
   const db = new DatabaseSync(':memory:');
   try {
-    const adapter = new NodeSqliteAdapter(db);
-    const v23 = BUILTIN_MIGRATIONS.filter(m => m.version <= 23);
-    await applySqliteMigrations(adapter, v23);
-    assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version, 23);
-    populateLegacyBuilds(db);
-    const oldRuns = db.prepare('SELECT * FROM world_build_runs ORDER BY run_id').all();
-    const oldUnits = db.prepare('SELECT * FROM world_build_units ORDER BY unit_id').all();
-    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
-    // ONLY v24 runs; this is not an empty/new-schema test.
-    assert.deepEqual(await applySqliteMigrations(adapter, [BUILTIN_MIGRATIONS.find(m => m.version === 24)]), [24]);
-    const runs = db.prepare('SELECT * FROM world_build_runs ORDER BY run_id').all();
-    const units = db.prepare('SELECT * FROM world_build_units ORDER BY unit_id').all();
-    assert.equal(runs.length, oldRuns.length);
-    assert.equal(units.length, oldUnits.length);
-    for (let i = 0; i < runs.length; i += 1) {
-      const expected = { ...oldRuns[i] };
-      if (expected.run_id === 'C') Object.assign(expected, { status: 'stopped_user', pause_requested: 0, cancel_requested: 0 });
-      assert.deepEqual({ ...runs[i] }, expected, `all fields for run ${expected.run_id}`);
-    }
-    for (let i = 0; i < units.length; i += 1) {
-      const expected = { ...oldUnits[i] };
-      if (expected.run_id === 'C' && expected.status === 'canceled'
-        && !oldUnits.some(child => child.parent_unit_id === expected.unit_id)) {
-        expected.status = expected.attempt === 0 && expected.result_ref === null && expected.usage_json === null
-          ? 'queued' : 'needs_review';
-      }
-      assert.deepEqual({ ...units[i] }, expected, `all fields for unit ${expected.unit_id}`);
-    }
-    const store = new SqliteBuildRunStore(adapter);
-    assert.ok((await store.listResumableRuns()).some(r => r.runId === 'C' && r.status === 'stopped_user'));
-    assert.equal((await store.getRun('A')).unitsFailed, 176);
-    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM world_build_units WHERE run_id = 'A' AND status = 'failed_retryable'`).get().n, 1);
-    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
-    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
-    // New constraints/indexes and parent FK enforcement remain functional.
-    assert.throws(() => db.exec(`UPDATE world_build_units SET run_id = 'missing' WHERE unit_id = 'A-0'`), /FOREIGN KEY/);
-    assert.equal(await store.acquireLease('C', 'new-executor', 60_000, '2026-09-30T00:00:00.000Z'), 43);
-    assert.equal(db.prepare(`SELECT attempt FROM world_build_units WHERE unit_id = 'C-0'`).get().attempt, 2);
+    db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (23); CREATE TABLE old_game(value TEXT); INSERT INTO old_game VALUES ('preserved')");
+    const { installBaselineSchema } = require('../dist/application/project/dbBaseline');
+    await assert.rejects(() => installBaselineSchema(new NodeSqliteAdapter(db)), /数据基线/);
+    assert.equal(db.prepare('SELECT value FROM old_game').get().value, 'preserved');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='frozen_turn_material_roots'").get().n, 0);
   } finally { db.close(); }
 });
 
-test('v25 also repairs legacy canceled builds on clients which already applied v24', async () => {
+
+test('current baseline refuses historical schema 24 without mutation', async () => {
   const db = new DatabaseSync(':memory:');
   try {
-    const adapter = new NodeSqliteAdapter(db);
-    await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS.filter(m => m.version <= 24));
-    populateLegacyBuilds(db); // Old v24 allowed these rows without converting them.
-    const throughV25 = BUILTIN_MIGRATIONS.filter(m => m.version <= 25);
-    assert.deepEqual(await applySqliteMigrations(adapter, throughV25), [25]);
-    assert.equal((await new SqliteBuildRunStore(adapter).getRun('C')).status, 'stopped_user');
-    assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-0'`).get().status, 'completed');
-    assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-6'`).get().status, 'queued');
-    assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-7'`).get().status, 'needs_review');
-    assert.equal(db.prepare(`SELECT status FROM world_build_units WHERE unit_id = 'C-20'`).get().status, 'canceled');
-    assert.deepEqual(await applySqliteMigrations(adapter, throughV25), []);
-    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (24); CREATE TABLE old_game(value TEXT); INSERT INTO old_game VALUES ('preserved')");
+    const { installBaselineSchema } = require('../dist/application/project/dbBaseline');
+    await assert.rejects(() => installBaselineSchema(new NodeSqliteAdapter(db)), /数据基线/);
+    assert.equal(db.prepare('SELECT value FROM old_game').get().value, 'preserved');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='frozen_turn_material_roots'").get().n, 0);
   } finally { db.close(); }
 });
+
 
 test('a rebuild with FK violations rolls back and restores foreign_keys=ON', async () => {
   const db = new DatabaseSync(':memory:');
@@ -239,22 +201,13 @@ test('a rebuild with FK violations rolls back and restores foreign_keys=ON', asy
   } finally { db.close(); }
 });
 
-test('phase6 schema 28/29/30 upgrade preserves populated interaction operations and prepared/committed steps', async () => {
-  for (const baseline of [28,29,30]) {
-    const db=new DatabaseSync(':memory:');try {
-      const adapter=new NodeSqliteAdapter(db);await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS.filter(m=>m.version<=baseline));
-      db.exec(`INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at) VALUES ('w','旧世界','hash',100,'n','c','ready','now','now');
-        INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at) VALUES ('c','w','旧战役','shineword','1','old','{}','now');
-        INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('b','c',3,'now');
-        INSERT INTO interaction_operations VALUES ('old-op','c','b','encounter_auto','paused_system',2,8,1,8,'now','now');
-        INSERT INTO interaction_operation_steps VALUES ('old-op',0,'npc_turn','paid-old-0',1,2,'committed','now','now');
-        INSERT INTO interaction_operation_steps VALUES ('old-op',1,'npc_turn','paid-old-1',2,NULL,'prepared','now','now');`);
-      const before=db.prepare('SELECT * FROM interaction_operations').all(), steps=db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all();
-      assert.deepEqual(await applySqliteMigrations(adapter,BUILTIN_MIGRATIONS),Array.from({length:33-baseline},(_,i)=>baseline+i+1));
-      assert.deepEqual(db.prepare('SELECT * FROM interaction_operations').all(),before);assert.deepEqual(db.prepare('SELECT * FROM interaction_operation_steps ORDER BY step_index').all(),steps);
-      assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys,1);assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
-      db.exec(`INSERT INTO interaction_operations VALUES ('new-turn','c','b','play_turn','running',3,9,0,1,'now','now')`);
-      assert.throws(()=>db.exec(`INSERT INTO interaction_operations VALUES ('other-turn','c','b','play_turn','running',3,10,0,1,'now','now')`),/UNIQUE/);
-    }finally{db.close()}
-  }
+test('current baseline refuses historical schema 25 without mutation', async () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (25); CREATE TABLE old_game(value TEXT); INSERT INTO old_game VALUES ('preserved')");
+    const { installBaselineSchema } = require('../dist/application/project/dbBaseline');
+    await assert.rejects(() => installBaselineSchema(new NodeSqliteAdapter(db)), /数据基线/);
+    assert.equal(db.prepare('SELECT value FROM old_game').get().value, 'preserved');
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='frozen_turn_material_roots'").get().n, 0);
+  } finally { db.close(); }
 });

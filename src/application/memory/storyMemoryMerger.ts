@@ -18,7 +18,7 @@ import type {
   StoryMemoryCharacter,
   StoryMemoryRelationship,
 } from './storyMemoryTypes';
-import { MEMORY_MERGER_CAPS } from './storyMemoryTypes';
+import { MEMORY_MERGER_CAPS, storyMemoryContentHash } from './storyMemoryTypes';
 
 export class PatchFingerprintMismatchError extends Error {
   constructor(
@@ -33,7 +33,7 @@ export class PatchFingerprintMismatchError extends Error {
 }
 
 function slug(kind: string, title: string): string {
-  return `${kind}:${stableFingerprint(title).slice(0, 8)}`;
+  return `${kind}:${stableFingerprint(title)}`;
 }
 
 function relationshipIdFor(fromActorId: string, toActorId: string): string {
@@ -240,7 +240,7 @@ export function mergeStoryMemoryPatch(
       next.narrative.archiveDigest = [
         next.narrative.archiveDigest,
         input.patch.narrative.archiveDigestAppend,
-      ].filter(Boolean).join(' ');
+      ].filter(Boolean).join(' ').slice(-8192);
     }
   }
 
@@ -250,6 +250,7 @@ export function mergeStoryMemoryPatch(
   next.metadata.lastAppliedPatchId = input.patchId;
   next.metadata.updatedAt = input.now;
   next.metadata.fingerprint = storyMemoryFingerprint(base.metadata.fingerprint, input.patchId, input.patch);
+  next.metadata.contentHash = storyMemoryContentHash(next);
   return next;
 }
 
@@ -262,23 +263,7 @@ export function storyMemoryFingerprint(
   return stableFingerprint({
     base: baseFingerprint,
     patchId,
-    range: patch.range,
-    counts: [
-      patch.characterUpdates.length,
-      patch.relationshipUpdates.length,
-      patch.conflictChanges.length,
-      patch.threadChanges.length,
-      patch.foreshadowingChanges.length,
-      patch.completedBeats.length,
-    ],
-    narrative: patch.narrative ?? null,
-    characters: patch.characterUpdates.map(update => [update.actorId, update.currentGoal ?? '', update.promises ?? []]),
-    relationships: patch.relationshipUpdates.map(update => [update.fromActorId, update.toActorId, update.action, update.publicStatus ?? '']),
-    titles: [
-      ...patch.conflictChanges.map(change => [change.action, change.title]),
-      ...patch.threadChanges.map(change => [change.action, change.title]),
-      ...patch.foreshadowingChanges.map(change => [change.action, change.title]),
-    ],
+    patch,
   });
 }
 

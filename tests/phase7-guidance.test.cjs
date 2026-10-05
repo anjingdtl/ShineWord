@@ -114,7 +114,7 @@ function baseEntries() {
       name: '岳轻', category: 'human', description: '同伴',
       attributes: { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 2, social: 2 },
       skills: {}, hp: 8, stamina: 6, defense: 2, attacks: [], abilities: [], startingItems: [],
-      behavior: { goal: '养伤', retreatThreshold: 0.2, morale: 3 }, lootPolicy: '无',
+      behavior: { goal: '养伤', retreatThreshold: 0.2, morale: 'steady' }, lootPolicy: '无',
       threat: { damage: 0, durability: 1, actions: 1, control: 0, environment: 0 },
     }),
     entry('scene-bridge', 'scene', {
@@ -183,7 +183,7 @@ async function fixture(options = {}) {
     worldStore: worlds, sha256Hex: sha.sha256Hex, worldId: 'w', sourceSha256: 'a'.repeat(64),
     mappingVersion: 'p7-test', entries, sections: [], createdAt: now,
   });
-  assert.equal(published.manifest.schemaVersion, 'world-package-4');
+  assert.equal(published.manifest.schemaVersion, 'shineword-world-package-5');
   const campaign = await createCampaign({
     db: adapter, worldStore: worlds, campaignId: 'c', title: 'P7 战役', worldId: 'w',
     packageRevision: published.manifest.revision, anchor: { worldTimeOrder: options.anchorOrder ?? 1, locationId: 'bridge' },

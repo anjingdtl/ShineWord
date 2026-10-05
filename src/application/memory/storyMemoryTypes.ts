@@ -1,5 +1,5 @@
 /**
- * Story Memory V2 types (infrastructure plan §19-§28).
+ * Story Memory V3: the only current narrative-memory protocol.
  *
  * Long-term NARRATIVE state derived from committed turns: goals, emotions,
  * promises, secrets, relationships, conflicts, threads, foreshadowing. It is
@@ -10,6 +10,9 @@
  * stable IDs, state versions and fingerprints are produced locally.
  */
 
+import { stableFingerprint } from '../llm/requestPlan';
+
+export const STORY_MEMORY_SCHEMA_VERSION = 3;
 export type StoryMemoryStatus = 'empty' | 'clean' | 'dirty' | 'rebuilding' | 'failed';
 
 export interface StoryArc {
@@ -86,7 +89,7 @@ export interface StoryResolvedThread {
 }
 
 export interface StoryMemoryState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   branchId: string;
   /** Highest state version folded into this memory. */
   throughStateVersion: number;
@@ -106,6 +109,7 @@ export interface StoryMemoryState {
     status: StoryMemoryStatus;
     dirtyFromStateVersion: number | null;
     fingerprint: string;
+    contentHash?: string;
     lastAppliedPatchId: string | null;
     updatedAt: string;
   };
@@ -165,9 +169,13 @@ export interface StoryMemoryForeshadowingChange {
 }
 
 export interface StoryMemoryPatch {
-  schemaVersion: 2;
+  /** Engine-owned exact committed-turn version manifest, never supplied by the model. */
+  evidenceVersions?: Record<string, number>;
+  evidenceAnchors?: Record<string, { summary: string; narrative: string; effects: readonly { op: string }[]; contentHash: string }>;
+  schemaVersion: 3;
   range: { fromStateVersion: number; toStateVersion: number };
   narrative?: {
+    evidenceTurnIds?: string[];
     currentArc?: StoryArc | null;
     currentObjective?: string;
     archiveDigestAppend?: string;
@@ -180,9 +188,15 @@ export interface StoryMemoryPatch {
   completedBeats: StoryBeat[];
 }
 
+export function storyMemoryContentHash(state: StoryMemoryState): string {
+  return stableFingerprint({ schemaVersion: state.schemaVersion, branchId: state.branchId,
+    throughStateVersion: state.throughStateVersion, characters: state.characters,
+    relationships: state.relationships, narrative: state.narrative });
+}
+
 export function emptyStoryMemoryState(branchId: string, updatedAt: string): StoryMemoryState {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     branchId,
     throughStateVersion: 0,
     characters: {},

@@ -301,6 +301,12 @@ test('save round-trip: export hashes payload, restore rebuilds a new campaign at
     db.prepare("INSERT INTO turn_narratives (branch_id, turn_id, outcome_grade, text, status, created_at) VALUES ('main', 'turn-0001', 'success', '雨夜潜入成功。', 'Committed', 't1')")
       .run();
 
+    const config = require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('world-1',1);
+    db.prepare("UPDATE world_packages SET schema_version='shineword-world-package-5', ruleset_version='0.3.0', rule_config_json=? WHERE world_id='world-1'").run(JSON.stringify(config));
+    for (const row of db.prepare("SELECT state_version,snapshot_json FROM snapshots WHERE branch_id='main'").all()) {
+      const state = JSON.parse(row.snapshot_json); state.ruleConfiguration = config;
+      db.prepare("UPDATE snapshots SET snapshot_json=? WHERE branch_id='main' AND state_version=?").run(JSON.stringify(state),row.state_version);
+    }
     const { json, jsonByteLength } = await exportSave({
       db: adapter, sha256Hex: sha.sha256Hex, campaignId: 'camp-src', branchId: 'main', createdAt: 't',
     });

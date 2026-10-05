@@ -98,7 +98,7 @@ export const MECHANISM_MODULES: readonly MechanismManifest[] = [
     requires: [{ moduleId: 'resources_conditions', version: '1.0.0' }],
     conflicts: [],
     capabilities: ['pressure_raise', 'pressure_relief', 'pressure_threshold_trigger'],
-    ownedFields: ['pressureTrack'],
+    ownedFields: ['pressureTracks'],
     parameterSchemaId: 'pressure_track.params-1',
     stateSchemaVersion: 1,
   },
@@ -118,6 +118,7 @@ export const MODULE_COMPOSITION_ORDER: readonly string[] = [
 
 export type ModuleCompositionErrorCode =
   | 'unknown_module'
+  | 'duplicate_module'
   | 'unsupported_module_version'
   | 'missing_dependency'
   | 'module_conflict'
@@ -149,6 +150,7 @@ export function resolveModuleComposition(
   const errors: ModuleCompositionError[] = [];
   const selected = new Map<string, string>();
   for (const selection of selections) {
+    if (selected.has(selection.moduleId)) errors.push({ code: 'duplicate_module', detail: `module '${selection.moduleId}' selected more than once` });
     const manifest = getMechanismManifest(selection.moduleId);
     if (!manifest) {
       errors.push({ code: 'unknown_module', detail: `module '${selection.moduleId}' is not registered with this app build` });

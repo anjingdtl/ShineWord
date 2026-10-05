@@ -9,8 +9,12 @@ import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import { computePackageContentHash, validatePackage } from './validate';
 import type { SqliteTransaction } from '../ports/sqlite';
+import { createWorldRuleConfiguration, requireCompiledRules, validateRuleEntryCapabilities, type WorldRulePreset } from '../content/runtimeRules';
+import type { WorldRuleConfiguration } from '../../domain/rules/worldRuleConfiguration';
 
 export interface PublishPackageInput {
+  ruleConfiguration?: WorldRuleConfiguration;
+  rulePreset?: WorldRulePreset;
   worldStore: SqliteWorldStore;
   sha256Hex: Sha256HexProvider['sha256Hex'];
   worldId: string;
@@ -70,21 +74,32 @@ export async function publishWorldPackage(input: PublishPackageInput): Promise<P
   }
 
   if (input.buildScope) assertValidWorldPackageBuildScope(input.buildScope);
-  input.onValidated?.();
-  const contentHash = await computePackageContentHash(
-    input.entries, input.sections, input.sha256Hex, input.buildScope,
-  );
   const existing = await input.worldStore.listWorldPackages(input.worldId);
   const revision = existing.length > 0 ? Math.max(...existing.map(pkg => pkg.revision)) + 1 : 1;
+  // New publication explicitly chooses rules; revisions inherit an existing
+  // world's selection instead of silently enabling combat again.
+  const previous = existing.length ? await input.worldStore.getWorldPackage(input.worldId, revision - 1) : null;
+  const inherited = previous?.manifest.ruleConfiguration;
+  const ruleConfiguration = input.ruleConfiguration ?? (inherited && !input.rulePreset
+    ? { ...inherited, revision, configHash: '' }
+    : createWorldRuleConfiguration(input.worldId, revision, input.rulePreset));
+  if (ruleConfiguration.worldId !== input.worldId || ruleConfiguration.revision !== revision) {
+    throw new Error('World rule configuration identity must match the published revision.');
+  }
+  const rules = requireCompiledRules(ruleConfiguration);
+  ruleConfiguration.configHash = rules.binding.configurationHash;
+  const entryErrors = validateRuleEntryCapabilities(input.entries, rules);
+  if (entryErrors.length) throw new Error(`Unsupported world mechanism definitions: ${entryErrors.join('; ')}`);
+  input.onValidated?.();
+  const contentHash = await computePackageContentHash(
+    input.entries.map(entry => ({ ...entry, revision })), input.sections, input.sha256Hex, input.buildScope,
+  );
 
   const manifest: WorldPackageManifest = {
     worldId: input.worldId,
     revision,
-    // P7: packages carrying situation entries declare schema 4; older loaders
-    // reject it explicitly instead of silently dropping playable content.
-    schemaVersion: input.entries.some(entry => entry.kind === 'situation')
-      ? 'world-package-4'
-      : input.buildScope ? 'world-package-3' : 'world-package-2',
+    schemaVersion: 'shineword-world-package-5',
+    ruleConfiguration,
     sourceSha256: input.sourceSha256,
     ruleset: { id: SHINEWORD_RULESET_ID, version: SHINEWORD_RULESET_VERSION },
     mappingVersion: input.mappingVersion,
