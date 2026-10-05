@@ -1,13 +1,15 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.8.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V0.9.0-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.8.1** · versionCode 80100。V0.8.1 为 0.8.0 之后的加固与复验收尾（无新能力）：可移植 SHA-256 请求/缓存身份、稳定存档门禁（拒绝未完成冻结回合与在途/未批准未知请求）、世界规则配置硬化（伪造哈希/非安全整数/未类型化约束拒绝）、数据库单基线 version 100（旧/不完整库显式拒绝且不静默修复）、移动端记忆状态诚实呈现（结果未知横幅 + 计费告知的恢复入口）。验收矩阵 A01–A36 全部闭合（**PASS 36 / NOT RUN 0 / FAIL 0**，真机与 2 项产品决策项为开放项），核心回归 922 项全绿；证据见 [收尾轮报告](docs/reviews/phase8/CLOSEOUT_ROUND2_2026-10-05.md)。
+> 当前版本：**V0.9.0** · versionCode 90000。V0.9.0 新增玩家头像系统：四题材（东方武侠/欧洲奇幻/日系二次元/赛博科幻）× 男女 × 5 职业共 40 个预设头像（WebP ≈1.24 MB），「我的」页头像选择卡（题材页签 + 男女瓦片 + 不使用头像回退），游玩页右上角常驻 32dp 圆形头像；头像为 App 级玩家身份，随四套皮肤自适应描边/角标但不随世界换肤，存储键 `shineword.ui.avatar.v1`，非法值归一化为未设置。核心回归 922 项全绿；证据见 [头像系统验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
+>
+> V0.8.1 为 0.8.0 之后的加固与复验收尾（无新能力）：可移植 SHA-256 请求/缓存身份、稳定存档门禁（拒绝未完成冻结回合与在途/未批准未知请求）、世界规则配置硬化（伪造哈希/非安全整数/未类型化约束拒绝）、数据库单基线 version 100（旧/不完整库显式拒绝且不静默修复）、移动端记忆状态诚实呈现（结果未知横幅 + 计费告知的恢复入口）。验收矩阵 A01–A36 全部闭合（**PASS 36 / NOT RUN 0 / FAIL 0**，真机与 2 项产品决策项为开放项），核心回归 922 项全绿；证据见 [收尾轮报告](docs/reviews/phase8/CLOSEOUT_ROUND2_2026-10-05.md)。
 >
 > V0.8.0 第八阶段完成通用规则核心 + 可组合机制模块 + 世界规则配置：单一当前协议（core 0.3.0、ActionContract 2.0、save-9、迁移 33，旧输入逐版本明确拒绝）、类型化回合材料与判别式记忆资格、零发送预算门（能力未知/超窗不发 HTTP）、持久化冻结与恢复、提交+outbox 唯一原子边界、证据化长期记忆（known-change 门、CAS 合并）、8 个可信机制模块与可选 pressure_track。205 轮设备长程实测（完整小说导入 + 完整构建 + 真实 GLM 回合）与 100/300/1000 累积旅程通过；证据与未验范围见 [第八阶段报告](docs/reviews/phase8/FINAL_REPORT.md) 与 [长程实测报告](docs/reviews/phase8/LONGRUN_REPORT.md)。仅支持 Android；LLM 由用户配置 OpenAI-compatible 端点。
 
@@ -29,7 +31,7 @@
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.8.1`，`versionCode=80100`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.9.0`，`versionCode=90000`。
 
 ## 安全与隐私
 

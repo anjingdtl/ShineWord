@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-05
+
+第九阶段：玩家头像系统（MINOR，新能力）。App 级玩家视觉身份——预设头像库 + 「我的」页选择卡 + 游玩页右上角常驻展示；不触碰核心引擎、主题令牌、存档与 LLM 链路（`npm run verify:core` 922 项全绿）。
+
+### Added — 玩家头像系统（2026-10-05）
+
+- **40 预设头像库**：四题材 × 男女 × 5 职业（东方武侠 侠客/弓手/谋士/刺客/雅士；欧洲奇幻 骑士/游侠/法师/盗贼/牧师；日系二次元 武士/游侠/法师/忍者/神官；赛博科幻 佣兵/技师/骇客/浪人/医师）。素材由 `tools/avatars/split_avatar_sheets.py`（Pillow 一次性脚本，1983×793 四张合图 5×2 裁切、每边内缩 8px、LANCZOS 320×320、WebP q88）产出 `mobile/src/assets/avatars/*.webp` 共 40 个 ≈1.24 MB；APK 体积增量 +1.27 MB（101,916,493 → 103,248,137 字节，SHA-256 `ef97c074…2631d29a`）。
+- **注册表与状态**：`avatarRegistry.ts`（`AvatarPreset` + 40 条字面量 require + `findAvatar` 防御查找）、`AvatarContext.tsx`（逐行沿用 ThemeContext 成熟模式：AsyncStorage 键 `shineword.ui.avatar.v1`、hydration + `hydratedRef` 防回写、读失败/非法值归一化「未设置」、fire-and-forget 持久化、Provider 外回退默认不抛错）。
+- **选择卡**（「我的」页，`AvatarCard`）：四题材 SegmentedControl 页签（序 = THEME_ORDER，初始 = 当前皮肤题材，不随换肤联动）+ 男女各 5 个 56dp 圆形瓦片（radio 语义、`avatar-option-{id}` testID、label 缀「（当前）」）+ 选中态主题描边加粗 + 右下角 ✓ 角标（双通道非颜色单一指示）+「不使用头像（默认字牌）」回退行；页首副标题加「头像」。
+- **游玩页常驻头像**（`PlayHeader`）：世界时钟与「☰ 信息」之间 32dp 圆形头像（容器描边随当前皮肤 `accent.primary`、`testID="play-avatar"`、a11y「玩家头像：{label}」）；未设置时不渲染，布局与改造前一致；头像为 App 级身份，进入世界 ThemeScope 换肤时本体不变、容器描边随世界皮肤。
+- 4 套皮肤全覆盖走查 + 8 项模拟器手检（默认未设置/持久化/四皮切换/世界覆盖/清除回退/非法值归一化/逐屏回归/radio 语义 dump）全部通过；证据见 [验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
+
 ## [0.8.1] - 2026-10-05
 
 第八阶段（0.8.0）之后的加固与复验收尾：无新能力，仅身份/存档/规则/数据库基线的可靠性硬化与验收补齐（PATCH）。
