@@ -14,6 +14,7 @@
 | 2026-10-04 | P8-8 | save-9 单协议：save-2..8 逐版本拒绝、无转换器（A33）；save-9 携带 Story Memory checkpoint+applied chain+后处理覆盖（入完整性摘要）；导入单事务重绑分支身份、零 LLM（A32）；`forkStoryMemory` 仅 applied（A31）；`dbBaseline` 新空库一次建全 + 旧开发库检测拒绝并提示开发重置（A34）；旧 save 兼容测试按单协议政策移除，新增 phase8-save9/phase8-p8-8 | typecheck PASS；890 项全绿 | 68474f7 |
 | 2026-10-04 | P8-9a | 累积长旅程 100/300/1000（tests/phase8-p8-9-journey.test.cjs）：单分支连续累积，handoff 覆盖 100%、本地 episodic 索引 100%、记忆折叠至 head、分页下一回合读取 1000 回合 ≤4ms；A25 PASS | typecheck PASS；894 项全绿；metrics 见测试输出 | 71ab575 |
 | 2026-10-04 | P8-9b | 真实 GLM 三组合旅程（私有驱动 .tmp/p8-real-journey.cjs：生产 CampaignSession + LedgeredProvider + 统一提交边界 + 协调器）：suspense 26 提交/3 批 clean through=24；fantasy 26 提交/3 批 clean through=24（sent→outcome_unknown→人工批准→lease 过期接管→重放成功的完整 A16/A17/A18 证据链，unknown 尝试保留审计）；daily 22 提交/7 批 clean through=22（修复轮验证拒绝+dirty 重建）；known-change 核对：三组合人物目标/关系/线程真实更新、实体时间随证据（v21–v24）、head 后零未覆盖 | 真实 API ~175 次物理 HTTP 全入账本；发现并修复协调器 fencing-token 旧值缺陷（fd0b7b2） | fd0b7b2 |
+| 2026-10-05 | P8-RA | 重验收加固：可移植 SHA-256 身份指纹（Node/RN 同源）、稳定存档门禁（拒绝未完成回合/在途或未知请求/运行中记忆任务，移除静默兜底）、`storyMemoryChain` 记忆链校验、`runtimeRules` 预设工厂接入生产、规则配置硬化（伪造哈希/非整数参数/未类型化约束拒绝）、数据库单基线 version 100 + 旧库拒绝且不静默修复 + 移动端“创建新的开发数据库”入口、GameInfoPanel 记忆状态诚实 UI；新增 `tests/phase8-reacceptance.test.cjs`（22 项）；补跑真实 GLM 三组合各 24 回合复测 | `verify:core` 916/916；移动严格类型 0；`verify:version` PASS；Debug APK 构建成功；真实旅程 72 回合 0 失败 | 见 git log |
 
 ## P8-0 基线复核结论
 

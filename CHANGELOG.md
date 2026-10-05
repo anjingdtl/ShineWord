@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Hardened — 第八阶段重验收与引擎加固（2026-10-05）
+
+- **跨端身份指纹**：请求预算/缓存身份指纹由 FNV-1a 32 位改为可移植 SHA-256（`src/domain/identity/sha256.ts`），Node 与 React Native 同源计算、消除 32 位碰撞；规则配置哈希同样跨端可复现（世界 ID 重绑定不变、参数变化即变）。
+- **稳定存档门禁**：导出稳定存档前强制校验分支归属、无未完成冻结回合、无 `prepared`/`sent`/未批准的 `outcome_unknown` 物理请求、无 `running`/`outcome_unknown` 的记忆后处理；移除静默 try/catch 兜底，宁可诚实拒绝也不导出不稳定存档。导入时按 `storyMemoryChain` 校验记忆检查点与补丁链（证据版本、连续区间、指纹一致）。
+- **世界规则配置硬化**：`runtimeRules` 统一预设工厂（fantasy/suspense/daily）接入全部生产链路；伪造配置哈希显式拒绝（`configuration_hash_mismatch`）、模块参数须为安全整数、`untrainedPolicy` 收敛为 `forbid`、约束条件引用类型化校验；能力表驱动的行动/效果门——禁用模块即拒绝对应行动、模型自造的效果与越界约束。
+- **数据库基线**：迁移链合并为单一当前基线（version 100），新空库一次装全；旧库或不完整库显式拒绝且**绝不静默修复或替换**，同时容忍 Android 系统表 `android_metadata`；移动端新增“创建新的开发数据库”入口（改用新数据库文件，旧数据、API 配置与系统 Keychain 均保留）。
+- **移动端记忆状态诚实呈现**：游戏信息面板新增故事记忆状态横幅（已覆盖 X/Y、正在整理、待整理、结果未知已停止自动重发且可能已计费），未知结果提供带计费告知的显式“恢复”入口。
+- 核心回归 **916 项全绿**（新增 `tests/phase8-reacceptance.test.cjs`；`894 → 916`）；真实 GLM 三组合旅程复测（fantasy/suspense/daily 各 24 回合）恢复完成；Debug APK 独立构建通过。
+
 ## [0.8.0] - 2026-10-05
 
 第八阶段（Shine-TRPG P8）：通用规则核心 + 可组合机制模块 + 世界规则配置，回合上下文与长期记忆完整闭环。单一当前协议（开发期舍弃旧版兼容）。

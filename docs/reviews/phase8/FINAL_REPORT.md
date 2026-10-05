@@ -52,6 +52,8 @@
 
 按方案 §21 规则：NOT RUN 不计入通过。**最终结论：32 PASS / 1 部分 / 3 NOT RUN，无 FAIL。**
 
+> **2026-10-05 重验收轮更新**：上文计数为第八阶段收尾时的快照。随后的“重验收与引擎加固轮”（见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)“重验收轮证据”与 CHANGELOG [Unreleased]）补足并校准了逐项状态：A10（恢复一致性）、A27（三世界组合与关闭战斗）、A34（新空库/旧开发库，含设备 Maestro 走查）转 PASS；A36 核心与 UI 实现证据齐备但设备端“故障后”横幅未单独截图，保留 NOT RUN；A05/A09/A11/A30 仍无独立端到端证据，保留 NOT RUN。**以逐项矩阵为准：PASS 31 / NOT RUN 5（A05/A09/A11/A30/A36）/ FAIL 0。**
+
 ## 4. 真实 LLM 旅程证据（P8-9b）
 
 驱动：`.tmp/p8-real-journey.cjs`（私有，不入库；生产 `CampaignSession` + `LedgeredProvider` + 统一提交边界 + `TurnPostProcessingCoordinator`）。模型 GLM-5.3-Flash（授权 coding 端点，档位 low，声明窗口 128K/输出 8192——测试配置值，非供应商认证）。骰点固定 RNG_MAX 以复现。

@@ -37,3 +37,14 @@
 - 验收明细：[ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)
 - 最终报告（费用/规模/身份）：[FINAL_REPORT.md](FINAL_REPORT.md)
 - 私有旅程资产：`.tmp/p8-real-journey.cjs`、`.tmp/p8-journey-{suspense,fantasy,daily}.sqlite`（不入库）
+
+## 重验收与加固轮（2026-10-05）
+
+第八阶段收尾后追加一轮“重验收 + 引擎加固”，补强身份、存档、规则与数据库基线不变量，并补回被网络中断的真实旅程证据。
+
+- **工程门禁**：`npm run verify:core` **916/916**（新增 `tests/phase8-reacceptance.test.cjs`）；移动端严格类型检查 0；`npm run verify:version` PASS（0.8.0 / 80000）；Debug APK 独立构建成功。
+- **加固**：请求/缓存身份指纹由 FNV-1a 32 位改为可移植 SHA-256（Node/RN 同源）；稳定存档门禁（拒绝未完成冻结回合、在途或未批准的未知物理请求、运行中记忆后处理，移除静默 try/catch 兜底）；`storyMemoryChain` 存档记忆链校验；`runtimeRules` 预设工厂接入生产；伪造配置哈希、非安全整数参数、未类型化约束显式拒绝；数据库单基线 version 100 + 旧/不完整库拒绝且不静默修复 + 移动端“创建新的开发数据库”入口。
+- **设备**：旧开发库拒绝 UI 走查（Maestro 流程 `fresh-baseline-reset` + `ui-legacy-refused.xml`），Keychain 重置前后 SHA-256 一致；设备导入真实《放开那个女巫》1504 章并达可玩（`ui-final-library.xml`）。
+- **真实旅程复测**（替换此前被 `fetch failed` 中断的残缺样本）：三组合各 24 回合、0 失败、记忆 clean、账本全入账；明细见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)“重验收轮证据”。
+- **新关闭验收项**：A10、A27、A34（A36 保留 NOT RUN）。校准后 **PASS 31 / NOT RUN 5（A05/A09/A11/A30/A36）/ FAIL 0**。
+- **私有资产**（不入库）：`.tmp/phase8-reacceptance-20261005/`（真实旅程驱动、设备 dump、metrics、SQLite 快照）。
