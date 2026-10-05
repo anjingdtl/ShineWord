@@ -55,7 +55,7 @@
 
 日期：2026-10-05（Asia/Shanghai）。基线：`main@501bf20` 工作副本之上；本轮新增 `tests/phase8-closeout-round2.test.cjs`（6 用例）与设备走查，逐项报告见 [CLOSEOUT_ROUND2_2026-10-05.md](CLOSEOUT_ROUND2_2026-10-05.md)。
 
-- **工程门禁**：`npm run verify:core` **922/922**（`916 → 922`）；移动端严格类型检查 0；`npm run verify:version` PASS（0.8.0 / 80000）；`git diff --check` 0 行；Debug APK 独立构建 BUILD SUCCESSFUL。
+- **工程门禁**：`npm run verify:core` **922/922**（`916 → 922`）；移动端严格类型检查 0；`npm run verify:version` PASS（0.8.0 / 80000）；`git diff --check` 0 行；Debug APK：Gradle `BUILD SUCCESSFUL`，但该轮 `npm run apk:debug` 脚本在 aapt 后置校验处 `exit 1`（受限环境拒绝带管道子进程 `EBUSY`）——**不计为通过**，已于同日晚些的 0.8.1 发版轮修复脚本 I/O 并复跑为真实通过（见 [CLOSEOUT_ROUND2_2026-10-05.md](CLOSEOUT_ROUND2_2026-10-05.md) §更正）。
 - **NOT RUN 清零**：A05（对抗泄漏样本）、A09（Narrator+Prepared+repair 组合超窗）、A11（冻结后不漂移）、A30（确定性重放）新增独立用例转 PASS；A36（设备端“故障后”横幅与恢复入口）经 emulator-5554（API 37）实机走查转 PASS。
 - **校准后汇总**：PASS **36** / NOT RUN **0** / FAIL **0**（以 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md) 逐项为准）。
 - **仍开放项（不冒充完成）**：真机 NOT RUN；小说自动映射质量未评分；同源多项目语义未定；BUG-SCHED-1（结算等待无进度反馈，产品决策）；设备旧项目政策（新协议战役须新建项目）。

@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -109,9 +110,22 @@ function runAndroidTool(toolName, args) {
     console.error(`Android SDK tool not found: ${toolPath}`);
     process.exit(1);
   }
-  return process.platform === 'win32'
-    ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', toolPath, ...args], { encoding: 'utf8', windowsHide: true })
-    : spawnSync(toolPath, args, { encoding: 'utf8' });
+  // Capture child output through a temp file rather than an OS pipe: some
+  // hardened Windows hosts refuse piped child spawns (spawnSync ... EBUSY)
+  // while file-descriptor stdio stays permitted. Same tools, same checks.
+  const capturePath = path.join(os.tmpdir(), `shineword-${toolName}-${process.pid}-${Date.now()}.log`);
+  const captureFd = fs.openSync(capturePath, 'w');
+  let result;
+  try {
+    result = process.platform === 'win32'
+      ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', toolPath, ...args], { stdio: ['ignore', captureFd, captureFd] })
+      : spawnSync(toolPath, args, { stdio: ['ignore', captureFd, captureFd] });
+  } finally {
+    fs.closeSync(captureFd);
+  }
+  const stdout = fs.readFileSync(capturePath, 'utf8');
+  fs.unlinkSync(capturePath);
+  return { status: result.status, stdout, stderr: '' };
 }
 
 const badging = runAndroidTool('aapt', ['dump', 'badging', sourceApk]);

@@ -63,9 +63,18 @@
 | `npm run typecheck --prefix mobile` | ✅ PASS | 严格模式 0 错误 |
 | `npm run verify:version` | ✅ PASS | `version=0.8.0 versionCode=80000` |
 | `git diff --check` | ✅ PASS | 0 行 |
-| `npm run apk:debug --prefix mobile` | ✅ PASS | `BUILD SUCCESSFUL in 21s`；产物 `mobile/android/app/build/outputs/apk/debug/app-debug.apk`（SHA-256 `3a22dd4c…633f6`） |
+| `npm run apk:debug --prefix mobile` | ⚠️ 更正 | Gradle 侧 `BUILD SUCCESSFUL in 21s`，但脚本在 **aapt 后置校验处 exit 1**（受限 Windows 环境拒绝带管道的子进程 `spawnSync ... EBUSY`），APK 未复制到 `dist/`。**本项不计为通过**；已于 2026-10-05 发版轮修复脚本 I/O 并复跑为真实通过（见 §更正）。 |
 
-（输出日志：`.tmp/closeout-round2/core.log`、`mobile-typecheck.log`、`apk-debug.log`、`emulator.log`。）
+（输出日志：`.tmp/closeout-round2/core.log`、`mobile-typecheck.log`、`release-apk-debug.log`、`emulator.log`。）
+
+### 更正（2026-10-05 发版轮）
+
+上一轮将 `npm run apk:debug` 记作“BUILD SUCCESSFUL”不准确：Gradle 成功，但 `mobile/scripts/build-apk.js` 的后置校验用 `spawnSync(..., { encoding: 'utf8' })`（管道）调用 aapt，本机环境对带管道的子进程一律返回 `EBUSY`，脚本遂 `exit 1` 且未产出 `dist/` 产物。
+
+发版轮已定位并修复该健壮性缺陷：`runAndroidTool` 改为以**临时文件描述符**捕获子进程输出（同样的工具、同样的校验标准），修复后 Debug 与 Release 均真实通过：
+
+- `npm run apk:debug --prefix mobile` → `DEBUG_EXIT=0`，产物 `dist/apk/debug/ShineWord-V0.8.1-debug.apk`。
+- `npm run apk:release --prefix mobile` → `RELEASE_EXIT=0`，"expected certificate, one signer, v2 signature, and zip alignment" 全部通过，产物 `dist/apk/release/ShineWord-V0.8.1-release.apk`（SHA-256 `0bbf88a295da8e86a246efdf403b510285b1f1b081d6f3edc4c5d67b79e876d5`）。
 
 ## 4. 开放项与遗留（不冒充完成）
 

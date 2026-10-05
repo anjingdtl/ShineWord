@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-05
+
+第八阶段（0.8.0）之后的加固与复验收尾：无新能力，仅身份/存档/规则/数据库基线的可靠性硬化与验收补齐（PATCH）。
+
 ### Hardened — 第八阶段重验收与引擎加固（2026-10-05）
 
 - **跨端身份指纹**：请求预算/缓存身份指纹由 FNV-1a 32 位改为可移植 SHA-256（`src/domain/identity/sha256.ts`），Node 与 React Native 同源计算、消除 32 位碰撞；规则配置哈希同样跨端可复现（世界 ID 重绑定不变、参数变化即变）。
@@ -11,7 +15,7 @@
 - **世界规则配置硬化**：`runtimeRules` 统一预设工厂（fantasy/suspense/daily）接入全部生产链路；伪造配置哈希显式拒绝（`configuration_hash_mismatch`）、模块参数须为安全整数、`untrainedPolicy` 收敛为 `forbid`、约束条件引用类型化校验；能力表驱动的行动/效果门——禁用模块即拒绝对应行动、模型自造的效果与越界约束。
 - **数据库基线**：迁移链合并为单一当前基线（version 100），新空库一次装全；旧库或不完整库显式拒绝且**绝不静默修复或替换**，同时容忍 Android 系统表 `android_metadata`；移动端新增“创建新的开发数据库”入口（改用新数据库文件，旧数据、API 配置与系统 Keychain 均保留）。
 - **移动端记忆状态诚实呈现**：游戏信息面板新增故事记忆状态横幅（已覆盖 X/Y、正在整理、待整理、结果未知已停止自动重发且可能已计费），未知结果提供带计费告知的显式“恢复”入口。
-- 核心回归 **916 项全绿**（新增 `tests/phase8-reacceptance.test.cjs`；`894 → 916`）；真实 GLM 三组合旅程复测（fantasy/suspense/daily 各 24 回合）恢复完成；Debug APK 独立构建通过。
+- 核心回归 **916 项全绿**（新增 `tests/phase8-reacceptance.test.cjs`；`894 → 916`）；真实 GLM 三组合旅程复测（fantasy/suspense/daily 各 24 回合）恢复完成。
 
 ### Verified — 第八阶段收尾轮补齐 5 项 NOT RUN（2026-10-05 Round 2）
 
@@ -21,6 +25,10 @@
 - **A30 确定性重放**：相同绑定/状态/行动/roll 的合同、Prepared 归约与事件流逐字节相同，结果仅提交一次。
 - **A36 设备端故障后横幅**：emulator-5554（API 37）实机走查，游戏信息面板显示“1 项请求结果未知，已停止自动重发；可能已计费”横幅与计费告知的“恢复”入口；UI↔设备库对照。
 - 核心回归 **922 项全绿**（`916 → 922`，新增 6）；验收矩阵 **PASS 36 / NOT RUN 0 / FAIL 0**（真机与 2 项产品决策项仍为开放项）。
+
+### Fixed — 发版打包脚本健壮性（2026-10-05）
+
+- `mobile/scripts/build-apk.js` 的 `runAndroidTool` 由“管道捕获子进程输出（`spawnSync(..., { encoding })`）”改为“临时文件描述符捕获”：部分加固的 Windows 主机拒绝带管道的子进程（`spawnSync ... EBUSY`），导致 Gradle 成功后脚本在 aapt 后置校验处 `exit 1`、APK 未落到 `dist/`。改用 fd 后 Debug/Release 打包在同机稳定通过；校验工具与判定标准不变（aapt 包名/版本、JS bundle 存在、apksigner 单签名者 + v2 + 期望证书指纹、zipalign 对齐）。
 
 ## [0.8.0] - 2026-10-05
 
