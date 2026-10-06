@@ -10,6 +10,11 @@ import { isEntryVisibleAtAnchor, isPlayerRecruitmentCandidate, isTemplateValidAt
 import { createBaseContentManifest } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest } from '../worldPackage/branchContentStore';
 import { requireCompiledRules } from '../content/runtimeRules';
+import type { CampaignContentArtifactV1, CampaignIntentV1, CampaignPlanV1 } from '../../domain/campaignPlan/types';
+import { evaluateCampaignProgress } from '../../domain/campaignPlan/progressReducer';
+import { applySituationRuntime } from '../situations/causalProjection';
+import { emptyRuntimeForPlan } from '../../domain/campaignPlan/types';
+import type { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 
 export interface OpeningAnchor {
   /** World-time order the game starts at (canon events after this diverge). */
@@ -52,6 +57,18 @@ export interface CreateCampaignInput {
   companions?: CompanionSpec[];
   goal: string;
   createdAt: string;
+  /**
+   * P9: adopt a validated campaign plan atomically with campaign creation
+   * (plan §6.4). The plan/artifact/runtime land in the SAME transaction; the
+   * adoption pass activates the start node before the v0 snapshot is written.
+   */
+  adoption?: {
+    planStore: SqliteCampaignPlanStore;
+    plan: CampaignPlanV1;
+    intent: CampaignIntentV1;
+    artifact: CampaignContentArtifactV1;
+    sourceTrigger: string;
+  };
 }
 
 export interface CreatedCampaign {
@@ -445,6 +462,49 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       basePackage: { revision: input.packageRevision, contentHash: pkg.manifest.contentHash },
     });
   }
+  // P9 adoption pass: initial mainline runtime is part of the creation
+  // transaction — the start node activates from evaluated conditions, never
+  // from model claims, and the content artifact binds to the branch snapshot.
+  if (input.adoption) {
+    // Initialize the campaign situations (activation tick) BEFORE progress
+    // evaluation, so the first turn already offers the stage's methods.
+    const situationRuntime = applySituationRuntime({
+      definitions: input.adoption.artifact.situations.map(situation => ({
+        situationId: situation.entryId,
+        definition: situation.definition,
+      })),
+      nextState: snapshot,
+      sourceTurnId: `${branchId}:adoption`,
+      playerActorId: input.protagonist.actorId,
+      methodOps: [],
+    });
+    snapshot.situations = situationRuntime.situations;
+    const runtime = emptyRuntimeForPlan({
+      branchId, plan: input.adoption.plan, intentRevision: input.adoption.intent.intentRevision,
+      stateVersion: 0, playerActorId: input.protagonist.actorId,
+    });
+    const adoptionPass = evaluateCampaignProgress({
+      plan: input.adoption.plan,
+      runtime,
+      state: snapshot,
+      transactionEvents: [],
+      historyEvents: [],
+      artifact: input.adoption.artifact,
+      turnId: `${branchId}:adoption`,
+      nextStateVersion: 0,
+    });
+    // A plan whose ENDING condition already holds at the opening creates a
+    // dead-on-arrival campaign — refuse adoption (found in real GLM journey
+    // J1: ending-caught fired at the adoption pass itself).
+    if (adoptionPass.runtime.ending) {
+      throw new Error(`提案的结局「${adoptionPass.runtime.ending.title}」在开局状态即成立，拒绝采用该提案；请重新生成。`);
+    }
+    snapshot.campaignRuntime = adoptionPass.runtime;
+    snapshot.campaignContentBinding = {
+      artifactIds: [input.adoption.artifact.artifactId],
+      contentHash: input.adoption.artifact.contentHash,
+    };
+  }
   for (const card of cards) {
     const sceneEntry = pkg.entries.find(entry => entry.kind === 'scene' &&
       (entry.definition as { locationId?: string }).locationId === input.anchor.locationId);
@@ -544,6 +604,18 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
        VALUES (?, 0, ?, NULL, ?)`,
       [branchId, JSON.stringify(snapshot), input.createdAt],
     );
+    if (input.adoption) {
+      await input.adoption.planStore.archivePlanRevision(tx, {
+        plan: input.adoption.plan,
+        intent: input.adoption.intent,
+        setupId: input.adoption.intent.setupId,
+        campaignId: input.campaignId,
+        sourceTrigger: input.adoption.sourceTrigger,
+        intentHash: input.adoption.plan.intentHash,
+        adoptedAt: input.createdAt,
+      });
+      await input.adoption.planStore.archiveArtifact(tx, input.adoption.artifact, input.createdAt);
+    }
   });
 
   return { campaignId: input.campaignId, branchId, snapshot: cloneGameState(snapshot), cards };

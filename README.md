@@ -1,13 +1,13 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V0.9.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V1.0.0-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V0.9.1** · versionCode 90100。V0.9.1 修复 360dp 级真机「我的 → 玩家头像」选择卡横向溢出：四题材页签与男女头像行在窄屏装不下时改为横向滑动（56dp 瓦片直径不变），「赛博科幻」页签与第 5 个头像可滑入完整点选；宽屏（411dp）布局与 V0.9.0 一致不变。`SegmentedControl` 新增 `scrollable` 选项，其他调用处不受影响。证据见 [CHANGELOG](CHANGELOG.md)。
+> 当前版本：**V1.0.0** · versionCode 1000000。V1.0.0 引入第九阶段「战役主线规划与持续后果」：开局填写意图后由真实模型生成战役提案（核心目标/基调/第一个问题），一键开始冒险；游玩页新增战役主线卡（当前目标/最近进展/已完成阶段）；主线进度、四档后果与延迟后果全部来自本地规则结算。存档/数据库协议不兼容旧版（save-10 / DB 基线 101），旧项目保留但需新建。`SegmentedControl` 新增 `scrollable` 选项，其他调用处不受影响。证据见 [CHANGELOG](CHANGELOG.md)。
 >
 > V0.9.0 新增玩家头像系统：四题材（东方武侠/欧洲奇幻/日系二次元/赛博科幻）× 男女 × 5 职业共 40 个预设头像（WebP ≈1.24 MB），「我的」页头像选择卡（题材页签 + 男女瓦片 + 不使用头像回退），游玩页右上角常驻 32dp 圆形头像；头像为 App 级玩家身份，随四套皮肤自适应描边/角标但不随世界换肤，存储键 `shineword.ui.avatar.v1`，非法值归一化为未设置。核心回归 922 项全绿；证据见 [头像系统验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
 >

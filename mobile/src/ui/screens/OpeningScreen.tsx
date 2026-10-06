@@ -18,7 +18,8 @@ import type { CompanionDirective } from '../../../../src/domain/characters/card'
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
 import { getSegmentReadiness } from '../../segmentRuntime';
-import { createCampaign } from '../../../../src/application/campaign/createCampaign';
+import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
+import { CampaignProposalCard, PlanningStatus } from '../features/opening/CampaignProposalCard';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
 import { nativeSha256 } from '../../nativeCrypto';
@@ -72,6 +73,10 @@ export function OpeningScreen(): React.JSX.Element {
   const [goalSuggestions, setGoalSuggestions] = useState<readonly string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [planningPhase, setPlanningPhase] = useState<string | null>(null);
+  const [planningError, setPlanningError] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<ProposalView | null>(null);
+  const pendingCreate = React.useRef<PreparePlanInput | null>(null);
   const [noPackage, setNoPackage] = useState(false);
   const [repairMessage, setRepairMessage] = useState<string | null>(null);
 
@@ -230,51 +235,116 @@ export function OpeningScreen(): React.JSX.Element {
     setQuickRecommendationsInitialized(true);
   }
 
+  /** Gathers wizard inputs into ONE plan-input object shared by generate/adopt. */
+  async function collectPlanInput(): Promise<PreparePlanInput> {
+    const session = await createSession(profile!, await buildProvider(profile!));
+    const selectedAnchor = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+    const worldSetup = await session.getWorldSetup(worldId, selectedAnchor?.worldTimeOrder);
+    if (worldSetup.packageRevision === null) throw new Error('世界包尚未发布。');
+    if (worldSetup.locations.length === 0) throw new Error('这个世界没有可用的开局地点（场景条目缺失）。');
+    const chosenLocation = locationId || worldSetup.locations[0];
+    const anchor = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
+    if (setup?.anchorEvents.length && !anchor) throw new Error('开局锚点不在已发布原著事件中。');
+    const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
+    if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
+    const actorName = kind === 'canon'
+      ? worldSetup.canonCharacters.find(character => character.entityId === canonEntityId)?.name ?? '无名旅人'
+      : name.trim() || '无名旅人';
+    const quickLoadout = !advancedWizard;
+    const recommended = recommendOpeningLoadout(worldSetup.skills);
+    const characterAttributes = quickLoadout && !quickAdvancedOpen ? recommended.attributes : points;
+    const characterSkills = quickLoadout && !quickAdvancedOpen ? recommended.initialSkills : chosenSkills;
+    const runtime = await getDatabaseRuntime();
+    const certification = await getSegmentReadiness(worldId);
+    if (certification && !certification.availableArtifacts.length) throw new Error('开局资料尚未通过证据与行动依赖验证，请查看项目构建状态。');
+    const published = await runtime.worldStore.getWorldPackage(worldId, worldSetup.packageRevision);
+    if (!published) throw new Error('已发布世界包读取失败。');
+    return {
+      profile: profile!,
+      worldId,
+      worldTitle: title,
+      packageRevision: worldSetup.packageRevision,
+      packageContentHash: published.manifest.contentHash,
+      anchor: {
+        worldTimeOrder: anchor?.worldTimeOrder ?? 1,
+        ...(anchor?.eventId ? { anchorEventId: anchor.eventId } : {}),
+        locationId: chosenLocation,
+      },
+      anchorTitle: anchor ? `序${anchor.worldTimeOrder} · ${anchor.title}` : '时间原点',
+      protagonist: {
+        actorId: 'actor-player',
+        kind,
+        name: actorName,
+        ...(kind === 'canon' ? { canonEntityId } : {}),
+      },
+      protagonistSkills: characterSkills,
+      companions: companions.map((templateId, index) => ({
+        actorId: `actor-ally-${index + 1}`,
+        templateId,
+        directive: companionDirectives[templateId] ?? 'protect',
+      })),
+      goal: goal.trim(),
+      goalSuggestions,
+      // Extra creation fields ride along for adoption (kept out of intent).
+      ...({} as Record<string, never>),
+    } satisfies PreparePlanInput;
+  }
+
+  /** P9 two-phase start: generate the campaign proposal (real phases). */
   async function create() {
-    if (!profile) return;
+    if (!profile || busy) return;
+    setBusy(true);
+    setError(null);
+    setPlanningError(null);
+    setProposal(null);
+    try {
+      const input = await collectPlanInput();
+      pendingCreate.current = input;
+      setPlanningPhase('preparing');
+      const result = await prepareCampaignPlan(input, phase => setPlanningPhase(phase));
+      if (result.phase === 'ready') {
+        const view = await readReadyProposal(result.setupId);
+        if (!view) throw new Error('提案已生成但读取失败，请重新生成。');
+        setProposal(view);
+      } else {
+        setPlanningError(result.error ?? null);
+        setPlanningPhase(result.phase);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPlanningPhase(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** One click adopts the ready proposal atomically (A09 idempotent). */
+  async function startAdventure() {
+    if (!profile || busy || !proposal || !pendingCreate.current) return;
     setBusy(true);
     setError(null);
     try {
+      const input = pendingCreate.current;
       const session = await createSession(profile, await buildProvider(profile));
-      const selectedAnchor = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
-      const worldSetup = await session.getWorldSetup(worldId, selectedAnchor?.worldTimeOrder);
-      if (worldSetup.packageRevision === null) throw new Error('世界包尚未发布。');
-      if (worldSetup.locations.length === 0) throw new Error('这个世界没有可用的开局地点（场景条目缺失）。');
-      const chosenLocation = locationId || worldSetup.locations[0];
-      const anchor = worldSetup.anchorEvents.find(event => event.eventId === anchorEventId);
-      if (setup?.anchorEvents.length && !anchor) throw new Error('开局锚点不在已发布原著事件中。');
-      const invalidCompanion = companions.find(id => !worldSetup.companionTemplates.some(template => template.entryId === id));
-      if (invalidCompanion) throw new Error(`所选同伴 ${invalidCompanion} 在当前开局锚点不可招募。`);
-      const actorName = kind === 'canon'
-        ? worldSetup.canonCharacters.find(character => character.entityId === canonEntityId)?.name ?? '无名旅人'
-        : name.trim() || '无名旅人';
+      const worldSetup = await session.getWorldSetup(worldId);
       const quickLoadout = !advancedWizard;
       const recommended = recommendOpeningLoadout(worldSetup.skills);
       const characterAttributes = quickLoadout && !quickAdvancedOpen ? recommended.attributes : points;
       const characterSkills = quickLoadout && !quickAdvancedOpen ? recommended.initialSkills : chosenSkills;
       const campaignId = `camp-${Date.now().toString(36)}`;
-      const runtime = await getDatabaseRuntime();
-      const certification = await getSegmentReadiness(worldId);
-      if (certification && !certification.availableArtifacts.length) throw new Error('开局资料尚未通过证据与行动依赖验证，请查看项目构建状态。');
-      await createCampaign({
-        db: runtime.db,
-        worldStore: runtime.worldStore,
+      const adopted = await adoptCampaignPlan({
+        profile,
+        setupId: proposal.setupId,
+        candidateId: proposal.candidateId,
         campaignId,
-        title: `${title} · ${actorName}`,
+        title: `${title} · ${input.protagonist.name}`,
         worldId,
-        packageRevision: worldSetup.packageRevision,
-        anchor: {
-          // The anchor is a REAL point in the story (G02), not a placeholder.
-          worldTimeOrder: anchor?.worldTimeOrder ?? 1,
-          anchorEventId: anchor?.eventId,
-          locationId: chosenLocation,
-        },
+        packageRevision: input.packageRevision,
+        anchor: input.anchor,
         protagonist: {
           actorId: 'actor-player',
           kind,
-          name: kind === 'canon'
-            ? (worldSetup.canonCharacters.find(c => c.entityId === canonEntityId)?.name ?? actorName)
-            : actorName,
+          name: input.protagonist.name,
           description: characterDescription.trim() || undefined,
           ...(kind === 'original'
             ? {
@@ -290,18 +360,9 @@ export function OpeningScreen(): React.JSX.Element {
               }
             : { canonEntityId }),
         },
-        companions: companions.map((templateId, index) => ({
-          actorId: `actor-ally-${index + 1}`,
-          templateId,
-          directive: companionDirectives[templateId] ?? 'protect',
-        })),
-        goal: goal.trim() || '在开局锚点处开始一段冒险',
-        createdAt: new Date().toISOString(),
+        companions: input.companions,
       });
-      // replace() keeps the wizard out of the back stack: Back from 游玩页
-      // returns to the world/campaign context that started the wizard,
-      // never to a finished wizard (plan §11.6).
-      navigation.replace('Play', { campaignId, branchId: `${campaignId}-main` });
+      navigation.replace('Play', { campaignId: adopted.campaignId, branchId: adopted.branchId });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -377,6 +438,15 @@ export function OpeningScreen(): React.JSX.Element {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
+        {planningPhase && !proposal ? <PlanningStatus phase={planningPhase} error={planningError ?? undefined} /> : null}
+        {proposal ? (
+          <CampaignProposalCard
+            proposal={proposal}
+            busy={busy}
+            onStart={startAdventure}
+            onRegenerate={() => { setProposal(null); setPlanningPhase(null); }}
+            onEditIntent={() => { setProposal(null); setPlanningPhase(null); }} />
+        ) : null}
         {setup && setup.locations.length === 0 ? (
           <View style={{ gap: theme.space.sm }}>
             <StatusBanner tone="warning" title="需要补齐原著开局资料"
@@ -572,7 +642,7 @@ export function OpeningScreen(): React.JSX.Element {
           <Button
             label={quickStep === 0 ? '下一步' : busy ? '正在开始…' : '开始故事'}
             onPress={quickStep === 0 ? advanceQuickStep : create}
-            disabled={quickStep === 0 ? !quickIdentityReady : busy || !quickStartReady}
+            disabled={quickStep === 0 ? !quickIdentityReady : busy || !quickStartReady || proposal !== null || planningPhase === 'preparing' || planningPhase === 'planning' || planningPhase === 'validating'}
             style={{ flex: 1 }}
             testID={quickStep === 0 ? 'opening-next' : 'quick-opening-start'}
           />

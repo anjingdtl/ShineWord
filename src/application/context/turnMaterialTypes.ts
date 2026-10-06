@@ -8,7 +8,7 @@
  * with diagnostics, never silently dropped.
  */
 
-export const TURN_MATERIAL_SCHEMA_VERSION = 'turn-material-1';
+export const TURN_MATERIAL_SCHEMA_VERSION = 'turn-material-2';
 
 export type TurnMaterialKind =
   | 'rule_summary'
@@ -22,7 +22,10 @@ export type TurnMaterialKind =
   | 'recent_text'
   | 'relevant_recall'
   | 'style'
-  | 'task_requirement';
+  | 'task_requirement'
+  | 'campaign_direction'
+  | 'campaign_progress'
+  | 'campaign_opportunities';
 
 export const TURN_MATERIAL_KINDS: readonly TurnMaterialKind[] = [
   'rule_summary',
@@ -37,6 +40,9 @@ export const TURN_MATERIAL_KINDS: readonly TurnMaterialKind[] = [
   'relevant_recall',
   'style',
   'task_requirement',
+  'campaign_direction',
+  'campaign_progress',
+  'campaign_opportunities',
 ];
 
 /** Authority domain: which owner is responsible for this material (plan §4.1). */
@@ -46,7 +52,9 @@ export type AuthorityDomain =
   | 'world_baseline'
   | 'viewer_knowledge'
   | 'story_memory'
-  | 'style';
+  | 'style'
+  /** P9: future campaign planning — explicitly NOT committed facts. */
+  | 'campaign_plan';
 
 /** Visibility scope locked before relevance and budget (plan §9.3). */
 export type VisibilityScope = 'public' | 'party' | 'gm';

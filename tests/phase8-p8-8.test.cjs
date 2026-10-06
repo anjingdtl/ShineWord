@@ -59,7 +59,7 @@ test('A31: forkStoryMemory replays only applied patches; pending/rejected never 
   const db = freshDb();
   const adapter = new NodeSqliteAdapter(db);
   db.prepare("INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at) VALUES ('w','T','h',1,'n','c','ready','now','now')").run();
-  db.prepare("INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at) VALUES ('c','w','T','shineword-core','0.3.0','m','{}','now')").run();
+  db.prepare("INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at) VALUES ('c','w','T','shineword-core','0.4.0','m','{}','now')").run();
   db.prepare("INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('src','c',16,'now')").run();
   db.prepare("INSERT INTO branches (branch_id,campaign_id,parent_branch_id,state_version,created_at) VALUES ('fork','c','src',9,'now')").run();
 
@@ -97,8 +97,8 @@ test('A32: save-9 round trip carries story memory; import runs zero LLM calls an
   const db = freshDb();
   const adapter = new NodeSqliteAdapter(db);
   db.prepare("INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at) VALUES ('w9','T9','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1,'n','c','ready',?,?)").run(NOW, NOW);
-  db.prepare("INSERT INTO world_packages (world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES ('w9',1,'world-package-2','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','shineword-core','0.3.0','m','published','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',?)").run(NOW);
-  db.prepare("INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at,package_revision,anchor_json,status) VALUES ('c9','w9','T9','shineword-core','0.3.0','m','{}',?,1,'{}','active')").run(NOW);
+  db.prepare("INSERT INTO world_packages (world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES ('w9',1,'world-package-2','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','shineword-core','0.4.0','m','published','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',?)").run(NOW);
+  db.prepare("INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at,package_revision,anchor_json,status) VALUES ('c9','w9','T9','shineword-core','0.4.0','m','{}',?,1,'{}','active')").run(NOW);
   db.prepare("INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('b9','c9',1,?)").run(NOW);
   const state = { ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('w9',1), branchId: 'b9', stateVersion: 1, clockSeconds: 60, clockMinutes: 1,
     actors: { 'pc': { actorId: 'pc', locationId: 'l1', resources: { hp: 5 }, conditions: [] } },
@@ -125,7 +125,7 @@ test('A32: save-9 round trip carries story memory; import runs zero LLM calls an
     {patch,patchId:'p-m1',baseFingerprint:'seed',turnVersions:new Map([['turn-0001',1]]),now:NOW});
   await store.saveState(merged);
   await store.markPatchApplied('p-m1', merged.metadata.fingerprint, NOW);
-  const contract = {protocolVersion:'2.0',turnId:'turn-0001',expectedStateVersion:0,actorId:'pc',actionType:'observe',requiresRoll:false,
+  const contract = {protocolVersion:'3.0',turnId:'turn-0001',expectedStateVersion:0,actorId:'pc',actionType:'observe',requiresRoll:false,
     evidenceIds:[],intent:'前行',timeCostMinutes:0,resourcePreconditions:[],outcomes:Object.fromEntries(['full_success','success','failure','severe_failure'].map(g=>[g,{achieved:true,publicSummary:'前行',effects:[]}]))};
   db.prepare("UPDATE turns SET action_contract_json=?,action_contract_hash=? WHERE branch_id='b9' AND turn_id='turn-0001'").run(JSON.stringify(contract),await sha.sha256Hex(JSON.stringify(contract)));
   db.prepare("UPDATE world_packages SET schema_version='shineword-world-package-5',rule_config_json=? WHERE world_id='w9'").run(JSON.stringify(state.ruleConfiguration));
@@ -145,7 +145,7 @@ test('A32: save-9 round trip carries story memory; import runs zero LLM calls an
   const target = freshDb();
   const targetAdapter = new NodeSqliteAdapter(target);
   target.prepare("INSERT INTO worlds (world_id,title,source_sha256,source_bytes,normalize_version,chapter_split_version,build_status,created_at,updated_at) VALUES ('w9','T9','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1,'n','c','ready',?,?)").run(NOW, NOW);
-  target.prepare("INSERT INTO world_packages (world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES ('w9',1,'world-package-2','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','shineword-core','0.3.0','m','published','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',?)").run(NOW);
+  target.prepare("INSERT INTO world_packages (world_id,revision,schema_version,source_sha256,ruleset_id,ruleset_version,mapping_version,status,content_hash,validation_json,created_at) VALUES ('w9',1,'world-package-2','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','shineword-core','0.4.0','m','published','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',?)").run(NOW);
   target.prepare("UPDATE world_packages SET schema_version='shineword-world-package-5',rule_config_json=? WHERE world_id='w9'").run(JSON.stringify(state.ruleConfiguration));
   let llmCalls = 0;
   const originalPrepare = target.prepare.bind(target);
@@ -171,8 +171,10 @@ test('A34: baseline installs on a fresh DB; legacy dev databases are detected an
   const fresh = new DatabaseSync(':memory:');
   const freshAdapter = new NodeSqliteAdapter(fresh);
   const install = await installBaselineSchema(freshAdapter);
-  assert.equal(install.baselineVersion, 'shineword-db-baseline-1');
-  assert.ok(install.appliedVersions.includes(100));
+  assert.equal(install.baselineVersion, 'shineword-db-baseline-2');
+  assert.ok(install.appliedVersions.includes(101));
+  const campaignTable = fresh.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_plan_jobs'").get();
+  assert.ok(campaignTable, 'baseline creates the phase-9 campaign tables');
   const frozenTable = fresh.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='frozen_turn_material_roots'").get();
   assert.ok(frozenTable, 'baseline creates the phase-8 tables');
   const freshCheck = await detectLegacyDevelopmentDatabase(freshAdapter);

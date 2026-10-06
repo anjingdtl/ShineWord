@@ -85,7 +85,7 @@ test('migration 32 creates branch_situations and branch_decision_guidance', asyn
   const { db, adapter } = openDb();
   try {
     const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-    assert.equal(applied[applied.length - 1], 100);
+    assert.equal(applied[applied.length - 1], 101);
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('branch_situations','branch_decision_guidance')").all()
       .map(row => row.name).sort();
     assert.deepEqual(tables, ['branch_decision_guidance', 'branch_situations']);
@@ -102,7 +102,7 @@ test('turn store round-trips situation state through the atomic commit', async (
     seedBranch(adapter);
     const store = new SqliteTurnStore(adapter);
     const contract = {
-      protocolVersion: '2.0', turnId: 'turn-0002', expectedStateVersion: 1,
+      protocolVersion: '3.0', turnId: 'turn-0002', expectedStateVersion: 1,
       actorId: 'actor-player', actionType: 'observe', evidenceIds: [], requiresRoll: false,
       intent: '观察废院', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {
@@ -184,7 +184,7 @@ test('situation rows are replaced (not accumulated) across commits', async () =>
     seedBranch(adapter);
     const store = new SqliteTurnStore(adapter);
     const mkContract = turnId => ({
-      protocolVersion: '2.0', turnId, expectedStateVersion: Number(turnId.slice(5)) - 1,
+      protocolVersion: '3.0', turnId, expectedStateVersion: Number(turnId.slice(5)) - 1,
       actorId: 'actor-player', actionType: 'observe', evidenceIds: [], requiresRoll: false,
       intent: '观察', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {

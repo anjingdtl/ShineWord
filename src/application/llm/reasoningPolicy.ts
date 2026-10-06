@@ -145,6 +145,11 @@ export const REASONING_RESERVE_POLICY: Record<LlmRequestKind, TierReserves> = {
     target: { low: 512, high: 2_048, max: 6_144 },
     minimum: { low: 256, high: 1_024, max: 3_072 },
   },
+  campaign_plan: {
+    // Planning-grade task: same reserve schedule as world mapping.
+    target: { low: 4_096, high: 12_288, max: 32_768 },
+    minimum: { low: 2_048, high: 6_144, max: 16_384 },
+  },
   opening_goal: {
     target: { low: 1_024, high: 2_048, max: 4_096 },
     minimum: { low: 512, high: 1_024, max: 2_048 },

@@ -1,4 +1,6 @@
 import type { RollGrade } from '../../domain/rules/types';
+import { compileCampaignEffects } from '../../domain/campaignPlan/campaignEffects';
+import { outcomeSetHashFor } from '../campaignPlan/localCompile';
 import type { ActionContract, EffectOperation } from '../../domain/turns/types';
 import type { PlannerProposal } from '../../domain/turns/proposal';
 import type { GameStateSnapshot } from '../../domain/state/types';
@@ -79,6 +81,15 @@ export interface CompileProposalInput {
   /** Original player input, never rewritten by the Planner. */
   requestedIntent?: string;
   selectedBaseAction?: AllowedCandidateV1;
+  /**
+   * P9 (A11/A13): stable method selected by candidate reference (player tap
+   * or planner-echoed free-input mapping). The LOCAL compiler verifies the id
+   * against the offered methods; stale ids are refused, never silently
+   * re-resolved to a different path.
+   */
+  selectedMethodRef?: { situationId: string; methodId: string };
+  /** P9: candidate reference frozen into the contract hash (player choice identity). */
+  candidateRef?: string;
 }
 
 export interface CompiledAction {
@@ -148,9 +159,21 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   const methods = input.methods ?? [];
   const requestedIntent = input.requestedIntent ?? input.proposal.intent;
   const normalize = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
-  const matching = methods.filter(method => normalize(method.firstStep.intent) === normalize(requestedIntent));
-  if (matching.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
-  const selected = matching[0];
+  // P9: a stable selected reference wins over text matching (A11); the id
+  // must be one of the offered methods at this state, else the choice is
+  // stale and refused instead of re-resolved (A13).
+  const ref = input.selectedMethodRef ?? parseMethodRef(input.proposal.candidateRef);
+  let selected: import("../../domain/situations/types").MethodTemplateV1 | undefined;
+  if (ref) {
+    const index = methods.findIndex((method, i) => method.methodId === ref.methodId
+      && (input.methodSituations?.[i] ?? "") === ref.situationId);
+    if (index === -1) throw new ProposalRejectedError('所选路径已不在当前可用办法中，请刷新后重新选择。');
+    selected = methods[index]!;
+  } else {
+    const matching = methods.filter(method => normalize(method.firstStep.intent) === normalize(requestedIntent));
+    if (matching.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
+    selected = matching[0];
+  }
   const baseAction = input.selectedBaseAction;
   if (baseAction && (baseAction.availability !== 'available' || baseAction.firstStepIntent !== requestedIntent)) {
     throw new ProposalRejectedError('当前基础行动与所选路径不一致。');
@@ -158,7 +181,7 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   if (!selected && baseAction?.actionId === 'short_rest') {
     const cap = input.actingCard.resourceMax.stamina ?? 10;
     const outcome = automaticOutcome(true, '你进行了短休。', [{ op: 'restoreResource', actorId: input.actingCard.actorId, resourceId: 'stamina', amount: Math.min(SHORT_REST_STAMINA_RESTORE, cap), cap }]);
-    return { storedSkillKey: null, contract: { protocolVersion: '2.0', turnId: input.proposal.turnId,
+    return { storedSkillKey: null, contract: { protocolVersion: '3.0', turnId: input.proposal.turnId,
       expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId, actionType: 'short_rest',
       intent: requestedIntent, evidenceIds: [], requiresRoll: false, timeCostMinutes: SHORT_REST_MINUTES,
       resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } } };
@@ -194,11 +217,26 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   // a Planner paraphrase must not replace it in history or recovery.
   compiled.contract.intent = requestedIntent;
   if (methods.length === 0) return compiled;
-  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent);
+  const selectedRef = input.selectedMethodRef ?? parseMethodRef(input.proposal.candidateRef);
+  const selectedIndex = selected && methods.includes(selected) ? methods.indexOf(selected) : -1;
+  const selectedCandidateRef = selectedRef
+    ? `method:${selectedRef.situationId}:${selectedRef.methodId}`
+    : (input.candidateRef?.startsWith('method:') ? input.candidateRef : undefined);
+  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent,
+    selectedIndex >= 0 ? selectedIndex : undefined, selectedCandidateRef);
 }
 
 function normalizeSkillId(skillId: string): string {
   return skillId.replace(/^skill-/, '');
+}
+
+/** P9: parses a method:{situationId}:{methodId} candidate reference. */
+function parseMethodRef(ref: string | undefined): { situationId: string; methodId: string } | null {
+  if (!ref || !ref.startsWith('method:')) return null;
+  const rest = ref.slice('method:'.length);
+  const separator = rest.lastIndexOf(':');
+  if (separator <= 0 || separator >= rest.length - 1) return null;
+  return { situationId: rest.slice(0, separator), methodId: rest.slice(separator + 1) };
 }
 
 function bindSituationMethod(
@@ -207,12 +245,17 @@ function bindSituationMethod(
   methodSituations: readonly string[],
   cards: readonly ActorCard[],
   requestedIntent: string,
+  selectedIndex?: number,
+  candidateRef?: string,
 ): CompiledAction {
   const { contract } = compiled;
+  const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
   for (const [index, method] of methods.entries()) {
     const step = method.firstStep;
-    const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
-    if (normalizeIntent(requestedIntent) !== normalizeIntent(step.intent)) continue;
+    // P9: a stable selected id binds even when the player paraphrased the
+    // step text; only structural checks still apply (A11).
+    const byId = selectedIndex !== undefined && index === selectedIndex;
+    if (!byId && normalizeIntent(requestedIntent) !== normalizeIntent(step.intent)) continue;
     if (step.actionKind !== contract.actionType) continue;
     if (step.skillId !== undefined) {
       if (contract.skillId === undefined) continue;
@@ -236,18 +279,57 @@ function bindSituationMethod(
     const situationId = methodSituations[index] ?? '';
     if (!situationId) continue;
     const successEffects = (method.successEffects ?? []) as EffectOperation[];
+    const templates = method.outcomeTemplates;
+    let outcomes = contract.outcomes;
+    let campaignEffects: ActionContract['campaignEffects'] = undefined;
+    let outcomeSetHash: string | undefined;
+    if (templates) {
+      // P9 §8.2: four-grade templates override summaries/effects BEFORE the
+      // roll; every grade comes from locally validated specs only.
+      const actingActorId = contract.actorId;
+      const actorResolver = (actorId: string): string => {
+        // Model-drift alias: campaign templates may name the protagonist
+        // generically; resolve to the acting card before template lookup.
+        const actingCard = cards.find(item => item.actorId === actingActorId);
+        if (actorId === 'player' || actorId === '玩家' || actorId === 'pc' || actorId === 'self'
+          || (actingCard && actorId === actingCard.name)) return actingActorId;
+        const card = cards.find(item => item.templateId === actorId);
+        return card?.actorId ?? actorId;
+      };
+      const perGrade: Record<RollGrade, NonNullable<NonNullable<ActionContract['campaignEffects']>[RollGrade]>> = {} as never;
+      outcomes = { ...contract.outcomes };
+      for (const grade of ['full_success', 'success', 'failure', 'severe_failure'] as const) {
+        const template = templates[grade];
+        if (!template) continue;
+        const compiledSpecs = compileCampaignEffects(template.effects, { actorResolver });
+        outcomes[grade] = {
+          ...outcomes[grade],
+          achieved: template.achieved,
+          publicSummary: template.resultFact,
+          effects: [...outcomes[grade].effects, ...compiledSpecs.effects.map(effect => ({ ...effect }))],
+        };
+        perGrade[grade] = {
+          transitions: compiledSpecs.transitions,
+          knowledgeGrants: compiledSpecs.knowledgeGrants,
+          relationshipShifts: compiledSpecs.relationshipShifts,
+          scheduledConsequences: compiledSpecs.scheduledConsequences,
+        };
+      }
+      campaignEffects = perGrade;
+      outcomeSetHash = outcomeSetHashFor(method);
+    } else if (successEffects.length > 0) {
+      outcomes = {
+        ...contract.outcomes,
+        full_success: appendEffects(contract.outcomes.full_success, successEffects),
+        success: appendEffects(contract.outcomes.success, successEffects),
+      };
+    }
     const withMethod: ActionContract = {
       ...contract,
-      methodRef: { situationId, methodId: method.methodId },
-      ...(successEffects.length > 0
-        ? {
-          outcomes: {
-            ...contract.outcomes,
-            full_success: appendEffects(contract.outcomes.full_success, successEffects),
-            success: appendEffects(contract.outcomes.success, successEffects),
-          },
-        }
-        : {}),
+      outcomes,
+      methodRef: { situationId, methodId: method.methodId, ...(outcomeSetHash ? { outcomeSetHash } : {}) },
+      ...(candidateRef ? { candidateRef } : {}),
+      ...(campaignEffects ? { campaignEffects } : {}),
     };
     return { ...compiled, contract: withMethod };
   }
@@ -267,7 +349,7 @@ function compileProposalBase(input: CompileProposalInput, publishedMethod = fals
   const currentLocation = state.actors[actorId]?.locationId;
 
   const base = {
-    protocolVersion: '2.0' as const,
+    protocolVersion: '3.0' as const,
     turnId: proposal.turnId,
     expectedStateVersion: proposal.expectedStateVersion,
     actorId,
@@ -518,7 +600,7 @@ function compileAbilityAction(input: CompileProposalInput): CompiledAction {
 
   return {
     contract: {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       turnId: proposal.turnId,
       expectedStateVersion: proposal.expectedStateVersion,
       actorId: actingCard.actorId,

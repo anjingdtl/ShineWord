@@ -86,6 +86,10 @@ export interface RunV2TurnInput {
   /** Parallel owner situation ids for `methods`. */
   methodSituations?: readonly string[];
   selectedBaseAction?: import('../guidance/types').AllowedCandidateV1;
+  /** P9: player-selected stable method reference (guidance candidate tap). */
+  selectedMethodRef?: { situationId: string; methodId: string };
+  /** P9: candidate reference string frozen into the contract. */
+  candidateRef?: string;
   narratorBudget?: { capabilities: import('../llm/requestPlan').FrozenModelCapabilities; reasoningPolicy: import('../llm/reasoningPolicy').ReasoningPolicySelection };
   updateCommittedState?: (
     nextState: import('../../domain/state/types').GameStateSnapshot,
@@ -181,6 +185,7 @@ export function plannerV2System(): string {
     'move: also destinationId (a location id that exists in this world).',
     'Optional: narrativeHint with successSummary and failureSummary strings (wording only).',
     'Use actor ids exactly as supplied in the world context.',
+    'If the player action matches one of the 可选介入办法 lines listed in the context, include candidateRef="method:{situationId}:{methodId}" copied exactly from that line; otherwise omit candidateRef.',
   ].join(' ');
 }
 
@@ -429,6 +434,10 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     compiled = compileProposal({
       requestedIntent: input.playerIntent,
       selectedBaseAction: input.selectedBaseAction,
+      // P9: a stable selected candidate reference (player tap or validated
+      // free-input mapping) binds the exact method; stale ids are refused.
+      ...(input.selectedMethodRef ? { selectedMethodRef: input.selectedMethodRef } : {}),
+      ...(input.candidateRef ? { candidateRef: input.candidateRef } : {}),
       proposal: proposalWithActor,
       actingCard: input.actingCard,
       cards: input.cards,

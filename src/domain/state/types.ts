@@ -151,6 +151,15 @@ export interface GameStateSnapshot {
   /** Immutable world artifact selection and last historical style binding. */
   segmentContentBinding?: import('../content/types').ContentDependencyBinding & { artifactIds: readonly string[] };
   styleSnapshot?: import('../style/types').EffectiveStyleSnapshotV1;
+  /**
+   * P9 campaign mainline runtime: the ONLY authoritative progress record.
+   * Written by the commit transaction after CampaignProgressReducer
+   * evaluation; UI and story memory are read-only consumers. Absent on
+   * pre-P9 snapshots and legacy saves.
+   */
+  campaignRuntime?: import('../campaignPlan/types').CampaignRuntimeV1;
+  /** P9: campaign content artifacts adopted by this branch (immutable ids). */
+  campaignContentBinding?: { artifactIds: readonly string[]; contentHash: string };
 }
 
 function cloneEncounter(entry: EncounterSnapshotEntry): EncounterSnapshotEntry {
@@ -216,6 +225,11 @@ export function cloneGameState(state: GameStateSnapshot): GameStateSnapshot {
     artifactIds: [...state.segmentContentBinding.artifactIds],
   };
   if (state.styleSnapshot) cloned.styleSnapshot = JSON.parse(JSON.stringify(state.styleSnapshot)) as import('../style/types').EffectiveStyleSnapshotV1;
+  if (state.campaignRuntime) cloned.campaignRuntime = JSON.parse(JSON.stringify(state.campaignRuntime)) as import('../campaignPlan/types').CampaignRuntimeV1;
+  if (state.campaignContentBinding) cloned.campaignContentBinding = {
+    artifactIds: [...state.campaignContentBinding.artifactIds],
+    contentHash: state.campaignContentBinding.contentHash,
+  };
   if (state.itemSources) {
     cloned.itemSources = Object.fromEntries(Object.entries(state.itemSources).map(([itemId, source]) => [itemId, { ...source }]));
   }

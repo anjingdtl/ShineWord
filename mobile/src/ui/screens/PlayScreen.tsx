@@ -10,6 +10,7 @@ import { Button } from '../components/Button';
 import { typeStyle } from '../components/typography';
 import { ActionChoices, type ActionChoice } from '../features/play/ActionChoices';
 import { GuidanceCard } from '../features/play/GuidanceCard';
+import { CampaignProgressCard, useCampaignProgress } from '../features/play/CampaignProgressCard';
 import { ActionComposer } from '../features/play/ActionComposer';
 import { NarrativeFeed } from '../features/play/NarrativeFeed';
 import { PlayHeader } from '../features/play/PlayHeader';
@@ -49,6 +50,8 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   // First-session guide (product ask #4): once per device, dismissed by
   // "开始游玩" or implicitly after the first committed turn.
   const [guideVisible, setGuideVisible] = useState(false);
+  const [progressExpanded, setProgressExpanded] = useState(false);
+  const campaignProgress = useCampaignProgress(campaignId, branchId, view?.stateVersion);
   const guideHidden = turns.length > 0;
 
   useEffect(() => {
@@ -149,6 +152,14 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
       />
 
+      {campaignProgress ? (
+        <View style={{ paddingHorizontal: theme.space.lg }}>
+          <CampaignProgressCard
+            progress={campaignProgress}
+            expanded={progressExpanded}
+            onToggle={() => setProgressExpanded(value => !value)} />
+        </View>
+      ) : null}
       <NarrativeFeed
         turns={turns}
         goal={view?.goal ?? ''}

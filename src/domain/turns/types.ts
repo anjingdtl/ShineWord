@@ -54,7 +54,8 @@ export interface OutcomeClause {
 }
 
 export interface ActionContract {
-  protocolVersion: '2.0';
+  /** P9 (ADR-2): single protocol constant; 3.0 adds candidateRef + outcomeSetHash. */
+  protocolVersion: '3.0';
   turnId: string;
   expectedStateVersion: number;
   /** Optional on pre-progressive contracts; when present it is frozen into
@@ -81,7 +82,26 @@ export interface ActionContract {
    * the contract hash; the planner channel can never author it. Situation
    * transitions bound to the method apply only through the local reducer.
    */
-  methodRef?: { situationId: string; methodId: string };
+  methodRef?: { situationId: string; methodId: string; outcomeSetHash?: string };
+  /**
+   * P9 (A11/A13): the stable candidate reference the player selected (or the
+   * mapped free-input candidate). Frozen into the contract hash so history
+   * and recovery keep the exact chosen path; stale ids are refused at compile.
+   */
+  candidateRef?: string;
+  /**
+   * P9 (§8.2): per-grade campaign outcome extensions frozen BEFORE the roll.
+   * Engine effects live in outcomes[grade].effects; this carries the parts
+   * the generic effect ops cannot express (situation transitions, knowledge
+   * grants, relationship shifts, deferred consequences). Executed by the
+   * campaign settlement in the same commit as the rolled grade.
+   */
+  campaignEffects?: Readonly<Partial<Record<RollGrade, {
+    transitions: import('../situations/types').SituationTransitionOp[];
+    knowledgeGrants: ReadonlyArray<{ entryId: string; actorId: string }>;
+    relationshipShifts: ReadonlyArray<{ fromActorId: string; toActorId: string; delta: number }>;
+    scheduledConsequences: readonly string[];
+  }>>>;
   /**
    * P8-6: the immutable rule binding this contract was compiled under
    * (core version, configuration hash, module versions, capability-table

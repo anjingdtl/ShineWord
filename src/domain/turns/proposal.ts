@@ -39,6 +39,13 @@ export interface PlannerProposal {
     successSummary: string;
     failureSummary: string;
   };
+  /**
+   * P9 (A11): when the player's free input maps to one of the listed
+   * intervention methods, the planner echoes that method's stable reference
+   * (method:{situationId}:{methodId}). The LOCAL compiler verifies it
+   * against the offered methods before binding; an unknown id is refused.
+   */
+  candidateRef?: string;
 }
 
 export const PROPOSAL_ACTION_KINDS: readonly ProposalActionKind[] = [
@@ -80,6 +87,8 @@ const PROPOSAL_KEYS = new Set([
   'evidenceIds',
   'intent',
   'narrativeHint',
+  // P9 (A11): planner may echo a stable method reference for free input.
+  'candidateRef',
 ]);
 
 const DIFFICULTY_BAND_SET = new Set(['simple', 'normal', 'challenging', 'hard', 'extreme', 'peak']);
@@ -133,6 +142,9 @@ export function validatePlannerProposal(proposal: PlannerProposal): string[] {
   }
   if (proposal.actionKind === 'move' && !nonEmpty(proposal.destinationId)) {
     errors.push('move requires destinationId.');
+  }
+  if (proposal.candidateRef !== undefined && !/^method:[A-Za-z0-9][A-Za-z0-9._:-]*:[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(proposal.candidateRef)) {
+    errors.push('candidateRef must be a method:{situationId}:{methodId} reference.');
   }
   if (
     proposal.narrativeHint !== undefined &&

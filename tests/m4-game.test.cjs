@@ -145,7 +145,7 @@ test('fork at an earlier snapshot restores the historical state (rewind)', async
 
     // Commit a turn to reach stateVersion 1 with a different location.
     const contract = {
-      protocolVersion: '2.0', turnId: 'turn-0001', expectedStateVersion: 0,
+      protocolVersion: '3.0', turnId: 'turn-0001', expectedStateVersion: 0,
       actorId: 'actor-player', actionType: 'move', evidenceIds: ['e'],
       requiresRoll: false, intent: 'move on', timeCostMinutes: 5, resourcePreconditions: [],
       outcomes: {
@@ -334,7 +334,7 @@ function makeCard() {
     abilities: [], preparedAbilities: [],
     resourceMax: { stamina: 10, hp: 10 },
     defense: 10, powerTier: 'ordinary',
-    rulesetId: 'shineword-core', rulesetVersion: '0.3.0',
+    rulesetId: 'shineword-core', rulesetVersion: '0.4.0',
     worldId: 'w-fixture', worldPackageRevision: 1, cardRevision: 1,
   };
 }

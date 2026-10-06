@@ -612,7 +612,7 @@ export class EncounterService {
         throw new Error('同伴支援目标已不满足援救条件。');
       }
       const contract: ActionContract = {
-        protocolVersion: '2.0',
+        protocolVersion: '3.0',
         turnId: requestTurnId(input.encounterId, input.requestId)
           ?? `enc:${input.encounterId}:${currentActorId}:rescue:${ctx.state.stateVersion}`,
         expectedStateVersion: ctx.state.stateVersion,
@@ -844,7 +844,7 @@ export class EncounterService {
     const turnId = requestTurnId(input.encounterId, input.requestId) ?? `enc:${input.encounterId}:${currentActorId}:rescue:${ctx.state.stateVersion}`;
     const hpCap = targetCard.resourceMax.hp ?? 10;
     const contract: ActionContract = {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       turnId,
       expectedStateVersion: ctx.state.stateVersion,
       actorId: currentActorId,
@@ -1375,7 +1375,7 @@ function engineActionContract(input: {
     effects: [event],
   };
   return {
-    protocolVersion: '2.0',
+    protocolVersion: '3.0',
     turnId: input.turnId,
     expectedStateVersion: input.expectedStateVersion,
     actorId: input.actorId,

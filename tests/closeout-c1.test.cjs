@@ -390,7 +390,7 @@ test('re-extraction of a polluted world leaves published packages untouched', as
         revision: 1,
         schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('w-pub', 1),
         sourceSha256: parsedHashOf(bytes),
-        ruleset: { id: 'shineword-core', version: '0.3.0' },
+        ruleset: { id: 'shineword-core', version: '0.4.0' },
         mappingVersion: 'm',
         status: 'published',
         contentHash: 'pkg-content-hash-1',

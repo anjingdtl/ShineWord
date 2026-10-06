@@ -1,7 +1,7 @@
 import type { SqliteMigration } from './migrations';
 
 /** Fresh development schema. Historical upgrade chains are intentionally removed. */
-export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [{ version: 100, name: 'phase8_current_baseline', sql: `
+export const BUILTIN_MIGRATIONS: readonly SqliteMigration[] = [{ version: 101, name: 'phase9_campaign_baseline', sql: `
 CREATE TABLE actor_cards (
   branch_id TEXT NOT NULL,
   actor_id TEXT NOT NULL,
@@ -1197,4 +1197,100 @@ CREATE INDEX world_segments_by_world ON world_segments(world_id, status);
 
 CREATE TABLE abandoned_turns (branch_id TEXT NOT NULL, turn_id TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(branch_id,turn_id));
 CREATE TABLE shineword_baseline (baseline_version TEXT PRIMARY KEY, installed_at TEXT NOT NULL);
+
+CREATE TABLE campaign_setups (
+  setup_id TEXT PRIMARY KEY,
+  world_id TEXT NOT NULL,
+  package_revision INTEGER NOT NULL,
+  intent_json TEXT NOT NULL,
+  intent_history_json TEXT NOT NULL DEFAULT '[]',
+  current_candidate_id TEXT,
+  status TEXT NOT NULL CHECK(status IN ('draft','planning','proposal_ready','adopted','failed','cancelled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE campaign_plan_jobs (
+  job_id TEXT PRIMARY KEY,
+  setup_id TEXT NOT NULL,
+  campaign_id TEXT,
+  branch_id TEXT,
+  job_kind TEXT NOT NULL CHECK(job_kind IN ('opening_plan','replan')),
+  trigger_reasons_json TEXT NOT NULL DEFAULT '[]',
+  base_state_version INTEGER,
+  base_plan_id TEXT,
+  base_plan_revision INTEGER,
+  intent_hash TEXT NOT NULL,
+  content_manifest_hash TEXT,
+  knowledge_policy_hash TEXT,
+  trigger_event_refs_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL CHECK(status IN ('queued','running','candidate_ready','adopted','retryable_failed','outcome_unknown','invalid','stale','cancelled')),
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  fencing_token INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT,
+  physical_request_budget INTEGER NOT NULL DEFAULT 2,
+  freeze_root_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE campaign_plan_candidates (
+  candidate_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  setup_id TEXT NOT NULL,
+  attempt_group TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('raw_response','parsed','validated','compiled','ready','rejected','repairing')),
+  raw_response_ref TEXT,
+  raw_response_text TEXT,
+  parse_result_json TEXT,
+  validation_errors_json TEXT NOT NULL DEFAULT '[]',
+  repair_used INTEGER NOT NULL DEFAULT 0,
+  candidate_hash TEXT NOT NULL,
+  plan_json TEXT,
+  artifact_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(job_id, attempt_group, attempt_no),
+  FOREIGN KEY(job_id) REFERENCES campaign_plan_jobs(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE campaign_plan_revisions (
+  plan_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  parent_revision INTEGER,
+  setup_id TEXT,
+  campaign_id TEXT,
+  source_trigger TEXT,
+  intent_json TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  intent_hash TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  adopted_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(plan_id, revision)
+);
+
+CREATE TABLE campaign_content_artifacts (
+  artifact_id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  plan_revision INTEGER NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'campaign',
+  artifact_json TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_campaign_plan_jobs_status ON campaign_plan_jobs(status, updated_at);
+CREATE INDEX idx_campaign_plan_jobs_setup ON campaign_plan_jobs(setup_id);
+CREATE UNIQUE INDEX idx_campaign_plan_jobs_singleflight
+  ON campaign_plan_jobs(branch_id, job_kind)
+  WHERE status IN ('queued','running','candidate_ready') AND branch_id IS NOT NULL;
+CREATE INDEX idx_campaign_plan_candidates_job ON campaign_plan_candidates(job_id, stage);
+CREATE INDEX idx_campaign_plan_revisions_campaign ON campaign_plan_revisions(campaign_id, revision);
+CREATE INDEX idx_campaign_content_artifacts_campaign ON campaign_content_artifacts(campaign_id);
 ` }];

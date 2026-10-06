@@ -20,7 +20,7 @@ test('portable SHA-256 agrees with Node for empty, Unicode, unpaired surrogates 
 
 function configuration(overrides = {}) {
   return { schemaVersion: 'world-rule-config-1', worldId: 'review', revision: 1,
-    core: { id: 'shineword-core', version: '0.3.0' },
+    core: { id: 'shineword-core', version: '0.4.0' },
     modules: [{ moduleId: 'resources_conditions', version: '1.0.0', parameters: {} }],
     vocabulary: {}, constraints: [], provenance: [], configHash: '', ...overrides };
 }
@@ -155,7 +155,7 @@ test('engine pressure deltas pass the production contract gate; model-authored d
 test('current baseline accepts Android metadata without classifying an empty install as legacy',async()=>{
  const {DatabaseSync}=require('node:sqlite');const {NodeSqliteAdapter}=require('./helpers/mobileHarness.cjs');
  const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE android_metadata(locale TEXT);');
- try{const installed=await require('../dist/application/project/dbBaseline').installBaselineSchema(new NodeSqliteAdapter(db));assert.deepEqual(installed.appliedVersions,[100]);assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='android_metadata'").get());}finally{db.close()}
+ try{const installed=await require('../dist/application/project/dbBaseline').installBaselineSchema(new NodeSqliteAdapter(db));assert.deepEqual(installed.appliedVersions,[101]);assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='android_metadata'").get());}finally{db.close()}
 });
 
 test('memory observation coverage checks relationship subjects, not just a shared turn id',()=>{
@@ -200,7 +200,7 @@ test('stable save refuses sent/unknown memory requests, but pending unsent cover
   await h.adapter.execute("INSERT INTO frozen_turn_postprocess_outbox(handoff_id,campaign_id,branch_id,turn_id,committed_state_version,public_evidence_hash,has_body,task_schema,status,created_at,updated_at) VALUES ('pending','c','c-main','t',0,'hash',0,'turn-postprocess-handoff-1','running','now','now')");
   await assert.rejects(()=>exportSave(options),/running story-memory/);
   await h.adapter.execute("UPDATE frozen_turn_postprocess_outbox SET status='pending'");
-  assert.equal((await exportSave(options)).save.manifest.schemaVersion,'shineword-save-9');
+  assert.equal((await exportSave(options)).save.manifest.schemaVersion,'shineword-save-10');
  }finally{h.db.close()}
 });
 

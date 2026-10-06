@@ -17,7 +17,7 @@ export const SHINEWORD_RULESET_ID = 'shineword-core';
  * they are refused with an explicit upgrade message instead of silently
  * mixing rule versions.
  */
-export const SHINEWORD_RULESET_VERSION = '0.3.0';
+export const SHINEWORD_RULESET_VERSION = '0.4.0';
 
 export const SKILL_DIE_BY_RANK: Readonly<Record<SkillRank, DieSides>> = {
   untrained: 4,

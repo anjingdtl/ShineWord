@@ -592,7 +592,7 @@ test('fork: branch-B inherits patches <= fork version and never the source futur
 test('migration 20 creates story memory tables', async () => {
   const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-  assert.ok(applied.includes(100));
+  assert.ok(applied.includes(101));
   const tables = await adapter.queryAll(
     "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('story_memory_states','story_memory_patches')",
   );

@@ -78,6 +78,18 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
     );
   }
 
+  // P9 (plan §12.3): the campaign runtime is branch state. Rebind its branch
+  // identity to the new branch; completed nodes, granted rewards and pending
+  // consequences carry over EXACTLY as they were at the fork point. The
+  // source branch's pending replan candidates never cross over (jobs are
+  // branch-scoped and are not copied).
+  if (snapshot.campaignRuntime) {
+    snapshot.campaignRuntime = {
+      ...snapshot.campaignRuntime,
+      branchId: input.targetBranchId,
+    };
+  }
+
   if (!Array.isArray(snapshot.encounters)) {
     const existingEncounter = await db.queryOne(
       'SELECT encounter_id FROM encounters WHERE branch_id = ? LIMIT 1',

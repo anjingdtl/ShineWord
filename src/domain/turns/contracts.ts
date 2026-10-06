@@ -151,7 +151,18 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
     findForbiddenKeys(contract, 'contract', errors);
   }
 
-  if (contract.protocolVersion !== '2.0') errors.push('protocolVersion must be 2.0.');
+  if (contract.protocolVersion !== '3.0') errors.push('protocolVersion must be 3.0.');
+  if (contract.candidateRef !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:\-]*$/.test(contract.candidateRef)) {
+    errors.push('candidateRef must be a stable reference string.');
+  }
+  if (contract.methodRef !== undefined) {
+    if (!nonEmpty(contract.methodRef.situationId) || !nonEmpty(contract.methodRef.methodId)) {
+      errors.push('methodRef requires situationId and methodId.');
+    }
+    if (contract.methodRef.outcomeSetHash !== undefined && !/^[a-f0-9]{16,64}$/i.test(contract.methodRef.outcomeSetHash)) {
+      errors.push('methodRef.outcomeSetHash must be a hex digest.');
+    }
+  }
   if (!nonEmpty(contract.turnId)) errors.push('turnId is required.');
   if (!Number.isInteger(contract.expectedStateVersion) || contract.expectedStateVersion < 0) {
     errors.push('expectedStateVersion must be a non-negative integer.');

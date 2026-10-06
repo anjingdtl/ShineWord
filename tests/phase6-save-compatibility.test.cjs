@@ -27,7 +27,7 @@ async function fixture() {
   const entries = [lore('base-rule')], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
   const manifest = { schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('portable-world', 1), worldId: 'portable-world', revision: 1,
-    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
+    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.4.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   const quoteHash = await sha.sha256Hex(TEXT);
   const canon = { chapters: [{ worldId: manifest.worldId, chapterId: 'chapter-1', index: 0, title: '石桥',
@@ -73,7 +73,7 @@ async function fixture() {
   await h.adapter.execute("INSERT INTO snapshots(branch_id,state_version,snapshot_json,state_hash,created_at) VALUES ('b',0,?,NULL,?)", [JSON.stringify(state), NOW]);
   await h.adapter.execute("INSERT INTO actor_cards(branch_id,actor_id,card_json,created_at,updated_at,updated_state_version) VALUES ('b','pc',?,?,?,0)", [JSON.stringify({ actorId: 'pc', name: '旅人', controller: 'player' }), NOW, NOW]);
   await h.adapter.execute("INSERT INTO party_members(branch_id,actor_id,controller,role,joined_at) VALUES ('b','pc','player','protagonist',?)", [NOW]);
-  const contract = { protocolVersion: '2.0', turnId: 'frozen-1', expectedStateVersion: 0, actorId: 'pc', actionType: 'observe',
+  const contract = { protocolVersion: '3.0', turnId: 'frozen-1', expectedStateVersion: 0, actorId: 'pc', actionType: 'observe',
     evidenceIds: [], requiresRoll: false, intent: '观察石桥', timeCostMinutes: 0, resourcePreconditions: [],
     outcomes: Object.fromEntries(['full_success', 'success', 'failure', 'severe_failure'].map(grade => [grade, { achieved: true, publicSummary: '观察', effects: [] }])),
     contentDependency: binding, styleSnapshot };

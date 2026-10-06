@@ -25,7 +25,7 @@ function genreConfig(name, modules, constraints = []) {
     schemaVersion: 'world-rule-config-1',
     worldId: `w-${name}`,
     revision: 1,
-    core: { id: 'shineword-core', version: '0.3.0' },
+    core: { id: 'shineword-core', version: '0.4.0' },
     modules: modules.map(moduleId => ({
       moduleId,
       version: '1.0.0',

@@ -36,6 +36,14 @@ export interface ConditionFacts {
    */
   causalWorldTimeOrder: number;
   resolveActorId?: (actorId: string) => string;
+  /** P9 leaves: campaign node runtime status (undefined = node absent). */
+  campaignNodeStatus?: (nodeId: string) => string | undefined;
+  /** P9: whether a committed event of this type (+payload match) occurred. */
+  committedEventOccurred?: (eventType: string, payloadMatch?: Readonly<Record<string, string>>) => boolean | undefined;
+  /** P9: promise status inside a situation (undefined = promise/situation absent). */
+  promiseStatus?: (situationId: string, promiseId: string) => 'open' | 'fulfilled' | 'broken' | undefined;
+  /** P9: situation counter value (undefined = counter absent). */
+  situationCounter?: (situationId: string, counterId: string) => number | undefined;
 }
 
 export function validateConditionShape(
@@ -96,6 +104,10 @@ function countAndValidate(
     case 'situation_status':
     case 'reference_event_resolved':
     case 'world_time_at_least':
+    case 'campaign_node_status':
+    case 'committed_event':
+    case 'promise_status':
+    case 'situation_counter_at_least':
       return validateLeaf(record, errors, prefix);
     default:
       errors.push(`${prefix}: unknown condition kind "${String(record.kind)}".`);
@@ -157,6 +169,39 @@ function validateLeaf(record: Record<string, unknown>, errors: string[], prefix:
     case 'world_time_at_least':
       if (typeof record.order !== 'number' || !Number.isInteger(record.order) || record.order < 0) {
         errors.push(`${prefix}.world_time_at_least.order: must be a non-negative integer.`);
+      }
+      break;
+    case 'campaign_node_status':
+      requireId(record.nodeId, errors, `${prefix}.campaign_node_status.nodeId`);
+      if (typeof record.status !== 'string' || !record.status) {
+        errors.push(`${prefix}.campaign_node_status.status: must be a non-empty string.`);
+      }
+      break;
+    case 'committed_event':
+      if (typeof record.eventType !== 'string' || !/^[a-z][a-z0-9_]*$/.test(record.eventType)) {
+        errors.push(`${prefix}.committed_event.eventType: must be a snake_case event type.`);
+      }
+      if (record.payloadMatch !== undefined) {
+        const match = record.payloadMatch as unknown;
+        if (typeof match !== 'object' || match === null || Array.isArray(match)
+          || Object.keys(match as Record<string, unknown>).length > 4
+          || Object.values(match as Record<string, unknown>).some(v => typeof v !== 'string')) {
+          errors.push(`${prefix}.committed_event.payloadMatch: must be an object of ≤4 string values.`);
+        }
+      }
+      break;
+    case 'promise_status':
+      requireId(record.situationId, errors, `${prefix}.promise_status.situationId`);
+      requireId(record.promiseId, errors, `${prefix}.promise_status.promiseId`);
+      if (!['open', 'fulfilled', 'broken'].includes(String(record.status))) {
+        errors.push(`${prefix}.promise_status.status: must be open|fulfilled|broken.`);
+      }
+      break;
+    case 'situation_counter_at_least':
+      requireId(record.situationId, errors, `${prefix}.situation_counter_at_least.situationId`);
+      requireId(record.counterId, errors, `${prefix}.situation_counter_at_least.counterId`);
+      if (typeof record.minimum !== 'number' || !Number.isInteger(record.minimum) || record.minimum < 0) {
+        errors.push(`${prefix}.situation_counter_at_least.minimum: must be a non-negative integer.`);
       }
       break;
     default:
@@ -271,6 +316,26 @@ export function evaluateCondition(
     }
     case 'world_time_at_least':
       return facts.causalWorldTimeOrder >= condition.order ? TRUE : FALSE;
+    case 'campaign_node_status': {
+      const status = facts.campaignNodeStatus?.(condition.nodeId);
+      if (status === undefined) return UNKNOWN;
+      return status === condition.status ? TRUE : FALSE;
+    }
+    case 'committed_event': {
+      const occurred = facts.committedEventOccurred?.(condition.eventType, condition.payloadMatch);
+      if (occurred === undefined) return UNKNOWN;
+      return occurred ? TRUE : FALSE;
+    }
+    case 'promise_status': {
+      const status = facts.promiseStatus?.(condition.situationId, condition.promiseId);
+      if (status === undefined) return UNKNOWN;
+      return status === condition.status ? TRUE : FALSE;
+    }
+    case 'situation_counter_at_least': {
+      const value = facts.situationCounter?.(condition.situationId, condition.counterId);
+      if (value === undefined) return UNKNOWN;
+      return value >= condition.minimum ? TRUE : FALSE;
+    }
     default:
       return UNKNOWN;
   }

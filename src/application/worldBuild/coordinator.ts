@@ -1525,6 +1525,9 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         } catch (error) {
           if (deps.signal?.aborted) return await interruptedResultAfterRequest();
           const reason = error instanceof Error ? error.message : String(error);
+          if ((globalThis as { __WORLD_FINALIZE_DEBUG__?: boolean }).__WORLD_FINALIZE_DEBUG__) {
+            console.error('[finalize-error]', reason, error instanceof Error ? error.stack?.slice(0, 1500) : '');
+          }
           const canonConflict = reason.includes('Canon blocking conflict');
           const missingOpeningLocation = reason.includes('当前开局可用的地点证据');
           const mappingFailed = reason.includes('小说→三宝书映射失败');

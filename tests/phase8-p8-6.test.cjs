@@ -22,7 +22,7 @@ function fantasyConfig(overrides = {}) {
     schemaVersion: 'world-rule-config-1',
     worldId: 'w-fantasy',
     revision: 1,
-    core: { id: 'shineword-core', version: '0.3.0' },
+    core: { id: 'shineword-core', version: '0.4.0' },
     modules: [
       { moduleId: 'resources_conditions', version: '1.0.0', parameters: {} },
       { moduleId: 'skill_actions', version: '1.0.0', parameters: {} },
@@ -86,7 +86,7 @@ test('A26: a fantasy configuration compiles to a deterministic binding, capabili
   config.configHash = computeWorldRuleConfigurationHash(config);
   const compiled = compileWorldRuleConfiguration(config);
   assert.equal(compiled.ok, true, JSON.stringify(compiled.diagnostics));
-  assert.equal(compiled.binding.coreVersion, '0.3.0');
+  assert.equal(compiled.binding.coreVersion, '0.4.0');
   assert.equal(compiled.binding.configurationHash, config.configHash);
   const capabilities = compiled.capabilityTable.capabilities;
   assert.ok(capabilities.includes('encounter_begin'), 'combat enabled');

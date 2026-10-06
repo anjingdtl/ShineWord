@@ -210,7 +210,7 @@ export function compileAttack(input: AttackActionInput): {
   };
 
   const contract: ActionContract = {
-    protocolVersion: '2.0',
+    protocolVersion: '3.0',
     turnId,
     expectedStateVersion: input.state.stateVersion,
     actorId: input.attacker.actorId,

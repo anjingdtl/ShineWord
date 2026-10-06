@@ -9,7 +9,7 @@ const {
 function validContract() {
   const outcome = (achieved, publicSummary) => ({ achieved, publicSummary, effects: [] });
   return {
-    protocolVersion: '2.0',
+    protocolVersion: '3.0',
     turnId: 'turn-001',
     expectedStateVersion: 12,
     actorId: 'actor-player',

@@ -259,7 +259,7 @@ test('engine-only rescue effects are accepted by engine contracts and remain for
   const effect = { op: 'removeCondition', actorId: 'actor-su', conditionId: 'disabled' };
   const outcome = { achieved: true, publicSummary: '援救同伴', effects: [effect] };
   const contract = {
-    protocolVersion: '2.0', turnId: 'engine-rescue-check', expectedStateVersion: 0,
+    protocolVersion: '3.0', turnId: 'engine-rescue-check', expectedStateVersion: 0,
     actorId: 'actor-shen', actionType: 'rescue', targetId: 'actor-su', evidenceIds: [],
     requiresRoll: false, intent: '援救同伴', timeCostMinutes: 0, resourcePreconditions: [],
     outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome },
@@ -396,7 +396,7 @@ test('A08: GM templates stay private and direct template IDs cannot bypass recru
   for (const fact of canonFacts) await worldStore.saveFact(fact, 'test');
   await worldStore.saveRuleMapping({ worldId: 'w-pkg', mappingId: 'canon-stealth', targetEntityId: 'canon-person',
     mappingKind: 'skill', mapping: { skillId: 'stealth', rank: 'trained' }, evidenceRefs: ['canon-skill'],
-    rulesetVersion: '0.3.0', status: 'active' }, 'test');
+    rulesetVersion: '0.4.0', status: 'active' }, 'test');
   const canonCampaign = await createCampaign({
     db: adapter, worldStore, campaignId: 'camp-canon', title: '原著开局', worldId: 'w-pkg', packageRevision,
     anchor: { worldTimeOrder: 5, locationId: 'courtyard' },
@@ -442,7 +442,7 @@ test('A11: recruitment, relationship, party lifecycle, knowledge and item lineag
   let state = await turnStore.getState('camp-s-main');
   const makeEngineContract = (turnId, actorId, effect) => {
     const outcome = { achieved: true, publicSummary: 'test engine state', effects: effect ? [effect] : [] };
-    return { protocolVersion: '2.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules(state.ruleConfiguration).binding, turnId, expectedStateVersion: state.stateVersion, actorId,
+    return { protocolVersion: '3.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules(state.ruleConfiguration).binding, turnId, expectedStateVersion: state.stateVersion, actorId,
       actionType: 'test_state', evidenceIds: [], requiresRoll: false, intent: 'test state', timeCostMinutes: 0,
       resourcePreconditions: [], outcomes: { full_success: outcome, success: outcome, failure: outcome, severe_failure: outcome } };
   };
@@ -789,7 +789,7 @@ test('A05: a rolled-but-uncommitted turn resumes after import with its own dice'
   await session.playTurn({ campaignId: 'camp-s', branchId: 'camp-s-main', intent: 'sneak' });
   const turnStore = new SqliteTurnStore(adapter);
   const contractJson = JSON.stringify({
-    protocolVersion: '2.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules((await turnStore.getState('camp-s-main')).ruleConfiguration).binding, turnId: 'turn-0002', expectedStateVersion: 1, actorId: 'actor-shen',
+    protocolVersion: '3.0', ruleBinding: require('../dist/application/content/runtimeRules').requireCompiledRules((await turnStore.getState('camp-s-main')).ruleConfiguration).binding, turnId: 'turn-0002', expectedStateVersion: 1, actorId: 'actor-shen',
     actionType: 'skill_check', skillId: 'stealth', difficultyBand: 'challenging',
     evidenceIds: [], requiresRoll: true, intent: 'interrupted', timeCostMinutes: 10,
     resourcePreconditions: [],

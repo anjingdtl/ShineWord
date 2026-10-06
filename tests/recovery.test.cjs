@@ -73,7 +73,7 @@ function contract() {
     effects,
   });
   return {
-    protocolVersion: '2.0',
+    protocolVersion: '3.0',
     turnId: 'turn-recovery-001',
     expectedStateVersion: 1,
     actorId: 'actor-player',

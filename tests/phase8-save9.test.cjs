@@ -24,7 +24,7 @@ async function fixture() {
   const entries = [], sections = [];
   const hash = await computePackageContentHash(entries, sections, sha.sha256Hex);
   const manifest = { schemaVersion: 'shineword-world-package-5', ruleConfiguration: require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('p8-world', 1), worldId: 'p8-world', revision: 1,
-    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.3.0' },
+    sourceSha256: await sha.sha256Hex('raw'), ruleset: { id: 'shineword-core', version: '0.4.0' },
     mappingVersion: 'mapping-1', status: 'published', contentHash: hash };
   await h.runtime.worldStore.saveImportedWorldPackage({
     world: { worldId: manifest.worldId, title: 'P8 存档', sourceSha256: manifest.sourceSha256, sourceBytes: 0,
@@ -33,7 +33,7 @@ async function fixture() {
     validationJson: '{}', createdAt: NOW });
   await h.adapter.execute(`INSERT INTO campaigns
     (campaign_id, world_id, title, ruleset_id, ruleset_version, world_mapping_version, opening_json, created_at, package_revision, anchor_json, status)
-    VALUES ('c', ?, 'P8 存档', 'shineword-core', '0.3.0', 'mapping-1', '{}', ?, 1, '{}', 'active')`, [manifest.worldId, NOW]);
+    VALUES ('c', ?, 'P8 存档', 'shineword-core', '0.4.0', 'mapping-1', '{}', ?, 1, '{}', 'active')`, [manifest.worldId, NOW]);
   await h.adapter.execute("INSERT INTO branches(branch_id,campaign_id,state_version,created_at) VALUES ('b','c',1,?)", [NOW]);
   const contentManifest = createBaseContentManifest({ worldId: manifest.worldId, branchId: 'b', stateVersion: 0,
     basePackage: { revision: 1, contentHash: hash } });
@@ -75,7 +75,7 @@ test('save-9 carries guidance and situation state through a full hop with reboun
   const target = await createMobileHarness();
   try {
     const exported = await exportSave({ db: source.adapter, sha256Hex: sha.sha256Hex, campaignId: 'c', branchId: 'b', createdAt: NOW });
-    assert.equal(exported.save.manifest.schemaVersion, 'shineword-save-9');
+    assert.equal(exported.save.manifest.schemaVersion, 'shineword-save-10');
     assert.ok(exported.save.guidance?.length === 1, 'guidance exported');
     assert.ok(exported.save.state.situations?.length === 1, 'situation state rides the head snapshot');
     assert.deepEqual(await validateSaveJson(exported.json, sha.sha256Hex), { ok: true, errors: [] });

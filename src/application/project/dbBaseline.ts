@@ -2,7 +2,9 @@ import { BUILTIN_MIGRATIONS } from '../../infra/sqlite/builtinMigrations';
 import { splitSqlStatements } from '../../infra/sqlite/migrations';
 import type { SqliteDatabase } from '../ports/sqlite';
 
-export const DB_BASELINE_VERSION = 'shineword-db-baseline-1';
+export const DB_BASELINE_VERSION = 'shineword-db-baseline-2';
+export const PHASE9_BASELINE_FIRST_VERSION = 101;
+/** Historical: phase-8 databases (version 100 / baseline-1) are legacy now. */
 export const PHASE8_BASELINE_FIRST_VERSION = 100;
 export interface LegacyDatabaseCheck { legacy: boolean; reason: string }
 export class LegacyDevelopmentDatabaseError extends Error {
@@ -16,7 +18,7 @@ export async function detectLegacyDevelopmentDatabase(db: SqliteDatabase): Promi
   if (tables.some(t => t.name === 'shineword_baseline')) {
     const marker = await db.queryOne<{ baseline_version: string }>('SELECT baseline_version FROM shineword_baseline');
     const history = await db.queryAll<{ version: number }>('SELECT version FROM schema_migrations').catch(() => []);
-    if (marker?.baseline_version === DB_BASELINE_VERSION && history.length === 1 && history[0]?.version === PHASE8_BASELINE_FIRST_VERSION) {
+    if (marker?.baseline_version === DB_BASELINE_VERSION && history.length === 1 && history[0]?.version === PHASE9_BASELINE_FIRST_VERSION) {
       // A marker alone does not prove that the fresh baseline finished installing.
       // Verify every declared table and column without modifying the database.
       const installed = new Set(tables.map(table => table.name));
@@ -34,7 +36,7 @@ export async function detectLegacyDevelopmentDatabase(db: SqliteDatabase): Promi
       if (complete) return { legacy: false, reason: 'current protocol' };
     }
   }
-  return { legacy: true, reason: '这是旧版或不完整的开发数据库。当前版本只接受新的第八阶段数据基线；请创建新的开发数据库。原数据库、API 配置和安全密钥保留。' };
+  return { legacy: true, reason: '这是旧版或不完整的开发数据库。当前版本只接受新的第九阶段数据基线；请创建新的开发数据库。原数据库、API 配置和安全密钥保留。' };
 }
 
 export interface BaselineInstallResult { appliedVersions: number[]; baselineVersion: string }
@@ -51,5 +53,5 @@ export async function installBaselineSchema(db: SqliteDatabase): Promise<Baselin
     await tx.execute('INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)', [baseline.version, baseline.name, now]);
     await tx.execute('INSERT INTO shineword_baseline(baseline_version,installed_at) VALUES (?,?)', [DB_BASELINE_VERSION, now]);
   });
-  return { appliedVersions: [PHASE8_BASELINE_FIRST_VERSION], baselineVersion: DB_BASELINE_VERSION };
+  return { appliedVersions: [PHASE9_BASELINE_FIRST_VERSION], baselineVersion: DB_BASELINE_VERSION };
 }

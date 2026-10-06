@@ -24,14 +24,15 @@ import { createBaseContentManifest, isBranchContentManifestStructure, isProgress
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 
 /**
- * P8-8 single-protocol save (plan §17.2/§18.2): `shineword-save-9` is the
- * ONLY registered schema. Historical save-2..8 are development-legacy
+ * P9 single-protocol save (plan §12.3): `shineword-save-10` is the
+ * ONLY registered schema. Historical save-2..9 are development-legacy
  * identifiers kept solely to RECOGNIZE and REFUSE with a per-version reason
  * — there is no reader, converter or default-field filler for them.
  */
-export const SAVE_SCHEMA_VERSION = 'shineword-save-9';
+export const SAVE_SCHEMA_VERSION = 'shineword-save-10';
 /** Development-legacy identifiers, refused with an explicit upgrade reason. */
 export const REFUSED_SAVE_SCHEMA_VERSIONS: Readonly<Record<string, string>> = {
+  'shineword-save-9': 'save-9 predates the phase-9 campaign protocol (intent/plan/runtime/content artifacts); start a new campaign on the current protocol.',
   'shineword-save-8': 'save-8 predates the phase-8 single protocol (story-memory-v3, handoff coverage, rule binding); start a new campaign on the current protocol.',
   'shineword-save-7': 'save-7 predates the phase-8 single protocol; start a new campaign.',
   'shineword-save-6': 'save-6 predates the phase-8 single protocol; start a new campaign.',
@@ -155,6 +156,16 @@ export interface SaveFile {
     committedStateVersion: number;
     status: string;
   }>;
+  /**
+   * P9 (save-10): campaign mainline identity — every plan revision referenced
+   * by snapshot history (runtime.planBinding) plus the adopted content
+   * artifacts. Imports restore these verbatim; no plan is regenerated.
+   */
+  campaign?: {
+    intents: Array<import('../../domain/campaignPlan/types').CampaignIntentV1>;
+    planRevisions: Array<import('../../domain/campaignPlan/types').CampaignPlanV1>;
+    artifacts: Array<import('../../domain/campaignPlan/types').CampaignContentArtifactV1>;
+  };
 }
 
 const FORBIDDEN_SAVE_KEYS = new Set(['apikey', 'api_key', 'key', 'secret', 'token', 'authorization']);
@@ -219,6 +230,8 @@ function payloadForHash(save: Omit<SaveFile, 'manifest'>): CanonicalJson {
   // digest just like tampering with state.
   if (save.storyMemory !== undefined) payload.storyMemory = save.storyMemory as unknown as CanonicalJson;
   if (save.postprocessCoverage !== undefined) payload.postprocessCoverage = save.postprocessCoverage as unknown as CanonicalJson;
+  // P9 (save-10): campaign plan identity rides the integrity payload.
+  if (save.campaign !== undefined) payload.campaign = save.campaign as unknown as CanonicalJson;
   return payload;
 }
 
@@ -474,9 +487,38 @@ async function exportSaveSnapshot(input: ExportSaveInput): Promise<{ save: SaveF
   }
   const projectStyle = await input.projectStyleArchive?.exportProjectStyle(campaign.world_id);
   if (projectStyle && !await validatePortableProjectStyle(projectStyle, campaign.world_id, input.sha256Hex)) throw new Error('Cannot export an invalid project style binding.');
+  // P9 (save-10): carry every plan revision + campaign artifact referenced by
+  // snapshot history so imports never regenerate plans (plan §12.3).
+  let campaignSection: SaveFile['campaign'];
+  if (snapshotHistory.some(s => s.snapshot.campaignRuntime)) {
+    const planKeys = new Set(snapshotHistory
+      .map(s => s.snapshot.campaignRuntime?.planBinding)
+      .filter((b): b is NonNullable<typeof b> => b !== undefined)
+      .map(b => `${b.planId}\u0000${b.revision}`));
+    const artifactIds9 = new Set(snapshotHistory.flatMap(s => [...(s.snapshot.campaignContentBinding?.artifactIds ?? [])]));
+    const planRevisions: NonNullable<SaveFile['campaign']>['planRevisions'] = [];
+    const intents: NonNullable<SaveFile['campaign']>['intents'] = [];
+    for (const key of planKeys) {
+      const [planId, revision] = key.split('\u0000');
+      const row = await db.queryOne<{ plan_json: string; intent_json: string }>(
+        'SELECT plan_json, intent_json FROM campaign_plan_revisions WHERE plan_id=? AND revision=?', [planId, Number(revision)]);
+      if (!row) throw new Error('Cannot export a campaign bound to a missing plan revision.');
+      planRevisions.push(JSON.parse(row.plan_json));
+      intents.push(JSON.parse(row.intent_json));
+    }
+    const artifacts: NonNullable<SaveFile['campaign']>['artifacts'] = [];
+    for (const artifactId of artifactIds9) {
+      const row = await db.queryOne<{ artifact_json: string }>(
+        'SELECT artifact_json FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
+      if (!row) throw new Error('Cannot export a campaign bound to a missing content artifact.');
+      artifacts.push(JSON.parse(row.artifact_json));
+    }
+    campaignSection = { intents, planRevisions, artifacts };
+  }
   const payload = {
     state, segmentArtifacts,
     ...(projectStyle ? { projectStyle } : {}),
+    ...(campaignSection ? { campaign: campaignSection } : {}),
     contentDeltas,
     snapshotHistory,
     turns,
@@ -753,6 +795,35 @@ export async function validateSaveJsonBytes(
     || parsed.postprocessCoverage.some(item => !item || typeof item !== 'object'
       || typeof item.handoffId !== 'string' || typeof item.turnId !== 'string'))) {
     errors.push('postprocessCoverage contains a malformed entry.');
+  }
+  // P9 (save-10): campaign section — every runtime planBinding must resolve to
+  // a carried revision; every content binding to a carried artifact.
+  if (parsed.campaign !== undefined) {
+    const campaign = parsed.campaign as { intents?: unknown; planRevisions?: unknown; artifacts?: unknown };
+    if (!Array.isArray(campaign.planRevisions) || !Array.isArray(campaign.intents)
+      || campaign.intents.length !== (campaign.planRevisions ?? []).length
+      || (campaign.planRevisions as unknown[]).some(plan => !plan || typeof plan !== 'object')) {
+      errors.push('campaign must pair planRevisions and intents 1:1.');
+    } else {
+      const carriedPlans = new Set((campaign.planRevisions as Array<{ planId?: unknown; revision?: unknown; contentHash?: unknown }>)
+        .filter(p => typeof p.planId === 'string' && Number.isInteger(p.revision))
+        .map(p => `${String(p.planId)}\u0000${Number(p.revision)}`));
+      const carriedArtifacts = new Set((Array.isArray(campaign.artifacts) ? campaign.artifacts as Array<{ artifactId?: unknown }> : [])
+        .filter(a => a && typeof a.artifactId === 'string').map(a => String(a.artifactId)));
+      const snapshotsToCheck = [parsed.state, ...(Array.isArray(parsed.snapshotHistory)
+        ? (parsed.snapshotHistory as Array<{ snapshot?: { campaignRuntime?: { planBinding?: { planId: string; revision: number } }; campaignContentBinding?: { artifactIds?: string[] } } }>).map(item => item.snapshot) : [])];
+      for (const [index, snapshot] of snapshotsToCheck.entries()) {
+        const binding = snapshot?.campaignRuntime?.planBinding;
+        if (binding && !carriedPlans.has(`${binding.planId}\u0000${binding.revision}`)) {
+          errors.push(`Snapshot ${index} binds a plan revision the save does not carry.`);
+        }
+        for (const artifactId of snapshot?.campaignContentBinding?.artifactIds ?? []) {
+          if (!carriedArtifacts.has(artifactId)) {
+            errors.push(`Snapshot ${index} binds a content artifact the save does not carry: ${artifactId}.`);
+          }
+        }
+      }
+    }
   }
   if (errors.length > 0) {
     try {
@@ -1306,6 +1377,35 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
             input.createdAt,
             input.createdAt,
           ],
+        );
+      }
+    }
+    // P9 (save-10): plan revisions, intents and content artifacts restore
+    // verbatim under the NEW campaign id — history snapshots bind them by
+    // planId+revision, and imports never regenerate plans (plan §12.3).
+    if (save.campaign) {
+      if (save.campaign.intents.length !== save.campaign.planRevisions.length) {
+        throw new Error('Save campaign section pairs each plan revision with exactly one intent.');
+      }
+      for (const [index, plan] of save.campaign.planRevisions.entries()) {
+        const intent = save.campaign.intents[index]!;
+        await tx.execute(
+          `INSERT OR REPLACE INTO campaign_plan_revisions
+            (plan_id, revision, parent_revision, setup_id, campaign_id, source_trigger, intent_json, plan_json, intent_hash, content_hash, adopted_at, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [plan.planId, plan.revision, plan.parentRevision, intent.setupId, input.newCampaignId,
+            'save_import', JSON.stringify(intent), JSON.stringify(plan), plan.intentHash,
+            plan.contentHash, input.createdAt, input.createdAt],
+        );
+      }
+      for (const artifact of save.campaign.artifacts) {
+        const rebound = { ...artifact, campaignId: input.newCampaignId };
+        await tx.execute(
+          `INSERT OR REPLACE INTO campaign_content_artifacts
+            (artifact_id, campaign_id, plan_id, plan_revision, scope, artifact_json, content_hash, created_at)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [rebound.artifactId, input.newCampaignId, rebound.planId, rebound.planRevision,
+            rebound.scope, JSON.stringify(rebound), rebound.contentHash, input.createdAt],
         );
       }
     }

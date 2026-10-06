@@ -383,7 +383,7 @@ test('ledger: requests without ledger metadata pass through unlogged', async () 
 test('ledger: migration 19 creates llm_request_attempts table', async () => {
   const adapter = new NodeSqliteAdapter(new DatabaseSync(':memory:'));
   const applied = await applySqliteMigrations(adapter, BUILTIN_MIGRATIONS);
-  assert.ok(applied.includes(100));
+  assert.ok(applied.includes(101));
   const row = await adapter.queryAll(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_request_attempts'",
   );

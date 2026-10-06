@@ -20,7 +20,15 @@ export type SituationCondition =
   | { kind: 'quest_status'; questId: string; status: string }
   | { kind: 'situation_status'; situationId: string; status: SituationStatus }
   | { kind: 'reference_event_resolved'; eventKey: string }
-  | { kind: 'world_time_at_least'; order: number };
+  | { kind: 'world_time_at_least'; order: number }
+  /** P9 (plan §5.2): campaign node runtime status, evaluated against CampaignRuntimeV1. */
+  | { kind: 'campaign_node_status'; nodeId: string; status: string }
+  /** P9: a committed branch event of this type (optionally payload-matched) occurred. */
+  | { kind: 'committed_event'; eventType: string; payloadMatch?: Readonly<Record<string, string>> }
+  /** P9: promise state inside a situation snapshot. */
+  | { kind: 'promise_status'; situationId: string; promiseId: string; status: 'open' | 'fulfilled' | 'broken' }
+  /** P9: situation counter reached a minimum. */
+  | { kind: 'situation_counter_at_least'; situationId: string; counterId: string; minimum: number };
 
 export type SituationStatus = 'dormant' | 'eligible' | 'active' | 'resolved' | 'suppressed';
 
@@ -72,6 +80,23 @@ export interface MethodTemplateV1 {
   /** Situation transitions applied by the local reducer on success/failure. */
   onSuccess?: readonly SituationTransitionOp[];
   onFailure?: readonly SituationTransitionOp[];
+  /**
+   * P9 (plan §8.2): full four-grade outcome templates for important campaign
+   * methods. Authored ONLY by the campaign content compiler (never by the
+   * Planner channel, never inside world-package situations). Each grade
+   * freezes achieved/result facts/effects/transitions/consequences before the
+   * roll; the local settlement executes the template for the rolled grade.
+   */
+  outcomeTemplates?: Readonly<Record<import('../rules/types').RollGrade, MethodOutcomeTemplateV1>>;
+}
+
+/** P9: per-grade outcome template for campaign methods (plan §8.2). */
+export interface MethodOutcomeTemplateV1 {
+  achieved: boolean;
+  /** Player-safe result fact, shown in the result card verbatim. */
+  resultFact: string;
+  /** Engine effect specs, validated against the campaign template whitelist. */
+  effects: readonly import('../campaignPlan/types').CampaignEffectSpec[];
 }
 
 export type SituationTransitionOp =

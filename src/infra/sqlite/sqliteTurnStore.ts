@@ -856,6 +856,8 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
     if (snapshotPayload?.segmentContentBinding) state.segmentContentBinding = snapshotPayload.segmentContentBinding;
     if (snapshotPayload?.styleSnapshot) state.styleSnapshot = snapshotPayload.styleSnapshot;
     if (snapshotPayload?.situations) state.situations = snapshotPayload.situations;
+    if (snapshotPayload?.campaignRuntime) state.campaignRuntime = snapshotPayload.campaignRuntime;
+    if (snapshotPayload?.campaignContentBinding) state.campaignContentBinding = snapshotPayload.campaignContentBinding;
     if (typeof snapshotPayload?.causalWorldTimeOrder === 'number') {
       state.causalWorldTimeOrder = snapshotPayload.causalWorldTimeOrder;
     }

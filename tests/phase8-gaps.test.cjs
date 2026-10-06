@@ -219,7 +219,7 @@ test('G4: committing a turn writes a handoff outbox row in the same transaction,
   );
   const store = new SqliteTurnStore(new NodeSqliteAdapter(db));
   const contract = {
-    protocolVersion: '2.0',
+    protocolVersion: '3.0',
     turnId: 'turn-1',
     expectedStateVersion: 0,
     actorId: 'actor-player',

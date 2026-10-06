@@ -30,7 +30,9 @@ export type LlmRequestKind =
   | 'summarizer'
   | 'style_analyzer'
   | 'opening_goal'
-  | 'narrator_guidance';
+  | 'narrator_guidance'
+  /** P9: campaign mainline planning (proposal + stage draft + first situation). */
+  | 'campaign_plan';
 
 export function normalizeReasoningTier(value: unknown): ReasoningTier {
   if (value === 'high' || value === 'max') return value;

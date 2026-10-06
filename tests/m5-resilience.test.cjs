@@ -315,7 +315,7 @@ test('profile-level thinkingDisabled is IGNORED: thinking is never disabled (pol
 test('malformed planner contracts are rejected cleanly, not with TypeErrors', async () => {
   const { assertValidActionContract, validateActionContract } = require('../dist/domain/turns/contracts');
   const base = {
-    protocolVersion: '2.0', turnId: 'turn-001', expectedStateVersion: 0,
+    protocolVersion: '3.0', turnId: 'turn-001', expectedStateVersion: 0,
     actorId: 'actor-player', actionType: 'observe', intent: '观察',
     evidenceIds: [], requiresRoll: false, timeCostMinutes: 5,
     resourcePreconditions: [],

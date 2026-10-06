@@ -16,4 +16,6 @@ export const DEFAULT_OUTPUT_DEMANDS: Record<LlmRequestKind, OutputDemand> = {
   opening_goal: { minimum: 200, target: 500, maximum: 1_200 },
   // Ancillary decision-point guidance: summary + <=6 short steps only.
   narrator_guidance: { minimum: 300, target: 900, maximum: 2_500 },
+  // P9: campaign plan = proposal + stage graph + first-stage situation in one shot.
+  campaign_plan: { minimum: 2_048, target: 6_144, maximum: 12_288 },
 };

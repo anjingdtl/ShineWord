@@ -95,7 +95,7 @@ function makeCard() {
     defense: 10,
     powerTier: 'ordinary',
     rulesetId: 'shineword-core',
-    rulesetVersion: '0.3.0',
+    rulesetVersion: '0.4.0',
     worldId: 'w-fixture',
     worldPackageRevision: 1,
     cardRevision: 1,

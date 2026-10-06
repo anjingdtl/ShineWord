@@ -96,6 +96,11 @@ import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { applySituationRuntime } from '../situations/causalProjection';
+import { resolveCampaignContent } from '../campaignPlan/contentResolver';
+import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
+import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
+import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
+import { compileCampaignEffects } from '../../domain/campaignPlan/campaignEffects';
 import type {
   MethodTemplateV1,
   SituationDefinitionV1,
@@ -312,6 +317,101 @@ export class CampaignSession {
     }));
   }
 
+/**
+   * P9 public campaign projection (plan §13): player-safe progress card
+   * data from the RUNTIME only — completed stages, current objective,
+   * recent progress lines and pending visible consequences. GM premises,
+   * hidden stages and future plans never surface here (A33).
+   */
+  async getCampaignProgress(campaignId: string, branchId: string): Promise<{
+    status: string;
+    longTermGoal: string;
+    currentObjective: string;
+    completedStages: Array<{ nodeId: string; title: string; resolution?: string }>;
+    recentProgress: Array<{ text: string; atStateVersion: number }>;
+    pendingConsequences: string[];
+    ending: { title: string; outcomeKind: string } | null;
+  } | null> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const state = await this.deps.turns.getState(branchId);
+    const runtime = state?.campaignRuntime;
+    if (!runtime) return null;
+    const context = await this.loadCampaignPlanForState(campaignId, state!);
+    const plan = context?.plan;
+    const completedStages: Array<{ nodeId: string; title: string; resolution?: string }> = runtime.nodeStates
+      .filter(node => node.status === 'succeeded')
+      .map(node => ({
+        nodeId: node.nodeId,
+        title: plan?.nodes.find(item => item.nodeId === node.nodeId)?.title ?? node.nodeId,
+      }));
+    const situationResolution = (state?.situations ?? []).find(item => item.resolution !== undefined)?.resolution;
+    if (situationResolution && completedStages.length > 0 && completedStages[completedStages.length - 1]!.resolution === undefined) {
+      completedStages[completedStages.length - 1]!.resolution = situationResolution;
+    }
+    return {
+      status: runtime.campaignStatus,
+      longTermGoal: plan?.longTermGoal ?? runtime.publicObjectiveProjection,
+      currentObjective: runtime.campaignStatus === 'active' ? runtime.publicObjectiveProjection : '战役已结束',
+      completedStages,
+      recentProgress: runtime.recentProgressLines.map(line => ({ text: line.text, atStateVersion: line.atStateVersion })),
+      pendingConsequences: runtime.deferredConsequences.filter(item => item.status === 'pending' && item.visibility === 'public').map(item => item.description),
+      ending: runtime.ending ? { title: runtime.ending.title, outcomeKind: runtime.ending.outcomeKind } : null,
+    };
+  }
+
+  /**
+   * P9 (A18): user-initiated goal change. Requires a stable boundary, bumps
+   * the intent revision, records the change as a branch event and enqueues
+   * the single-flight replan. Legal play stays available meanwhile.
+   */
+  async changeCampaignGoal(options: {
+    campaignId: string;
+    branchId: string;
+    newGoal: string;
+    newRawIntent?: string;
+  }): Promise<{ intentRevision: number; replanEnqueued: boolean }> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    const pending = await this.deps.db.queryOne<{ n: number }>(
+      `SELECT COUNT(*) n FROM turns WHERE branch_id=? AND status<>'Committed'`, [options.branchId]);
+    if ((pending?.n ?? 0) > 0) throw new Error('请先完成或取消进行中的回合，再调整战役目标。');
+    const state = await this.deps.turns.getState(options.branchId);
+    const runtime = state?.campaignRuntime;
+    if (!runtime) throw new Error('该战役没有主线运行时。');
+    if (runtime.campaignStatus !== 'active') throw new Error('战役已结束，不能再调整目标；请开始新的战役。');
+    const context = await this.loadCampaignPlanForState(options.campaignId, state!);
+    if (!context) throw new Error('主线计划缺失。');
+    const nextRuntime = {
+      ...runtime,
+      intentRevision: runtime.intentRevision + 1,
+      publicObjectiveProjection: options.newGoal,
+      replanReasonCodes: [...new Set([...runtime.replanReasonCodes, 'goal_changed'])],
+    };
+    const now = new Date().toISOString();
+    const nextState = { ...state!, campaignRuntime: nextRuntime };
+    await this.deps.turns.commitAtomic({
+      branchId: options.branchId,
+      turnId: `${options.branchId}:manage-goal:${nextRuntime.intentRevision}`,
+      expectedStateVersion: state!.stateVersion,
+      nextState: { ...nextState, stateVersion: state!.stateVersion + 1 },
+      actionContractJson: '{}', actionContractHash: 'manage-goal',
+      committedTurn: {
+        branchId: options.branchId,
+        turnId: `${options.branchId}:manage-goal:${nextRuntime.intentRevision}`,
+        previousStateVersion: state!.stateVersion, stateVersion: state!.stateVersion + 1,
+        outcomeGrade: 'success', publicSummary: '调整了战役目标。', effects: [], committedAt: now,
+      },
+      events: [{ eventType: 'campaign_goal_changed', payload: { fromRevision: runtime.intentRevision, toRevision: nextRuntime.intentRevision, newGoal: options.newGoal } }],
+    });
+    const { enqueueReplan } = await import('../campaignPlan/replanService');
+    const job = await enqueueReplan({
+      deps: { db: this.deps.db, planStore: new SqliteCampaignPlanStore(this.deps.db), worldStore: this.deps.worldStore,
+        provider: this.provider, profile: this.profile },
+      campaignId: options.campaignId, branchId: options.branchId,
+      plan: context.plan, runtime: nextRuntime, state: { ...nextState, stateVersion: state!.stateVersion + 1 },
+      reasons: ['goal_changed'],
+    });
+    return { intentRevision: nextRuntime.intentRevision, replanEnqueued: !job.merged };
+  }
   async getSummary(campaignId: string, branchId: string): Promise<CampaignSummary> {
     const row = await this.deps.db.queryOne<SqliteRow>(
       'SELECT campaign_id, title, world_id, package_revision, ruleset_version, opening_json, anchor_json FROM campaigns WHERE campaign_id = ?',
@@ -427,7 +527,7 @@ export class CampaignSession {
     const turnId = `system-${input.actionType}-${String(state.stateVersion + 1).padStart(6, '0')}`;
     const emptyOutcome = { achieved: true, publicSummary: input.intent, effects: [] };
     const contract: ActionContract = {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       ruleBinding: requireCompiledRules(state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,
@@ -1076,9 +1176,10 @@ export class CampaignSession {
     if (!branch) return pkg.entries;
     if (branch.state.segmentContentBinding) {
       if (!this.deps.segmentContent) throw new Error('Segment content owner is unavailable for the adopted branch.');
-      return (await this.deps.segmentContent.loadEffectiveCatalog({
+      const catalog = await this.deps.segmentContent.loadEffectiveCatalog({
         campaignId: branch.campaignId, branchId: branch.state.branchId, binding: branch.state.segmentContentBinding,
-      })).entries;
+      });
+      return this.withCampaignEntries(catalog.entries, branch.campaignId, branch.state);
     }
     if (!branch.state.contentManifest) return pkg.entries;
     const deltas = await loadBranchDeltaEntries({
@@ -1088,7 +1189,8 @@ export class CampaignSession {
       getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
       sha256Hex: this.deps.hashProvider.sha256Hex,
     });
-    return [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
+    return this.withCampaignEntries(
+      [...pkg.entries, ...deltas.flatMap(delta => delta.entries)], branch.campaignId, branch.state);
   }
 
   private async localSituationReducer(campaignId: string, branchId: string, state: GameStateSnapshot, turnId: string, actingActorId: string): Promise<(next: GameStateSnapshot) => Array<{ eventType: string; payload: unknown }>> {
@@ -1108,6 +1210,184 @@ export class CampaignSession {
       for (const fate of runtime.actorFates) { if (next.actors[fate.actorId]) next.actors[fate.actorId]!.lifeStatus = fate.lifeStatus; }
       return runtime.events;
     };
+  }
+
+  /** P9: campaign artifacts compose into every entry read (unified resolver). */
+  private async withCampaignEntries(
+    entries: readonly ContentEntry[], campaignId: string, state: GameStateSnapshot,
+  ): Promise<ContentEntry[]> {
+    const binding = state.campaignContentBinding;
+    if (!binding || binding.artifactIds.length === 0) return [...entries];
+    const artifacts: CampaignContentArtifactV1[] = [];
+    for (const artifactId of binding.artifactIds) {
+      const row = await this.deps.db.queryOne<{ artifact_json: string; content_hash: string }>(
+        'SELECT artifact_json, content_hash FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
+      if (!row || row.content_hash !== binding.contentHash) {
+        throw new Error(`战役内容 ${artifactId} 缺失或哈希不符，拒绝以不完整内容继续回合。`);
+      }
+      artifacts.push(JSON.parse(row.artifact_json) as CampaignContentArtifactV1);
+    }
+    return resolveCampaignContent(entries, artifacts);
+  }
+
+  /** Loads the plan + artifacts the branch runtime is bound to (or null). */
+  private async loadCampaignPlanForState(
+    campaignId: string, state: GameStateSnapshot,
+  ): Promise<{ plan: CampaignPlanV1; artifacts: CampaignContentArtifactV1[]; runtime: CampaignRuntimeV1 } | null> {
+    const runtime = state.campaignRuntime;
+    if (!runtime) return null;
+    const planRow = await this.deps.db.queryOne<{ plan_json: string }>(
+      'SELECT plan_json FROM campaign_plan_revisions WHERE plan_id=? AND revision=?',
+      [runtime.planBinding.planId, runtime.planBinding.revision]);
+    if (!planRow) {
+      throw new Error(`主线计划 ${runtime.planBinding.planId} r${runtime.planBinding.revision} 缺失，拒绝继续。`);
+    }
+    const plan = JSON.parse(planRow.plan_json) as CampaignPlanV1;
+    const artifacts: CampaignContentArtifactV1[] = [];
+    for (const artifactId of state.campaignContentBinding?.artifactIds ?? plan.contentArtifactRefs) {
+      const row = await this.deps.db.queryOne<{ artifact_json: string }>(
+        'SELECT artifact_json FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
+      if (row) artifacts.push(JSON.parse(row.artifact_json) as CampaignContentArtifactV1);
+    }
+    return { plan, artifacts, runtime };
+  }
+
+  /**
+   * P9 settlement (plan §8.2/§9): applies the rolled grade's campaign
+   * outcome extensions, then runs the CampaignProgressReducer against the
+   * post-settlement state + this transaction's events. Mutates nextState
+   * (runtime, knowledge, relationships) and returns the campaign events.
+   */
+  /** P9: preloads plan/artifacts/history for the synchronous settlement. */
+  private async prepareCampaignSettlement(
+    campaignId: string, state: GameStateSnapshot,
+  ): Promise<null | {
+    plan: CampaignPlanV1;
+    artifacts: readonly CampaignContentArtifactV1[];
+    historyEvents: Array<{ eventType: string; payload: unknown; eventKey: string; stateVersion: number }>;
+  }> {
+    const context = await this.loadCampaignPlanForState(campaignId, state);
+    if (!context) return null;
+    const historyRows = await this.deps.db.queryAll<{ event_seq: number; event_type: string; payload_json: string; state_version: number }>(
+      'SELECT event_seq, event_type, payload_json, state_version FROM branch_events WHERE branch_id=? ORDER BY event_seq DESC LIMIT ?',
+      [state.branchId, EVENT_HISTORY_WINDOW]);
+    const historyEvents = historyRows.reverse().map(row => ({
+      eventType: row.event_type, payload: JSON.parse(row.payload_json),
+      eventKey: String(row.event_seq), stateVersion: row.state_version,
+    }));
+    return { plan: context.plan, artifacts: context.artifacts, historyEvents };
+  }
+
+  private applyCampaignSettlement(input: {
+    nextState: GameStateSnapshot;
+    contract: ActionContract;
+    grade: RollGrade;
+    transactionEvents: Array<{ eventType: string; payload: unknown }>;
+    plan: CampaignPlanV1;
+    artifacts: readonly CampaignContentArtifactV1[];
+    historyEvents: Array<{ eventType: string; payload: unknown; eventKey: string; stateVersion: number }>;
+  }): Array<{ eventType: string; payload: unknown }> {
+    const { nextState } = input;
+    const runtime = nextState.campaignRuntime;
+    if (!runtime) return [];
+    const events: Array<{ eventType: string; payload: unknown }> = [];
+    const playerActorId = nextState.party?.find(member => member.controller === 'player')?.actorId ?? '';
+    // 1. Per-grade campaign outcome extensions frozen in the contract.
+    const extension = input.contract.campaignEffects?.[input.grade];
+    if (extension) {
+      for (const grant of extension.knowledgeGrants) {
+        const actorId = ['__player__', 'player', '玩家', 'pc', 'self'].includes(grant.actorId) ? playerActorId || grant.actorId : grant.actorId;
+        nextState.discoveries = [...(nextState.discoveries ?? [])];
+        if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === actorId)) {
+          nextState.discoveries.push({
+            entryId: grant.entryId, actorId,
+            knownAtStateVersion: nextState.stateVersion,
+            sourceTurnId: input.contract.turnId, knownVia: 'told',
+          });
+          events.push({ eventType: 'knowledge_discovered', payload: { entryId: grant.entryId, actorId } });
+        }
+      }
+      for (const shift of extension.relationshipShifts) {
+        nextState.relationships = [...(nextState.relationships ?? [])];
+        const existing = nextState.relationships.find(rel =>
+          rel.fromActorId === shift.fromActorId && rel.toActorId === shift.toActorId);
+        if (existing) {
+          existing.closeness = Math.max(-5, Math.min(5, existing.closeness + shift.delta));
+          existing.updatedTurnId = input.contract.turnId;
+          events.push({ eventType: 'relationship_changed', payload: { fromActorId: shift.fromActorId, toActorId: shift.toActorId, delta: shift.delta } });
+        }
+      }
+      const ownerArtifact = input.artifacts.find(item => item.situations.some(s => s.entryId === input.contract.methodRef?.situationId));
+      for (const consequenceId of extension.scheduledConsequences) {
+        const template = ownerArtifact?.consequenceTemplates.find(item => item.consequenceId === consequenceId);
+        if (!template) continue;
+        const scheduled = registerDeferredConsequence(runtime, {
+          consequenceId: template.consequenceId,
+          description: template.description,
+          triggerCondition: template.triggerCondition,
+          sourceEventRefs: [input.contract.turnId],
+          affectedActors: [],
+          effectSpecs: template.effectSpecs,
+          visibility: template.visibility,
+        }, input.contract.turnId, nextState.stateVersion);
+        if (scheduled) events.push(scheduled);
+      }
+    }
+    // 2. Progress reducer over the post-settlement state (history preloaded).
+    const transactionEvents = input.transactionEvents.map((event, index) => ({
+      eventType: event.eventType, payload: event.payload,
+      eventKey: `tx:${index}:${event.eventType}`, stateVersion: nextState.stateVersion,
+    }));
+    const artifact = input.artifacts.find(item => item.planId === runtime.planBinding.planId) ?? input.artifacts[0];
+    const outcome = evaluateCampaignProgress({
+      plan: input.plan, runtime, state: nextState,
+      transactionEvents, historyEvents: input.historyEvents, artifact,
+      turnId: input.contract.turnId, nextStateVersion: nextState.stateVersion,
+    });
+    nextState.campaignRuntime = outcome.runtime;
+    events.push(...outcome.events);
+    // 3. Stage rewards: applied locally, deduped by runtime.grantedRewardKeys.
+    if (artifact) {
+      for (const reward of outcome.rewards) {
+        for (const spec of reward.policy.rewards) {
+          if (spec.kind === 'knowledge') {
+            const actorId = spec.toActorId ?? playerActorId;
+            nextState.discoveries = [...(nextState.discoveries ?? [])];
+            if (!nextState.discoveries.some(d => d.entryId === spec.targetId && d.actorId === actorId)) {
+              nextState.discoveries.push({ entryId: spec.targetId, actorId,
+                knownAtStateVersion: nextState.stateVersion, sourceTurnId: input.contract.turnId, knownVia: 'told' });
+              events.push({ eventType: 'knowledge_discovered', payload: { entryId: spec.targetId, actorId } });
+            }
+          } else if (spec.kind === 'relationship' && spec.toActorId) {
+            nextState.relationships = [...(nextState.relationships ?? [])];
+            const rel = nextState.relationships.find(item => item.fromActorId === spec.targetId && item.toActorId === spec.toActorId);
+            if (rel) {
+              rel.closeness = Math.max(-5, Math.min(5, rel.closeness + (spec.delta ?? 1)));
+              rel.updatedTurnId = input.contract.turnId;
+              events.push({ eventType: 'relationship_changed', payload: { fromActorId: spec.targetId, toActorId: spec.toActorId, delta: spec.delta ?? 1 } });
+            }
+          } else if (spec.kind === 'item') {
+            nextState.itemOwners = { ...nextState.itemOwners };
+            if (nextState.itemOwners[spec.targetId] === undefined) {
+              nextState.itemOwners[spec.targetId] = spec.toActorId ?? playerActorId;
+              nextState.itemSources = { ...(nextState.itemSources ?? {}) };
+              nextState.itemSources[spec.targetId] = { kind: 'quest_reward', sourceId: reward.policyId, obtainedAtStateVersion: nextState.stateVersion };
+              events.push({ eventType: 'item_transferred', payload: { itemId: spec.targetId, toActorId: nextState.itemOwners[spec.targetId] } });
+            }
+          } else if (spec.kind === 'skill_rank' && spec.toActorId) {
+            nextState.skills = [...(nextState.skills ?? [])];
+            const entry = nextState.skills.find(skill => skill.actorId === spec.toActorId && skill.skillId === spec.targetId);
+            if (entry) {
+              const ranks = ['untrained', 'novice', 'trained', 'expert', 'master'] as const;
+              const nextIndex = Math.min(ranks.length - 1, Math.max(0, ranks.indexOf(entry.rank) + 1));
+              entry.rank = ranks[nextIndex]!;
+              events.push({ eventType: 'training_completed', payload: { actorId: spec.toActorId, skillId: spec.targetId, rank: entry.rank } });
+            }
+          }
+        }
+      }
+    }
+    return events;
   }
 
   private async assertNoActiveEncounter(branchId: string): Promise<void> {
@@ -1699,11 +1979,13 @@ export class CampaignSession {
           sha256Hex: this.deps.hashProvider.sha256Hex,
         })
         : [];
-      const allEntries = this.deps.segmentContent && summary.state.segmentContentBinding
-        ? (await this.deps.segmentContent.loadEffectiveCatalog({
-          campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding,
-        })).entries
-        : [...basePackage.entries, ...deltas.flatMap(delta => delta.entries)];
+      const allEntries = await this.withCampaignEntries(
+        this.deps.segmentContent && summary.state.segmentContentBinding
+          ? (await this.deps.segmentContent.loadEffectiveCatalog({
+            campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding,
+          })).entries
+          : [...basePackage.entries, ...deltas.flatMap(delta => delta.entries)],
+        options.campaignId, summary.state);
       const situationDefinitions = allEntries
         .filter(entry => entry.kind === 'situation')
         .map(entry => ({ situationId: entry.entryId, definition: entry.definition as SituationDefinitionV1 }));
@@ -2149,9 +2431,11 @@ export class CampaignSession {
           sha256Hex: this.deps.hashProvider.sha256Hex,
         })
       : [];
-    const allEntries = this.deps.segmentContent && summary.state.segmentContentBinding
-      ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding })).entries
-      : [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)];
+    const allEntries = await this.withCampaignEntries(
+      this.deps.segmentContent && summary.state.segmentContentBinding
+        ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding })).entries
+        : [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)],
+      options.campaignId, summary.state);
     if (new Set(allEntries.map(entry => entry.entryId)).size !== allEntries.length) {
       throw new Error('The active branch content manifest contains conflicting immutable entry ids.');
     }
@@ -2239,6 +2523,15 @@ export class CampaignSession {
       const definition = situationDefinitions.find(situation => situation.situationId === ref.situationId);
       const method = definition?.definition.methods.find(item => item.methodId === ref.methodId);
       if (!method) return [];
+      // P9 §8.2: campaign methods carry per-grade outcome templates; the
+      // frozen outcomeSetHash pins the exact set the contract was compiled
+      // against (A14) — mismatch means the published content drifted.
+      if (method.outcomeTemplates) {
+        const specs = method.outcomeTemplates[grade]?.effects ?? [];
+        return compileCampaignEffects(specs, {
+          actorResolver: actorId => plannerCards.find(card => card.templateId === actorId)?.actorId ?? actorId,
+        }).transitions;
+      }
       return grade === 'success' || grade === 'full_success'
         ? [...(method.onSuccess ?? [])]
         : [...(method.onFailure ?? [])];
@@ -2281,7 +2574,7 @@ export class CampaignSession {
       if (situationStatusById.get(situation.situationId)?.status !== 'active'
         || (situation.definition.locationId && situation.definition.locationId !== playerState.locationId)) continue;
       const methodLines = activeMethods.filter((_, index) => activeMethodSituations[index] === situation.situationId)
-        .map(method => `- ${method.title}：${method.firstStep.intent}`)
+        .map(method => `- ${method.title}（candidateRef: method:${situation.situationId}:${method.methodId}）：${method.firstStep.intent}`)
         .slice(0, 4)
         .join('\n');
       contextParts.push(`【当前局面】${situation.definition.summary}（压力：${situation.definition.pressure.description}）\n可选介入办法（均为首步尝试，玩家也可能自行描述其他做法）：\n${methodLines}`);
@@ -2455,6 +2748,20 @@ export class CampaignSession {
     };
     let result;
     try {
+      // P9 (A11/A13): resolve the selected guidance candidate to a stable
+      // method reference, verified against the methods offered this turn.
+      const selectedCandidateRef = options.guidanceChoice?.candidateRef;
+      let selectedCandidate: { selectedMethodRef: { situationId: string; methodId: string }; candidateRef: string } | undefined;
+      if (selectedCandidateRef?.startsWith('method:')) {
+        const rest = selectedCandidateRef.slice('method:'.length);
+        const separator = rest.lastIndexOf(':');
+        const situationId = rest.slice(0, separator);
+        const methodId = rest.slice(separator + 1);
+        const offered = activeMethodSituations.some((owner, index) =>
+          owner === situationId && activeMethods[index]?.methodId === methodId);
+        if (!offered) throw new Error('所选路径已不在当前可用办法中，请刷新后重新选择。');
+        selectedCandidate = { selectedMethodRef: { situationId, methodId }, candidateRef: selectedCandidateRef };
+      }
       result = await runV2Turn({
         provider: this.provider,
         store: this.deps.turns,
@@ -2463,6 +2770,9 @@ export class CampaignSession {
         branchId: options.branchId,
         turnId,
         playerIntent: options.intent,
+        // P9 (A11/A13): the player's tap carries a stable candidate reference;
+        // compile binds THAT method id, refusing stale choices.
+        ...(selectedCandidate ? selectedCandidate : {}),
         worldContext: plannerWorldContext,
         plannerWireOutputTokens: turnBundle.plannerWireOutputTokens,
         plannerFinalWire: turnBundle.plannerFinalWire,
@@ -2505,6 +2815,9 @@ export class CampaignSession {
         ...(situationDefinitions.length > 0 ? {
           prepareResolution: async ({ contract, contractHash, grade, rollRecord }) => {
             const settlement = await settlementPlanFor(grade, contract);
+            // P9: campaign settlement inputs are preloaded here (async scope);
+            // the deterministic reduction itself stays synchronous.
+            const campaignSettlement = await this.prepareCampaignSettlement(options.campaignId, summary.state);
             return prepareTurnResolution(this.deps.turns, {
               branchId: options.branchId,
               contract,
@@ -2534,7 +2847,17 @@ export class CampaignSession {
                   if (actorState) actorState.lifeStatus = fate.lifeStatus;
                 }
                 this.advanceCausalOrder(nextState, contract, authoritativeEntries, factsById, situationDefinitions, runtime.events, allEntries, catalogCausalFloor);
-                return [...discoveryEvents, ...runtime.events];
+                // P9: campaign outcome extensions + progress reducer run in the
+                // SAME prepared reduction — runtime, events and rewards land in
+                // one commit (invariant 4). Inputs were preloaded above.
+                if (!campaignSettlement) return [...discoveryEvents, ...runtime.events];
+                const campaignEvents = this.applyCampaignSettlement({
+                  nextState, contract, grade,
+                  transactionEvents: [...discoveryEvents, ...runtime.events],
+                  plan: campaignSettlement.plan, artifacts: campaignSettlement.artifacts,
+                  historyEvents: campaignSettlement.historyEvents,
+                });
+                return [...discoveryEvents, ...runtime.events, ...campaignEvents];
               },
             });
           },
@@ -2666,6 +2989,31 @@ export class CampaignSession {
       // picks them up.
     });
 
+    // P9 (plan §10.1): local replan trigger evaluation after the commit —
+    // enqueues at most one merged background job; never blocks the turn and
+    // never issues an LLM call itself.
+    const postCommitState = await this.deps.turns.getState(options.branchId);
+    if (postCommitState?.campaignRuntime) {
+      try {
+        const context = await this.loadCampaignPlanForState(options.campaignId, postCommitState);
+        if (context && postCommitState) {
+          const { evaluateReplanTriggers, enqueueReplan } = await import('../campaignPlan/replanService');
+          const reasons = evaluateReplanTriggers({ plan: context.plan, runtime: postCommitState.campaignRuntime!, state: postCommitState });
+          if (reasons.length > 0) {
+            await enqueueReplan({
+              deps: { db: this.deps.db, planStore: new SqliteCampaignPlanStore(this.deps.db), worldStore: this.deps.worldStore,
+                provider: this.provider, profile: this.profile },
+              campaignId: options.campaignId, branchId: options.branchId,
+              plan: context.plan, runtime: postCommitState.campaignRuntime!, state: postCommitState,
+              reasons,
+            });
+          }
+        }
+      } catch {
+        // Trigger evaluation is advisory; the play turn is already committed.
+      }
+    }
+
     return {
       turnId,
       text: result.narrative.text,
@@ -2708,7 +3056,7 @@ export class CampaignSession {
 
     const turnId = `rest-${options.kind}-${summary.state.stateVersion + 1}`;
     const contract: ActionContract = {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       ruleBinding: requireCompiledRules(summary.state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: summary.state.stateVersion,
@@ -2824,7 +3172,7 @@ export class CampaignSession {
 
     const turnId = `train-${storedSkillKey}-v${state.stateVersion + 1}`;
     const contract: ActionContract = {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       ruleBinding: requireCompiledRules(summary.state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,
@@ -2922,7 +3270,7 @@ export class CampaignSession {
     const turnId = `milestone-${options.encounterId}-${options.actorId}-${storedSkillKey}`;
     const awarded = awardPractice(progress, options.encounterId, 'milestone');
     const contract: ActionContract = {
-      protocolVersion: '2.0',
+      protocolVersion: '3.0',
       ruleBinding: requireCompiledRules(state.ruleConfiguration).binding,
       turnId,
       expectedStateVersion: state.stateVersion,

@@ -336,6 +336,8 @@ function makeEntry(params: {
 interface CleanContext {
   knownFactIds: Set<string>;
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
+  /** Non-blocking mapper adjustments surfaced to the review queue. */
+  diagnostics: string[];
 }
 
 interface CleanedProposals {
@@ -507,10 +509,20 @@ function cleanConstraint(raw: unknown, ctx: CleanContext): ContentEntry | null {
     rejectEntry(ctx, 'constraint', id, [`unknown enforcement ${enforcement}.`]);
     return null;
   }
+  // Runtime gate (validateRuleEntryCapabilities): entry-level constraints can
+  // only be 'audit' — blocking semantics need typed ruleConfiguration
+  // targets the mapper cannot author. A model-proposed blocking constraint
+  // downgrades to audit with a review note instead of failing the publish
+  // (same philosophy as dangling template loot: never block the package).
+  let effectiveEnforcement = enforcement;
+  if (enforcement !== 'audit') {
+    effectiveEnforcement = 'audit';
+    ctx.diagnostics.push(`constraint-${id}: enforcement ${enforcement} downgraded to audit (blocking constraints need typed ruleConfiguration targets)`);
+  }
   const definition: Record<string, unknown> = {
     name,
     description: asString(record.description) ?? name,
-    enforcement,
+    enforcement: effectiveEnforcement,
   };
   const pattern = asString(record.pattern);
   if (pattern) definition.pattern = pattern;
@@ -1111,6 +1123,7 @@ async function requestMappingProposals(
   actorTemplates: RawActorTemplate[];
   items: Array<{ entry: ContentEntry; weaponSkillId: string | null }>;
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
+  diagnostics: string[];
   mappedFactCount: number;
   batches: number;
   /** Closeout C3: per-batch usage plus cache-hit accounting. */
@@ -1150,6 +1163,7 @@ async function requestMappingProposals(
   const actorTemplates: RawActorTemplate[] = [];
   const items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
   const allRejected: Array<{ kind: string; id: string; reasons: string[] }> = [];
+  const allDiagnostics: string[] = [];
   const usagePerBatch: Array<unknown | null> = [];
   let mappedFactCount = 0;
   let skippedBatches = 0;
@@ -1354,7 +1368,7 @@ async function requestMappingProposals(
     // before a pause or lease change can stop the loop (extraction units
     // follow the same contract). The checks below stop the NEXT batch.
     const ctx: CleanContext = { knownFactIds: input.incrementalMapping
-      ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [] };
+      ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [], diagnostics: [] };
     // WorldMapper V2 (plan P4): evidence-verified rule mappings land through
     // the store's idempotent path; rejects surface in the review queue.
     // These writes are deliberately unfenced against pause: ruleMappingId is
@@ -1479,6 +1493,7 @@ async function requestMappingProposals(
     }
     mappedFactCount += batch.length;
     allRejected.push(...ctx.rejected);
+    allDiagnostics.push(...ctx.diagnostics);
 
     // Persist the batch checkpoint AFTER its results are merged in memory;
     // a crash before this write re-runs exactly this batch, nothing else.
@@ -1516,6 +1531,7 @@ async function requestMappingProposals(
     actorTemplates,
     items,
     rejected: allRejected,
+    diagnostics: allDiagnostics,
     mappedFactCount,
     batches: completedBatches,
     usagePerBatch,
@@ -1796,6 +1812,17 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed', 'invalid-proposal']);
     // Rejected proposals (invalid enums, missing ids, unknown attributes) go
     // to the review queue as major issues instead of entering the package.
+    for (const diagnostic of mapped.diagnostics) {
+      await worldStore.saveReviewIssue({
+        worldId,
+        issueId: `invalid-proposal-${diagnostic.split(':')[0]}-${diagnostic.length}`,
+        kind: 'invalid_proposal',
+        severity: 'major',
+        detailJson: JSON.stringify({ kind: 'mapper_adjustment', id: diagnostic, reasons: [diagnostic] }),
+        createdAt: input.createdAt,
+      });
+      reviewIssueCount += 1;
+    }
     for (const rejection of mapped.rejected) {
       await worldStore.saveReviewIssue({
         worldId,
@@ -1844,6 +1871,11 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
 
   // LLM actor templates: keep attack skill references that resolve after the
   // baseline fill; dangling ones are dropped instead of blocking publication.
+  // Loot items get the same treatment (real-world regression: a template
+  // citing an item the mapper never published blocked the whole package at
+  // the publish gate). Dangling loot drops to the review queue as a major
+  // invalid_proposal issue; the template still publishes without it.
+  const mappedItemIds = new Set(items.map(item => item.entry.entryId));
   for (const template of actorTemplates) {
     const definition = template.entry.definition as Record<string, unknown>;
     const attacks = (definition.attacks as Array<Record<string, unknown>>)
@@ -1852,9 +1884,27 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     const lootItemIds = Array.isArray(definition.lootItemIds)
       ? definition.lootItemIds.filter((itemId): itemId is string => typeof itemId === 'string')
       : [];
+    const resolvableLoot = lootItemIds.filter(itemId => mappedItemIds.has(itemId));
+    for (const dangling of lootItemIds.filter(itemId => !mappedItemIds.has(itemId))) {
+      await worldStore.saveReviewIssue({
+        worldId,
+        issueId: `invalid-proposal-template_loot-${template.entry.entryId}:${dangling}`,
+        kind: 'invalid_proposal',
+        severity: 'major',
+        detailJson: JSON.stringify({
+          kind: 'template_loot', id: `${template.entry.entryId}:${dangling}`,
+          reasons: [`loot item ${dangling} was not published in this package; dropped from the template`],
+        }),
+        createdAt: input.createdAt,
+      });
+      reviewIssueCount += 1;
+    }
+    if (resolvableLoot.length !== lootItemIds.length) {
+      definition.lootItemIds = resolvableLoot;
+    }
     template.entry.dependencyIds = [...new Set([
       ...attacks.map(attack => String(attack.skillId)),
-      ...lootItemIds,
+      ...resolvableLoot,
     ])];
     entries.push(template.entry);
   }

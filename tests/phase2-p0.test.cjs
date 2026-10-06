@@ -86,7 +86,7 @@ function seedBranch(db, branchId, campaignId = 'camp-1', stateVersion = 0) {
 
 function moveContract(turnId, expectedStateVersion, locationId) {
   return {
-    protocolVersion: '2.0', turnId, expectedStateVersion,
+    protocolVersion: '3.0', turnId, expectedStateVersion,
     actorId: 'actor-player', actionType: 'move', evidenceIds: ['e'],
     requiresRoll: false, intent: 'move on', timeCostMinutes: 5, resourcePreconditions: [],
     outcomes: {
@@ -302,7 +302,7 @@ test('save round-trip: export hashes payload, restore rebuilds a new campaign at
       .run();
 
     const config = require('../dist/application/content/runtimeRules').createWorldRuleConfiguration('world-1',1);
-    db.prepare("UPDATE world_packages SET schema_version='shineword-world-package-5', ruleset_version='0.3.0', rule_config_json=? WHERE world_id='world-1'").run(JSON.stringify(config));
+    db.prepare("UPDATE world_packages SET schema_version='shineword-world-package-5', ruleset_version='0.4.0', rule_config_json=? WHERE world_id='world-1'").run(JSON.stringify(config));
     for (const row of db.prepare("SELECT state_version,snapshot_json FROM snapshots WHERE branch_id='main'").all()) {
       const state = JSON.parse(row.snapshot_json); state.ruleConfiguration = config;
       db.prepare("UPDATE snapshots SET snapshot_json=? WHERE branch_id='main' AND state_version=?").run(JSON.stringify(state),row.state_version);

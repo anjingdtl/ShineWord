@@ -15,6 +15,8 @@ export function schedulingRoleForRequest(request: LlmRequest): Pick<RequestSched
     // Ancillary guidance yields to player actions (plan §8.3): P1, never P0.
     case 'narrator_guidance': return { role: 'goal_recommender', priority: 'P1' };
     case 'style_analyzer': return { role: 'style_analyzer', priority: 'P3' };
+    // P9 campaign planning: background build grade, never preempts P0 play.
+    case 'campaign_plan': return { role: 'mapper', priority: 'P2' };
     case 'planner': return { role: 'planner', priority: 'P0' };
     case 'narrator': return { role: 'narrator', priority: 'P0' };
     case 'world_extract': case 'timeline': case 'registry': return { role: 'extractor', priority: 'P3' };
