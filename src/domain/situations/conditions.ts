@@ -352,6 +352,7 @@ export function snapshotConditionFacts(input: {
   relationships?: ReadonlyArray<{ fromActorId: string; toActorId: string; closeness: number }>;
   questProgress?: ReadonlyArray<{ questId: string; status: string }>;
   situations?: readonly SituationSnapshotEntry[];
+  campaignNodeStates?: ReadonlyArray<{ nodeId: string; status: string }>;
   playerActorId: string;
   resolvedReferenceEventKeys?: readonly string[];
   causalWorldTimeOrder: number;
@@ -364,6 +365,7 @@ export function snapshotConditionFacts(input: {
   }
   const resolveActorId = (id: string): string => input.actors[id] ? id : aliases.get(id) ?? id;
   const situationById = new Map((input.situations ?? []).map(entry => [entry.situationId, entry]));
+  const nodeStatus = new Map((input.campaignNodeStates ?? []).map(node => [node.nodeId, node.status]));
   const knownEntries = new Map<string, Set<string>>();
   for (const discovery of input.discoveries ?? []) {
     let owners = knownEntries.get(discovery.entryId);
@@ -400,6 +402,13 @@ export function snapshotConditionFacts(input: {
     relationshipCloseness: (from, to) => relationshipKeys.get(`${resolveActorId(from)}->${resolveActorId(to)}`),
     questStatus: questId => questStatusById.get(questId),
     situationStatus: situationId => situationById.get(situationId)?.status,
+    campaignNodeStatus: nodeId => nodeStatus.get(nodeId),
+    promiseStatus: (situationId, promiseId) =>
+      situationById.get(situationId)?.promises.find(promise => promise.promiseId === promiseId)?.status,
+    situationCounter: (situationId, counterId) => {
+      const counter = situationById.get(situationId)?.counters[counterId];
+      return typeof counter === 'number' && Number.isFinite(counter) ? counter : undefined;
+    },
     referenceEventResolved: eventKey => (resolvedKeys.size === 0 && !input.resolvedReferenceEventKeys
       ? undefined
       : resolvedKeys.has(eventKey)),

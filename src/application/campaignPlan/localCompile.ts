@@ -15,6 +15,7 @@ import type { MethodOutcomeTemplateV1, SituationCondition, SituationDefinitionV1
 import type { ContentEntry } from '../../domain/content/types';
 import type { ConditionTemplateNode, CampaignPlanCandidateModelV1, StageSpec } from './candidateModel';
 import { canonicalJsonOf, sha256HexOf } from './hashing';
+import { actorReferenceInScope } from '../../domain/campaignPlan/actorReferences';
 
 /**
  * Local campaign compiler (plan §6.2/§6.3): turns a STRICTLY parsed candidate
@@ -163,7 +164,7 @@ function compileMethods(
       errors.push(`method ${method.methodId}: ability ${method.firstStep.abilityId} not visible at the anchor.`);
       continue;
     }
-    if (method.firstStep.targetEntryId && !ctx.openingTemplateIds.has(method.firstStep.targetEntryId) && !ctx.openingActorIds.has(method.firstStep.targetEntryId)) {
+    if (method.firstStep.targetEntryId && !actorReferenceInScope(method.firstStep.targetEntryId, ctx)) {
       errors.push(`method ${method.methodId}: target ${method.firstStep.targetEntryId} not in the opening scope.`);
       continue;
     }
@@ -178,13 +179,17 @@ function compileMethods(
     }
     const outcomeTemplates = compileOutcomeTemplates(method, situationAliases, errors);
     if (!outcomeTemplates) continue;
+    const { condition: requirement, ...requires } = method.requires;
+    const condition = requirement ? compileCondition(requirement, ctx, situationAliases, errors) : null;
+    if (requirement && !condition) continue;
     methods.push({
       methodId: method.methodId,
       title: method.title,
       goal: method.goal,
       firstStep: { ...method.firstStep },
       requires: {
-        ...method.requires,
+        ...requires,
+        ...(condition ? { condition } : {}),
         ...(method.requires.skillId && !skillIds.has(method.requires.skillId) && !skillIds.has(method.requires.skillId.replace(/^skill-/, ''))
           ? (errors.push(`method ${method.methodId}: requires skill ${method.requires.skillId} not visible.`), { skillId: undefined as never })
           : {}),

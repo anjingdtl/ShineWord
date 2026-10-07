@@ -122,7 +122,7 @@ export function OpeningScreen(): React.JSX.Element {
           setCompanions(input.companions.map(c => c.templateId));
           setCompanionDirectives(Object.fromEntries(input.companions.map(c => [c.templateId, (c.directive ?? 'protect') as CompanionDirective])));
           setQuickRecommendationsInitialized(true); setQuickStep(1);
-          setProposal(restored.proposal); setPlanningPhase(restored.phase);
+          setProposal(restored.proposal); setPlanningPhase(restored.phase); setPlanningError(restored.error ?? null);
           return;
         }
         const firstAnchor = worldSetup.anchorEvents[0];
@@ -375,7 +375,10 @@ export function OpeningScreen(): React.JSX.Element {
   async function resumePreparation() {
     if (!pendingCreate.current || !planningSetupId.current || busy || actionInFlight.current) return;
     actionInFlight.current = true; setBusy(true); setPlanningError(null);
-    try { setProposal(await resumeCampaignPreparation(planningSetupId.current, pendingCreate.current, setPlanningPhase)); }
+    try {
+      const result = await resumeCampaignPreparation(planningSetupId.current, pendingCreate.current, setPlanningPhase);
+      setProposal(result.proposal); setPlanningPhase(result.phase); setPlanningError(result.error ?? null);
+    }
     catch (e) { setPlanningError(e instanceof Error ? e.message : String(e)); setPlanningPhase('failed'); }
     finally { actionInFlight.current = false; setBusy(false); }
   }

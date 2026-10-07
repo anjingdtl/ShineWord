@@ -6,7 +6,7 @@
  */
 import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
 import type { CampaignIntentV1 } from '../../src/domain/campaignPlan/types';
-import { SqliteCampaignPlanStore } from '../../src/infra/sqlite/sqliteCampaignPlanStore';
+import { SqliteCampaignPlanStore, type CampaignPlanJobRecord } from '../../src/infra/sqlite/sqliteCampaignPlanStore';
 import { runOpeningPlanJob } from '../../src/application/campaignPlan/planningService';
 import { adoptOpeningPlan } from '../../src/application/campaignPlan/adoption';
 import { getDatabaseRuntime } from './database';
@@ -49,6 +49,22 @@ export interface PreparePlanResult {
   phase: PlanningPhase;
   candidateId: string | null;
   error?: string;
+}
+
+export interface PreparationView {
+  proposal: ProposalView | null;
+  phase: PlanningPhase;
+  error?: string;
+}
+
+const UNKNOWN_PREPARATION_MESSAGE = '云端结果未知，可能已经计费；本次任务已保存，恢复不会自动重发。';
+
+/** The durable job classification survives all three opening entry paths. */
+function projectPreparation(job: Pick<CampaignPlanJobRecord, 'status' | 'lastError'> | null, proposal: ProposalView | null, errors: readonly string[] = []): PreparationView {
+  if (proposal) return { proposal, phase: 'ready' };
+  if (job?.status === 'outcome_unknown') return { proposal: null, phase: 'outcome_unknown', error: UNKNOWN_PREPARATION_MESSAGE };
+  if (job?.status === 'running' || job?.status === 'queued') return { proposal: null, phase: 'preparing' };
+  return { proposal: null, phase: 'failed', error: errors.slice(0, 3).join('；') || job?.lastError || '保存的规划尚未通过校验。' };
 }
 
 export function makeCampaignIntent(input: PreparePlanInput): CampaignIntentV1 {
@@ -136,7 +152,7 @@ export async function prepareCampaignPlan(
   }
   if (run.status === 'outcome_unknown') {
     return { setupId: intent.setupId, jobId, phase: 'outcome_unknown', candidateId: run.candidateId,
-      error: '云端结果未知，可能已计费；请在网络稳定后重试。' };
+      error: UNKNOWN_PREPARATION_MESSAGE };
   }
   return { setupId: intent.setupId, jobId, phase: 'failed', candidateId: run.candidateId,
     error: run.errors.slice(0, 3).join('；') || '提案校验未通过。' };
@@ -144,8 +160,8 @@ export async function prepareCampaignPlan(
 
 /** Restore the same persisted character/intent; completed model responses are reused. */
 export async function restoreCampaignPreparation(worldId: string, profile: ApiProfile): Promise<{
-  input: PreparePlanInput; setupId: string; proposal: ProposalView | null; phase: PlanningPhase;
-} | null> {
+  input: PreparePlanInput; setupId: string;
+} & PreparationView | null> {
   const runtime = await getDatabaseRuntime();
   const planStore = new SqliteCampaignPlanStore(runtime.db);
   const row = await runtime.db.queryOne<{ setup_id: string }>(
@@ -154,7 +170,8 @@ export async function restoreCampaignPreparation(worldId: string, profile: ApiPr
   if (!setup) return null;
   const intent = setup.intent;
   const proposal = await readReadyProposal(setup.setupId);
-  return { setupId: setup.setupId, proposal, phase: proposal ? 'ready' : 'preparing', input: {
+  const job = await planStore.getJob(`job-${setup.setupId}`);
+  return { setupId: setup.setupId, ...projectPreparation(job, proposal), input: {
     profile, worldId, worldTitle: '', packageRevision: setup.packageRevision,
     packageContentHash: intent.sourceCoverageBinding.packageContentHash, anchor: intent.openingAnchor,
     anchorTitle: '已保存的开局时刻', protagonist: intent.protagonistBinding,
@@ -164,7 +181,7 @@ export async function restoreCampaignPreparation(worldId: string, profile: ApiPr
   } };
 }
 
-export async function resumeCampaignPreparation(setupId: string, input: PreparePlanInput, onPhase: (phase: PlanningPhase) => void): Promise<ProposalView> {
+export async function resumeCampaignPreparation(setupId: string, input: PreparePlanInput, onPhase: (phase: PlanningPhase) => void): Promise<PreparationView> {
   const runtime = await getDatabaseRuntime();
   const planStore = new SqliteCampaignPlanStore(runtime.db);
   const jobId = `job-${setupId}`;
@@ -175,9 +192,9 @@ export async function resumeCampaignPreparation(setupId: string, input: PrepareP
     provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase }, jobId,
     { anchorTitle: input.anchorTitle, playerName: input.protagonist.name, protagonistSkills: input.protagonistSkills, openingGoalSuggestions: [] });
   const proposal = await readReadyProposal(setupId);
-  if (!proposal) throw new Error(run.errors.join('；') || '任务仍在运行，请稍后恢复；不会重复发送已完成请求。');
-  onPhase('ready');
-  return proposal;
+  const result = projectPreparation(await planStore.getJob(jobId), proposal, run.errors);
+  onPhase(result.phase);
+  return result;
 }
 
 export async function cancelCampaignPreparation(setupId: string): Promise<void> {

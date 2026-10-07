@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.shineword.qa.input">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="37" />
+  <application android:label="ShineWord QA Text Input" android:debuggable="true" />
+  <instrumentation android:name="com.shineword.qa.input.TextInput" android:targetPackage="com.shineword.qa.input" android:functionalTest="true" />
+</manifest>

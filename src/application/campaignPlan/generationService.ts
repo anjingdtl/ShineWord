@@ -12,7 +12,7 @@ import type { ContentEntry } from '../../domain/content/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { SKILL_RANKS } from '../../domain/rules/types';
 import type { LocalCompileContext } from './localCompile';
-import { CAMPAIGN_PLAN_MODEL_VERSION, METHOD_REQUIREMENT_FIELDS, extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
+import { CAMPAIGN_PLAN_MODEL_VERSION, METHOD_REQUIREMENT_FIELDS, METHOD_CONDITION_TEMPLATE_KINDS, PROPOSAL_TEXT_LIMITS, extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
 
 /**
  * Campaign plan generation (plan §6.2): freeze → generate → strict parse →
@@ -75,6 +75,7 @@ export function buildPlanRequestMaterials(input: {
     '}',
     '',
     '结构规则：',
+    `- proposal 各字段必须是字符串并满足长度：${Object.entries(PROPOSAL_TEXT_LIMITS).map(([field, limit]) => `${field} ${limit.min}..${limit.max} 字符`).join('；')}。tone 用简短风格标签，不写长剧情描述；长度错误只修正对应字段，不删目标/前提，也不裁剪输入的完整玩家意图。`,
     '- stages 2-6 个，主路径必须从无 activation 的起点可达至少一个结局条件；远期阶段用 coverage="provisional"；',
     '- 只有当前第一阶段 activation=null。后续阶段用 node_succeeded 与 dependsOn 引用前驱；firstSituation 仅服务当前第一阶段，远期不得用 self 的同一计数冒充独立问题。短篇每阶段约 2-5 次有意义的决定，不用反复交谈/观察刷 10/30 次计数；完成条件对应取得证据、达成承诺或解除具体阻碍。',
     '- 第一个 concrete 阶段必须完整可玩：endings 之前先由 firstSituation 给出 2-4 个办法（methods），办法之间机制不同（不同技能/不同行动类型/不同对象），至少一个办法的 firstStep 只用下面列出的技能且不需要准备；',
@@ -82,6 +83,8 @@ export function buildPlanRequestMaterials(input: {
     '- 每种办法必须至少有一个成功档以权威 effects 推进该阶段 completion；有风险的失败要提供改变局面的代价或新机会。日常观察、无风险交谈可使用 observe/talk/interact，不必强制 skill_check。',
     '- 至少一条当前可执行路线必须能通过不同、有因果关系的普通 success 决定完成阶段，不能让所有完成路线都只等待 full_success。大成功可给捷径或额外收益。普通成功已经创建承诺、发现知识之后，后续办法应消费这些已提交事实；重复创建同一承诺或重复授予同一知识不算新进展。累计计数达到门槛的成功路径不能仍强制等待大成功才写入 resolved。',
     '- 中长篇阶段应包含准备、取得实绩、兑现或选择后续方向等不同问题，避免首步一次普通成功就跳过所有过程，也不要通过重复同一步骤凑篇幅。修订时先核对已有开放承诺、已知知识、关系和实际失败代价，再提供当前角色能执行的下一步。',
+    '- 局面 resolved/suppressed 后，其办法不能继续执行。不能让唯一增进关系的办法先关闭 self，却要求随后在同一局面反复交谈达到更高关系；同理，先 prepare 取得条件，最后由满足前提的 fulfillment 办法结算，完成条件必须能在关闭前成立。关系起点使用已提交值，未建立的有向关系从0开始。',
+    '- 计数的单位必须与实际取得的事实一致：一次取得一份证词，不能写成 evidence+10 冒充两份独立证据。关闭前供给不足时，提供不关闭局面的准备办法，随后由 requires.condition 达标的兑现办法收尾；修复不能通过删除准备门槛或夸大一次首步成果跳过过程。',
     '- 条件模板白名单：situation_resolved{situationId}, situation_status{situationId,status}, quest_succeeded{questId}, committed_event{eventType,payloadMatch?}, counter_at_least{situationId,counterId,minimum}, promise_fulfilled{situationId,promiseId}, knowledge_known{entryId}, relationship_at_least{fromActorId,toActorId,closeness}, item_owned{itemId,actorId}, actor_alive{actorId}, actor_dead{actorId}, node_succeeded{nodeId}；可用 {"kind":"all","of":[...]}/any/not 组合（≤3 层）。firstSituation 的局面可以用 situationId "self" 指代自身；',
     '- 效果模板白名单：situation_status{situationId,status,resolution?}, situation_counter{situationId,counterId,delta(±10)}, promise_create{situationId,promiseId,promisorActorId,promiseeActorId?,description}, promise_fulfill{situationId,promiseId}, promise_break{situationId,promiseId}, grant_knowledge{entryId}, grant_item{itemId,toActorId}, relationship_shift{fromActorId,toActorId,delta(±3)}, condition_apply{actorId,conditionId}, condition_remove{actorId,conditionId}, resource_change{actorId,resourceId,amount(±10)}, clock_advance{minutes(≤240)}, record_event{eventType,summary}, schedule_consequence{consequenceId}, suppress_reference_event{situationId,eventKey,reason}；',
     '- 可选 "consequences": [{consequenceId,description,trigger, effects:[{template:"schedule_consequence" 之外的效果}],visibility}] 表示延迟后果；可选 "rewards": [{policyId,nodeId,description,rewards:[{kind:"skill_rank|item|knowledge|relationship|resource_cap",targetId,toActorId?,rank?,delta?}]}]；',
@@ -91,12 +94,17 @@ export function buildPlanRequestMaterials(input: {
     '- actorId/fromActorId/toActorId 使用玩家 actorId 或在场人物模板 ID；禁止杜撰 pc、roland、anna 等英文昵称。计数条件必须明确 integer minimum，situation_status 必须明确 status。',
     '- situation_status 的 status 只允许 dormant / eligible / active / resolved / suppressed。failed、completed、cancelled 都不是局面状态。失败或取消条件可用 committed_event，且对应 outcomes 必须用 record_event 产生那个事件；不需要的 failure/cancellation 写 null。',
     '- 每个末端主阶段必须有 endings.condition 中的 node_succeeded 引用（包括失败/开放结局）。本地不会代你补造结局。',
+    '- 尚未完成后续主目标不等于失败。不能用“前一阶段成功 AND NOT 后续成功事件/节点”自动触发代价或失败结局，否则后续阶段根本没有行动机会。提前失败/代价退出必须由已提交的失败、取消或实际损失证据触发；成功结局应等目标的后续主阶段完成。保护持续安全、争取协作等已承诺目标必须留出实际推进机会。',
+    '- success/pyrrhic/open 结局不能只依赖前序节点成功就自动跳过后续 main 目标；not 失败事件也不是退出证据。确实不属于当前完整目标的后日谈/下一场委托应标 role=optional，不能先列为主目标再提前结束。实际失败、取消、角色损失可保留提前退出路径。',
     '- method 完整形状：{"methodId":"stable-id","title":"办法标题","goal":"要实现什么","firstStep":{"intent":"玩家直接可执行的第一步描述","actionKind":"observe|talk|interact|skill_check|ability|move","skillId":"仅检定时填写已给出的技能 ID","targetEntryId":"可选的在场人物模板 ID"},"requires":{},"preparation":"无","tradeoffs":"具体代价","outcomes":{"full_success":{"resultFact":"本档结果事实","effects":[]},"success":{"resultFact":"本档结果事实","effects":[]},"failure":{"resultFact":"本档结果事实","effects":[]},"severe_failure":{"resultFact":"本档结果事实","effects":[]}}}。不同办法应改变不同的关系、承诺、知识、代价或后续机会。',
-    `- requires 仅支持这些字段：${METHOD_REQUIREMENT_FIELDS.join(', ')}。ID 必须是白名单中的字符串；minRank 必须与 skillId 配对，等级为 ${SKILL_RANKS.join(' / ')}；minCloseness 必须与 relationshipTo 配对且为0..100整数。不要发明 knowledge、promise、counter、event、condition 等 requires 字段；无法表示的准备条件应改为已支持的知识/物品/关系门槛或另一条可执行办法，不能删除真实限制。`,
+    `- requires 仅支持这些字段：${METHOD_REQUIREMENT_FIELDS.join(', ')}。ID 必须是白名单中的字符串；minRank 必须与 skillId 配对，等级为 ${SKILL_RANKS.join(' / ')}；minCloseness 必须与 relationshipTo 配对且为0..100整数。不要发明 knowledge、promise、counter、event 等 requires 字段。condition 使用已有条件模板，不能填写自由文本或代码。`,
+    `- requires.condition 可用 ${METHOD_CONDITION_TEMPLATE_KINDS.join(', ')}，按既有 all/any/not 结构组合；不能使用 committed_event。例：{"kind":"counter_at_least","situationId":"self","counterId":"evidence","minimum":2} 或 {"kind":"promise_fulfilled","situationId":"已提交承诺所属局面ID","promiseId":"已提交承诺ID"}。缺失数据不会被 not 当成成立。准备办法先产生计数/知识/承诺，后续办法引用相同身份并兑现；不能让唯一生产准备条件的办法依赖它自己尚未产生的条件。`,
+    '- 条件必须嵌套在 requires.condition 中。完整示例："requires":{"condition":{"kind":"counter_at_least","situationId":"self","counterId":"evidence","minimum":2}}。禁止直接把 kind/of/situationId/counterId/minimum 放在 requires 根上；修复时保留原准备条件，只更正结构，不能删掉门槛。',
     '- 每个 schedule_consequence 的 consequenceId 必须在根对象 consequences 数组中完整定义；consequences.trigger 必须是条件 JSON 对象，不是文字。条件字段用 kind，效果字段用 template。',
     '- 输出前核对每一个 schedule_consequence.consequenceId 与 consequences[].consequenceId 完全一致。没有定义就不得安排；不用延迟后果时 consequences=[] 且 outcomes 中没有 schedule_consequence。不要照抄上面的示例事件，事件必须有本次后续办法的 record_event 来源。',
     '- 阶段 completion/failure/cancellation 不能引用该阶段自身的 node_succeeded；那会成为无法推进的循环。未来未构建的阶段保持 provisional。',
     '- 当前阶段 completion 的局面/计数/承诺必须有 outcomes 或 consequences 中的实际效果来源。要求 self resolved 就必须有 situation_status resolved；要求承诺兑现则先 promise_create 再 promise_fulfill。旧承诺必须逐字使用已提交状态中的 situationId+promiseId，不能把旧 promiseId 配给新的 self。',
+    '- 普通 success 的完成路径也必须兑现 completion 引用的旧开放承诺，或提供独立准备后的履约办法；只有 full_success 兑现旧承诺仍会让普通成功反复计数而无法推进。已提交 fulfilled 的旧承诺可以直接沿用，不重复创建或改写。',
     '- 带 deadlineClockSeconds 的局面超时也会 resolved。completion 不能只要求 self resolved，必须在 all 中同时要求成功产生的正数计数、fulfilled 承诺或成功专属 committed_event；any 的每条 resolved 路径都要有成功证据，不能把超时记作完成。',
     '- 当前可行动人物见“当前在场人物”白名单；其它世界人物只能作为远期背景，不能当作当前 firstStep.targetEntryId。至少一个入口 requires={} 且不依赖物品、能力、关系或未发现知识；无在场目标时可从无 targetEntryId 的现场调查开始。',
     '- 当前只定义一份 firstSituation，situationId=self。不要发明 sit-n2 等远期局面 ID；provisional 阶段用 committed_event 或已有知识/任务作为 completion，后续修订才定义它自己的局面。record_event 必须含 eventType 与 summary。',

@@ -7,6 +7,8 @@ import type {
 import { CAMPAIGN_PLAN_COMPILER_VERSION, CAMPAIGN_PLAN_SCHEMA } from './types';
 import type { SituationCondition } from '../situations/types';
 import { validateConditionShape } from '../situations/conditions';
+import { committedSituationMarker, producesSituationMarker, ordinaryCompletionBeforeExit, type CompletionBaseline } from './ordinaryCompletion';
+import { actorReferenceInScope as actorInScope } from './actorReferences';
 
 /**
  * Local hard gates for a compiled campaign plan (plan §6.3). Structural
@@ -78,23 +80,29 @@ function currentCompletionHasProducer(condition: SituationCondition, artifact: C
  * full_success. Counting ordinary successes cannot create a missing resolved
  * status/event. Existing adopted archives are deliberately not reinterpreted.
  */
-export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1): string[] {
+export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1, baseline?: CompletionBaseline): string[] {
   const start = plan.nodes.find(n => plan.startNodeIds.includes(n.nodeId) && n.coverage === 'concrete');
   if (!start) return [];
   const own = new Set(artifact.situations.map(s => s.entryId));
   const allEffects = artifactEffects(artifact);
-  const effects = artifact.situations.flatMap(s => s.definition.methods.flatMap(m => m.outcomeTemplates?.success.effects ?? []));
+  const effects: import('./types').CampaignEffectSpec[] = [];
+  const methods = artifact.situations.flatMap(s => s.definition.methods);
   const possible = (c: SituationCondition): boolean => {
     if (c.kind === 'all') return c.of.every(possible);
     if (c.kind === 'any') return c.of.some(possible);
     // External/current facts and negative conditions cannot be disproved by
     // producer analysis alone. Leave them to the normal qualification gates.
     if (c.kind === 'not') return true;
+    // The current stage cannot unlock its own producer by already succeeding.
+    if (c.kind === 'campaign_node_status' && c.nodeId === start.nodeId) return c.status === 'active';
     if (c.kind === 'committed_event') {
       return !allEffects.some(e => e.template === 'record_event' && e.eventType === c.eventType)
         || effects.some(e => e.template === 'record_event' && e.eventType === c.eventType);
     }
-    if (!('situationId' in c) || !own.has(c.situationId)) return true;
+    if (!('situationId' in c)) return true;
+    const committed = committedSituationMarker(c, baseline);
+    if (committed === true) return true;
+    if (!own.has(c.situationId) && (committed !== false || !allEffects.some(e => producesSituationMarker(e, c)))) return true;
     if (c.kind === 'situation_status') return c.status === 'active'
       || effects.some(e => e.template === 'situation_status' && e.situationId === c.situationId && e.status === c.status);
     if (c.kind === 'situation_counter_at_least') return c.minimum <= 0
@@ -108,8 +116,14 @@ export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact
   // it AND produce its trigger. Unscheduled/circular/full-success-only
   // consequences must not smuggle a missing marker through the gate.
   const consumed = new Set<string>();
-  for (let pass = 0; pass < artifact.consequenceTemplates.length; pass++) {
+  const consumedMethods = new Set<import('../situations/types').MethodTemplateV1>();
+  for (let pass = 0; pass < methods.length + artifact.consequenceTemplates.length; pass++) {
     let added = false;
+    for (const method of methods) {
+      if (!consumedMethods.has(method) && (!method.requires.condition || possible(method.requires.condition))) {
+        consumedMethods.add(method); effects.push(...(method.outcomeTemplates?.success.effects ?? [])); added = true;
+      }
+    }
     for (const consequence of artifact.consequenceTemplates) {
       if (!consumed.has(consequence.consequenceId)
         && effects.some(e => e.template === 'schedule_consequence' && e.consequenceId === consequence.consequenceId)
@@ -119,8 +133,11 @@ export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact
     }
     if (!added) break;
   }
+  if (possible(start.completion) && !ordinaryCompletionBeforeExit(plan, artifact, baseline)) return [
+    `artifact: current stage ${start.nodeId} cannot supply an ordinary completion route before its situation closes; a resolved/suppressed situation cannot repeat its methods to reach remaining counters, promises or relationships. Provide independent preparation and a final fulfillment route, or use the actual committed baseline.`,
+  ];
   return possible(start.completion) ? [] : [
-    `artifact: current stage ${start.nodeId} has no ordinary success producer for a completion route; provide success effects that satisfy completion, or a subsequent ordinary-success fulfillment method. Repeated counters/promises cannot replace a missing resolved status or event; full_success may remain a shortcut.`,
+    `artifact: current stage ${start.nodeId} has no ordinary success producer for a completion route; provide success effects that satisfy completion, or a subsequent ordinary-success fulfillment method with independently producible prerequisites. Repeated counters/promises cannot replace a missing resolved status or event; full_success may remain a shortcut.`,
   ];
 }
 
@@ -188,10 +205,6 @@ export function validateCampaignIntent(intent: CampaignIntentV1): string[] {
   return errors;
 }
 
-function actorInScope(id: unknown, ctx: PlanValidationContext): boolean {
-  return typeof id === 'string' && (ctx.openingActorIds.has(id) || ctx.openingTemplateIds.has(id)
-    || (id.startsWith('npc-') && ctx.openingTemplateIds.has(id.slice(4))));
-}
 
 function validateNodeCondition(
   node: CampaignNodeV1,
@@ -258,6 +271,9 @@ function validateConditionReferences(
       if (!ctx.visibleWorldEntryIds.has(condition.entryId)) {
         errors.push(`${prefix}: knowledge ${condition.entryId} not a visible world entry.`);
       }
+      return;
+    case 'quest_status':
+      if (!ctx.visibleWorldEntryIds.has(condition.questId)) errors.push(`${prefix}: quest ${condition.questId} is outside scope.`);
       return;
     case 'situation_status':
     case 'promise_status':
@@ -506,6 +522,15 @@ export function validateContentArtifact(
   // Situation transitions must reference artifact or world situations only.
   for (const situation of artifact.situations) {
     for (const method of situation.definition.methods ?? []) {
+      for (const [field, condition] of [['requires.condition', method.requires.condition], ['visibility', method.visibility]] as const) {
+        if (!condition) continue;
+        const prefix = `method.${method.methodId}.${field}`;
+        validateConditionShape(condition, errors, prefix);
+        validateConditionReferences(condition, ctx, errors, prefix);
+        for (const nodeId of collectConditionNodeRefs(condition)) {
+          if (!plan.nodes.some(node => node.nodeId === nodeId)) errors.push(`${prefix}: unknown campaign node ${nodeId}.`);
+        }
+      }
       for (const grade of ['full_success', 'success', 'failure', 'severe_failure'] as const) {
         const template = method.outcomeTemplates?.[grade];
         if (!template) continue;

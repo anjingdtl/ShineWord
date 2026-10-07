@@ -29,7 +29,7 @@
 
 设备基点 .tmp/phase9/reaccept-final-tree/stable-source-v12.sqlite；关系证明 reaccept-device/fork-branches.json。只读复制，不覆盖App数据库。
 
-每段身份在本段identity.json或UI start行，最终安装在 reaccept-device/identity.json。当前生产源码7813f21fae13fb2a3538f9601d6d381f8049670bc5e274ca7bd168b50a041ceb、identity scope v3（加入实际打包的version.json；旧身份不改写），APK见FINAL_REPORT。J3-final启动身份是4123…，运行期间仅移动布局变动，主机预载核心未变；JSONL的live源码哈希不被冒充为预载执行身份。之后期限归约与奖励解析又修改核心，故这些真实区间均保留诊断，不能称最终同身份80。
+每段身份在本段identity.json或UI start行，最终安装在 reaccept-device/identity.json。最新生产源码53629ccff12efc738bf7e6f85c8f72bc0562241a19a3ba34aacfbd2837d9b254、identity scope v3（加入实际打包的version.json；旧身份不改写），APK见FINAL_REPORT。J3-final启动身份是4123…，运行期间仅移动布局变动，主机预载核心未变；JSONL的live源码哈希不被冒充为预载执行身份。之后期限归约与奖励解析又修改核心，故这些真实区间均保留诊断，不能称最终同身份80。
 
 真实故障修复：
 
@@ -68,3 +68,40 @@ UI当面向罗兰进言v33普通success，自然completed/ending-pardon/改判�
 final21（源码7813f21fae13fb2a3538f9601d6d381f8049670bc5e274ca7bd168b50a041ceb、APK42bbcd35cc600c9d42a127fd9552fcc13605b80e58ff81acf2ec77bcc8d66eb8）保留数据安装，实际安装hash核对一致；在原v33冷启动复验已结束主线卡、阶段列表、最终叙事和campaign_ending事件，旧战役办法退出，世界普通探索仍可用。runtime/全部工件hash逐项保持原样，旧承诺保持fulfilled，原分叉仍v37。复验新增0玩家决定、0HTTP，预算1055/1100。证据reaccept-device/final21-ending-reacceptance.json及natural-ending/ending-review/ending-narrative截图；final20失败截图保留。以上三个新增决定跨身份诊断，不能补成最终同身份J1 UI20。
 
 清理经正式模型配置UI恢复真实GLM端点，Keychain引用保留；核对后停止本轮PID/命令行/监听端口均匹配的QA代理。字体1.0、1080×2400、Gboard，原模拟器/数据库保留，App在配置保存后force-stop。证据final21-cleanup.json。
+
+## eb48dae提交后的自动内容与模拟器复验
+
+仍使用同一真实小说正式导入世界r1、序7边陲镇与现有安娜/罗兰资料；部分ready仅有1段，后段按需补建、原著将死角色成功救援持续存活未齐。未自动解决两个世界审查问题以冒充全世界通过。实际资格与上下文来自生产stores，不手填世界、提案或结局。
+
+| 样本 | 真实结果 | 有效决定/验收范围 |
+|---|---|---|
+| final22 Android J1 camp-muxy5yns | 明确保护/救援/阻止处决/持续安全目标，普通success关系0→1却关闭局面、completion要求15，自动r2采用 | 1项诊断，触发R29，未完成20 |
+| final23 Android J1 camp-muxyznzn | 2请求ready；递帖、发现广场事实、创建兑现承诺、阻止处决四项持久变化，n3成功/NOT镇民支持触发“代价惨重的生机”，v6停止；安娜active，n4安全available/n5支持planned | 4项诊断，过早结局FAIL，触发R30，不继续刷数或称长期保护完成 |
+| final24 主机J2 | 生成加修复2请求，requires根上误放计数AST而invalid | 0决定；原响应保留，触发R31精确反馈 |
+| final25 Android J1 | 合法开局、完整明确目标；2请求后材料已允许的npc罗兰目标被compile误拒 | 0决定；触发R32共用人物身份边界，原文离线编译通过、0HTTP |
+| final25 主机J2 camp-final25-j2-muy0c693 | 初始2请求ready，5项推进后v8自然“称台倾向真相”，必做节点均成功、额外aftermath-watch为optional，立即停止 | 5项诊断，未齐20；一次证词+10的单位/节奏仍不足 |
+| final26 主机J3 | 2请求后tone实际43字超40，旧笼统required错误无助修复 | 0决定；触发R33共享长度合同，原字段/响应保留 |
+| final27 Android J1 | 2请求后期限可能被当作成功而invalid；原文还含前序成功/NOT死亡跳过后续main的出口 | 0决定；期限硬门有效，R35补齐裸前序出口检查 |
+| final27 主机J2 camp-final27-j2-muy6ovj2 | 初始1请求ready；官方记录、安娜证词、矿区物证、呈递被拒、再次论证等7项；v10兑现旧交证承诺、v12新后果即时触发；后续末端node_8缺终局引用，2请求后invalid，main node5仍available | 7项人工可评估诊断，未齐20；同v12触发不计隔两决定后果 |
+| final27 主机J3 camp-final27-j3-muy6xiai | 初始2请求ready；11次提交/11状态差异候选，work在v5达到20，但旧mine-aid-promise仅full_success兑现；同方法3次后停止。n4成功能跳过仍main的n5 | 仅v1/v2/v4/v5/v12共5项可评估；v6–11六次多余计数不兑现承诺/打开机会，排除。v6“救出矿工”文字未写独立事实；v12新伤势是持久损失，非延迟证明。触发R34/R35 |
+| final28 high Android J1 | 正式入口保存完整中文救援目标、合法属性/技能、序7/长篇；job-setup-world-src-7f45fe0b11ea30ec-muwccd51-muy7o2nc，一次campaign_plan在300秒超时后outcome_unknown | 0决定，无重发；独立opening_goal一次成功另记。原恢复0HTTP却显示failed，触发R36 |
+| final28 high 主机J2/J3 | job-setup-final28-j2-muy7pbx0 / job-setup-final28-j3-muy7pjqb，各一次规划后300秒超时、outcome_unknown | 各0决定；均无修复、采用或重放，不推断内容评分 |
+| final29 同一Android未知job | 保留数据安装后冷/手动恢复均明确未知，原意图逐字段不变、campaign_plan仍1次；360/411dp fontScale2提示/控件实际可读可达 | 0决定/0规划重发；冷入口独立opening_goal 1次，预算1160→1161，单列 |
+| final29 既有camp-muxpraio-main结局显示 | 原v33改判之约，主线/完成阶段/最终叙事/事件一致；snapshot/runtime/归档hash、旧承诺与v37分叉不变 | 新增0决定/0HTTP；仅显示回归，不计最终旅程或成功救援 |
+
+上述主机均为生产CampaignSession/SQLite与实际GLM provider、非强制骰点；Android通过正式开局/行动UI。plan采用/管理/短休/轮询/错误重试不计玩家配额。计数差异工具输出仍要求语义人工复核；final27-manual-review.json排除门槛后六项，未用工具自动PASS。
+
+| 身份（scope v3） | 生产源码SHA-256 | Debug APK SHA-256 | bytes |
+|---|---|---|---|
+| final22 | 943143f45e972843ee801160c11c04fdaaee981f052ee3fd7c49fbc5b67f8bf2 | 4621d914f02f34c4f3761fdbae85c9de36d3ad033adcb1d3e2ddb8f11b5e2248 | 109442367 |
+| final23 | 58e8ee75c3bb7c741a814758169b1b5aefda40213989cb266018931efc3a3bf1 | bd465dde6261ba21c7304fe89d1bd4e5b6973eaf47e4730d9723b47d832a0c6a | 109450407 |
+| final24 | 5877b28db5eeba8d3ae9d35ed8e5eddfdd8cd4e398563137d2dea9320c5cfaaf | 6f58ac7f7b796af2b5beb52c95799581d1c4733e769df88b0e17e28499bb051b | 109457011 |
+| final25 | 9b78c6b03b5de63e22139faf103c9866113cad75573d241fb8c626e345f15a7e | 6344ae4888105e6ad4596efd6fff7a145c7edfd6b2b562cea7bf611c9a1c821e | 109457415 |
+| final26 | a437fb1881932566e188bde092629fabacb2b67ff229b9b74c3a0d87f2b8cb37 | 1fb2f01c27ef4769c2b0f3e3346aa10db2d543ddd8a11a09b98cf774bd28b063 | 109457779 |
+| final27 | aca9a26bba4303cdd5686df6523e4af3122f5c0d9fccf0e561bf09a88735ea81 | 22fda466b027fb5d389bc635758dd9dbf36a9b2b5be549f92e2ce2534a0cdfc8 | 109452999 |
+| final28 | d531af0a507e4d161706f7a2c7d1cd9a760153594ac2271db276014502419e87 | c30576350b823eed3b5df3b3d82b1668a75fef57be834dc78b0c6af00d571f4c | 109461403 |
+| final29 | 53629ccff12efc738bf7e6f85c8f72bc0562241a19a3ba34aacfbd2837d9b254 | 1b8eb52f182fe02bb6ec7fd2218cb9260b8984cc32410060041868e2109c801f | 109462083 |
+
+各身份文件reaccept-identity-final22…final29.json；历史执行身份不改写为最终。final29没有新完整自动旅程，不能与旧诊断拼80。A15/A36仍FAIL，A19/A38仍NOT RUN；各自动计划/旅程六维分别见CONTENT_QUALITY，未达全部≥3。
+
+实际请求预算最终1161/1500；high只作未完成的规划对照，主机content输出16384/设备默认和代理端点分别记录，不冒充匹配10+10性能。所有未知任务与原响应保留、不自动重放。恢复/大字号证据final29-j1-cold-restore.json、final29-j1-explicit-restore.json、final29-recovery-display.json；原档结局证据final29-ending-reacceptance.json。清理正式UI恢复直连GLM/low、Keychain引用逐值不变，停止PID/命令行/端口验证过的本轮代理，font1/密度420/Gboard/原库/AVD保留，App已force-stop，见final29-cleanup.json。

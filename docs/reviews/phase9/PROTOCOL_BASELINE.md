@@ -94,6 +94,8 @@
 
 `tests/phase9-baseline.test.cjs`（开工先行，随各包转绿）：
 
+2026-10-07准备条件补全：campaign-plan-model-1可选requires.condition复用既有有界ConditionTemplateNode；编译后仍为既有MethodRequirements.condition，不改变归档、行动合同、快照或save版本。仅允许现态可读叶子，不接受committed_event作为方法前提。范围校验与UNKNOWN语义保持硬门禁；普通成功来源检查进一步尊重resolved/suppressed停止提供办法的生命周期，冻结当前有向关系/已知知识作为基线。新作者校验不会重解释已采用或已ready归档。
+
 | 编号 | 缺口 | 证据目标 |
 |---|---|---|
 | P9G1 | 无战役意图/计划/运行时类型与校验 | 非法计划（断环、引用缺失、单路线）被拒 |
@@ -102,3 +104,17 @@
 | P9G4 | 无 CampaignProgressReducer；进度无法从事件求值 | changed/no_change/提前完成确定性判定 |
 | P9G5 | 无 campaign_plan requestKind；无规划任务恢复 | 任务状态机+恢复点测试 |
 | P9G6 | 存档/DB 无战役字段 | save-10 往返含 runtime/plan/content |
+### 新候选结局顺序门（final25）
+
+新计划作者校验区分后续主目标未完成与已经失败：若结局用前阶段成功及后续成功事件/节点的否定自动结束，而没有实际失败/取消/损失门，会进入原有一次修复；仍错误则invalid。该必要门只位于candidateJob，不用于已采用归档或ready恢复，不增加AST模板、不改UNKNOWN/NOT和运行时进度求值。错误报告要求保留实际意图和失败路线，不能由编译器补造结局。
+### 身份与proposal作者字段（final27）
+
+计划的演员引用与办法目标共用actorReferenceInScope，只允许已有开局角色/模板及由已知模板生成的npc身份。关系门槛消费实际快照的有向角色身份；未知和歧义不会由名称猜测为合法角色。PROPOSAL_TEXT_LIMITS共供提示和解析，longTermGoal 4..120、publicPitch 10..400、gmPremise 4..400、tone 2..40；越界明确报告对应字段，不裁剪完整玩家意图、原响应或其它必需字段。既有已采用归档的协议和hash不变。
+
+### 冻结现态的跨阶段证据（final28）
+
+新候选普通成功必要门读取原任务冻结的situations：已经兑现的旧承诺/达到的计数/已定局状态可作基线；明确尚未满足且有本地producer的旧标记不能仅依赖大成功。未知基线不被改成否定事实，承诺身份始终为situationId+promiseId。当前关闭办法不能反复执行补足旧计数。终局顺序门同样检查裸前序成功触发和“没有失败”条件，保留实际损失、取消、可选后日谈及退休节点。两项均仅用于新作者验证，不更改运行时求值、已采用档、ready恢复、save版本或冻结四档合同。
+
+### 开局持久分类的统一投影（final29）
+
+首次准备、冷启动和显式恢复按同一持久job状态投影PreparationView：完整proposal为ready，outcome_unknown保留未知与可能计费说明，queued/running为preparing，invalid等错误仍failed并保留诊断。未ready不等于校验失败。桥接/UI返回形状变化不改变数据库状态机、冻结意图、归档、save版本或未知请求禁止重放合同。实际同一未知job冷/手动恢复没有重发规划；冷入口的独立目标建议按自己的逻辑请求计账，不混为恢复成本。

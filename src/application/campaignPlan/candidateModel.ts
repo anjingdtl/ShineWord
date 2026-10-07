@@ -21,6 +21,9 @@ export const CONDITION_TEMPLATE_KINDS = [
 ] as const;
 export type ConditionTemplateKind = (typeof CONDITION_TEMPLATE_KINDS)[number];
 
+/** Method eligibility reads the current snapshot, never an event-history query. */
+export const METHOD_CONDITION_TEMPLATE_KINDS = CONDITION_TEMPLATE_KINDS.filter(kind => kind !== 'committed_event');
+
 export interface ConditionTemplateNode {
   kind: ConditionTemplateKind | 'all' | 'any' | 'not';
   situationId?: string;
@@ -67,6 +70,7 @@ export interface MethodSpec {
     relationshipTo?: string;
     minCloseness?: number;
     actorAlive?: string;
+    condition?: ConditionTemplateNode;
   };
   tradeoffs: string;
   preparation: string;
@@ -75,8 +79,15 @@ export interface MethodSpec {
 
 /** Shared authoring contract for prompt and actionable repair diagnostics. */
 export const METHOD_REQUIREMENT_FIELDS = [
-  'skillId', 'minRank', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'minCloseness', 'actorAlive',
+  'skillId', 'minRank', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'minCloseness', 'actorAlive', 'condition',
 ] as const;
+
+export const PROPOSAL_TEXT_LIMITS = {
+  longTermGoal: { min: 4, max: 120 },
+  publicPitch: { min: 10, max: 400 },
+  gmPremise: { min: 4, max: 400 },
+  tone: { min: 2, max: 40 },
+} as const;
 
 export interface StageSpec {
   nodeId: string;
@@ -194,7 +205,10 @@ function parseRequirements(value: unknown, errors: string[], prefix: string): Me
   const idFields = ['skillId', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'actorAlive'];
   const unsupported = Object.keys(value).filter(field => !(METHOD_REQUIREMENT_FIELDS as readonly string[]).includes(field));
   if (unsupported.length) {
-    errors.push(`${prefix}: unsupported requirement field ${unsupported.join(', ')}; allowed fields: ${METHOD_REQUIREMENT_FIELDS.join(', ')}. Use a supported field or provide another executable method; do not discard the preparation requirement.`); return null;
+    const correction = typeof value.kind === 'string' && ([...METHOD_CONDITION_TEMPLATE_KINDS, 'all', 'any', 'not'] as readonly string[]).includes(value.kind)
+      ? 'Put the complete condition object under requires.condition, e.g. requires:{"condition":{"kind":"counter_at_least","situationId":"self","counterId":"evidence","minimum":2}}; preserve the original condition fields and threshold.'
+      : 'Use a supported field or provide another executable method; do not discard the preparation requirement.';
+    errors.push(`${prefix}: unsupported requirement field ${unsupported.join(', ')}; allowed fields: ${METHOD_REQUIREMENT_FIELDS.join(', ')}. ${correction}`); return null;
   }
   for (const field of idFields) {
     if (gates[field] !== undefined && !isReference(gates[field])) {
@@ -207,6 +221,18 @@ function parseRequirements(value: unknown, errors: string[], prefix: string): Me
   if (gates.minCloseness !== undefined && (gates.relationshipTo === undefined || !Number.isInteger(gates.minCloseness)
     || Number(gates.minCloseness) < 0 || Number(gates.minCloseness) > 100)) {
     errors.push(`${prefix}.minCloseness: relationshipTo and an integer within 0..100 required.`); return null;
+  }
+  if (gates.condition !== undefined) {
+    const condition = parseCondition(gates.condition, errors, `${prefix}.condition`);
+    if (!condition) return null;
+    const snapshotOnly = (node: ConditionTemplateNode): boolean => node.of
+      ? node.of.every(snapshotOnly)
+      : (METHOD_CONDITION_TEMPLATE_KINDS as readonly string[]).includes(node.kind);
+    if (!snapshotOnly(condition)) {
+      errors.push(`${prefix}.condition: method prerequisites must use snapshot conditions (${METHOD_CONDITION_TEMPLATE_KINDS.join(', ')}), combined with all/any/not; committed_event is reserved for campaign progress.`);
+      return null;
+    }
+    gates.condition = condition;
   }
   return gates as MethodSpec['requires'];
 }
@@ -514,13 +540,13 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     errors.push(`candidate: unknown modelVersion ${String(c.modelVersion)}.`);
     return null;
   }
-  const proposal = c.proposal as Record<string, unknown> | undefined;
+  const proposal = c.proposal;
   DBG('proposal-check');
-  if (!proposal || !isBoundedString(proposal.longTermGoal, 4, 120)
-    || !isBoundedString(proposal.publicPitch, 10, 400)
-    || !isBoundedString(proposal.gmPremise, 4, 400)
-    || !isBoundedString(proposal.tone, 2, 40)) {
-    errors.push('proposal: longTermGoal/publicPitch/gmPremise/tone required.');
+  if (!isRecord(proposal)) { errors.push('proposal: object with longTermGoal/publicPitch/gmPremise/tone required.'); return null; }
+  const invalidProposalFields = Object.entries(PROPOSAL_TEXT_LIMITS).filter(([field, limit]) =>
+    !isBoundedString(proposal[field], limit.min, limit.max));
+  if (invalidProposalFields.length) {
+    for (const [field, limit] of invalidProposalFields) errors.push(`proposal.${field}: string of ${limit.min}..${limit.max} chars required; correct this field while preserving the full player intent and other proposal fields.`);
     return null;
   }
   DBG('stages-check');

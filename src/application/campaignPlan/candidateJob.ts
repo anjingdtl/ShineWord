@@ -5,10 +5,12 @@ import { frozenPlanJob, readPlanFreeze, writePlanFreeze, thawPlanContext } from 
 import { canonicalJsonOf, sha256HexOf } from './hashing';
 import { compileCampaignPlan } from './localCompile';
 import { validateCampaignIntent, validateCampaignPlan, validateOrdinarySuccessCompletion } from '../../domain/campaignPlan/planValidation';
+import { validateEndingCompletionOrder } from '../../domain/campaignPlan/endingValidation';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { isIntactReadyCandidate } from './candidateIntegrity';
 import { assessMethod } from '../guidance/candidates';
+import { openingRelationshipFor } from '../campaign/recruitment';
 
 /** Both planning modes share durable generation, bounded repair and fencing. */
 export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, input: {
@@ -156,6 +158,12 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     const state = frozen!.baseState;
     const cards = (state?.cards ?? []).map(row => row.card as import('../../domain/characters/card').ActorCard);
     const playerCard = cards.find(card => card.actorId === frozen!.intent.protagonistBinding.actorId);
+    const openingRelationships = frozen!.intent.companionBindings.flatMap(companion => {
+      const entry = ctx.visibleEntries.find(e => e.entryId === companion.templateId && e.kind === 'actor_template');
+      const relationship = entry ? openingRelationshipFor(entry, frozen!.intent.openingAnchor.worldTimeOrder) : null;
+      return relationship ? [{ fromActorId: companion.actorId, toActorId: frozen!.intent.protagonistBinding.actorId,
+        closeness: relationship.closeness }] : [];
+    });
     const executableMethodIds = state && playerCard ? new Set(compiled.artifact.situations.flatMap(s => s.definition.methods
       .filter(method => assessMethod(s.entryId, method, { state, playerCard,
         cardsByName: new Map(cards.filter(c => ctx.presentActorRefs?.includes(c.actorId)).map(c => [c.actorId, c])),
@@ -168,7 +176,12 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       executableMethodIds,
       knownPromiseRefs: (frozen!.baseState?.situations ?? []).flatMap(s => (s.promises ?? []).map(p => ({ situationId: s.situationId, promiseId: p.promiseId }))),
       knownLocationIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'scene').map(e => (e.definition as { locationId: string }).locationId)) }, compiled.artifact),
-      ...validateOrdinarySuccessCompletion(compiled.plan, compiled.artifact)];
+      ...validateOrdinarySuccessCompletion(compiled.plan, compiled.artifact, {
+        playerActorId: frozen!.intent.protagonistBinding.actorId,
+        relationships: state?.relationships ?? openingRelationships, discoveries: state?.discoveries,
+        actorAliases: state ? cards : frozen!.intent.companionBindings,
+        situations: state?.situations,
+      }), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact)];
       return { compiled, errors };
     };
     const generation = await generateCampaignPlanCandidate({ provider: deps.provider, profile: frozen.profile,

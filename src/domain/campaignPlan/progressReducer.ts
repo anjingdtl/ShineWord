@@ -134,6 +134,7 @@ export function campaignConditionFacts(input: {
     relationships: input.state.relationships,
     questProgress: input.state.questProgress,
     situations: input.state.situations,
+    campaignNodeStates: input.runtime.nodeStates,
     playerActorId: input.playerActorId,
     resolvedReferenceEventKeys: input.resolvedReferenceEventKeys,
     causalWorldTimeOrder: input.state.causalWorldTimeOrder ?? 0,
@@ -142,20 +143,11 @@ export function campaignConditionFacts(input: {
       templateId: (entry.card as { templateId?: string }).templateId,
     })),
   });
-  const nodeStatus = new Map(input.runtime.nodeStates.map(n => [n.nodeId, n.status]));
   const recentEvents = [...input.transactionEvents, ...input.historyEvents].slice(0, EVENT_HISTORY_WINDOW);
-  const situationById = new Map((input.state.situations ?? []).map(s => [s.situationId, s]));
   return {
     ...facts,
-    campaignNodeStatus: nodeId => nodeStatus.get(nodeId),
     committedEventOccurred: (eventType, payloadMatch) =>
       recentEvents.some(event => eventMatches(event, eventType, payloadMatch)),
-    promiseStatus: (situationId, promiseId) =>
-      situationById.get(situationId)?.promises.find(p => p.promiseId === promiseId)?.status,
-    situationCounter: (situationId, counterId) => {
-      const counter = situationById.get(situationId)?.counters[counterId];
-      return typeof counter === 'number' ? counter : undefined;
-    },
   };
 }
 

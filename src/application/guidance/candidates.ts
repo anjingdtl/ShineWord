@@ -62,6 +62,18 @@ export function assessMethod(
   if (!player || player.lifeStatus === 'critical' || player.lifeStatus === 'dead'
     || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) blockers.push('需要先得到援救并恢复行动能力');
   const requires = method.requires ?? {};
+  const conditionFacts = requires.condition || method.visibility ? snapshotConditionFacts({
+    actors: state.actors,
+    cards: [...context.cardsByName.values()],
+    itemOwners: state.itemOwners,
+    discoveries: state.discoveries,
+    relationships: state.relationships,
+    questProgress: state.questProgress,
+    situations: state.situations,
+    campaignNodeStates: state.campaignRuntime?.nodeStates,
+    playerActorId: playerCard.actorId,
+    causalWorldTimeOrder: context.causalWorldTimeOrder,
+  }) : undefined;
 
   const requiredSkill = requires.skillId ?? (method.firstStep.actionKind === 'skill_check' ? method.firstStep.skillId : undefined);
   if (requiredSkill) {
@@ -94,8 +106,9 @@ export function assessMethod(
     if (!known) blockers.push('需要先发现相关线索');
   }
   if (requires.relationshipTo && requires.minCloseness !== undefined) {
+    const relationshipActorId = resolveMethodActor(requires.relationshipTo, state, [...context.cardsByName.values()]);
     const closeness = (state.relationships ?? []).find(
-      rel => rel.fromActorId === playerCard.actorId && rel.toActorId === requires.relationshipTo)?.closeness;
+      rel => rel.fromActorId === playerCard.actorId && rel.toActorId === relationshipActorId)?.closeness;
     if (closeness === undefined || closeness < requires.minCloseness) {
       blockers.push('需要先增进与相关人物的关系');
     }
@@ -113,35 +126,13 @@ export function assessMethod(
     }
   }
   if (requires.condition) {
-    const facts = snapshotConditionFacts({
-      actors: state.actors,
-      cards: [...context.cardsByName.values()],
-      itemOwners: state.itemOwners,
-      discoveries: state.discoveries,
-      relationships: state.relationships,
-      questProgress: state.questProgress,
-      situations: state.situations,
-      playerActorId: playerCard.actorId,
-      causalWorldTimeOrder: context.causalWorldTimeOrder,
-    });
-    const result = evaluateCondition(requires.condition, facts);
+    const result = evaluateCondition(requires.condition, conditionFacts!);
     if (!result.value || result.unknown) blockers.push('前提条件尚未成立');
   }
 
   // Method-level visibility gate (e.g. a lead only offered once discovered).
   if (method.visibility) {
-    const facts = snapshotConditionFacts({
-      actors: state.actors,
-      cards: [...context.cardsByName.values()],
-      itemOwners: state.itemOwners,
-      discoveries: state.discoveries,
-      relationships: state.relationships,
-      questProgress: state.questProgress,
-      situations: state.situations,
-      playerActorId: playerCard.actorId,
-      causalWorldTimeOrder: context.causalWorldTimeOrder,
-    });
-    const visible = evaluateCondition(method.visibility, facts);
+    const visible = evaluateCondition(method.visibility, conditionFacts!);
     if (!visible.value || visible.unknown) {
       return {
         ref: `method:${situationId}:${method.methodId}`,
