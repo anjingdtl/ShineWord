@@ -100,7 +100,8 @@ import { resolveCampaignContent } from '../campaignPlan/contentResolver';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
 import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
-import { compileCampaignEffects } from '../../domain/campaignPlan/campaignEffects';
+import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
+import { applyEffects } from '../../domain/state/effects';
 import type {
   MethodTemplateV1,
   SituationDefinitionV1,
@@ -220,7 +221,10 @@ export class CampaignSession {
     provider: LlmProvider,
     private readonly profile: ApiProfile,
   ) {
-    this.encounters = new EncounterService(deps);
+    this.encounters = new EncounterService({ ...deps,
+      prepareAuthority: input => this.prepareLocalAuthority(input.campaignId, input.state, input.contract, input.grade, input.events),
+      afterCommit: (campaignId, branchId) => this.enqueueCampaignReplan(campaignId, branchId),
+    });
     this.provider = deps.llmLedger
       ? provider instanceof RateScheduledProvider ? provider.withLedger(deps.llmLedger, {
           modelProfileFingerprint: llmModelProfileFingerprint(profile),
@@ -344,14 +348,19 @@ export class CampaignSession {
         nodeId: node.nodeId,
         title: plan?.nodes.find(item => item.nodeId === node.nodeId)?.title ?? node.nodeId,
       }));
-    const situationResolution = (state?.situations ?? []).find(item => item.resolution !== undefined)?.resolution;
-    if (situationResolution && completedStages.length > 0 && completedStages[completedStages.length - 1]!.resolution === undefined) {
-      completedStages[completedStages.length - 1]!.resolution = situationResolution;
+    for (const stage of completedStages) {
+      const situationId = plan?.nodes.find(node => node.nodeId === stage.nodeId)?.situationRef;
+      const situation = state?.situations?.find(item => item.situationId === situationId);
+      const completedAt = runtime.nodeStates.find(node => node.nodeId === stage.nodeId)?.resolvedAtVersion;
+      // Later pressure/side effects cannot rewrite why a completed stage ended.
+      if (situation?.resolvedAtVersion !== undefined && completedAt !== undefined && situation.resolvedAtVersion <= completedAt) {
+        stage.resolution = situation.resolution;
+      }
     }
     return {
       status: runtime.campaignStatus,
-      longTermGoal: plan?.longTermGoal ?? runtime.publicObjectiveProjection,
-      currentObjective: runtime.campaignStatus === 'active' ? runtime.publicObjectiveProjection : '战役已结束',
+      longTermGoal: runtime.intent?.normalizedIntent ?? plan?.longTermGoal ?? runtime.publicObjectiveProjection,
+      currentObjective: ['active', 'paused'].includes(runtime.campaignStatus) ? runtime.publicObjectiveProjection : '战役已结束',
       completedStages,
       recentProgress: runtime.recentProgressLines.map(line => ({ text: line.text, atStateVersion: line.atStateVersion })),
       pendingConsequences: runtime.deferredConsequences.filter(item => item.status === 'pending' && item.visibility === 'public').map(item => item.description),
@@ -377,13 +386,21 @@ export class CampaignSession {
     const state = await this.deps.turns.getState(options.branchId);
     const runtime = state?.campaignRuntime;
     if (!runtime) throw new Error('该战役没有主线运行时。');
-    if (runtime.campaignStatus !== 'active') throw new Error('战役已结束，不能再调整目标；请开始新的战役。');
+    if (!['active', 'paused'].includes(runtime.campaignStatus)) throw new Error('战役已结束，不能再调整目标；请开始新的战役。');
+    if (!options.newGoal.trim()) throw new Error('请输入新的战役目标。');
     const context = await this.loadCampaignPlanForState(options.campaignId, state!);
     if (!context) throw new Error('主线计划缺失。');
+    const planStore = new SqliteCampaignPlanStore(this.deps.db);
+    const originalIntent = runtime.intent ?? (await planStore.getPlanRevision(runtime.planBinding.planId, runtime.planBinding.revision))?.intent;
+    if (!originalIntent) throw new Error('战役意图缺失，不能调整目标。');
+    const nextIntent = { ...originalIntent, intentRevision: runtime.intentRevision + 1,
+      rawIntent: options.newRawIntent ?? options.newGoal, normalizedIntent: options.newGoal.trim(), goalMode: 'declared' as const };
     const nextRuntime = {
       ...runtime,
       intentRevision: runtime.intentRevision + 1,
-      publicObjectiveProjection: options.newGoal,
+      intent: nextIntent,
+      stateVersion: state!.stateVersion + 1,
+      publicObjectiveProjection: options.newGoal.trim(),
       replanReasonCodes: [...new Set([...runtime.replanReasonCodes, 'goal_changed'])],
     };
     const now = new Date().toISOString();
@@ -400,7 +417,8 @@ export class CampaignSession {
         previousStateVersion: state!.stateVersion, stateVersion: state!.stateVersion + 1,
         outcomeGrade: 'success', publicSummary: '调整了战役目标。', effects: [], committedAt: now,
       },
-      events: [{ eventType: 'campaign_goal_changed', payload: { fromRevision: runtime.intentRevision, toRevision: nextRuntime.intentRevision, newGoal: options.newGoal } }],
+      events: [{ eventType: 'campaign_goal_changed', payload: { fromRevision: runtime.intentRevision, toRevision: nextRuntime.intentRevision, newGoal: options.newGoal.trim(), rawIntent: nextIntent.rawIntent } }],
+      transactionChanges: tx => this.assertCampaignManagementBoundary(tx, options.branchId),
     });
     const { enqueueReplan } = await import('../campaignPlan/replanService');
     const job = await enqueueReplan({
@@ -412,6 +430,70 @@ export class CampaignSession {
     });
     return { intentRevision: nextRuntime.intentRevision, replanEnqueued: !job.merged };
   }
+  async setCampaignStatus(options: { campaignId: string; branchId: string; status: 'active' | 'paused' | 'ended' }): Promise<void> {
+    await this.assertCampaignBranch(options.campaignId, options.branchId);
+    const state = await this.deps.turns.getState(options.branchId);
+    const runtime = state?.campaignRuntime;
+    if (!state || !runtime || !['active','paused'].includes(runtime.campaignStatus)) throw new Error('该战役已结束或没有主线。');
+    if (runtime.campaignStatus === options.status) return;
+    const nextState = { ...state, stateVersion: state.stateVersion + 1, campaignRuntime: { ...runtime,
+      campaignStatus: options.status, stateVersion: state.stateVersion + 1,
+      nodeStates: runtime.nodeStates.map(node => ({ ...node, status: options.status === 'paused' && node.status === 'active' ? 'suspended' as const
+        : options.status === 'active' && node.status === 'suspended' ? 'active' as const : node.status })) } };
+    const turnId = `${options.branchId}:manage-status:${nextState.stateVersion}`;
+    await this.deps.turns.commitAtomic({ branchId: options.branchId, turnId, expectedStateVersion: state.stateVersion, nextState,
+      actionContractJson: '{}', actionContractHash: 'manage-status',
+      committedTurn: { branchId: options.branchId, turnId, previousStateVersion: state.stateVersion, stateVersion: nextState.stateVersion,
+        outcomeGrade: 'success', publicSummary: options.status === 'paused' ? '暂时搁置了主线，可以继续探索。' : options.status === 'active' ? '继续追寻战役目标。' : '主动结束了这段冒险。', effects: [], committedAt: new Date().toISOString() },
+      events: [{ eventType: 'campaign_status_changed', payload: { from: runtime.campaignStatus, to: options.status } }],
+      transactionChanges: tx => this.assertCampaignManagementBoundary(tx, options.branchId),
+    });
+  }
+
+  private async assertCampaignManagementBoundary(tx: import('../ports/sqlite').SqliteTransaction, branchId: string): Promise<void> {
+    const pending = await tx.queryOne<{ n: number }>("SELECT COUNT(*) n FROM turns WHERE branch_id=? AND status<>'Committed'", [branchId]);
+    const busy = await tx.queryOne<{ n: number }>("SELECT COUNT(*) n FROM interaction_operations WHERE branch_id=? AND status IN ('running','paused_system')", [branchId]);
+    const unknown = await tx.queryOne<{ n: number }>("SELECT COUNT(*) n FROM llm_request_attempts WHERE branch_id=? AND request_kind<>'campaign_plan' AND (status IN ('prepared','sent') OR (status='outcome_unknown' AND replay_approved_at IS NULL))", [branchId]);
+    if ((pending?.n ?? 0) + (busy?.n ?? 0) + (unknown?.n ?? 0) > 0) throw new Error('请先完成进行中的回合或处理未确认的请求，再管理主线。');
+  }
+
+  /** Executes only an existing triggered job; ordinary turns never add a director call. */
+  async runCampaignReplan(campaignId: string, branchId: string, options: { automatic?: boolean } = {}): Promise<string> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const planStore = new SqliteCampaignPlanStore(this.deps.db);
+    let job = await planStore.findActiveJob(branchId, 'replan');
+    if (!job && !options.automatic) {
+      const latest = await this.deps.db.queryOne<{ status: string }>("SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' ORDER BY created_at DESC LIMIT 1", [branchId]);
+      if (latest?.status === 'outcome_unknown') throw new Error('上次规划的请求结果尚未确认，请先在请求账本处理，不能自动重发。');
+      const state = await this.deps.turns.getState(branchId);
+      const context = state && await this.loadCampaignPlanForState(campaignId, state);
+      if (!state || !context || !['active','paused'].includes(context.runtime.campaignStatus)) return 'no_change';
+      const { enqueueReplan } = await import('../campaignPlan/replanService');
+      const queued = await enqueueReplan({ deps: { db: this.deps.db, planStore, worldStore: this.deps.worldStore, provider: this.provider, profile: this.profile },
+        campaignId, branchId, plan: context.plan, runtime: context.runtime, state, reasons: [`player_requested:${new Date().toISOString()}`] });
+      job = await planStore.getJob(queued.jobId);
+    }
+    if (!job) return 'no_change';
+    if (options.automatic && !['queued','candidate_ready'].includes(job.status)) return 'no_change';
+    const state = await this.deps.turns.getState(branchId);
+    const row = state?.campaignRuntime && await planStore.getPlanRevision(state.campaignRuntime.planBinding.planId, state.campaignRuntime.planBinding.revision);
+    const intent = state?.campaignRuntime?.intent ?? (row ? row.intent : null);
+    if (!state || !intent) throw new Error('战役意图缺失。');
+    const { runReplanJob, adoptReplanCandidate } = await import('../campaignPlan/replanService');
+    const run = await runReplanJob({ db: this.deps.db, planStore, worldStore: this.deps.worldStore, provider: this.provider, profile: this.profile,
+      segmentContent: this.deps.segmentContent }, job.jobId,
+      { intent, protagonistSkills: (state.skills ?? []).filter(s => s.actorId === intent.protagonistBinding.actorId).map(s => s.skillId),
+        anchorTitle: '当前已提交局势', playerName: intent.protagonistBinding.name });
+    if (!['candidate_ready','already_ready'].includes(run.status) || !run.candidateId) {
+      if (run.status === 'stale') return 'stale';
+      throw new Error(run.errors.join('；') || `规划状态：${run.status}`);
+    }
+    const adopted = await adoptReplanCandidate({ db: this.deps.db, planStore, turns: this.deps.turns,
+      campaignId, branchId, candidateId: run.candidateId });
+    if (adopted.outcome === 'stale') throw new Error(`提案尚未采用：${adopted.reason}`);
+    return 'adopted';
+  }
+
   async getSummary(campaignId: string, branchId: string): Promise<CampaignSummary> {
     const row = await this.deps.db.queryOne<SqliteRow>(
       'SELECT campaign_id, title, world_id, package_revision, ruleset_version, opening_json, anchor_json FROM campaigns WHERE campaign_id = ?',
@@ -552,7 +634,7 @@ export class CampaignSession {
       relationships: [],
       ...input.settlement,
     };
-    const applySituations = await this.localSituationReducer(input.campaignId, input.branchId, state, turnId, input.actorId);
+    const applySituations = await this.prepareLocalAuthority(input.campaignId, state, contract, 'success', input.events);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: input.branchId,
@@ -567,6 +649,7 @@ export class CampaignSession {
       events: input.events,
       committedAt: new Date().toISOString(),
     });
+    await this.enqueueCampaignReplan(input.campaignId, input.branchId);
     if (input.actionType !== 'scene_actors') await this.ensureDecisionPointGuidance({
       campaignId: input.campaignId, branchId: input.branchId, sourceTurnId: turnId,
     });
@@ -1205,7 +1288,7 @@ export class CampaignSession {
     return next => {
       if (definitions.length === 0) return [];
       next.causalWorldTimeOrder = order;
-      const runtime = applySituationRuntime({ definitions, nextState: next, sourceTurnId: turnId, playerActorId, methodOps: [] });
+      const runtime = applySituationRuntime({ definitions, nextState: { ...next, stateVersion: next.stateVersion + 1 }, sourceTurnId: turnId, playerActorId, methodOps: [] });
       next.situations = runtime.situations;
       for (const fate of runtime.actorFates) { if (next.actors[fate.actorId]) next.actors[fate.actorId]!.lifeStatus = fate.lifeStatus; }
       return runtime.events;
@@ -1222,11 +1305,18 @@ export class CampaignSession {
     for (const artifactId of binding.artifactIds) {
       const row = await this.deps.db.queryOne<{ artifact_json: string; content_hash: string }>(
         'SELECT artifact_json, content_hash FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
-      if (!row || row.content_hash !== binding.contentHash) {
+      if (!row) {
         throw new Error(`战役内容 ${artifactId} 缺失或哈希不符，拒绝以不完整内容继续回合。`);
       }
-      artifacts.push(JSON.parse(row.artifact_json) as CampaignContentArtifactV1);
+      const artifact = JSON.parse(row.artifact_json) as CampaignContentArtifactV1;
+      const { contentHash, ...body } = artifact;
+      const { canonicalJsonOf, sha256HexOf } = await import('../campaignPlan/hashing');
+      if (artifact.campaignId !== campaignId || artifact.artifactId !== artifactId || row.content_hash !== contentHash
+        || contentHash !== sha256HexOf(canonicalJsonOf(body))) throw new Error(`战役内容 ${artifactId} 缺失或哈希不符，拒绝以不完整内容继续回合。`);
+      artifacts.push(artifact);
     }
+    const { campaignContentBindingHash } = await import('../campaignPlan/contentBinding');
+    if (campaignContentBindingHash(artifacts) !== binding.contentHash) throw new Error('战役内容组合 hash 不匹配，拒绝继续。');
     return resolveCampaignContent(entries, artifacts);
   }
 
@@ -1243,11 +1333,23 @@ export class CampaignSession {
       throw new Error(`主线计划 ${runtime.planBinding.planId} r${runtime.planBinding.revision} 缺失，拒绝继续。`);
     }
     const plan = JSON.parse(planRow.plan_json) as CampaignPlanV1;
+    const { canonicalJsonOf, sha256HexOf } = await import('../campaignPlan/hashing');
+    const { contentHash: planHash, ...planBody } = plan;
+    if (planHash !== runtime.planBinding.contentHash || planHash !== sha256HexOf(canonicalJsonOf(planBody))) throw new Error('主线计划 hash 不匹配，拒绝继续。');
     const artifacts: CampaignContentArtifactV1[] = [];
     for (const artifactId of state.campaignContentBinding?.artifactIds ?? plan.contentArtifactRefs) {
-      const row = await this.deps.db.queryOne<{ artifact_json: string }>(
-        'SELECT artifact_json FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
-      if (row) artifacts.push(JSON.parse(row.artifact_json) as CampaignContentArtifactV1);
+      const row = await this.deps.db.queryOne<{ artifact_json: string; content_hash: string }>(
+        'SELECT artifact_json,content_hash FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
+      if (!row) throw new Error(`战役内容 ${artifactId} 缺失，拒绝以不完整内容结算。`);
+      const artifact = JSON.parse(row.artifact_json) as CampaignContentArtifactV1;
+      const { contentHash, ...body } = artifact;
+      if (artifact.campaignId !== campaignId || artifact.artifactId !== artifactId || row.content_hash !== contentHash
+        || contentHash !== sha256HexOf(canonicalJsonOf(body))) throw new Error(`战役内容 ${artifactId} 哈希不符，拒绝结算。`);
+      artifacts.push(artifact);
+    }
+    if (state.campaignContentBinding) {
+      const { campaignContentBindingHash } = await import('../campaignPlan/contentBinding');
+      if (campaignContentBindingHash(artifacts) !== state.campaignContentBinding.contentHash) throw new Error('战役内容组合 hash 不匹配，拒绝结算。');
     }
     return { plan, artifacts, runtime };
   }
@@ -1271,11 +1373,44 @@ export class CampaignSession {
     const historyRows = await this.deps.db.queryAll<{ event_seq: number; event_type: string; payload_json: string; state_version: number }>(
       'SELECT event_seq, event_type, payload_json, state_version FROM branch_events WHERE branch_id=? ORDER BY event_seq DESC LIMIT ?',
       [state.branchId, EVENT_HISTORY_WINDOW]);
-    const historyEvents = historyRows.reverse().map(row => ({
-      eventType: row.event_type, payload: JSON.parse(row.payload_json),
-      eventKey: String(row.event_seq), stateVersion: row.state_version,
-    }));
+    const historyEvents = historyRows.reverse().map(row => {
+      const payload = JSON.parse(row.payload_json);
+      return { eventType: row.event_type === 'recordEvent' && typeof payload?.eventType === 'string' ? payload.eventType : row.event_type,
+        payload, eventKey: String(row.event_seq), stateVersion: row.state_version };
+    });
     return { plan: context.plan, artifacts: context.artifacts, historyEvents };
+  }
+
+  /** Every local action evaluates the same campaign authority before its commit. */
+  private async prepareLocalAuthority(campaignId: string, state: GameStateSnapshot, contract: ActionContract,
+    grade: RollGrade, transactionEvents: Array<{ eventType: string; payload: unknown }> = [],
+  ): Promise<(nextState: GameStateSnapshot) => Array<{ eventType: string; payload: unknown }>> {
+    const [applySituations, campaign] = await Promise.all([
+      this.localSituationReducer(campaignId, state.branchId, state, contract.turnId, contract.actorId),
+      this.prepareCampaignSettlement(campaignId, state),
+    ]);
+    return nextState => {
+      const situationEvents = applySituations(nextState);
+      if (!campaign) return situationEvents;
+      return [...situationEvents, ...this.applyCampaignSettlement({ nextState, contract, grade,
+        transactionEvents: [...transactionEvents, ...situationEvents], ...campaign })];
+    };
+  }
+
+  /** Advisory local enqueue only; committed actions never dispatch a director. */
+  private async enqueueCampaignReplan(campaignId: string, branchId: string): Promise<void> {
+    try {
+      const state = await this.deps.turns.getState(branchId);
+      const context = state && await this.loadCampaignPlanForState(campaignId, state);
+      if (!state?.campaignRuntime || !context) return;
+      const { evaluateReplanTriggers, enqueueReplan } = await import('../campaignPlan/replanService');
+      const reasons = evaluateReplanTriggers({ plan: context.plan, runtime: state.campaignRuntime, state });
+      if (reasons.length) await enqueueReplan({
+        deps: { db: this.deps.db, planStore: new SqliteCampaignPlanStore(this.deps.db), worldStore: this.deps.worldStore,
+          provider: this.provider, profile: this.profile }, campaignId, branchId,
+        plan: context.plan, runtime: state.campaignRuntime, state, reasons,
+      });
+    } catch { /* The action is already committed; preparation can be requested later. */ }
   }
 
   private applyCampaignSettlement(input: {
@@ -1288,10 +1423,23 @@ export class CampaignSession {
     historyEvents: Array<{ eventType: string; payload: unknown; eventKey: string; stateVersion: number }>;
   }): Array<{ eventType: string; payload: unknown }> {
     const { nextState } = input;
+    const nextVersion = input.contract.expectedStateVersion + 1;
     const runtime = nextState.campaignRuntime;
     if (!runtime) return [];
     const events: Array<{ eventType: string; payload: unknown }> = [];
     const playerActorId = nextState.party?.find(member => member.controller === 'player')?.actorId ?? '';
+    const campaignActor = (id: string): string => ['pc','player','self','__player__','玩家'].includes(id) ? playerActorId
+      : nextState.actors[id] ? id : `npc-${id}`;
+    const shiftRelationship = (from: string, to: string, delta: number): void => {
+      const fromActorId = campaignActor(from), toActorId = campaignActor(to);
+      if (!nextState.actors[fromActorId] || !nextState.actors[toActorId]) return;
+      nextState.relationships ??= [];
+      let rel = nextState.relationships.find(r => r.fromActorId === fromActorId && r.toActorId === toActorId);
+      if (!rel) { rel = { relId: `rel-${fromActorId}-${toActorId}`, fromActorId, toActorId, stance: 'neutral', closeness: 0, updatedTurnId: null }; nextState.relationships.push(rel); }
+      rel.closeness = Math.max(0, Math.min(100, rel.closeness + delta));
+      rel.updatedTurnId = input.contract.turnId;
+      events.push({ eventType: 'relationship_changed', payload: { fromActorId, toActorId, delta } });
+    };
     // 1. Per-grade campaign outcome extensions frozen in the contract.
     const extension = input.contract.campaignEffects?.[input.grade];
     if (extension) {
@@ -1301,21 +1449,14 @@ export class CampaignSession {
         if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === actorId)) {
           nextState.discoveries.push({
             entryId: grant.entryId, actorId,
-            knownAtStateVersion: nextState.stateVersion,
+            knownAtStateVersion: nextVersion,
             sourceTurnId: input.contract.turnId, knownVia: 'told',
           });
           events.push({ eventType: 'knowledge_discovered', payload: { entryId: grant.entryId, actorId } });
         }
       }
       for (const shift of extension.relationshipShifts) {
-        nextState.relationships = [...(nextState.relationships ?? [])];
-        const existing = nextState.relationships.find(rel =>
-          rel.fromActorId === shift.fromActorId && rel.toActorId === shift.toActorId);
-        if (existing) {
-          existing.closeness = Math.max(-5, Math.min(5, existing.closeness + shift.delta));
-          existing.updatedTurnId = input.contract.turnId;
-          events.push({ eventType: 'relationship_changed', payload: { fromActorId: shift.fromActorId, toActorId: shift.toActorId, delta: shift.delta } });
-        }
+        shiftRelationship(shift.fromActorId, shift.toActorId, shift.delta);
       }
       const ownerArtifact = input.artifacts.find(item => item.situations.some(s => s.entryId === input.contract.methodRef?.situationId));
       for (const consequenceId of extension.scheduledConsequences) {
@@ -1329,59 +1470,108 @@ export class CampaignSession {
           affectedActors: [],
           effectSpecs: template.effectSpecs,
           visibility: template.visibility,
-        }, input.contract.turnId, nextState.stateVersion);
+        }, input.contract.turnId, nextVersion);
         if (scheduled) events.push(scheduled);
       }
     }
     // 2. Progress reducer over the post-settlement state (history preloaded).
-    const transactionEvents = input.transactionEvents.map((event, index) => ({
+    const authorityEvents = [...input.contract.outcomes[input.grade].effects.map(effect => ({
+      eventType: effect.op === 'recordEvent' ? effect.eventType : effect.op, payload: effect,
+    })), ...input.transactionEvents, ...events];
+    const transactionEvents = authorityEvents.map((event, index) => ({
       eventType: event.eventType, payload: event.payload,
-      eventKey: `tx:${index}:${event.eventType}`, stateVersion: nextState.stateVersion,
+      eventKey: `tx:${index}:${event.eventType}`, stateVersion: nextVersion,
     }));
-    const artifact = input.artifacts.find(item => item.planId === runtime.planBinding.planId) ?? input.artifacts[0];
-    const outcome = evaluateCampaignProgress({
+    const artifact = input.artifacts.find(item => item.planId === runtime.planBinding.planId
+      && item.planRevision === runtime.planBinding.revision) ?? input.artifacts[0];
+    let outcome = evaluateCampaignProgress({
       plan: input.plan, runtime, state: nextState,
       transactionEvents, historyEvents: input.historyEvents, artifact,
-      turnId: input.contract.turnId, nextStateVersion: nextState.stateVersion,
+      turnId: input.contract.turnId, nextStateVersion: nextVersion,
     });
     nextState.campaignRuntime = outcome.runtime;
     events.push(...outcome.events);
+    const rewards = [...outcome.rewards];
+    // A triggered consequence must apply its effects in this Prepared state,
+    // not merely publish a "triggered" label. Re-evaluate progress afterwards.
+    const appliedConsequences = new Set(runtime.deferredConsequences.filter(c => c.status === 'triggered').map(c => c.idempotencyKey));
+    let consequenceCount = 0;
+    for (let round = 0; round < 4; round += 1) {
+      const triggered = nextState.campaignRuntime.deferredConsequences.filter(c => c.status === 'triggered' && !appliedConsequences.has(c.idempotencyKey));
+      if (!triggered.length) break;
+      for (const consequence of triggered) {
+        appliedConsequences.add(consequence.idempotencyKey);
+        consequenceCount += 1;
+        const compiled = compileCampaignEffects(consequence.effectSpecs, { actorResolver: id => {
+          if (['__player__','player','玩家','pc','self'].includes(id)) return playerActorId;
+          return nextState.actors[id] ? id : nextState.actors[`npc-${id}`] ? `npc-${id}` : undefined;
+        } });
+        compiled.effects = bindCampaignResources(compiled.effects, nextState, (nextState.cards ?? []).map(c => ({ actorId: c.actorId, resourceMax: (c.card as { resourceMax: Record<string, number> }).resourceMax })));
+        Object.assign(nextState, applyEffects(nextState, compiled.effects));
+        for (const effect of compiled.effects) events.push({ eventType: effect.op === 'recordEvent' ? effect.eventType : 'campaign_consequence_effect', payload: { consequenceId: consequence.consequenceId, ...effect } });
+        const causal = applySituationRuntime({ nextState: { ...nextState, stateVersion: nextState.stateVersion + 1 }, sourceTurnId: input.contract.turnId, playerActorId,
+          definitions: input.artifacts.flatMap(a => a.situations.map(s => ({ situationId: s.entryId, definition: s.definition }))), methodOps: compiled.transitions });
+        nextState.situations = causal.situations;
+        events.push(...causal.events);
+        for (const grant of compiled.knowledgeGrants) {
+          nextState.discoveries ??= [];
+          if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === grant.actorId)) {
+            nextState.discoveries.push({ entryId: grant.entryId, actorId: grant.actorId, knownAtStateVersion: nextVersion, sourceTurnId: input.contract.turnId, knownVia: 'told' });
+            events.push({ eventType: 'knowledge_discovered', payload: grant });
+          }
+        }
+        for (const shift of compiled.relationshipShifts) {
+          shiftRelationship(shift.fromActorId, shift.toActorId, shift.delta);
+        }
+      }
+      outcome = evaluateCampaignProgress({ plan: input.plan, runtime: nextState.campaignRuntime, state: nextState,
+        consequenceTriggerBudget: Math.max(0, 4 - consequenceCount),
+        transactionEvents: [...transactionEvents, ...events.map((event, index) => ({ ...event, eventKey: `campaign:${index}`, stateVersion: nextVersion }))],
+        historyEvents: input.historyEvents, artifact, turnId: input.contract.turnId, nextStateVersion: nextVersion });
+      nextState.campaignRuntime = outcome.runtime;
+      events.push(...outcome.events);
+      rewards.push(...outcome.rewards);
+    }
     // 3. Stage rewards: applied locally, deduped by runtime.grantedRewardKeys.
     if (artifact) {
-      for (const reward of outcome.rewards) {
+      for (const reward of rewards) {
         for (const spec of reward.policy.rewards) {
           if (spec.kind === 'knowledge') {
             const actorId = spec.toActorId ?? playerActorId;
             nextState.discoveries = [...(nextState.discoveries ?? [])];
             if (!nextState.discoveries.some(d => d.entryId === spec.targetId && d.actorId === actorId)) {
               nextState.discoveries.push({ entryId: spec.targetId, actorId,
-                knownAtStateVersion: nextState.stateVersion, sourceTurnId: input.contract.turnId, knownVia: 'told' });
+                knownAtStateVersion: nextVersion, sourceTurnId: input.contract.turnId, knownVia: 'told' });
               events.push({ eventType: 'knowledge_discovered', payload: { entryId: spec.targetId, actorId } });
             }
           } else if (spec.kind === 'relationship' && spec.toActorId) {
-            nextState.relationships = [...(nextState.relationships ?? [])];
-            const rel = nextState.relationships.find(item => item.fromActorId === spec.targetId && item.toActorId === spec.toActorId);
-            if (rel) {
-              rel.closeness = Math.max(-5, Math.min(5, rel.closeness + (spec.delta ?? 1)));
-              rel.updatedTurnId = input.contract.turnId;
-              events.push({ eventType: 'relationship_changed', payload: { fromActorId: spec.targetId, toActorId: spec.toActorId, delta: spec.delta ?? 1 } });
-            }
+            shiftRelationship(spec.targetId, spec.toActorId, spec.delta ?? 1);
           } else if (spec.kind === 'item') {
             nextState.itemOwners = { ...nextState.itemOwners };
             if (nextState.itemOwners[spec.targetId] === undefined) {
               nextState.itemOwners[spec.targetId] = spec.toActorId ?? playerActorId;
               nextState.itemSources = { ...(nextState.itemSources ?? {}) };
-              nextState.itemSources[spec.targetId] = { kind: 'quest_reward', sourceId: reward.policyId, obtainedAtStateVersion: nextState.stateVersion };
+              nextState.itemSources[spec.targetId] = { kind: 'quest_reward', sourceId: reward.policyId, obtainedAtStateVersion: nextVersion };
               events.push({ eventType: 'item_transferred', payload: { itemId: spec.targetId, toActorId: nextState.itemOwners[spec.targetId] } });
             }
-          } else if (spec.kind === 'skill_rank' && spec.toActorId) {
+          } else if (spec.kind === 'resource_cap') {
+            const actorId = spec.toActorId ?? playerActorId;
+            const stored = nextState.cards?.find(card => card.actorId === actorId);
+            const card = stored?.card as { resourceMax?: Record<string, number> } | undefined;
+            if (card?.resourceMax?.[spec.targetId] !== undefined) {
+              card.resourceMax[spec.targetId] = Math.max(1, card.resourceMax[spec.targetId]! + (spec.delta ?? 1));
+              events.push({ eventType: 'resource_cap_changed', payload: { actorId, resourceId: spec.targetId, cap: card.resourceMax[spec.targetId] } });
+            }
+          } else if (spec.kind === 'skill_rank') {
+            const actorId = spec.toActorId ?? playerActorId;
             nextState.skills = [...(nextState.skills ?? [])];
-            const entry = nextState.skills.find(skill => skill.actorId === spec.toActorId && skill.skillId === spec.targetId);
+            const entry = nextState.skills.find(skill => skill.actorId === actorId && (skill.skillId === spec.targetId || skill.skillId === spec.targetId.replace(/^skill-/, '')));
             if (entry) {
               const ranks = ['untrained', 'novice', 'trained', 'expert', 'master'] as const;
-              const nextIndex = Math.min(ranks.length - 1, Math.max(0, ranks.indexOf(entry.rank) + 1));
+              const requested = ranks.indexOf(spec.rank as typeof ranks[number]);
+              const nextIndex = Math.min(ranks.length - 1, Math.max(ranks.indexOf(entry.rank), requested >= 0 ? requested : ranks.indexOf(entry.rank) + 1));
               entry.rank = ranks[nextIndex]!;
-              events.push({ eventType: 'training_completed', payload: { actorId: spec.toActorId, skillId: spec.targetId, rank: entry.rank } });
+              events.push({ eventType: 'training_completed', payload: { actorId, skillId: spec.targetId, rank: entry.rank } });
             }
           }
         }
@@ -2042,6 +2232,10 @@ export class CampaignSession {
         situationDefinitions: combatCandidates ? [] : currentDefinitions,
         allowedCandidates: combatCandidates,
         preferredCandidateRef: options.preferredCandidateRef,
+        preferredSituationId: summary.state.campaignRuntime?.campaignStatus === 'active'
+          ? (await this.loadCampaignPlanForState(options.campaignId, summary.state))?.plan.nodes
+            .find(node => node.nodeId === summary.state.campaignRuntime?.primaryNodeId)?.situationRef
+          : undefined,
         entries: publicEntries,
         blockedEntries: allEntries.filter(entry => !publicEntries.some(publicEntry => publicEntry.entryId === entry.entryId)),
         knownEntryIds,
@@ -2746,6 +2940,9 @@ export class CampaignSession {
       if (relationship) plan.relationships = [relationship];
       return plan;
     };
+    const guidancePlan = (await this.loadCampaignPlanForState(options.campaignId, summary.state))?.plan;
+    const preferredSituationFor = (state: GameStateSnapshot): string | undefined => state.campaignRuntime?.campaignStatus === 'active'
+      ? guidancePlan?.nodes.find(node => node.nodeId === state.campaignRuntime?.primaryNodeId)?.situationRef : undefined;
     let result;
     try {
       // P9 (A11/A13): resolve the selected guidance candidate to a stable
@@ -2836,7 +3033,7 @@ export class CampaignSession {
                   nextState, contract, grade, authoritativeEntries, plannerCards, sourceLocationId);
                 const runtime = applySituationRuntime({
                   definitions: situationDefinitions,
-                  nextState,
+                  nextState: { ...nextState, stateVersion: nextState.stateVersion + 1 },
                   sourceTurnId: contract.turnId,
                   playerActorId: playerCard.actorId,
                   methodOps: methodOpsForContract(contract, grade),
@@ -2863,6 +3060,7 @@ export class CampaignSession {
           },
           buildSituationPacket: (prepared: PreparedTurnResolution) => buildSituationPacket({
             prepared,
+            preferredSituationId: preferredSituationFor(prepared.nextState),
             situationDefinitions,
             playerCard,
             visibleActorNames,
@@ -2874,6 +3072,7 @@ export class CampaignSession {
           }) => {
             const packet = buildSituationPacket({
               prepared, situationDefinitions, playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
+              preferredSituationId: preferredSituationFor(prepared.nextState),
             });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
               [...new Set((prepared.nextState.discoveries ?? []).filter(d => d.actorId === playerCard.actorId).map(d => d.entryId))].sort().join('\n'));
@@ -2992,27 +3191,7 @@ export class CampaignSession {
     // P9 (plan §10.1): local replan trigger evaluation after the commit —
     // enqueues at most one merged background job; never blocks the turn and
     // never issues an LLM call itself.
-    const postCommitState = await this.deps.turns.getState(options.branchId);
-    if (postCommitState?.campaignRuntime) {
-      try {
-        const context = await this.loadCampaignPlanForState(options.campaignId, postCommitState);
-        if (context && postCommitState) {
-          const { evaluateReplanTriggers, enqueueReplan } = await import('../campaignPlan/replanService');
-          const reasons = evaluateReplanTriggers({ plan: context.plan, runtime: postCommitState.campaignRuntime!, state: postCommitState });
-          if (reasons.length > 0) {
-            await enqueueReplan({
-              deps: { db: this.deps.db, planStore: new SqliteCampaignPlanStore(this.deps.db), worldStore: this.deps.worldStore,
-                provider: this.provider, profile: this.profile },
-              campaignId: options.campaignId, branchId: options.branchId,
-              plan: context.plan, runtime: postCommitState.campaignRuntime!, state: postCommitState,
-              reasons,
-            });
-          }
-        }
-      } catch {
-        // Trigger evaluation is advisory; the play turn is already committed.
-      }
-    }
+    await this.enqueueCampaignReplan(options.campaignId, options.branchId);
 
     return {
       turnId,
@@ -3077,7 +3256,8 @@ export class CampaignSession {
     const pressure = summary.state.ruleConfiguration?.modules.find(m => m.moduleId === 'pressure_track');
     if (pressure) for (const outcome of Object.values(contract.outcomes)) outcome.effects = [...outcome.effects,
       { op: 'relievePressure', trackId: 'tension', amount: Number(pressure.parameters.reliefAmount) }];
-    const applySituations = await this.localSituationReducer(options.campaignId, options.branchId, summary.state, turnId, playerCard.actorId);
+    const restEvents = [{ eventType: 'rest_completed', payload: { kind: options.kind } }];
+    const applySituations = await this.prepareLocalAuthority(options.campaignId, summary.state, contract, 'success', restEvents);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
@@ -3086,8 +3266,10 @@ export class CampaignSession {
       applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
+      events: restEvents,
       committedAt: new Date().toISOString(),
     });
+    await this.enqueueCampaignReplan(options.campaignId, options.branchId);
     await this.ensureDecisionPointGuidance({
       campaignId: options.campaignId,
       branchId: options.branchId,
@@ -3192,7 +3374,8 @@ export class CampaignSession {
         severe_failure: trainingOutcome(options.actorId, storedSkillKey, result.nextRank, TRAINING_MINUTES, TRAINING_STAMINA_COST),
       },
     };
-    const applySituations = await this.localSituationReducer(options.campaignId, options.branchId, state, turnId, options.actorId);
+    const trainingEvents = [{ eventType: 'training_completed', payload: { actorId: options.actorId, skillId: storedSkillKey, rank: result.nextRank } }];
+    const applySituations = await this.prepareLocalAuthority(options.campaignId, state, contract, 'success', trainingEvents);
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
@@ -3201,6 +3384,13 @@ export class CampaignSession {
       applyAuthoritativeState: applySituations,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
+      events: trainingEvents,
+      updateNextState: nextState => {
+        nextState.skills = (nextState.skills ?? []).map(skill => skill.actorId === options.actorId && skill.skillId === storedSkillKey
+          ? { ...skill, rank: next.rank, practicePoints: next.practicePoints, awardedKeys: [...next.awardedKeys] } : skill);
+        nextState.cards = (nextState.cards ?? []).map(stored => stored.actorId === options.actorId
+          ? { actorId: options.actorId, card: { ...nextCard, skills: { ...nextCard.skills }, resourceMax: { ...nextCard.resourceMax } } } : stored);
+      },
       settlement: {
         encounterId: `training-${options.branchId}-${options.actorId}-${storedSkillKey}`,
         skillUpserts: [{
@@ -3217,11 +3407,12 @@ export class CampaignSession {
       },
       committedAt: new Date().toISOString(),
     });
+    await this.enqueueCampaignReplan(options.campaignId, options.branchId);
     await this.ensureDecisionPointGuidance({
       campaignId: options.campaignId,
       branchId: options.branchId,
       sourceTurnId: turnId,
-      committedEvents: [{ eventType: 'training_completed', payload: { skillId: storedSkillKey } }],
+      committedEvents: trainingEvents,
     }).catch(() => undefined);
     return {
       advanced: true,
@@ -3288,11 +3479,13 @@ export class CampaignSession {
         severe_failure: milestoneOutcome(options.actorId, storedSkillKey, granted),
       },
     };
+    const applyAuthority = await this.prepareLocalAuthority(options.campaignId, state, contract, 'success');
     const committed = await commitResolvedTurn({
       store: this.deps.turns,
       branchId: options.branchId,
       contract,
       contractHash: await hashActionContract(contract, this.deps.hashProvider),
+      applyAuthoritativeState: applyAuthority,
       contractOrigin: 'engine',
       outcomeGrade: 'success',
       settlement: {
@@ -3315,6 +3508,7 @@ export class CampaignSession {
       },
       committedAt: new Date().toISOString(),
     });
+    await this.enqueueCampaignReplan(options.campaignId, options.branchId);
     return { granted, replayed: committed.replayed };
   }
 

@@ -565,9 +565,11 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       if (input.nextState.stateVersion !== input.expectedStateVersion + 1) {
         throw new Error('Atomic commit must advance stateVersion exactly once.');
       }
+      await input.transactionChanges?.(tx);
 
       // Growth/relationship settlement happens BEFORE persistState so the
       // snapshot stamped below is complete and reflects this turn's awards.
+      await this.mergePreparedCampaignProjections(tx, input);
       if (input.settlement) {
         await this.applySettlement(tx, input, input.nextState.stateVersion);
       }
@@ -586,6 +588,61 @@ export class SqliteTurnStore implements TurnStore, TurnRollJournal {
       await this.insertPostprocessHandoff(tx, branch.campaign_id, input);
       return input.committedTurn;
     });
+  }
+
+  /** Campaign grants are part of Prepared, and must reach the SQL projections
+   * before snapshot stamping reads them back. Preserve ordinary settlement deltas. */
+  private async mergePreparedCampaignProjections(tx: SqliteTransaction, input: AtomicCommitInput): Promise<void> {
+    if (!input.nextState.campaignRuntime || !await this.hasProjectionTables(tx)) return;
+    const plan = input.settlement ?? { encounterId: 'campaign', skillUpserts: [], rewardLedger: [], relationships: [] };
+    for (const rel of input.nextState.relationships ?? []) {
+      const current = await tx.queryOne<{ closeness: number; stance: string }>(
+        'SELECT closeness,stance FROM relationships WHERE branch_id=? AND from_actor_id=? AND to_actor_id=?', [input.branchId, rel.fromActorId, rel.toActorId]);
+      if (current && current.closeness === rel.closeness && current.stance === rel.stance) continue;
+      const existing = plan.relationships.find(r => r.fromActorId === rel.fromActorId && r.toActorId === rel.toActorId);
+      if (existing) {
+        // Prepared already includes the ordinary social settlement, followed
+        // by campaign effects. Persist that final value without adding it twice.
+        existing.closeness = rel.closeness;
+        existing.stance = rel.stance;
+        existing.updatedTurnId = input.turnId;
+      } else plan.relationships.push({ ...rel });
+    }
+    const rankOrder = ['untrained','novice','trained','expert','master'];
+    for (const skill of input.nextState.skills ?? []) {
+      const current = await tx.queryOne<{ rank: string }>('SELECT rank FROM actor_skills WHERE branch_id=? AND actor_id=? AND skill_id=?', [input.branchId, skill.actorId, skill.skillId]);
+      if (!current || current.rank === skill.rank) continue;
+      const existing = plan.skillUpserts.find(s => s.actorId === skill.actorId && s.skillId === skill.skillId);
+      if (existing) { if (rankOrder.indexOf(skill.rank) > rankOrder.indexOf(existing.rank)) existing.rank = skill.rank; }
+      else plan.skillUpserts.push({ ...skill, stateVersion: input.nextState.stateVersion });
+      const finalRank = existing?.rank ?? skill.rank;
+      // Training/lifecycle may already carry a whole card. Its later SQL
+      // upsert must retain grants applied by campaign authority in this commit.
+      const pending = plan.cardUpserts?.find(c => c.actorId === skill.actorId);
+      if (pending) {
+        const card = pending.card as { skills?: Record<string, string> };
+        card.skills = { ...card.skills, [skill.skillId]: finalRank };
+      }
+      const row = await tx.queryOne<{ card_json: string }>('SELECT card_json FROM actor_cards WHERE branch_id=? AND actor_id=?', [input.branchId, skill.actorId]);
+      if (row) {
+        const card = JSON.parse(row.card_json);
+        card.skills = { ...card.skills, [skill.skillId]: finalRank };
+        await tx.execute('UPDATE actor_cards SET card_json=?,updated_state_version=? WHERE branch_id=? AND actor_id=?', [JSON.stringify(card), input.nextState.stateVersion, input.branchId, skill.actorId]);
+      }
+    }
+    for (const stored of input.nextState.cards ?? []) {
+      const prepared = stored.card as { resourceMax?: Record<string, number> };
+      if (!prepared.resourceMax) continue;
+      const row = await tx.queryOne<{ card_json: string }>('SELECT card_json FROM actor_cards WHERE branch_id=? AND actor_id=?', [input.branchId, stored.actorId]);
+      if (!row) continue;
+      const card = JSON.parse(row.card_json);
+      if (JSON.stringify(card.resourceMax) === JSON.stringify(prepared.resourceMax)) continue;
+      card.resourceMax = { ...prepared.resourceMax };
+      const pending = plan.cardUpserts?.find(c => c.actorId === stored.actorId);
+      if (pending) (pending.card as { resourceMax?: Record<string, number> }).resourceMax = { ...prepared.resourceMax };
+      await tx.execute('UPDATE actor_cards SET card_json=?,updated_state_version=? WHERE branch_id=? AND actor_id=?', [JSON.stringify(card), input.nextState.stateVersion, input.branchId, stored.actorId]);
+    }
+    if (plan.relationships.length || plan.skillUpserts.length || input.settlement) input.settlement = plan;
   }
 
   /** Marks the persisted narrative candidate as the adopted revision. */

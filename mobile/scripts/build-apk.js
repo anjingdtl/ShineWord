@@ -8,6 +8,14 @@ const projectRoot = path.resolve(mobileRoot, '..');
 const androidDir = path.join(mobileRoot, 'android');
 const variant = (process.argv[2] || '').toLowerCase();
 
+// Java NIO uses a filesystem socket for Gradle's local daemon connection.
+// A long or redirected TEMP path can make Windows reject that connection.
+if (process.platform === 'win32' && !/jdk\.net\.unixdomain\.tmpdir=/.test(process.env.JAVA_TOOL_OPTIONS || '')) {
+  const socketDir = path.resolve(`${process.env.SystemDrive || 'C:'}\\`, 'shineword-jdk-tmp');
+  fs.mkdirSync(socketDir, { recursive: true });
+  process.env.JAVA_TOOL_OPTIONS = `${process.env.JAVA_TOOL_OPTIONS || ''} -Djdk.net.unixdomain.tmpdir="${socketDir}"`.trim();
+}
+
 if (!['debug', 'release'].includes(variant)) {
   console.error('Usage: npm run apk:<debug|release>');
   process.exit(1);

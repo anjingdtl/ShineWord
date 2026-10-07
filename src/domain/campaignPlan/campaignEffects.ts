@@ -1,6 +1,41 @@
 import type { CampaignEffectSpec, CompiledCampaignEffects } from './types';
 import type { EffectOperation } from '../turns/types';
 import type { SituationTransitionOp } from '../situations/types';
+import type { GameStateSnapshot } from '../state/types';
+
+/** Campaign penalties exhaust available resources; restores obey card caps.
+ * Called before rolling so every grade's actual authority is frozen. */
+export function bindCampaignResources(effects: readonly EffectOperation[], state: GameStateSnapshot,
+  cards: readonly { actorId: string; resourceMax: Record<string, number> }[], prior: readonly EffectOperation[] = []): EffectOperation[] {
+  const balances = new Map<string, number>();
+  const amount = (actorId: string, resourceId: string) => {
+    const key = `${actorId}:${resourceId}`;
+    const current = balances.get(key) ?? state.actors[actorId]?.resources[resourceId];
+    if (current === undefined) throw new Error(`Unknown campaign resource: ${key}.`);
+    return { key, current };
+  };
+  for (const effect of prior) {
+    if (effect.op === 'consumeResource' || effect.op === 'restoreResource') {
+      const { key, current } = amount(effect.actorId, effect.resourceId);
+      balances.set(key, effect.op === 'consumeResource' ? current - effect.amount : Math.min(effect.cap ?? Infinity, current + effect.amount));
+    }
+  }
+  return effects.flatMap((effect): EffectOperation[] => {
+    if (effect.op !== 'consumeResource' && effect.op !== 'restoreResource') return [{ ...effect }];
+    const { key, current } = amount(effect.actorId, effect.resourceId);
+    if (effect.op === 'consumeResource') {
+      const cost = Math.min(effect.amount, Math.max(0, current));
+      balances.set(key, current - cost);
+      // Exhaustion is already represented by the frozen balance. A zero cost
+      // is no operation and must not enter the strictly positive engine contract.
+      return cost > 0 ? [{ ...effect, amount: cost }] : [];
+    }
+    const cap = cards.find(c => c.actorId === effect.actorId)?.resourceMax[effect.resourceId];
+    if (cap === undefined) throw new Error(`Unknown campaign resource cap: ${key}.`);
+    balances.set(key, Math.min(cap, current + effect.amount));
+    return [{ ...effect, cap }];
+  });
+}
 
 /**
  * Local compiler for campaign effect specs (plan §6.2): the model selects

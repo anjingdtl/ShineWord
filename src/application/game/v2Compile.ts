@@ -1,5 +1,5 @@
 import type { RollGrade } from '../../domain/rules/types';
-import { compileCampaignEffects } from '../../domain/campaignPlan/campaignEffects';
+import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
 import { outcomeSetHashFor } from '../campaignPlan/localCompile';
 import type { ActionContract, EffectOperation } from '../../domain/turns/types';
 import type { PlannerProposal } from '../../domain/turns/proposal';
@@ -222,7 +222,7 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   const selectedCandidateRef = selectedRef
     ? `method:${selectedRef.situationId}:${selectedRef.methodId}`
     : (input.candidateRef?.startsWith('method:') ? input.candidateRef : undefined);
-  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent,
+  return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent, input.state,
     selectedIndex >= 0 ? selectedIndex : undefined, selectedCandidateRef);
 }
 
@@ -245,22 +245,24 @@ function bindSituationMethod(
   methodSituations: readonly string[],
   cards: readonly ActorCard[],
   requestedIntent: string,
+  state: GameStateSnapshot,
   selectedIndex?: number,
   candidateRef?: string,
 ): CompiledAction {
   const { contract } = compiled;
   const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
   for (const [index, method] of methods.entries()) {
+    if (selectedIndex !== undefined && index !== selectedIndex) continue;
     const step = method.firstStep;
     // P9: a stable selected id binds even when the player paraphrased the
     // step text; only structural checks still apply (A11).
     const byId = selectedIndex !== undefined && index === selectedIndex;
     if (!byId && normalizeIntent(requestedIntent) !== normalizeIntent(step.intent)) continue;
     if (step.actionKind !== contract.actionType) continue;
-    if (step.skillId !== undefined) {
+    if (step.actionKind === 'skill_check' && step.skillId !== undefined) {
       if (contract.skillId === undefined) continue;
       if (normalizeSkillId(step.skillId) !== normalizeSkillId(contract.skillId)) continue;
-    } else if (contract.skillId !== undefined) {
+    } else if (step.actionKind !== 'skill_check' && contract.skillId !== undefined) {
       continue; // a non-skill method cannot match a skill_check contract
     }
     if (step.targetEntryId !== undefined && contract.targetId !== undefined) {
@@ -306,7 +308,7 @@ function bindSituationMethod(
           ...outcomes[grade],
           achieved: template.achieved,
           publicSummary: template.resultFact,
-          effects: [...outcomes[grade].effects, ...compiledSpecs.effects.map(effect => ({ ...effect }))],
+            effects: [...outcomes[grade].effects, ...bindCampaignResources(compiledSpecs.effects, state, cards, outcomes[grade].effects)],
         };
         perGrade[grade] = {
           transitions: compiledSpecs.transitions,
@@ -333,6 +335,7 @@ function bindSituationMethod(
     };
     return { ...compiled, contract: withMethod };
   }
+  if (selectedIndex !== undefined) throw new ProposalRejectedError('所选办法未能绑定完整行动合同，请刷新路径后重试。');
   return compiled;
 }
 

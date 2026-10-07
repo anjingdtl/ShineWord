@@ -38,7 +38,7 @@ import { setPlayScreenActivity } from '../../../../llmScheduler';
 import { maintainSegmentContent, getSegmentReadiness, releaseRewoundSegmentDemands } from '../../../../segmentRuntime';
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
-import type { GuidanceStepView } from '../../../../../../src/application/guidance/types';
+import type { GuidanceStepView, TurnGuidanceV1 } from '../../../../../../src/application/guidance/types';
 import type { PlayTurnOptions } from '../../../../../../src/application/campaign/session';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
@@ -65,6 +65,7 @@ export interface PlayCombatView {
 }
 
 export interface PlayController {
+  guidance: TurnGuidanceV1 | null;
   campaignId: string;
   branchId: string;
   projection: PlayUiProjection | null;
@@ -110,6 +111,7 @@ export function usePlayController(): PlayController {
 
   const [projection, setProjection] = useState<PlayUiProjection | null>(null);
   const [turns, setTurns] = useState<TurnView[]>([]);
+  const [guidance, setGuidance] = useState<TurnGuidanceV1 | null>(null);
   const [intent, setIntent] = useState('');
   const [busy, setBusy] = useState(false);
   const [recovery, setRecovery] = useState<PlayRecovery | null>(null);
@@ -121,6 +123,11 @@ export function usePlayController(): PlayController {
   const [rejoinOptions, setRejoinOptions] = useState<PlayController['rejoinOptions']>([]);
   const actionInFlight = useRef(false);
   const autoNpcRunning = useRef(false);
+  const replanRunning = useRef(false);
+  const mounted = useRef(true);
+  const activeBranch = useRef(branchId);
+  activeBranch.current = branchId;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const refreshSeq = useRef(0);
   const foreground = useRef(AppState.currentState === 'active');
   const [foregroundEpoch, setForegroundEpoch] = useState(0);
@@ -139,6 +146,11 @@ export function usePlayController(): PlayController {
     // fresh one. Serialize: only the newest-started refresh may apply state.
     const seq = ++refreshSeq.current;
     try {
+      // Management/adoption and the opening create decision points even when
+      // they have no narrative card. Derive their choices locally, without HTTP.
+      const session = await createReadOnlySession();
+      const nextGuidance = await session.ensureDecisionPointGuidance({ campaignId, branchId,
+        sourceTurnId: 'refresh-current', localOnly: true });
       const [nextProjection, history, nextSceneEncounters, pending] = await Promise.all([
         getPlayUiProjection(campaignId, branchId),
         loadHistory(branchId),
@@ -148,6 +160,7 @@ export function usePlayController(): PlayController {
       if (seq !== refreshSeq.current) return;
       setProjection(nextProjection);
       setTurns(history);
+      setGuidance(nextGuidance?.decisionPoint.stateVersion === nextProjection.stateVersion ? nextGuidance : null);
       setSceneEncounterOptions(nextSceneEncounters);
       setRecovery(pending);
       if (pending?.intent && !actionInFlight.current) setIntent(previous => previous || pending.intent);
@@ -160,6 +173,24 @@ export function usePlayController(): PlayController {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Local commit triggers enqueue jobs. Only those jobs dispatch a planner;
+  // ordinary turns have no extra model call and remain usable while it runs.
+  useEffect(() => {
+    if (!profile || busy || recovery || !projection || replanRunning.current || !foreground.current) return;
+    replanRunning.current = true;
+    void (async () => {
+      try {
+        const session = await createSession(profile, await buildProvider(profile));
+        const status = await session.runCampaignReplan(campaignId, branchId, { automatic: true });
+        if (status === 'adopted' && mounted.current && activeBranch.current === branchId) {
+          setNotice('后续主线已根据最新局势准备。'); await refresh();
+        }
+      } catch {
+        if (mounted.current && activeBranch.current === branchId) setNotice('后续主线准备尚未完成，可以继续探索或在主线面板恢复。');
+      } finally { replanRunning.current = false; }
+    })();
+  }, [profile, campaignId, branchId, projection?.stateVersion, busy, recovery, foregroundEpoch, refresh]);
 
   // Returning to the foreground can coincide with a turn that finished in the
   // background (recovery/service completion); re-read the feed then too.
@@ -448,7 +479,8 @@ export function usePlayController(): PlayController {
       }
       if (projection) {
         const prepared = await maintainSegmentContent({ worldId: projection.worldId, campaignId, branchId,
-          stateVersion: projection.stateVersion, locationId: projection.player?.locationId ?? null, intent: value });
+          stateVersion: projection.stateVersion, locationId: projection.player?.locationId ?? null, intent: value,
+          publishedChoice: guidanceChoice });
         if (prepared.pending) { setNotice(prepared.message); await refresh(); return; }
       }
       const result = await session.playTurn({ campaignId, branchId, intent: value, guidanceChoice });
@@ -504,17 +536,19 @@ export function usePlayController(): PlayController {
   }
 
   async function partyCall(action: (session: Awaited<ReturnType<typeof createSession>>) => Promise<void>) {
-    if (!profile || pendingTurnBlocksAction()) return;
+    if (!profile || actionInFlight.current || pendingTurnBlocksAction()) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
       const session = await createSession(profile, await buildProvider(profile));
       await action(session);
       void session.resumePostProcessing(branchId).catch(() => undefined);
-      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      await refresh();
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -689,8 +723,6 @@ export function usePlayController(): PlayController {
    */
   const submitGuidanceStep = (step: GuidanceStepView): void => {
     if (busy || actionInFlight.current) return;
-    const latest = turns[turns.length - 1];
-    const guidance = latest?.guidance;
     if (!guidance) return;
     if (guidance.decisionPoint.branchId !== branchId
       || guidance.decisionPoint.stateVersion !== projection?.stateVersion) {
@@ -725,6 +757,7 @@ export function usePlayController(): PlayController {
     branchId,
     projection,
     turns,
+    guidance,
     intent,
     setIntent,
     busy,

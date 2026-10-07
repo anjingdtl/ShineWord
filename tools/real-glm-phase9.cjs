@@ -36,10 +36,9 @@ const { llmModelProfileFingerprint } = requireP('dist/application/llm/profileFin
 
 const KEY_FILE = 'C:/Users/Administrator/Desktop/AIstudio/Test-key/GLM-TEST.txt';
 const NOVEL_PATH = 'C:/Users/Administrator/Desktop/AIstudio/放开那个女巫.txt';
-const WORK = '.tmp/phase9';
+const WORK = process.env.PHASE9_WORK_DIR || '.tmp/phase9';
 const DB_PATH = path.join(WORK, 'phase9.sqlite');
-const MANIFEST_PATH = path.join(WORK, 'test-manifest.json');
-const BUDGET = 400;
+const { reservePhysicalRequest, updateManifest, manifestPath: MANIFEST_PATH } = require('./phase9-budget.cjs');
 
 function parseConfig() {
   const lines = fs.readFileSync(KEY_FILE, 'utf8').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -70,7 +69,10 @@ function loadManifest() {
 }
 
 function saveManifest(manifest) {
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
+  updateManifest(current => {
+    const { budget: _budget, ...rest } = manifest;
+    Object.assign(current, rest);
+  });
 }
 
 async function countPhysicalRequests(adapter) {
@@ -117,9 +119,11 @@ function pickStep(guidance, journey, decisionIndex) {
   if (!guidance || guidance.steps.length === 0) return null;
   const available = guidance.steps.filter(step => step.availability === 'available');
   if (available.length === 0) return null;
-  const preferred = available.filter(step =>
+  const campaignMethods = available.filter(step => step.situationId?.startsWith('camp-sit-'));
+  const relevant = campaignMethods.length ? campaignMethods : available;
+  const preferred = relevant.filter(step =>
     journey.prefer.some(keyword => step.title.includes(keyword) || step.firstStepIntent.includes(keyword)));
-  const pool = preferred.length > 0 ? preferred : available;
+  const pool = preferred.length > 0 ? preferred : relevant;
   return pool[decisionIndex % pool.length];
 }
 
@@ -208,7 +212,7 @@ async function buildWorld(h, profile) {
   if (!revision) throw new Error('progressive import did not publish a package');
   const after = await countPhysicalRequests(h.adapter);
   const spent = after - before;
-  manifest.budget.spent += spent;
+
   saveManifest(manifest);
   console.log(`[world] ${imported.worldId} r${revision} published (physical requests: ${spent})`);
   fs.writeFileSync(worldFile, JSON.stringify({ worldId: imported.worldId, revision }));
@@ -223,7 +227,7 @@ async function planAndAdopt(h, profile, world, journeyId, journey, anchorInput) 
     rawIntent: journey.intent, normalizedIntent: journey.intent, goalMode: 'declared',
     protagonistBinding: { actorId: 'actor-player', kind: 'original', name: '旅人' },
     openingAnchor: anchorInput.anchor,
-    companionBindings: [], lengthPreference: journey.length,
+    companionBindings: [], lengthPreference: process.env.PHASE9_LENGTH || journey.length,
     userConstraints: [], requestedCanonTargets: [], knowledgePolicy: 'anchor_projection',
     sourceCoverageBinding: {
       worldId: world.worldId, packageRevision: world.revision,
@@ -241,7 +245,7 @@ async function planAndAdopt(h, profile, world, journeyId, journey, anchorInput) 
   await planStore.insertJob({
     jobId, setupId, campaignId: null, branchId: null, jobKind: 'opening_plan',
     triggerReasons: ['user_requested'], baseStateVersion: null, basePlanId: null, basePlanRevision: null,
-    intentHash: sha(journey.intent), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
+    intentHash: requireP('dist/application/campaignPlan/hashing').sha256HexOf(requireP('dist/application/campaignPlan/hashing').canonicalJsonOf(intent)), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
     status: 'queued', leaseOwner: null, leaseExpiresAt: null, fencingToken: 0, attemptCount: 0,
     nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: null, lastError: null,
     createdAt: intent.createdAt, updatedAt: intent.createdAt,
@@ -261,7 +265,7 @@ async function planAndAdopt(h, profile, world, journeyId, journey, anchorInput) 
   });
   const after = await countPhysicalRequests(h.adapter);
   const manifest = loadManifest();
-  manifest.budget.spent += after - before;
+
   saveManifest(manifest);
   if (run.status !== 'candidate_ready') {
     throw new Error(`planning failed: ${run.status} ${run.errors.slice(0, 3).join('; ')}`);
@@ -330,7 +334,8 @@ async function makeSession(h, profile) {
 
 async function playJourney(h, profile, options) {
   const { journeyId, decisions, jsonlFile } = options;
-  const journey = JOURNEYS[journeyId] ?? { ...JOURNEYS.J1, ...options.journeyOverrides };
+  const journey = { ...(JOURNEYS[journeyId] ?? { ...JOURNEYS.J1, ...options.journeyOverrides }),
+    ...(process.env.PHASE9_ROUTE_KEYWORD ? { prefer: [process.env.PHASE9_ROUTE_KEYWORD] } : {}) };
   const manifest = loadManifest();
   const worldState = JSON.parse(fs.readFileSync(path.join(WORK, 'world.json'), 'utf8'));
   const anchor = await pickAnchor(h, worldState);
@@ -338,6 +343,16 @@ async function playJourney(h, profile, options) {
   // Adoption can refuse a plan whose ending already holds at the opening
   // (honest gate). Retry with a fresh proposal instead of failing the journey.
   let planned = null;
+  if (process.env.PHASE9_RESUME_CAMPAIGN) {
+    const campaignId = process.env.PHASE9_RESUME_CAMPAIGN;
+    const branchId = process.env.PHASE9_BRANCH_ID || `${campaignId}-main`;
+    if (process.env.PHASE9_FORK_FROM_VERSION) {
+      await session.rewind({ campaignId, sourceBranchId: `${campaignId}-main`, newBranchId: branchId,
+        atStateVersion: Number(process.env.PHASE9_FORK_FROM_VERSION) });
+    }
+    const summary = await session.getSummary(campaignId, branchId);
+    planned = { campaignId, branchId, planMs: 0, physical: 0, plan: summary.state.campaignRuntime };
+  }
   let lastPlanError = null;
   for (let attempt = 0; attempt < 3 && !planned; attempt += 1) {
     try {
@@ -350,35 +365,60 @@ async function playJourney(h, profile, options) {
   if (!planned) throw new Error(`planning failed after retries: ${lastPlanError}`);
   logLine(jsonlFile, {
     kind: 'plan', journeyId, campaignId: planned.campaignId, planMs: planned.planMs,
+    identity: require('./phase9-identity.cjs').codeIdentity().productionSourcesHash,
     physicalRequests: planned.physical,
     longTermGoal: 'see proposal card', primaryNode: planned.plan.primaryNodeId,
     nodeStates: planned.plan.nodeStates.map(n => [n.nodeId, n.status]),
   });
   console.log(`[${journeyId}] plan ready in ${planned.planMs}ms (${planned.physical} req) → ${planned.campaignId}`);
+  if (process.env.PHASE9_REQUEST_REPLAN === '1') {
+    const started = Date.now();
+    const outcome = await session.runCampaignReplan(planned.campaignId, planned.branchId);
+    logLine(jsonlFile, { kind: 'manual_replan', outcome, ms: Date.now() - started });
+    console.log(`[${journeyId}] requested replan: ${outcome}`);
+  }
 
   let lastGuidance = null;
   let committedDecisions = 0;
   let attempts = 0;
   const errors = [];
+  const rejectedRefs = new Set();
+  let decisionsWithoutStageProgress = 0;
   while (committedDecisions < decisions && attempts < decisions * 3) {
+    const current = await session.getSummary(planned.campaignId, planned.branchId);
+    if (['completed', 'failed', 'ended'].includes(current.state.campaignRuntime?.campaignStatus)) break;
     attempts += 1;
     const manifestNow = loadManifest();
-    if (manifestNow.budget.spent >= BUDGET) {
+    if (manifestNow.budget.spent >= manifestNow.budget.totalPhysicalRequests) {
       errors.push(`budget exhausted at decision ${committedDecisions}`);
       break;
     }
-    const step = pickStep(lastGuidance, journey, committedDecisions);
+    lastGuidance = await session.ensureDecisionPointGuidance({ campaignId: planned.campaignId, branchId: planned.branchId, sourceTurnId: 'qa-current', localOnly: true }) ?? lastGuidance;
+    if (process.env.PHASE9_REQUIRE_MAINLINE === '1' && current.state.campaignRuntime?.campaignStatus === 'active'
+      && !lastGuidance?.steps.some(s => s.situationId?.startsWith('camp-sit-') && s.availability === 'available')) {
+      errors.push('No executable published mainline route at this decision point; do not count generic exploration as acceptance.');
+      logLine(jsonlFile, { kind: 'content_blocked', stateVersion: current.state.stateVersion, primaryNode: current.state.campaignRuntime.primaryNodeId });
+      break;
+    }
+    const step = pickStep(lastGuidance ? { ...lastGuidance, steps: lastGuidance.steps.filter(s => !rejectedRefs.has(s.candidateRef)) } : null, journey, committedDecisions);
     const baseIntent = step ? step.firstStepIntent : (committedDecisions === 0
       ? journey.intent
       : ['观察周围的情况', '和附近的人聊聊眼前的事', '查看周围有没有值得注意的东西'][committedDecisions % 3]);
-    const intent = paraphrase(baseIntent, committedDecisions);
+    const tapped = step && (committedDecisions % 3 === 0 || step.actionId === 'move' || step.actionId === 'short_rest');
+    const recovering = committedDecisions === 0 && process.env.PHASE9_RECOVER_INTENT;
+    const intent = recovering || (tapped ? baseIntent : paraphrase(baseIntent, committedDecisions));
     const before = await countPhysicalRequests(h.adapter);
     const started = Date.now();
     try {
-      const result = await session.playTurn({ campaignId: planned.campaignId, branchId: planned.branchId, intent });
+      const guidanceChoice = tapped && !recovering ? { decisionPoint: lastGuidance.decisionPoint, candidateRef: step.candidateRef } : undefined;
+      const result = step?.actionId === 'short_rest' ? await session.rest({ campaignId: planned.campaignId, branchId: planned.branchId, kind: 'short', guidanceChoice })
+        : await session.playTurn({ campaignId: planned.campaignId, branchId: planned.branchId, intent, ...(guidanceChoice ? { guidanceChoice } : {}) });
       const after = await countPhysicalRequests(h.adapter);
       committedDecisions += 1;
       const state = await session.getSummary(planned.campaignId, planned.branchId);
+      decisionsWithoutStageProgress = state.state.campaignRuntime?.primaryNodeId === current.state.campaignRuntime?.primaryNodeId
+        && state.state.campaignRuntime?.lastProgressVersion === current.state.campaignRuntime?.lastProgressVersion
+        ? decisionsWithoutStageProgress + 1 : 0;
       const progress = await session.getCampaignProgress(planned.campaignId, planned.branchId);
       logLine(jsonlFile, {
         kind: 'decision', journeyId, decision: committedDecisions, turnId: result.turnId,
@@ -394,18 +434,40 @@ async function playJourney(h, profile, options) {
         progressLines: progress?.recentProgress?.slice(-2) ?? [],
         narrativePreview: (result.text ?? '').slice(0, 80),
       });
-      manifestNow.budget.spent = after;
+
       saveManifest(manifestNow);
       lastGuidance = result.guidance ?? lastGuidance;
       process.stdout.write(`[${journeyId}] decision ${committedDecisions}/${decisions} ${result.grade} ${(Date.now() - started) / 1000 | 0}s (req ${after - before})\n`);
+      // Exercise the same automatic job entry as the Android foreground hook.
+      try {
+        const startedReplan = Date.now();
+        const replan = await session.runCampaignReplan(planned.campaignId, planned.branchId, { automatic: true });
+        if (replan !== 'no_change') {
+          logLine(jsonlFile, { kind: 'replan', afterDecision: committedDecisions, outcome: replan, ms: Date.now() - startedReplan });
+          console.log(`[${journeyId}] automatic replan: ${replan}`);
+          if (replan === 'adopted') lastGuidance = null;
+        }
+      } catch (error) {
+        logLine(jsonlFile, { kind: 'replan_error', afterDecision: committedDecisions, message: error.message.slice(0, 600) });
+        console.log(`[${journeyId}] replan blocked: ${error.message.slice(0, 150)}`);
+      }
+      if (process.env.PHASE9_REQUIRE_MAINLINE === '1' && decisionsWithoutStageProgress >= 5) {
+        errors.push('Five decisions without stage progress; stop the diagnostic instead of filling the journey count.');
+        break;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`decision ${committedDecisions + 1}: ${message.slice(0, 200)}`);
       logLine(jsonlFile, { kind: 'error', journeyId, decision: committedDecisions + 1, intent, message: message.slice(0, 300) });
       process.stdout.write(`[${journeyId}] ERROR at decision ${committedDecisions + 1}: ${message.slice(0, 120)}\n`);
+      const pending = await h.adapter.queryOne("SELECT turn_id FROM turns WHERE branch_id=? AND status<>'Committed' LIMIT 1", [planned.branchId]);
+      // A durable partial/frozen turn cannot be replaced with another intent.
+      // Resume it explicitly after diagnosis instead of manufacturing retries.
+      if (pending || /Frozen turn|Invalid action contract|unknown|timeout/i.test(message)) break;
       // A rejected intent (stale path etc.) is a real outcome: try a different
       // action next attempt rather than aborting the whole journey.
       lastGuidance = null;
+      if (step) rejectedRefs.add(step.candidateRef);
       if (errors.length > 8) break;
     }
   }
@@ -438,6 +500,7 @@ async function replanProvider(h, profile) {
 async function main() {
   const command = process.argv[2] ?? 'smoke';
   fs.mkdirSync(WORK, { recursive: true });
+  fs.writeFileSync(path.join(WORK, 'identity.json'), JSON.stringify(require('./phase9-identity.cjs').codeIdentity(), null, 2));
   const config = parseConfig();
   const profile = {
     id: 'glm-phase9', name: 'GLM phase9', endpoint: config.endpoint, model: config.model, keyRef: 'glm.phase9',
@@ -449,6 +512,7 @@ async function main() {
   const secrets = new MemorySecretStore();
   await secrets.set(profile.keyRef, config.key);
   const transport = { async post(request) {
+    reservePhysicalRequest(`host:${WORK}`);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? 300_000);
     try {
@@ -573,7 +637,7 @@ async function main() {
     console.log(`[J4] A: ${resultA.decided} decisions, plan r${resultA.state.campaignRuntime?.planBinding.revision}, v${resultA.state.stateVersion}`);
     console.log(`[J4] B: ${resultB.decided} decisions, plan r${resultB.state.campaignRuntime?.planBinding.revision}, v${resultB.state.stateVersion}`);
     const manifestFork = loadManifest();
-    manifestFork.budget.spent = await countPhysicalRequests(h.adapter);
+
     saveManifest(manifestFork);
     h.db.close();
     return;

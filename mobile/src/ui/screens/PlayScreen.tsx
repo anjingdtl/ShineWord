@@ -1,12 +1,13 @@
 /** Text-first play surface: story, at most three direct choices, and free input. */
 import React, { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Keyboard, Text, View, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenShell } from '../components/ScreenShell';
 import { StatusBanner } from '../components/StatusBanner';
 import { Button } from '../components/Button';
+import { TextField } from '../components/TextField';
 import { typeStyle } from '../components/typography';
 import { ActionChoices, type ActionChoice } from '../features/play/ActionChoices';
 import { GuidanceCard } from '../features/play/GuidanceCard';
@@ -36,6 +37,10 @@ export function PlayScreen(): React.JSX.Element {
 
 function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController> }): React.JSX.Element {
   const { theme } = useTheme();
+  const { fontScale, height } = useWindowDimensions();
+  // Large text and short windows need choices to scroll with the story,
+  // otherwise fixed controls can leave less than one readable story line.
+  const scrollChoices = fontScale >= 1.8 || height < 600;
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const controller = props.controller;
   const {
@@ -51,8 +56,21 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   // "开始游玩" or implicitly after the first committed turn.
   const [guideVisible, setGuideVisible] = useState(false);
   const [progressExpanded, setProgressExpanded] = useState(false);
+  const [goalDraft, setGoalDraft] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
   const campaignProgress = useCampaignProgress(campaignId, branchId, view?.stateVersion);
   const guideHidden = turns.length > 0;
+  const closeProgress = (): void => {
+    Keyboard.dismiss();
+    setProgressExpanded(false);
+    setGoalDraft(null);
+  };
+
+  useEffect(() => {
+    const shown = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => { shown.remove(); hidden.remove(); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,9 +85,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     void AsyncStorage.setItem('shineword.play.guide.v1', 'seen').catch(() => undefined);
   };
 
-  // P7: the newest committed turn's guidance drives the actionable path
-  // card; older turns keep their guidance as history inside the feed data.
-  const latestGuidance = turns.length > 0 ? turns[turns.length - 1].guidance : undefined;
+  const latestGuidance = controller.guidance;
   const choices = useContextualActions({
     projection: view,
     encounter,
@@ -152,30 +168,45 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         busy={busy}
       />
 
-      {campaignProgress ? (
+      {campaignProgress && !keyboardVisible ? (
         <View style={{ paddingHorizontal: theme.space.lg }}>
           <CampaignProgressCard
             progress={campaignProgress}
-            expanded={progressExpanded}
-            onToggle={() => setProgressExpanded(value => !value)} />
+            expanded={false}
+            onToggle={() => { Keyboard.dismiss(); setProgressExpanded(true); }} />
         </View>
       ) : null}
+      <PlayPanel visible={progressExpanded} title="战役主线" onClose={closeProgress}>
+        <CampaignProgressCard progress={campaignProgress} expanded onToggle={closeProgress} busy={busy || recoveryLocked}
+          onPauseResume={() => void partyCall(async session => { await session.setCampaignStatus({ campaignId, branchId, status: campaignProgress?.status === 'paused' ? 'active' : 'paused' }); })}
+          onAdjustGoal={() => setGoalDraft(campaignProgress?.currentObjective ?? '')}
+          onReplan={() => void partyCall(async session => { const status = await session.runCampaignReplan(campaignId, branchId); controller.setNotice(status === 'no_change' ? '当前没有需要处理的主线修订。' : '后续主线已准备。'); })} />
+        {goalDraft !== null ? <View style={{ gap: theme.space.sm }}>
+          <TextField label="这次想做什么" value={goalDraft} onChangeText={setGoalDraft} multiline disabled={busy} />
+          <Button label="采用新目标并规划" disabled={busy || recoveryLocked || !goalDraft.trim()} onPress={() => void partyCall(async session => {
+            await session.changeCampaignGoal({ campaignId, branchId, newGoal: goalDraft.trim(), newRawIntent: goalDraft });
+            setGoalDraft(null);
+            await session.runCampaignReplan(campaignId, branchId);
+          })} testID="campaign-adopt-goal" />
+        </View> : null}
+      </PlayPanel>
       <NarrativeFeed
         turns={turns}
         goal={view?.goal ?? ''}
         busy={busy}
         guideVisible={guideVisible && !guideHidden}
         onDismissGuide={dismissGuide}
-        footer={latestGuidance && (encounter?.status !== 'active' || encounter.currentActorIsPlayer) ? (
-          <GuidanceCard
+        footer={<>
+          {scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} /> : null}
+          {latestGuidance && (encounter?.status !== 'active' || encounter.currentActorIsPlayer) ? <GuidanceCard
             embedded
             guidance={latestGuidance}
             currentStateVersion={view?.stateVersion}
             disabled={busy || recoveryLocked}
             onSubmitStep={controller.submitGuidanceStep}
             onPrefillIntent={value => controller.setIntent(value)}
-          />
-        ) : null}
+          /> : null}
+        </>}
       />
 
       <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.xs }}>
@@ -190,7 +221,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
       </View>
 
-      <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} />
+      {!scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} /> : null}
       <ActionComposer
         value={intent}
         onChangeText={setIntent}

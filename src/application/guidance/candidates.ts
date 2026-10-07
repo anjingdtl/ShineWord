@@ -63,7 +63,7 @@ export function assessMethod(
     || player.lifeStatus === 'incapacitated' || player.conditions.includes('disabled')) blockers.push('需要先得到援救并恢复行动能力');
   const requires = method.requires ?? {};
 
-  const requiredSkill = requires.skillId ?? method.firstStep.skillId;
+  const requiredSkill = requires.skillId ?? (method.firstStep.actionKind === 'skill_check' ? method.firstStep.skillId : undefined);
   if (requiredSkill) {
     const cardKey = Object.keys(playerCard.skills ?? {})
       .find(key => key.replace(/^skill-/, '') === requiredSkill.replace(/^skill-/, ''));

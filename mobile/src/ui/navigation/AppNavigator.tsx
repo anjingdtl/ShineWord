@@ -9,6 +9,8 @@
  * screen renders the themed <Header />, which keeps all chrome on tokens).
  */
 import React, { useMemo } from 'react';
+import { Text, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -33,6 +35,14 @@ const Tabs = createBottomTabNavigator<RootTabParamList>();
 
 function TabsNavigator(): React.JSX.Element {
   const { theme } = useTheme();
+  const { bottom } = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const bottomPadding = Math.max(bottom, theme.space.sm);
+  // Keep scaled labels above the system gesture area as well as the icons.
+  const contentHeight = Math.max(
+    theme.touch.min + theme.space.xl - theme.space.sm,
+    24 + theme.type.micro.lineHeight * fontScale + theme.space.sm + theme.space.xs * 2,
+  );
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -43,11 +53,16 @@ function TabsNavigator(): React.JSX.Element {
           backgroundColor: theme.bg.raised,
           borderTopColor: theme.border.color,
           borderTopWidth: theme.border.hairline,
-          height: theme.touch.min + theme.space.xl,
+          height: contentHeight + bottomPadding,
           paddingTop: theme.space.xs,
-          paddingBottom: theme.space.sm,
+          paddingBottom: bottomPadding,
         },
         tabBarLabelStyle: typeStyle(theme, theme.type.micro),
+        tabBarLabel: ({ color, children }) => (
+          <Text key={fontScale} style={[typeStyle(theme, theme.type.micro), { color }]} numberOfLines={1}>
+            {children}
+          </Text>
+        ),
         tabBarItemStyle: { paddingVertical: theme.space.xs / 2 },
       }}>
       <Tabs.Screen

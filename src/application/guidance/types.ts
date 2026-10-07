@@ -49,6 +49,8 @@ export interface AllowedCandidateV1 {
 
 /** Player-safe situation packet entering the Narrator request (§3.6). */
 export interface PublicSituationPacketV1 {
+  /** Locally bound current mainline; never supplied by the model. */
+  preferredSituationId?: string;
   changes: string[];
   opportunities: ReadonlyArray<{ text: string; situationId?: string }>;
   pressures: ReadonlyArray<{ text: string; deadlineClockSeconds?: number }>;

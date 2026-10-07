@@ -26,6 +26,8 @@ import { rangesCover } from '../../src/application/segmentBuild/ranges';
 import { estimateBuildLeadTimeMs } from '../../src/application/segmentBuild/segmentBuildService';
 import { readSegmentSchedulingAdmission } from './llmScheduler';
 import type { SegmentReadinessV1 } from '../../src/application/segmentBuild/types';
+import { guidanceContentBindingHash } from '../../src/application/guidance/types';
+import type { PlayTurnOptions } from '../../src/application/campaign/session';
 
 interface CampaignPlanningRow extends SqliteRow {
   world_id: string; anchor_json: string; opening_json: string; state_version: number;
@@ -69,6 +71,7 @@ export async function retrySegmentPreparation(worldId: string, segmentId: string
 export async function maintainSegmentContent(input: {
   worldId: string; campaignId: string; branchId: string; locationId: string | null;
   stateVersion: number; anchorWorldTimeOrder?: number | null; intent?: string;
+  publishedChoice?: PlayTurnOptions['guidanceChoice'];
 }): Promise<{ pending: boolean; message: string | null }> {
   const runtime = await getDatabaseRuntime();
   const plan = await runtime.segmentPlans.getPlan(input.worldId);
@@ -81,6 +84,19 @@ export async function maintainSegmentContent(input: {
   if (row.state_version !== input.stateVersion) return { pending: true, message: '战役状态已更新，请刷新后继续原行动。' };
   const state = await runtime.turns.getState(input.branchId);
   if (!state || state.stateVersion !== input.stateVersion) return { pending: true, message: '战役状态已更新，请刷新后继续原行动。' };
+  // A locally assessed, published method already has its executable content.
+  // Mentioning a known character in that exact first step must not turn nearby
+  // speculative source search hits into mandatory action dependencies.
+  const choice = input.publishedChoice;
+  if (choice?.candidateRef.startsWith('method:')) {
+    const guide = await runtime.guidance.get(input.branchId, choice.decisionPoint.decisionPointId);
+    const step = guide?.steps.find(s => s.candidateRef === choice.candidateRef);
+    if (guide && step?.availability === 'available' && step.firstStepIntent === input.intent
+      && guide.decisionPoint.branchId === input.branchId && guide.decisionPoint.campaignId === input.campaignId
+      && guide.decisionPoint.stateVersion === state.stateVersion
+      && guide.decisionPoint.contentBindingHash === guidanceContentBindingHash(state)
+      && JSON.stringify(guide.decisionPoint) === JSON.stringify(choice.decisionPoint)) return { pending: false, message: null };
+  }
   await runtime.segments.releaseStaleBranchDemands({ worldId: input.worldId, campaignId: input.campaignId, branchId: input.branchId, stateVersion: input.stateVersion });
   const anchor = finiteAnchor(row.anchor_json);
   let readiness = await runtime.segments.readReadiness(input);

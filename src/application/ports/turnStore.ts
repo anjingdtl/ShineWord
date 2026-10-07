@@ -63,6 +63,8 @@ export interface AtomicCommitInput {
   settlement?: TurnSettlementPlan;
   /** Additional engine events produced by authoritative projections in this transaction. */
   events?: Array<{ eventType: string; payload: unknown }>;
+  /** Fenced management changes must share the state/event/outbox transaction. */
+  transactionChanges?: (tx: import('./sqlite').SqliteTransaction) => Promise<void>;
 }
 
 export interface TurnStore {

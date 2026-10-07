@@ -36,6 +36,9 @@ export interface CampaignIntentV1 {
     kind: 'original' | 'canon';
     name: string;
     canonEntityId?: string;
+    description?: string;
+    attributes?: Record<string, number>;
+    initialSkills?: readonly string[];
   };
   openingAnchor: {
     worldTimeOrder: number;
@@ -133,6 +136,8 @@ export interface CampaignPlanV1 {
   lengthPreference: CampaignLengthPreference;
   startNodeIds: string[];
   nodes: CampaignNodeV1[];
+  /** Immutable definitions retained for history; they cannot be activated again. */
+  retiredNodeIds?: string[];
   possibleEndings: CampaignEndingV1[];
   /** Dependencies not yet buildable/resolvable at plan time (远期 provisional). */
   unresolvedDependencies: ReadonlyArray<{
@@ -203,6 +208,7 @@ export interface CampaignRuntimeV1 {
   planBinding: { planId: string; revision: number; contentHash: string };
   intentRevision: number;
   /** Snapshot state version this runtime was last updated at. */
+  intent?: CampaignIntentV1;
   stateVersion: number;
   campaignStatus: CampaignStatus;
   primaryNodeId: string | null;

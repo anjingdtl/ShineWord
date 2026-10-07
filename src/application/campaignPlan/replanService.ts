@@ -10,8 +10,10 @@ import { validateCampaignPlan } from '../../domain/campaignPlan/planValidation';
 import { compileCampaignPlan, type LocalCompileContext } from './localCompile';
 import { extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
 import { buildPlanningContext } from './planningService';
-import { sha256HexOf } from './hashing';
+import { sha256HexOf, canonicalJsonOf } from './hashing';
 import { stableFingerprint } from '../llm/requestPlan';
+import { isIntactReadyCandidate } from './candidateIntegrity';
+import { campaignContentBindingHash } from './contentBinding';
 
 /**
  * Campaign replanning (plan §10). Triggers are evaluated LOCALLY after each
@@ -33,7 +35,16 @@ export function evaluateReplanTriggers(input: ReplanTriggerInput): string[] {
   const reasons: string[] = [];
   if (['completed', 'failed', 'ended'].includes(runtime.campaignStatus)) return reasons;
   const primary = runtime.nodeStates.find(node => node.nodeId === runtime.primaryNodeId);
-  if (primary?.status === 'failed') reasons.push('primary_node_failed');
+  // The reducer clears a resolved primary before this post-commit check.
+  // Inspect the stranded runtime as well, rather than losing the failure.
+  const strandedFailure = runtime.campaignStatus === 'active' && runtime.primaryNodeId === null
+    && runtime.nodeStates.some(node => node.status === 'failed' && !plan.retiredNodeIds?.includes(node.nodeId));
+  if (primary?.status === 'failed' || strandedFailure) reasons.push('primary_node_failed');
+  if (runtime.campaignStatus === 'active' && runtime.primaryNodeId === null && !strandedFailure
+    && plan.nodes.some(node => node.role === 'main' && !plan.retiredNodeIds?.includes(node.nodeId)
+      && runtime.nodeStates.some(state => state.nodeId === node.nodeId && ['planned', 'available', 'suspended'].includes(state.status)))) {
+    reasons.push('stage_content_needed');
+  }
   // Critical actor fates referenced by FUTURE main nodes only — committed
   // history is never revised, only upcoming stages may need new paths.
   const resolvedIds = new Set(runtime.nodeStates
@@ -48,12 +59,17 @@ export function evaluateReplanTriggers(input: ReplanTriggerInput): string[] {
   }
   let fateFlipped = false;
   for (const actorId of actorIds) {
-    const alive = state.actors[actorId]?.lifeStatus ?? 'active';
+    const alive = (state.actors[actorId] ?? state.actors[`npc-${actorId}`])?.lifeStatus ?? 'active';
     if (alive === 'dead' || alive === 'critical') fateFlipped = true;
   }
   if (fateFlipped) reasons.push('critical_actor_fate');
-  if (runtime.nodeStates.some(node => node.supersedeReason === 'skipped_by_early_completion'
-    || node.supersedeReason === 'alternative_succeeded')) reasons.push('early_resolution');
+  if (runtime.nodeStates.some(node => !plan.retiredNodeIds?.includes(node.nodeId) &&
+    (node.supersedeReason === 'skipped_by_early_completion' || node.supersedeReason === 'alternative_succeeded'))) reasons.push('early_resolution');
+  const currentNode = plan.nodes.find(node => node.nodeId === runtime.primaryNodeId);
+  if (runtime.campaignStatus === 'active' && primary && ['active','available'].includes(primary.status) && currentNode
+    && (currentNode.coverage === 'provisional' || !currentNode.situationRef || !(state.situations ?? []).some(s => s.situationId === currentNode.situationRef && s.status !== 'resolved'))) {
+    reasons.push('stage_content_needed');
+  }
   if (runtime.replanReasonCodes.includes('goal_changed') && !reasons.includes('goal_changed')) reasons.push('goal_changed');
   return reasons;
 }
@@ -92,6 +108,7 @@ export function applyGoalChange(
 }
 
 export interface ReplanJobDeps {
+  segmentContent?: import('./planningService').PlanningRunDeps['segmentContent'];
   db: SqliteDatabase;
   planStore: SqliteCampaignPlanStore;
   worldStore: SqliteWorldStore;
@@ -115,7 +132,7 @@ export async function enqueueReplan(input: {
 }): Promise<{ jobId: string; merged: boolean }> {
   const now = input.deps.now ?? (() => new Date().toISOString());
   return input.deps.planStore.enqueueJobMergingTriggers({
-    jobId: `replan:${input.branchId}:${now()}`,
+    jobId: `replan:${input.branchId}:v${input.state.stateVersion}:${now()}`,
     setupId: `replan:${input.campaignId}`,
     campaignId: input.campaignId,
     branchId: input.branchId,
@@ -124,8 +141,8 @@ export async function enqueueReplan(input: {
     baseStateVersion: input.state.stateVersion,
     basePlanId: input.plan.planId,
     basePlanRevision: input.plan.revision,
-    intentHash: input.plan.intentHash,
-    contentManifestHash: null,
+    intentHash: input.runtime.intent ? sha256HexOf(canonicalJsonOf(input.runtime.intent)) : input.plan.intentHash,
+    contentManifestHash: input.state.campaignContentBinding?.contentHash ?? null,
     knowledgePolicyHash: null,
     triggerEventRefs: [],
     status: 'queued',
@@ -149,214 +166,11 @@ export interface ReplanCandidateResult {
  */
 export async function runReplanJob(deps: ReplanJobDeps, jobId: string, input: {
   intent: import('../../domain/campaignPlan/types').CampaignIntentV1;
-  protagonistSkills: readonly string[];
-  anchorTitle: string;
-  playerName: string;
+  protagonistSkills: readonly string[]; anchorTitle: string; playerName: string;
 }): Promise<ReplanCandidateResult> {
-  const now = deps.now ?? (() => new Date().toISOString());
-  const job = await deps.planStore.getJob(jobId);
-  if (!job) throw new Error(`Unknown replan job: ${jobId}.`);
-  if (!job.branchId || !job.campaignId) return { status: 'stale', candidateId: null, errors: ['replan job missing branch binding'], physicalRequests: 0 };
-  if (job.status === 'candidate_ready') {
-    return { status: 'candidate_ready', candidateId: (await deps.planStore.latestCandidateForJob(jobId))?.candidateId ?? null, errors: [], physicalRequests: 0 };
-  }
-  const claim = await deps.planStore.claimJob(jobId, `replan-runner:${jobId}`, new Date(Date.now() + 600_000).toISOString(), now());
-  if (!claim) return { status: 'stale', candidateId: null, errors: ['lease held'], physicalRequests: 0 };
-  const candidateId = `${jobId}:a${claim.attemptCount + 1}:1`;
-  try {
-    const runtimeRow = await deps.db.queryOne<{ snapshot_json: string }>(
-      'SELECT snapshot_json FROM snapshots WHERE branch_id=? ORDER BY state_version DESC LIMIT 1', [job.branchId]);
-    if (!runtimeRow) throw new Error('branch snapshot missing');
-    const state = JSON.parse(runtimeRow.snapshot_json) as GameStateSnapshot;
-    const runtime = state.campaignRuntime;
-    if (!runtime) throw new Error('branch has no campaign runtime');
-    if (runtime.planBinding.planId !== job.basePlanId || runtime.planBinding.revision !== job.basePlanRevision) {
-      await deps.planStore.transitionJob(jobId, claim.fencingToken, 'stale', { lastError: 'base plan binding moved on' }, now());
-      return { status: 'stale', candidateId: null, errors: ['base plan binding moved on'], physicalRequests: 0 };
-    }
-    const currentPlan = await deps.planStore.getPlanRevision(runtime.planBinding.planId, runtime.planBinding.revision);
-    if (!currentPlan) throw new Error('current plan revision missing');
-    const { ctx } = await buildPlanningContext({
-      worldStore: deps.worldStore, intent: input.intent, protagonistSkills: input.protagonistSkills,
-    });
-    const resolvedNodeIds = new Set(runtime.nodeStates
-      .filter(node => ['succeeded', 'failed', 'superseded', 'cancelled'].includes(node.status))
-      .map(node => node.nodeId));
-    const system = [
-      '你是一个文字 TRPG 的战役主线策划，现在需要根据玩家已造成的真实变化，修订一份既有战役计划的未来部分。',
-      '已完成的阶段是既成事实，不得回滚或改写；你只能替换尚未完成的阶段，并为当前困境给出新的可行路径。',
-      '输出要求与开局规划相同的 JSON 结构：顶层必须包含 "modelVersion": "campaign-plan-model-1"、proposal、stages、endings、firstSituation。',
-      `必须保留以下已完成或已定局的 nodeId（含义不变，可以不再展开）：${[...resolvedNodeIds].join('、') || '无'}。`,
-      `修订原因：${job.triggerReasons.join('、')}。`,
-      'firstSituation 仅在首个未完成阶段需要新的可玩局面时提供，且必须给出至少两条机制不同的办法。',
-    ].join('\n');
-    const user = [
-      `原计划公开目标：${currentPlan.plan.longTermGoal}`,
-      `原计划阶段（publicObjective）：${currentPlan.plan.nodes.map(node => `${node.nodeId}:${node.title}${resolvedNodeIds.has(node.nodeId) ? '（已定局）' : ''}`).join('；')}`,
-      `玩家意图：${input.intent.normalizedIntent}`,
-      `当前主目标：${runtime.publicObjectiveProjection}`,
-      `修订原因：${job.triggerReasons.join('、')}`,
-    ].join('\n');
-    const { planLlmRequest } = await import('../llm/requestBudgetKernel');
-    const { resolveModelCapabilities } = await import('../llm/capabilityResolver');
-    const { DEFAULT_OUTPUT_DEMANDS } = await import('../llm/requestDemands');
-    const { normalizeReasoningTier } = await import('../llm/types');
-    const { reasoningDialectForModel } = await import('../llm/reasoningPolicy');
-    const { estimateTokens } = await import('../context/tokenEstimate');
-    const { endpointBucketId } = await import('../worldBuild/rateScheduler');
-    const demands = DEFAULT_OUTPUT_DEMANDS.campaign_plan;
-    const maximum = Math.min(demands.maximum, deps.profile.contentOutputTokens ?? 16_384);
-    const plan = planLlmRequest({
-      capabilities: resolveModelCapabilities({
-        declared: {
-          contextWindowTokens: deps.profile.capabilities.contextWindow,
-          maxOutputTokens: deps.profile.capabilities.maxOutputTokens,
-          supportsJsonMode: deps.profile.capabilities.supportsJson,
-          reportsUsage: deps.profile.capabilities.reportsUsage,
-          reasoningUsageReported: deps.profile.capabilities.reportsUsage,
-        },
-        reasoningMode: 'always_on',
-      }),
-      requestKind: 'campaign_plan',
-      estimatedMandatoryInputTokens: estimateTokens(`${system}\n${user}`),
-      businessOutputDemand: { ...demands, target: Math.min(demands.target, maximum), maximum },
-      reasoningPolicy: {
-        tier: normalizeReasoningTier(deps.profile.reasoningTier ?? deps.profile.reasoningEffort),
-        providerDialect: deps.profile.reasoningDialect ?? reasoningDialectForModel(deps.profile.model),
-        model: deps.profile.model,
-      },
-    });
-    const reasoningPolicy = plan.reasoningPolicy;
-    if (!reasoningPolicy) throw new Error('campaign_plan_policy_missing');
-    const logicalRequestId = `campaign-replan:${job.branchId}:${jobId}`;
-    const dispatch = async (repairErrors: string[] | null): Promise<{ text: string; unknown: boolean; requests: number }> => {
-      try {
-        const response = await deps.provider.complete({
-          role: 'WorldMapper',
-          system,
-          user: repairErrors === null ? user
-            : `${user}\n\n上一次输出未通过校验：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON。`,
-          maxOutputTokens: plan.wireOutputTokens,
-          jsonMode: deps.profile.capabilities.supportsJson,
-          requestKind: 'campaign_plan',
-          reasoningTier: reasoningPolicy.tier,
-          reasoningReserveTokens: reasoningPolicy.reserveTokens,
-          reasoningPolicyVersion: reasoningPolicy.policyVersion,
-          ledger: { logicalRequestId, requestKind: 'campaign_plan', worldId: input.intent.sourceCoverageBinding.worldId },
-          scheduling: {
-            logicalTaskId: logicalRequestId, role: 'mapper', priority: 'P2',
-            endpointBucketId: endpointBucketId(deps.profile.endpoint),
-            requestPlanHash: stableFingerprint(plan), estimatedInputTokens: plan.mandatoryInputTokens,
-            reservedOutputTokens: plan.wireOutputTokens, worldId: input.intent.sourceCoverageBinding.worldId,
-          },
-        });
-        return { text: response.text, unknown: false, requests: 1 };
-      } catch (error) {
-        if (error instanceof Error && error.name === 'OutcomeUnknownReplayError') {
-          return { text: '', unknown: true, requests: 0 };
-        }
-        throw error;
-      }
-    };
-    let physicalRequests = 0;
-    const first = await dispatch(null);
-    physicalRequests += first.requests;
-    const parse = (text: string): { model: ReturnType<typeof parseCampaignPlanCandidate>; errors: string[] } => {
-      const errors: string[] = [];
-      const parsed = extractJsonObject(text);
-      const model = parsed === null ? null : parseCampaignPlanCandidate(parsed, errors);
-      return { model, errors };
-    };
-    let parsed: { model: ReturnType<typeof parseCampaignPlanCandidate>; errors: string[] } | null = first.unknown ? null : parse(first.text);
-    if (first.unknown) {
-      await deps.planStore.transitionJob(jobId, claim.fencingToken, 'outcome_unknown', { lastError: 'outcome unknown', attemptCount: claim.attemptCount + 1 }, now());
-      return { status: 'outcome_unknown', candidateId, errors: ['outcome_unknown'], physicalRequests };
-    }
-    if (parsed && !parsed.model) {
-      const repair = await dispatch(parsed.errors.slice(0, 12));
-      physicalRequests += repair.requests;
-      if (repair.unknown) {
-        await deps.planStore.transitionJob(jobId, claim.fencingToken, 'outcome_unknown', { lastError: 'outcome unknown during repair', attemptCount: claim.attemptCount + 1 }, now());
-        return { status: 'outcome_unknown', candidateId, errors: ['outcome_unknown'], physicalRequests };
-      }
-      parsed = parse(repair.text);
-    }
-    if (!parsed || !parsed.model) {
-      const invalidErrors = parsed ? parsed.errors : ['no_json_object'];
-      await deps.planStore.markCandidateStage(candidateId, 'rejected', invalidErrors, now());
-      await deps.planStore.transitionJob(jobId, claim.fencingToken, 'invalid', { lastError: invalidErrors.slice(0, 6).join('; ').slice(0, 300), attemptCount: claim.attemptCount + 1 }, now());
-      return { status: 'invalid', candidateId, errors: invalidErrors, physicalRequests };
-    }
-    // A replan model may omit firstSituation (the branch keeps playing the
-    // current board). Carry the current artifact's situations into the new
-    // revision so the playable stage stays intact.
-    const currentArtifactId = currentPlan.plan.contentArtifactRefs[0] ?? null;
-    const currentArtifact = currentArtifactId ? await deps.planStore.getArtifact(currentArtifactId) : null;
-    const modelForCompile: CampaignPlanCandidateModelV1 = parsed.model;
-    if (!(modelForCompile.firstSituation.methods?.length > 0) && currentArtifact) {
-      const carried: Array<Record<string, unknown>> = (currentArtifact.situations[0]?.definition.methods ?? []).map(method => ({
-        ...method,
-        outcomes: Object.fromEntries(['full_success', 'success', 'failure', 'severe_failure'].map(grade => [grade, {
-          resultFact: (method.outcomeTemplates as NonNullable<typeof method.outcomeTemplates>)?.[grade as 'success']?.resultFact ?? '结果由检定决定。',
-          effects: (method.outcomeTemplates as NonNullable<typeof method.outcomeTemplates>)?.[grade as 'success']?.effects ?? [],
-        }])),
-      }));
-      Object.assign(modelForCompile, {
-        firstSituation: {
-          situationTitle: currentArtifact.situations[0]?.definition.title ?? '当前局面',
-          summary: currentArtifact.situations[0]?.definition.summary ?? '战役继续推进。',
-          gmBrief: currentArtifact.situations[0]?.definition.gmBrief ?? '沿用当前局面。',
-          pressureDescription: currentArtifact.situations[0]?.definition.pressure.description ?? '局势会随时间变化。',
-          methods: carried,
-          signs: [],
-        },
-      });
-    }
-    const compiled = compileCampaignPlan({
-      model: modelForCompile, intent: input.intent, ctx,
-      planId: runtime.planBinding.planId,
-      revision: runtime.planBinding.revision + 1,
-      parentRevision: runtime.planBinding.revision,
-      createdAt: now(),
-    });
-    if (compiled.errors.length > 0) {
-      await deps.planStore.transitionJob(jobId, claim.fencingToken, 'invalid', { lastError: compiled.errors.join('; ').slice(0, 300), attemptCount: claim.attemptCount + 1 }, now());
-      return { status: 'invalid', candidateId, errors: compiled.errors, physicalRequests };
-    }
-    // Preserve resolved node identities: every already-terminal nodeId must
-    // still exist in the revision (its committed history stays readable).
-    for (const nodeId of resolvedNodeIds) {
-      if (!compiled.plan.nodes.some(node => node.nodeId === nodeId)) {
-        const error = `revision drops resolved node ${nodeId}; committed history must stay addressable.`;
-        await deps.planStore.transitionJob(jobId, claim.fencingToken, 'invalid', { lastError: error, attemptCount: claim.attemptCount + 1 }, now());
-        return { status: 'invalid', candidateId, errors: [error], physicalRequests };
-      }
-    }
-    const validation = validateCampaignPlan(compiled.plan, {
-      visibleWorldEntryIds: new Set(ctx.visibleEntries.map(entry => entry.entryId)),
-      openingActorIds: ctx.openingActorIds,
-      openingTemplateIds: ctx.openingTemplateIds,
-      artifactSituationIds: new Set(compiled.artifact.situations.map(s => s.entryId)),
-      protagonistSkills: ctx.protagonistSkills,
-    }, compiled.artifact);
-    if (validation.length > 0) {
-      await deps.planStore.transitionJob(jobId, claim.fencingToken, 'invalid', { lastError: validation.slice(0, 6).join('; ').slice(0, 300), attemptCount: claim.attemptCount + 1 }, now());
-      return { status: 'invalid', candidateId, errors: validation, physicalRequests };
-    }
-    await deps.planStore.upsertCandidate({
-      candidateId, jobId, setupId: job.setupId, attemptGroup: `a${claim.attemptCount + 1}`, attemptNo: 1,
-      stage: 'ready', rawResponseRef: null, rawResponseText: first.text.slice(0, 200_000), parseResultJson: null,
-      validationErrors: [], repairUsed: physicalRequests > 1,
-      candidateHash: sha256HexOf(JSON.stringify({ plan: compiled.plan, artifact: compiled.artifact })),
-      plan: compiled.plan, artifact: compiled.artifact, createdAt: now(), updatedAt: now(),
-    });
-    await deps.planStore.transitionJob(jobId, claim.fencingToken, 'candidate_ready', { attemptCount: claim.attemptCount + 1 }, now());
-    return { status: 'candidate_ready', candidateId, errors: [], physicalRequests };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await deps.planStore.transitionJob(jobId, claim.fencingToken, 'retryable_failed', { lastError: message.slice(0, 300), attemptCount: claim.attemptCount + 1 }, now());
-    return { status: 'retryable_failed', candidateId, errors: [message], physicalRequests: 0 };
-  }
+  const { runCandidateJob } = await import('./candidateJob');
+  const result = await runCandidateJob(deps, jobId, input);
+  return { ...result, status: result.status === 'already_ready' ? 'candidate_ready' : result.status };
 }
 
 export interface AdoptReplanInput {
@@ -380,13 +194,18 @@ export async function adoptReplanCandidate(input: AdoptReplanInput): Promise<
 > {
   const now = input.now ?? (() => new Date().toISOString());
   const candidate = await input.planStore.getCandidate(input.candidateId);
-  if (!candidate || candidate.stage !== 'ready' || !candidate.plan || !candidate.artifact) {
+  if (!isIntactReadyCandidate(candidate)) {
     return { outcome: 'stale', reason: 'candidate is not ready' };
   }
   const job = await input.planStore.getJob(candidate.jobId);
   if (!job || job.branchId !== input.branchId || job.status !== 'candidate_ready') {
     return { outcome: 'stale', reason: 'job is not this branch\'s ready replan' };
   }
+  const invalidate = async (reason: string): Promise<{ outcome: 'stale'; reason: string }> => {
+    await input.db.execute("UPDATE campaign_plan_jobs SET status='stale',last_error=?,updated_at=? WHERE job_id=? AND status='candidate_ready' AND fencing_token=?",
+      [reason, now(), job.jobId, job.fencingToken]);
+    return { outcome: 'stale', reason };
+  };
   // 1. Stable boundary: no uncommitted turns, no running interaction, no
   // unsettled physical requests for this branch.
   const pending = await input.db.queryOne<{ n: number }>(
@@ -410,91 +229,92 @@ export async function adoptReplanCandidate(input: AdoptReplanInput): Promise<
   if (runtime.planBinding.planId !== job.basePlanId
     || runtime.planBinding.revision !== job.basePlanRevision
     || job.intentHash !== candidate.plan.intentHash) {
-    return { outcome: 'stale', reason: 'runtime moved on since the candidate was compiled' };
+    return invalidate('runtime moved on since the candidate was compiled');
   }
-  // 3. Local revalidation: every terminal node's completion condition must
-  // still hold on the CURRENT state, and the plan must not complete instantly
-  // by contradiction.
-  const facts = replanFacts(state);
+  const { canonicalJsonOf } = await import('./hashing');
+  const { readPlanFreeze } = await import('./jobFreeze');
+  const freeze = await readPlanFreeze(input.db, job.jobId);
+  const original = await input.planStore.getPlanRevision(runtime.planBinding.planId, runtime.planBinding.revision);
+  const intent = runtime.intent ?? original?.intent;
+  if (!intent || sha256HexOf(canonicalJsonOf(intent)) !== candidate.plan.intentHash) {
+    return invalidate('player intent changed after generation');
+  }
+  if (sha256HexOf(canonicalJsonOf({ plan: candidate.plan, artifact: candidate.artifact })) !== candidate.candidateHash) {
+    return invalidate('candidate hash mismatch');
+  }
+  if (freeze?.baseState && canonicalJsonOf(state.segmentContentBinding ?? null) !== canonicalJsonOf(freeze.baseState.segmentContentBinding ?? null)) {
+    return invalidate('adopted source content changed after freeze');
+  }
+  if (freeze?.baseState && state.stateVersion !== freeze.baseState.stateVersion) {
+    // A conservative local validation: changed authoritative facts require a new
+    // explicit candidate, never an invisible paid regeneration.
+    const facts = (s: GameStateSnapshot) => canonicalJsonOf({ actors: s.actors, items: s.itemOwners,
+      discoveries: s.discoveries, relationships: s.relationships, situations: s.situations, nodes: s.campaignRuntime?.nodeStates });
+    if (facts(state) !== facts(freeze.baseState)) return invalidate('authoritative facts changed after freeze');
+  }
   for (const nodeState of runtime.nodeStates) {
-    if (!['succeeded', 'failed', 'superseded', 'cancelled'].includes(nodeState.status)) continue;
-    const revised = candidate.plan.nodes.find(node => node.nodeId === nodeState.nodeId);
-    if (!revised) continue;
-    if (nodeState.status === 'succeeded') {
-      const holds = evaluateCondition(revised.completion, facts);
-      if (!holds.value || holds.unknown) {
-        return { outcome: 'stale', reason: `node ${nodeState.nodeId} is committed as succeeded but its revised completion no longer holds` };
-      }
+    if (!['succeeded','failed','superseded','cancelled'].includes(nodeState.status)) continue;
+    const previous = original?.plan.nodes.find(n => n.nodeId === nodeState.nodeId);
+    const revised = candidate.plan.nodes.find(n => n.nodeId === nodeState.nodeId);
+    if (!previous || !revised || canonicalJsonOf(previous) !== canonicalJsonOf(revised)) {
+      return invalidate('revision changes committed node ' + nodeState.nodeId);
     }
   }
-  // 4/5. Management commit: switch the binding, archive revision + artifact,
-  // append the adoption event — all in ONE transaction.
   const nextRevision = candidate.plan.revision;
-  const nextState = { ...state, campaignRuntime: {
-    ...runtime,
+  const { contentHash: _artifactHash, ...artifactBody } = candidate.artifact;
+  const reboundBody = { ...artifactBody, campaignId: input.campaignId };
+  const artifact = { ...reboundBody, contentHash: sha256HexOf(canonicalJsonOf(reboundBody)) };
+  const artifactIds = [...new Set([...candidate.plan.contentArtifactRefs, ...(state.campaignContentBinding?.artifactIds ?? [])])];
+  const artifacts = await Promise.all(artifactIds.map(async id => id === artifact.artifactId ? artifact : input.planStore.getArtifact(id)));
+  if (artifacts.some(a => !a)) return { outcome: 'stale', reason: 'bound content archive missing' };
+  const nextRuntime: CampaignRuntimeV1 = {
+    ...runtime, intent,
     planBinding: { planId: candidate.plan.planId, revision: nextRevision, contentHash: candidate.plan.contentHash },
-    replanReasonCodes: [...new Set([...runtime.replanReasonCodes, ...job.triggerReasons])],
+    replanReasonCodes: runtime.replanReasonCodes.filter(reason => !job.triggerReasons.includes(reason)),
     stateVersion: state.stateVersion + 1,
-  } as CampaignRuntimeV1 };
-  await input.db.transaction(async tx => {
-    await input.planStore.archivePlanRevision(tx, {
-      plan: candidate.plan!, intent: await loadIntentFor(input.planStore, job.setupId),
-      setupId: job.setupId, campaignId: input.campaignId, sourceTrigger: `replan:${job.triggerReasons.join('+')}`,
-      intentHash: candidate.plan!.intentHash, adoptedAt: now(),
-    });
-    await input.planStore.archiveArtifact(tx, { ...candidate.artifact!, campaignId: input.campaignId }, now());
-    const managementTurnId = `${input.branchId}:manage-replan:${nextRevision}`;
-    await tx.execute(
-      `INSERT INTO turns (branch_id, turn_id, expected_state_version, committed_state_version, status, outcome_grade, public_summary, effects_json, action_contract_json, action_contract_hash, created_at)
-       VALUES (?, ?, ?, ?, 'Committed', 'success', ?, '[]', '{}', ?, ?)`,
-      [input.branchId, managementTurnId, state.stateVersion, state.stateVersion + 1,
-        '主线规划已根据最新局势修订。', 'manage-replan', now()]);
-    await tx.execute(
-      'UPDATE branches SET state_version = ? WHERE branch_id = ?',
-      [state.stateVersion + 1, input.branchId]);
-    await tx.execute(
-      `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at) VALUES (?, ?, ?, NULL, ?)`,
-      [input.branchId, state.stateVersion + 1, JSON.stringify(nextState), now()]);
-    await tx.execute(
-      `INSERT INTO branch_events (branch_id, event_seq, turn_id, state_version, event_type, payload_json, created_at)
-       VALUES (?, (SELECT COALESCE(MAX(event_seq),0)+1 FROM branch_events WHERE branch_id=?), ?, ?, 'campaign_plan_adopted', ?, ?)`,
-      [input.branchId, input.branchId, managementTurnId, state.stateVersion + 1,
-        JSON.stringify({ planId: candidate.plan!.planId, revision: nextRevision, reasons: job.triggerReasons }), now()]);
-    await input.planStore.transitionJob(candidate.jobId, job.fencingToken, 'adopted', {}, now());
-  });
-  return { outcome: 'adopted', revision: nextRevision };
-}
-
-function replanFacts(state: GameStateSnapshot) {
-  return snapshotConditionFacts({
-    actors: state.actors,
-    itemOwners: state.itemOwners,
-    discoveries: state.discoveries,
-    relationships: state.relationships,
-    questProgress: state.questProgress,
-    situations: state.situations,
-    playerActorId: state.party?.find(member => member.controller === 'player')?.actorId ?? '',
-    causalWorldTimeOrder: state.causalWorldTimeOrder ?? 0,
-    cards: (state.cards ?? []).map(entry => ({
-      actorId: entry.actorId,
-      templateId: (entry.card as { templateId?: string }).templateId,
-    })),
-  });
-}
-
-async function loadIntentFor(planStore: SqliteCampaignPlanStore, setupId: string): Promise<import('../../domain/campaignPlan/types').CampaignIntentV1> {
-  const setup = await planStore.getSetup(setupId);
-  if (setup) return setup.intent;
-  // Replans reference the original setup by id; fall back to a minimal shell
-  // preserving the binding-critical fields from the plan itself.
-  return {
-    schemaVersion: 'campaign-intent-1', setupId, intentRevision: 1,
-    rawIntent: '', normalizedIntent: '', goalMode: 'declared',
-    protagonistBinding: { actorId: '', kind: 'original', name: '' },
-    openingAnchor: { worldTimeOrder: 0, locationId: '' },
-    companionBindings: [], lengthPreference: 'medium', userConstraints: [],
-    requestedCanonTargets: [], knowledgePolicy: 'anchor_projection',
-    sourceCoverageBinding: { worldId: '', packageRevision: 1, coverageWorldTimeOrder: 0, packageContentHash: '' },
-    createdAt: new Date().toISOString(),
+    nodeStates: [
+      ...runtime.nodeStates.map(node => ['succeeded','failed','superseded','cancelled'].includes(node.status) ||
+        (candidate.plan!.nodes.some(n => n.nodeId === node.nodeId) && !candidate.plan!.retiredNodeIds?.includes(node.nodeId)) ? node :
+        { ...node, status: 'superseded' as const, supersedeReason: 'replanned_future', resolvedAtVersion: state.stateVersion + 1 }),
+      ...candidate.plan.nodes.filter(n => !runtime.nodeStates.some(node => node.nodeId === n.nodeId)).map(n => ({
+        nodeId: n.nodeId, status: 'planned' as const, completedEvidence: [] })),
+    ],
   };
+  const nextState: GameStateSnapshot = { ...state, stateVersion: state.stateVersion + 1, campaignRuntime: nextRuntime,
+    campaignContentBinding: { artifactIds, contentHash: campaignContentBindingHash(artifacts as NonNullable<typeof artifact>[]) } };
+  const { applySituationRuntime } = await import('../situations/causalProjection');
+  const ticked = applySituationRuntime({ nextState, definitions: candidate.artifact.situations.map(s => ({ situationId: s.entryId, definition: s.definition })),
+    playerActorId: intent.protagonistBinding.actorId, sourceTurnId: input.branchId + ':manage-replan:' + nextRevision, methodOps: [] });
+  nextState.situations = ticked.situations;
+  const { evaluateCampaignProgress } = await import('../../domain/campaignPlan/progressReducer');
+  const progress = evaluateCampaignProgress({ plan: candidate.plan, runtime: nextRuntime, state: nextState,
+    transactionEvents: [], historyEvents: [], turnId: input.branchId + ':manage-replan:' + nextRevision, nextStateVersion: nextState.stateVersion });
+  nextState.campaignRuntime = progress.runtime;
+  const turnId = input.branchId + ':manage-replan:' + nextRevision;
+  try {
+    await input.turns.commitAtomic({ branchId: input.branchId, turnId, expectedStateVersion: state.stateVersion,
+      nextState, actionContractJson: '{}', actionContractHash: 'manage-replan',
+      committedTurn: { branchId: input.branchId, turnId, previousStateVersion: state.stateVersion, stateVersion: nextState.stateVersion,
+        outcomeGrade: 'success', publicSummary: '主线规划已根据最新局势修订。', effects: [], committedAt: now() },
+      events: [{ eventType: 'campaign_plan_adopted', payload: { planId: candidate.plan.planId, revision: nextRevision, reasons: job.triggerReasons } }, ...progress.events],
+      transactionChanges: async tx => {
+        const active = await tx.queryOne<{ n: number }>(
+          "SELECT COUNT(*) n FROM turns WHERE branch_id=? AND status<>'Committed'", [input.branchId]);
+        const busy = await tx.queryOne<{ n: number }>(
+          "SELECT COUNT(*) n FROM interaction_operations WHERE branch_id=? AND status IN ('running','paused_system')", [input.branchId]);
+        const unknown = await tx.queryOne<{ n: number }>(
+          "SELECT COUNT(*) n FROM llm_request_attempts WHERE branch_id=? AND (status IN ('prepared','sent') OR (status='outcome_unknown' AND replay_approved_at IS NULL))", [input.branchId]);
+        if ((active?.n ?? 0) + (busy?.n ?? 0) + (unknown?.n ?? 0) > 0) throw new Error('stable boundary changed');
+        const won = await tx.execute("UPDATE campaign_plan_jobs SET status='adopted',updated_at=? WHERE job_id=? AND status='candidate_ready' AND fencing_token=?",
+          [now(), job.jobId, job.fencingToken]);
+        if (won !== 1) throw new Error('adoption job fence expired');
+        await input.planStore.archivePlanRevision(tx, { plan: candidate.plan!, intent, setupId: job.setupId,
+          campaignId: input.campaignId, sourceTrigger: 'replan:' + job.triggerReasons.join('+'), intentHash: candidate.plan!.intentHash, adoptedAt: now() });
+        await input.planStore.archiveArtifact(tx, artifact, now());
+      },
+    });
+  } catch (error) {
+    return { outcome: 'stale', reason: error instanceof Error ? error.message : String(error) };
+  }
+  return { outcome: 'adopted', revision: nextRevision };
 }

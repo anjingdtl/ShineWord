@@ -253,6 +253,10 @@ export function ProjectHubScreen(): React.JSX.Element {
                 navigation.navigate('Opening', { worldId, title });
               }}
             />
+            {route.params.campaignId && playable ? <Button
+              label="开始新的冒险" variant="secondary"
+              onPress={() => navigation.navigate('Opening', { worldId, title })}
+              testID="project-new-adventure" /> : null}
             <Button
               label={appending ? '导入中…' : '追加下一部书籍'}
               variant="secondary"
@@ -264,12 +268,12 @@ export function ProjectHubScreen(): React.JSX.Element {
         </Card>
 
         {readiness ? <Card>
-          <Text style={typeStyle(theme, theme.type.body)}>已就绪资料：{readiness.availableArtifacts.length} 段 · 正在准备：{readiness.segments.filter(s => ['queued','extracting','mapping','validating'].includes(s.status)).length} 段</Text>
-          {readiness.pauseReason ? <Text style={typeStyle(theme, theme.type.small)}>整理已暂停，已就绪内容可继续使用。</Text> : null}
-          {readiness.diagnostics.length ? <Text style={typeStyle(theme, theme.type.small)}>部分资料需要处理，可在构建任务与审查中查看原因。</Text> : null}
+          <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.primary }]}>已就绪资料：{readiness.availableArtifacts.length} 段 · 正在准备：{readiness.segments.filter(s => ['queued','extracting','mapping','validating'].includes(s.status)).length} 段</Text>
+          {readiness.pauseReason ? <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>整理已暂停，已就绪内容可继续使用。</Text> : null}
+          {readiness.diagnostics.length ? <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>部分资料需要处理，可在构建任务与审查中查看原因。</Text> : null}
           {readiness.segments.filter(s => s.status === 'failed_retryable' && !s.runIds.length && s.lastErrorCode === 'execution_prepare_failed').map(segment => (
             <View key={segment.intent.segmentId} style={{ gap: theme.space.sm }}>
-              <Text style={typeStyle(theme, theme.type.small)}>原著资料准备未完成，请检查原文或重试准备。</Text>
+              <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary }]}>原著资料准备未完成，请检查原文或重试准备。</Text>
               <Button label="重试准备" disabled={taskBusy || Boolean(readiness.pauseReason)}
                 onPress={() => {
                   setTaskBusy(true);

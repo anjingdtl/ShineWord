@@ -156,6 +156,19 @@ export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidance
 
   // Fill from local candidates so the player always has real choices.
   if (packet) {
+    // Keep a currently executable mainline route visible even when all model
+    // suggestions discuss generic exploration. Assessment remains local.
+    const mainline = packet.preferredSituationId && packet.allowedCandidates.find(candidate =>
+      candidate.situationId === packet.preferredSituationId && candidate.availability === 'available');
+    if (mainline && !steps.some(step => step.situationId === packet.preferredSituationId && step.availability === 'available')) {
+      const outcome = validateLlmStep({ candidateRef: mainline.ref, title: mainline.title,
+        rationale: mainline.goal, tradeoffs: mainline.tradeoffs, firstStepIntent: mainline.firstStepIntent }, packet, input.blockedNames);
+      if (outcome) {
+        steps.unshift({ ...outcome.step, source: 'local' });
+        usedRefs.add(mainline.ref);
+        steps.splice(limit);
+      }
+    }
     for (const allowed of packet.allowedCandidates) {
       if (steps.length >= limit) break;
       if (usedRefs.has(allowed.ref)) continue;

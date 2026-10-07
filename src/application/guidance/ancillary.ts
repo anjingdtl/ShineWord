@@ -65,6 +65,7 @@ export interface AncillaryGuidanceInput {
   knowledgeHash?: string;
   allowedCandidates?: readonly import('./types').AllowedCandidateV1[];
   preferredCandidateRef?: string;
+  preferredSituationId?: string;
 }
 
 export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): TurnGuidanceV1 {
@@ -123,6 +124,7 @@ export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): Turn
       cards: input.cards,
       allowedCandidates: input.allowedCandidates,
       preferredCandidateRef: input.preferredCandidateRef,
+      preferredSituationId: input.preferredSituationId,
     }),
     campaignId: input.campaignId,
     playerActorId: input.playerCard.actorId,
@@ -132,7 +134,7 @@ export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): Turn
     visibleActorNames: input.visibleActorNames,
     contentBindingHash: guidanceContentBindingHash(input.state),
     knowledgeHash: input.knowledgeHash ?? stableFingerprint([...input.knownEntryIds].sort()),
-    contextHash: stableFingerprint({ definitions: input.situationDefinitions, candidates: input.allowedCandidates, preferredCandidateRef: input.preferredCandidateRef }),
+    contextHash: stableFingerprint({ definitions: input.situationDefinitions, candidates: input.allowedCandidates, preferredCandidateRef: input.preferredCandidateRef, preferredSituationId: input.preferredSituationId }),
   });
 }
 
@@ -229,6 +231,7 @@ async function performUpgrade(input: AncillaryGuidanceInput): Promise<TurnGuidan
     cards: input.cards,
     allowedCandidates: input.allowedCandidates,
     preferredCandidateRef: input.preferredCandidateRef,
+    preferredSituationId: input.preferredSituationId,
   });
   if (!packet) return null;
 

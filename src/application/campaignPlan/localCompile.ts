@@ -37,6 +37,13 @@ export interface LocalCompileContext {
   openingTemplateIds: ReadonlySet<string>;
   openingLocationId: string;
   protagonistSkills: ReadonlySet<string>;
+  protagonistActorId?: string;
+  /** Public, living actors at the actual current location, including aliases. */
+  presentActorRefs?: readonly string[];
+  protagonistSkillRanks?: Readonly<Record<string, string>>;
+  /** Director-only actor details at the anchor; never a public projection. */
+  actorMaterials?: ReadonlyArray<{ actorId: string; name: string; description: string; goal: string }>;
+  openingFacts?: ReadonlyArray<{ factId: string; subject: string; predicate: string; value: unknown }>;
   /** Canon fact ids available for provenance grounding. */
   availableFactIds: ReadonlySet<string>;
 }
@@ -69,6 +76,8 @@ function compileCondition(
   errors: string[],
 ): SituationCondition | null {
   const resolveSituation = (id: string): string => situationAliases.get(id) ?? id;
+  const actor = (id: string): string => ['pc','player','self','__player__','玩家'].includes(id)
+    ? ctx.protagonistActorId ?? [...ctx.openingActorIds][0] ?? id : id;
   switch (node.kind) {
     case 'all':
     case 'any': {
@@ -96,13 +105,13 @@ function compileCondition(
     case 'knowledge_known':
       return { kind: 'knowledge_known', entryId: node.entryId! };
     case 'relationship_at_least':
-      return { kind: 'relationship_at_least', fromActorId: node.fromActorId!, toActorId: node.toActorId!, closeness: node.closeness! };
+      return { kind: 'relationship_at_least', fromActorId: actor(node.fromActorId!), toActorId: actor(node.toActorId!), closeness: node.closeness! };
     case 'item_owned':
-      return { kind: 'item_owned_by', itemId: node.itemId!, actorId: node.actorId! };
+      return { kind: 'item_owned_by', itemId: node.itemId!, actorId: actor(node.actorId!) };
     case 'actor_alive':
-      return { kind: 'actor_alive', actorId: node.actorId! };
+      return { kind: 'actor_alive', actorId: actor(node.actorId!) };
     case 'actor_dead':
-      return { kind: 'not', of: { kind: 'actor_alive', actorId: node.actorId! } };
+      return { kind: 'not', of: { kind: 'actor_alive', actorId: actor(node.actorId!) } };
     case 'node_succeeded':
       return { kind: 'campaign_node_status', nodeId: node.nodeId!, status: 'succeeded' };
     default:
@@ -167,18 +176,7 @@ function compileMethods(
         continue;
       }
     }
-    // Dangling schedule_consequence refs (model named a consequence it never
-    // defined, or the consequence was dropped) are removed here instead of
-    // failing the plan — scheduling is optional enrichment.
-    const knownConsequenceIds = new Set(model.consequences.map(c => c.consequenceId));
-    const methodWithCleanEffects = {
-      ...method,
-      outcomes: Object.fromEntries(Object.entries(method.outcomes).map(([grade, outcome]) => [grade, {
-        ...outcome,
-        effects: outcome.effects.filter(effect => !(effect.template === 'schedule_consequence' && !knownConsequenceIds.has(effect.consequenceId))),
-      }])),
-    } as unknown as typeof method;
-    const outcomeTemplates = compileOutcomeTemplates(methodWithCleanEffects, situationAliases, errors);
+    const outcomeTemplates = compileOutcomeTemplates(method, situationAliases, errors);
     if (!outcomeTemplates) continue;
     methods.push({
       methodId: method.methodId,
@@ -197,29 +195,6 @@ function compileMethods(
     });
   }
   void itemIds;
-  // Playability floor (plan §6.3): at least TWO mechanically different
-  // methods. When the model returns same-shape variants (same actionKind +
-  // skill + target), keep one and append a generic direct-engagement route
-  // so the two-route gate always holds on the FIRST playable stage.
-  const signatures = new Set(methods.map(method =>
-    `${method.firstStep.actionKind}:${method.firstStep.skillId ?? '-'}:${method.firstStep.targetEntryId ?? '-'}:${method.firstStep.destinationId ?? '-'}`));
-  if (methods.length >= 1 && signatures.size < 2) {
-    methods.push({
-      methodId: 'direct-approach',
-      title: '直接行动',
-      goal: `直接面对并处理：${model.firstSituation.situationTitle}`,
-      firstStep: { intent: `直接介入处理：${model.firstSituation.situationTitle}`, actionKind: 'interact' },
-      requires: {},
-      tradeoffs: '不绕路、不收集额外信息，直接承担风险',
-      preparation: '无',
-      outcomeTemplates: {
-        full_success: { achieved: true, resultFact: '你直接介入并稳住了局面。', effects: [] },
-        success: { achieved: true, resultFact: '你直接介入，事情有了进展。', effects: [] },
-        failure: { achieved: false, resultFact: '直接介入没有奏效。', effects: [] },
-        severe_failure: { achieved: false, resultFact: '鲁莽的直接介入让局面更糟。', effects: [] },
-      },
-    });
-  }
   return methods;
 }
 
@@ -279,10 +254,12 @@ export function compileCampaignPlan(input: {
   revision: number;
   parentRevision: number | null;
   createdAt: string;
+  situationId?: string;
 }): LocalCompileOutput {
   const { model, intent, ctx } = input;
   const errors: string[] = [];
-  const situationAliases = new Map<string, string>([['self', FIRST_SITUATION_ENTRY_ID]]);
+  const situationEntryId = input.situationId ?? FIRST_SITUATION_ENTRY_ID;
+  const situationAliases = new Map<string, string>([['self', situationEntryId]]);
   const nodes = compileNodes(model, ctx, situationAliases, errors);
   const methods = compileMethods(model, ctx, situationAliases, errors);
   const endings: CampaignEndingV1[] = [];
@@ -295,28 +272,19 @@ export function compileCampaignPlan(input: {
       condition, outcomeKind: ending.outcomeKind,
     });
   }
-  // Completion pass: a terminal main stage that no ending references gets a
-  // synthesized success ending on its own success — completing the final
-  // stage IS the natural campaign exit (plan §5.2: the compiler guarantees
-  // the explicit exit instead of rejecting the whole plan).
-  const endingNodeRefs = new Set(endings.flatMap(ending => collectConditionNodeRefs(ending.condition)));
-  for (const node of nodes) {
-    if (node.role !== 'main' || node.nextNodeIds.length > 0) continue;
-    if (endingNodeRefs.has(node.nodeId)) continue;
-    endings.push({
-      endingId: 'end-auto-' + node.nodeId,
-      title: node.title + ' · 完成',
-      publicDescription: '完成「' + node.title + '」后，这段冒险迎来它的结局。',
-      condition: { kind: 'campaign_node_status', nodeId: node.nodeId, status: 'succeeded' },
-      outcomeKind: 'success',
-    });
-  }
+  // Missing exits are validation errors; the compiler cannot invent a success ending.
   const startNodes = nodes.filter(node => node.activation === null).map(node => node.nodeId);
   // Wire the concrete start stage to the first situation.
   const concreteStart = nodes.find(node => startNodes.includes(node.nodeId) && node.coverage === 'concrete')
     ?? nodes.find(node => startNodes.includes(node.nodeId));
   if (concreteStart) {
-    concreteStart.situationRef = concreteStart.situationRef ?? FIRST_SITUATION_ENTRY_ID;
+    concreteStart.situationRef = situationEntryId;
+    concreteStart.coverage = 'concrete';
+  }
+  // Materialized coverage is a compiler fact, not a model assertion. Only the
+  // first situation is compiled here; other unbuilt stages remain provisional.
+  for (const node of nodes) {
+    if (node !== concreteStart && !ctx.visibleEntries.some(e => e.kind === 'situation' && e.entryId === node.situationRef)) node.coverage = 'provisional';
   }
   const situationDefinition: SituationDefinitionV1 = {
     title: model.firstSituation.situationTitle,
@@ -334,10 +302,11 @@ export function compileCampaignPlan(input: {
     transitions: {},
   };
   const rewardPolicies: CampaignRewardPolicyV1[] = model.rewards
-    .filter(reward => nodes.some(node => node.nodeId === reward.nodeId))
     .map(reward => ({
       policyId: reward.policyId, nodeId: reward.nodeId,
-      description: reward.description, rewards: reward.rewards,
+      description: reward.description, rewards: reward.rewards.map(spec => ({ ...spec,
+        ...(spec.toActorId && ['pc','player','self','__player__','玩家'].includes(spec.toActorId)
+          ? { toActorId: intent.protagonistBinding.actorId } : {}) })),
     }));
   const artifactDraft: Omit<CampaignContentArtifactV1, 'contentHash'> = {
     schemaVersion: CAMPAIGN_CONTENT_SCHEMA,
@@ -347,7 +316,7 @@ export function compileCampaignPlan(input: {
     planId: input.planId,
     planRevision: input.revision,
     namespace: 'campaign',
-    situations: [{ entryId: FIRST_SITUATION_ENTRY_ID, nodeId: concreteStart?.nodeId ?? nodes[0]?.nodeId ?? '', definition: situationDefinition }],
+    situations: [{ entryId: situationEntryId, nodeId: concreteStart?.nodeId ?? nodes[0]?.nodeId ?? '', definition: situationDefinition }],
     rewardPolicies,
     consequenceTemplates: model.consequences.map(consequence => ({
       consequenceId: consequence.consequenceId,
@@ -395,7 +364,9 @@ export function compileCampaignPlan(input: {
     startNodeIds: startNodes.slice(0, 2),
     nodes,
     possibleEndings: endings,
-    unresolvedDependencies: [],
+    unresolvedDependencies: nodes.filter(node => node.coverage === 'provisional').map(node => ({
+      nodeId: node.nodeId, kind: 'content_prep' as const, description: `为“${node.publicObjective}”准备当前事实下的可执行局面。`,
+    })),
     contentArtifactRefs: [artifact.artifactId],
     compilerVersion: CAMPAIGN_PLAN_COMPILER_VERSION,
     createdAt: input.createdAt,

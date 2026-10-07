@@ -73,3 +73,19 @@ test('a submitted action waits for branch adoption and an unknown paid dependenc
   assert.equal(unknown.prepared[0].higherPriorityPending,true,'required P1 work cannot also request speculative buffers');
   assert.equal(unknown.searched[0].scope.kind,'build_internal');
 });
+
+test('an exact current published method is playable despite speculative nearby dependencies; stale and forged choices cannot bypass preparation',async()=>{
+  for(const mutation of ['none','version','ref','intent','binding']){
+    const f=fixture({dependency:true,unknown:true});
+    const decisionPoint={campaignId:'campaign',branchId:'branch',stateVersion:2,decisionPointId:'dp-2',contentBindingHash:'no-binding'};
+    const guide={decisionPoint,steps:[{candidateRef:'method:camp-sit-open:ask',availability:'available',firstStepIntent:'查看旧桥'}]};
+    f.runtime.guidance={async get(){return guide}};
+    const choice={decisionPoint:{...decisionPoint},candidateRef:'method:camp-sit-open:ask'};
+    if(mutation==='version')choice.decisionPoint.stateVersion=1;
+    if(mutation==='ref')choice.candidateRef='method:camp-sit-open:forged';
+    if(mutation==='binding')choice.decisionPoint.contentBindingHash='forged';
+    const result=await f.module.maintainSegmentContent({...f.input,publishedChoice:choice,intent:mutation==='intent'?'调查未来王城与旧桥':'查看旧桥'});
+    assert.equal(result.pending,mutation!=='none');
+    if(mutation==='none'){assert.equal(f.searched.length,0);assert.equal(f.prepared.length,0);assert.equal(f.started.length,0)}
+  }
+});

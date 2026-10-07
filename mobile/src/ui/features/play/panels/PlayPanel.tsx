@@ -9,6 +9,8 @@
 import React, { useEffect, useRef } from 'react';
 import {
   Animated,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   Pressable,
   ScrollView,
@@ -17,6 +19,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typeStyle } from '../../../components/typography';
 import { useTheme } from '../../../theme/ThemeContext';
 
@@ -30,11 +33,15 @@ export function PlayPanel(props: {
   children: React.ReactNode;
 }): React.JSX.Element {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const progress = useRef(new Animated.Value(0)).current;
   const maxHeight = Math.round(height * 0.82);
 
   useEffect(() => {
+    // Clear the previous screen's focused input before the native modal can
+    // remember it and reopen its keyboard when the sheet is dismissed.
+    Keyboard.dismiss();
     if (!props.visible) return;
     // Enter animation only: RN unmounts the Modal on close, so an exit tween
     // would never be seen (and no dependency is worth adding for it).
@@ -53,7 +60,7 @@ export function PlayPanel(props: {
       animationType="none"
       onRequestClose={props.onClose}
       statusBarTranslucent>
-      <View style={styles.root}>
+      <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: insets.top }]}>
         <Animated.View
           style={[
             StyleSheet.absoluteFill,
@@ -83,6 +90,7 @@ export function PlayPanel(props: {
               borderTopRightRadius: theme.radius.lg,
               borderColor: theme.border.color,
               borderWidth: theme.border.hairline,
+              paddingBottom: insets.bottom,
               transform: [
                 { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [maxHeight, 0] }) },
               ],
@@ -143,14 +151,14 @@ export function PlayPanel(props: {
             {props.children}
           </ScrollView>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'flex-end' },
-  sheet: { alignSelf: 'stretch' },
+  sheet: { alignSelf: 'stretch', flexShrink: 1 },
   head: {},
   grip: { alignItems: 'center' },
 });

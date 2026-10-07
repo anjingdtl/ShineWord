@@ -62,6 +62,7 @@ function situationDef(overrides = {}) {
         requires: { skillId: 'skill-observation', minRank: 'untrained' },
         tradeoffs: '正面对峙，可能受伤',
         preparation: '无',
+        outcomeTemplates: { success: { achieved: true, resultFact: '威胁者被挡在门外。', effects: [{ template: 'situation_status', situationId: 'camp-sit-stage1', status: 'resolved', resolution: '守夜成功' }] } },
       },
       {
         methodId: 'trace-letter',
@@ -71,6 +72,7 @@ function situationDef(overrides = {}) {
         requires: { skillId: 'skill-observation', minRank: 'untrained' },
         tradeoffs: '花费时间，威胁可能升级',
         preparation: '无',
+        outcomeTemplates: { success: { achieved: true, resultFact: '信件揭示了威胁来源。', effects: [{ template: 'situation_status', situationId: 'camp-sit-stage1', status: 'resolved', resolution: '信件证据' }] } },
       },
     ],
     transitions: {},

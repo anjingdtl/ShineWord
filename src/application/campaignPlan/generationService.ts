@@ -10,6 +10,7 @@ import { estimateTokens } from '../context/tokenEstimate';
 import { endpointBucketId } from '../worldBuild/rateScheduler';
 import type { ContentEntry } from '../../domain/content/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
+import { SKILL_RANKS } from '../../domain/rules/types';
 import type { LocalCompileContext } from './localCompile';
 import { CAMPAIGN_PLAN_MODEL_VERSION, extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
 
@@ -55,7 +56,7 @@ export function buildPlanRequestMaterials(input: {
     .map(entry => entry.entryId);
 
   const goalBlock = intent.goalMode === 'declared'
-    ? `玩家意图（必须响应，不得改写）：${intent.normalizedIntent}${intent.userConstraints.length > 0 ? `\n玩家约束：${intent.userConstraints.join('；')}` : ''}`
+    ? `玩家完整意图（必须响应，不得裁剪）：${intent.rawIntent}\n归纳目标：${intent.normalizedIntent}${intent.userConstraints.length > 0 ? `\n玩家约束：${intent.userConstraints.join('；')}` : ''}`
     : '玩家意图：尚未决定目标（探索型开局）。请生成一个以"弄清局势、发现机会"为核心的探索开局，目标状态为待选择，不虚构玩家已宣布的目标。';
 
   const system = [
@@ -68,25 +69,46 @@ export function buildPlanRequestMaterials(input: {
     '  "proposal": {"title","longTermGoal","publicPitch","gmPremise","tone"},',
     '  "stages": [{"nodeId","role":"main|optional","title","publicObjective","gmPurpose","coverage":"concrete|provisional","activation","completion","failure","cancellation","dependsOn":[],"alternatives":[],"next":[],"provenance":{"kind":"design_fill|canon_inspired","sourceFactIds":[],"rationale"}}],',
     '  "endings": [{"endingId","title","publicDescription","outcomeKind":"success|pyrrhic|failure|open","condition"}],',
-    '  "firstSituation": {"situationTitle","summary","gmBrief","pressureDescription","deadlineClockSeconds","signs":[{"text"}],"methods":[...]}',
+    '  "firstSituation": {"situationTitle","summary","gmBrief","pressureDescription","deadlineClockSeconds","signs":[{"text"}],"methods":[...]},',
+    '  "consequences": [{"consequenceId":"stable-id","description":"后续反应","trigger":{"kind":"committed_event","eventType":"later_supported_event"},"effects":[{"template":"record_event","eventType":"reaction_recorded","summary":"实际回应"}],"visibility":"public"}],',
+    '  "rewards": []',
     '}',
     '',
     '结构规则：',
     '- stages 2-6 个，主路径必须从无 activation 的起点可达至少一个结局条件；远期阶段用 coverage="provisional"；',
+    '- 只有当前第一阶段 activation=null。后续阶段用 node_succeeded 与 dependsOn 引用前驱；firstSituation 仅服务当前第一阶段，远期不得用 self 的同一计数冒充独立问题。短篇每阶段约 2-5 次有意义的决定，不用反复交谈/观察刷 10/30 次计数；完成条件对应取得证据、达成承诺或解除具体阻碍。',
     '- 第一个 concrete 阶段必须完整可玩：endings 之前先由 firstSituation 给出 2-4 个办法（methods），办法之间机制不同（不同技能/不同行动类型/不同对象），至少一个办法的 firstStep 只用下面列出的技能且不需要准备；',
     '- 每个 method 的 outcomes 必须给出 full_success/success/failure/severe_failure 四档，各档 resultFact 一句玩家可读事实，effects 从效果模板白名单选择；',
+    '- 每种办法必须至少有一个成功档以权威 effects 推进该阶段 completion；有风险的失败要提供改变局面的代价或新机会。日常观察、无风险交谈可使用 observe/talk/interact，不必强制 skill_check。',
+    '- 至少一条当前可执行路线必须能通过不同、有因果关系的普通 success 决定完成阶段，不能让所有完成路线都只等待 full_success。大成功可给捷径或额外收益。普通成功已经创建承诺、发现知识之后，后续办法应消费这些已提交事实；重复创建同一承诺或重复授予同一知识不算新进展。累计计数达到门槛的成功路径不能仍强制等待大成功才写入 resolved。',
+    '- 中长篇阶段应包含准备、取得实绩、兑现或选择后续方向等不同问题，避免首步一次普通成功就跳过所有过程，也不要通过重复同一步骤凑篇幅。修订时先核对已有开放承诺、已知知识、关系和实际失败代价，再提供当前角色能执行的下一步。',
     '- 条件模板白名单：situation_resolved{situationId}, situation_status{situationId,status}, quest_succeeded{questId}, committed_event{eventType,payloadMatch?}, counter_at_least{situationId,counterId,minimum}, promise_fulfilled{situationId,promiseId}, knowledge_known{entryId}, relationship_at_least{fromActorId,toActorId,closeness}, item_owned{itemId,actorId}, actor_alive{actorId}, actor_dead{actorId}, node_succeeded{nodeId}；可用 {"kind":"all","of":[...]}/any/not 组合（≤3 层）。firstSituation 的局面可以用 situationId "self" 指代自身；',
     '- 效果模板白名单：situation_status{situationId,status,resolution?}, situation_counter{situationId,counterId,delta(±10)}, promise_create{situationId,promiseId,promisorActorId,promiseeActorId?,description}, promise_fulfill{situationId,promiseId}, promise_break{situationId,promiseId}, grant_knowledge{entryId}, grant_item{itemId,toActorId}, relationship_shift{fromActorId,toActorId,delta(±3)}, condition_apply{actorId,conditionId}, condition_remove{actorId,conditionId}, resource_change{actorId,resourceId,amount(±10)}, clock_advance{minutes(≤240)}, record_event{eventType,summary}, schedule_consequence{consequenceId}, suppress_reference_event{situationId,eventKey,reason}；',
     '- 可选 "consequences": [{consequenceId,description,trigger, effects:[{template:"schedule_consequence" 之外的效果}],visibility}] 表示延迟后果；可选 "rewards": [{policyId,nodeId,description,rewards:[{kind:"skill_rank|item|knowledge|relationship|resource_cap",targetId,toActorId?,rank?,delta?}]}]；',
+    '- 人物担保、合作或付出应留下可执行后果：在相应 outcomes 用 schedule_consequence 引用 consequences；trigger 应等待后续履约、事件或准备条件，不与调度条件同时成立。后续办法可用 promise_fulfilled、knowledge_known 或 relationship_at_least 消费这些真实结果。',
     '- 公开字段（title/publicObjective/publicPitch/longTermGoal/signs/summary）不得泄漏 gmPremise、gmPurpose、隐藏身份或原著后期走向；',
     '- 只能引用下面给出的 ID（技能/人物/地点/物品/线索/任务）；不得发明新的 ID。',
+    '- actorId/fromActorId/toActorId 使用玩家 actorId 或在场人物模板 ID；禁止杜撰 pc、roland、anna 等英文昵称。计数条件必须明确 integer minimum，situation_status 必须明确 status。',
+    '- situation_status 的 status 只允许 dormant / eligible / active / resolved / suppressed。failed、completed、cancelled 都不是局面状态。失败或取消条件可用 committed_event，且对应 outcomes 必须用 record_event 产生那个事件；不需要的 failure/cancellation 写 null。',
+    '- 每个末端主阶段必须有 endings.condition 中的 node_succeeded 引用（包括失败/开放结局）。本地不会代你补造结局。',
+    '- method 完整形状：{"methodId":"stable-id","title":"办法标题","goal":"要实现什么","firstStep":{"intent":"玩家直接可执行的第一步描述","actionKind":"observe|talk|interact|skill_check|ability|move","skillId":"仅检定时填写已给出的技能 ID","targetEntryId":"可选的在场人物模板 ID"},"requires":{},"preparation":"无","tradeoffs":"具体代价","outcomes":{"full_success":{"resultFact":"本档结果事实","effects":[]},"success":{"resultFact":"本档结果事实","effects":[]},"failure":{"resultFact":"本档结果事实","effects":[]},"severe_failure":{"resultFact":"本档结果事实","effects":[]}}}。不同办法应改变不同的关系、承诺、知识、代价或后续机会。',
+    '- 每个 schedule_consequence 的 consequenceId 必须在根对象 consequences 数组中完整定义；consequences.trigger 必须是条件 JSON 对象，不是文字。条件字段用 kind，效果字段用 template。',
+    '- 输出前核对每一个 schedule_consequence.consequenceId 与 consequences[].consequenceId 完全一致。没有定义就不得安排；不用延迟后果时 consequences=[] 且 outcomes 中没有 schedule_consequence。不要照抄上面的示例事件，事件必须有本次后续办法的 record_event 来源。',
+    '- 阶段 completion/failure/cancellation 不能引用该阶段自身的 node_succeeded；那会成为无法推进的循环。未来未构建的阶段保持 provisional。',
+    '- 当前阶段 completion 的局面/计数/承诺必须有 outcomes 或 consequences 中的实际效果来源。要求 self resolved 就必须有 situation_status resolved；要求承诺兑现则先 promise_create 再 promise_fulfill。旧承诺必须逐字使用已提交状态中的 situationId+promiseId，不能把旧 promiseId 配给新的 self。',
+    '- 带 deadlineClockSeconds 的局面超时也会 resolved。completion 不能只要求 self resolved，必须在 all 中同时要求成功产生的正数计数、fulfilled 承诺或成功专属 committed_event；any 的每条 resolved 路径都要有成功证据，不能把超时记作完成。',
+    '- 当前可行动人物见“当前在场人物”白名单；其它世界人物只能作为远期背景，不能当作当前 firstStep.targetEntryId。至少一个入口 requires={} 且不依赖物品、能力、关系或未发现知识；无在场目标时可从无 targetEntryId 的现场调查开始。',
+    '- 当前只定义一份 firstSituation，situationId=self。不要发明 sit-n2 等远期局面 ID；provisional 阶段用 committed_event 或已有知识/任务作为 completion，后续修订才定义它自己的局面。record_event 必须含 eventType 与 summary。',
+    '- 所有 eventType 使用小写 snake_case（^[a-z][a-z0-9_]*$），例如 rescue_completed；不能使用连字符或空格。committed_event 条件与 record_event 效果必须逐字引用同一个事件名。节点/办法/后果的 ID 与事件名是不同字段。',
+    `- rewards[].rewards[] 的每项必须有 kind 与 targetId。relationship 奖励的 targetId 是关系起点人物ID，toActorId 是终点人物ID，delta 为±3以内整数；targetId 不能换成 fromActorId，这与 relationship_shift 效果字段不同。知识/物品/技能奖励的 targetId 分别是已给出的条目ID，资源上限的 targetId 仅 hp/stamina。skill_rank 的 rank 必须是字符串 ${SKILL_RANKS.join(' / ')}，不能填写数字1、2或汉字等级。`,
+    '- relationship_at_least.closeness 沿用当前角色关系的 0..100 整数标度，门槛以当前已提交关系和可获得增量为依据；resourceId 仅 hp 或 stamina。proposal 的 longTermGoal/publicPitch/gmPremise/tone 全部填写；日常合作的 gmPremise 说明各方真实动机与阻力，无需预设阴谋。',
   ].join('\n');
 
   const user = [
     `作品：${input.worldTitle}`,
     `开局时刻：${input.anchorTitle}`,
     `开局地点：${ctx.openingLocationId}`,
-    `玩家角色：${input.playerName}（已会技能：${[...ctx.protagonistSkills].slice(0, 10).join(', ') || '无'}）`,
+    `玩家角色：${input.playerName}（actorId=${intent.protagonistBinding.actorId}；已会技能：${[...ctx.protagonistSkills].slice(0, 10).join(', ') || '无'}）`,
     goalBlock,
     `篇幅偏好：${intent.lengthPreference === 'short' ? '短篇（2-3 阶段）' : intent.lengthPreference === 'long' ? '长篇（4-6 阶段）' : '中篇（3-5 阶段）'}${intent.tone ? `；基调：${intent.tone}` : ''}`,
     input.openingGoalSuggestions.length > 0 ? `可参考的开局方向：${input.openingGoalSuggestions.join('；')}` : null,
@@ -94,7 +116,10 @@ export function buildPlanRequestMaterials(input: {
     '可用技能：', skills.join('、') || '无',
     '可用能力：', abilities.join('、') || '无',
     '可进入场景：', scenes.join('；') || '无',
-    '在场/可出现人物模板：', npcs.join('、') || '无',
+    '当前在场人物（仅这些可以作为当前行动对象）：', (ctx.presentActorRefs ?? []).join('、') || '无',
+    '世界人物模板（可能在别处，不代表当前在场）：', npcs.join('、') || '无',
+    '策划可用人物资料（公开文案仍需过滤隐藏动机）：', JSON.stringify(ctx.actorMaterials ?? []),
+    '开局时已验证的原著事实（不得补入后期事件）：', JSON.stringify(ctx.openingFacts ?? []),
     '已知物品：', items.join('、') || '无',
     '已知线索/资料：', clues.join('、') || '无',
     '可关联任务：', quests.join('、') || '无',
@@ -122,6 +147,14 @@ export async function generateCampaignPlanCandidate(input: {
   materials: PlanRequestMaterials;
   logicalRequestId: string;
   worldId: string;
+  branchId?: string;
+  /** Durable response recovery; never redispatch a completed generation. */
+  resume?: { text: string; repairUsed: boolean };
+  physicalRequestBudget?: number;
+  onResponse?: (text: string, repairUsed: boolean) => Promise<void>;
+  beforeDispatch?: () => Promise<void>;
+  /** Local reference and executable-contract gates share the same repair. */
+  validateModel?: (model: CampaignPlanCandidateModelV1) => readonly string[];
 }): Promise<PlanGenerationResult> {
   const demands = DEFAULT_OUTPUT_DEMANDS.campaign_plan;
   const maximum = Math.min(demands.maximum, input.profile.contentOutputTokens ?? 16_384);
@@ -158,7 +191,7 @@ export async function generateCampaignPlanCandidate(input: {
     reasoningTier: reasoningPolicy.tier,
     reasoningReserveTokens: reasoningPolicy.reserveTokens,
     reasoningPolicyVersion: reasoningPolicy.policyVersion,
-    ledger: { logicalRequestId: input.logicalRequestId, requestKind: 'campaign_plan', worldId: input.worldId },
+    ledger: { logicalRequestId: input.logicalRequestId, requestKind: 'campaign_plan', worldId: input.worldId, ...(input.branchId ? { branchId: input.branchId } : {}) },
     scheduling: {
       logicalTaskId: input.logicalRequestId,
       role: 'mapper', priority: 'P2',
@@ -172,6 +205,10 @@ export async function generateCampaignPlanCandidate(input: {
   });
 
   const dispatch = async (request: LlmRequest): Promise<{ text: string; unknown: boolean }> => {
+    await input.beforeDispatch?.();
+    // Repair instructions are mandatory too; validate their actual input size.
+    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum),
+      estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
     try {
       const response = await input.provider.complete(request);
       return { text: response.text, unknown: false };
@@ -185,30 +222,57 @@ export async function generateCampaignPlanCandidate(input: {
   };
 
   let physicalRequests = 0;
-  const first = await dispatch(buildRequest(null));
-  physicalRequests += 1;
+  const budget = input.physicalRequestBudget ?? 2;
+  if (!input.resume && budget < 1) return { status: 'invalid', model: null, parseErrors: ['physical_request_budget_exhausted'], rawText: '', physicalRequests };
+  const first = input.resume ? { text: input.resume.text, unknown: false } : await dispatch(buildRequest(null));
+  if (!input.resume) {
+    physicalRequests += 1;
+    if (!first.unknown) await input.onResponse?.(first.text, false);
+  }
   if (first.unknown) {
     return { status: 'outcome_unknown', model: null, parseErrors: [], rawText: '', physicalRequests };
   }
   const firstErrors: string[] = [];
   const firstParsed = extractJsonObject(first.text);
   const firstModel = firstParsed === null ? null : parseCampaignPlanCandidate(firstParsed, firstErrors);
-  if (firstModel !== null) {
+  if (firstModel) firstErrors.push(...(input.validateModel?.(firstModel) ?? []));
+  if (firstModel !== null && firstErrors.length === 0) {
     return { status: 'ready', model: firstModel, parseErrors: [], rawText: first.text, physicalRequests };
   }
+  if (firstParsed === null) firstErrors.push('输出必须是完整 JSON 对象。');
+  if (input.resume?.repairUsed || physicalRequests >= budget) {
+    return { status: 'invalid', model: null, parseErrors: firstErrors, rawText: first.text, physicalRequests };
+  }
   // One bounded repair with the SAME frozen materials + error list.
-  const repair = await dispatch(buildRequest(firstErrors.slice(0, 12)));
+  const repairRequest = buildRequest(firstErrors.slice(0, 12));
+  repairRequest.user += `\n待修复候选（保留完整意图和合法合同）：\n${first.text}`;
+  const repair = await dispatch(repairRequest);
   physicalRequests += 1;
   if (repair.unknown) {
     return { status: 'outcome_unknown', model: null, parseErrors: firstErrors, rawText: first.text, physicalRequests };
   }
+  await input.onResponse?.(repair.text, true);
   const repairErrors: string[] = [];
   const repairParsed = extractJsonObject(repair.text);
   const repairModel = repairParsed === null ? null : parseCampaignPlanCandidate(repairParsed, repairErrors);
-  if (repairModel !== null) {
+  if (repairModel) repairErrors.push(...(input.validateModel?.(repairModel) ?? []));
+  if (repairModel !== null && repairErrors.length === 0) {
     return { status: 'ready', model: repairModel, parseErrors: [], rawText: repair.text, physicalRequests };
   }
   return { status: 'invalid', model: null, parseErrors: repairErrors.length > 0 ? repairErrors : firstErrors, rawText: repair.text, physicalRequests };
+}
+
+function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number) {
+  return {
+    capabilities: resolveModelCapabilities({ declared: {
+      contextWindowTokens: input.profile.capabilities.contextWindow, maxOutputTokens: input.profile.capabilities.maxOutputTokens,
+      supportsJsonMode: input.profile.capabilities.supportsJson, reportsUsage: input.profile.capabilities.reportsUsage,
+      reasoningUsageReported: input.profile.capabilities.reportsUsage }, reasoningMode: 'always_on' as const }),
+    requestKind: 'campaign_plan' as const, estimatedMandatoryInputTokens: 0,
+    businessOutputDemand: { ...demands, target: Math.min(demands.target, maximum), maximum },
+    reasoningPolicy: { tier: normalizeReasoningTier(input.profile.reasoningTier ?? input.profile.reasoningEffort),
+      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model), model: input.profile.model },
+  };
 }
 
 export { llmModelProfileFingerprint };

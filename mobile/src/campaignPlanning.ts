@@ -12,6 +12,7 @@ import { adoptOpeningPlan } from '../../src/application/campaignPlan/adoption';
 import { getDatabaseRuntime } from './database';
 import { buildProvider } from './runtime';
 import { resolveSkillKey } from '../../src/domain/characters/card';
+import { canonicalJsonOf, sha256HexOf } from '../../src/application/campaignPlan/hashing';
 
 export type PlanningPhase =
   | 'preparing'      // 准备相关资料
@@ -29,7 +30,8 @@ export interface PreparePlanInput {
   packageContentHash: string;
   anchor: { worldTimeOrder: number; anchorEventId?: string; locationId: string };
   anchorTitle: string;
-  protagonist: { actorId: string; kind: 'original' | 'canon'; name: string; canonEntityId?: string };
+  protagonist: { actorId: string; kind: 'original' | 'canon'; name: string; canonEntityId?: string;
+    description?: string; attributes?: Record<string, number>; initialSkills?: readonly string[] };
   protagonistSkills: readonly string[];
   companions: ReadonlyArray<{ actorId: string; templateId: string; directive?: string }>;
   goal: string;
@@ -63,6 +65,9 @@ export function makeCampaignIntent(input: PreparePlanInput): CampaignIntentV1 {
       kind: input.protagonist.kind,
       name: input.protagonist.name,
       ...(input.protagonist.canonEntityId ? { canonEntityId: input.protagonist.canonEntityId } : {}),
+      ...(input.protagonist.description ? { description: input.protagonist.description } : {}),
+      ...(input.protagonist.attributes ? { attributes: input.protagonist.attributes } : {}),
+      initialSkills: [...input.protagonistSkills],
     },
     openingAnchor: {
       worldTimeOrder: input.anchor.worldTimeOrder,
@@ -76,7 +81,7 @@ export function makeCampaignIntent(input: PreparePlanInput): CampaignIntentV1 {
     })),
     ...(input.tone ? { tone: input.tone } : {}),
     lengthPreference: input.lengthPreference ?? 'medium',
-    userConstraints: [...(input.userConstraints ?? [])].slice(0, 8),
+    userConstraints: [...(input.userConstraints ?? [])],
     requestedCanonTargets: [],
     knowledgePolicy: 'anchor_projection',
     sourceCoverageBinding: {
@@ -93,6 +98,7 @@ export function makeCampaignIntent(input: PreparePlanInput): CampaignIntentV1 {
 export async function prepareCampaignPlan(
   input: PreparePlanInput,
   onPhase?: (phase: PlanningPhase) => void,
+  onSetup?: (setupId: string) => void,
 ): Promise<PreparePlanResult> {
   const runtime = await getDatabaseRuntime();
   const planStore = new SqliteCampaignPlanStore(runtime.db);
@@ -103,12 +109,13 @@ export async function prepareCampaignPlan(
     setupId: intent.setupId, worldId: input.worldId, packageRevision: input.packageRevision,
     intent, intentHistory: [intent], currentCandidateId: null, status: 'planning', createdAt: now, updatedAt: now,
   });
+  onSetup?.(intent.setupId);
   const jobId = `job-${intent.setupId}`;
   // Cancel any stale in-flight job for a previous setup of this wizard entry.
   await planStore.insertJob({
     jobId, setupId: intent.setupId, campaignId: null, branchId: null, jobKind: 'opening_plan',
     triggerReasons: ['user_requested'], baseStateVersion: null, basePlanId: null, basePlanRevision: null,
-    intentHash: 'i'.repeat(64), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
+    intentHash: sha256HexOf(canonicalJsonOf(intent)), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
     status: 'queued', leaseOwner: null, leaseExpiresAt: null, fencingToken: 0, attemptCount: 0,
     nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: null, lastError: null, createdAt: now, updatedAt: now,
   });
@@ -116,14 +123,14 @@ export async function prepareCampaignPlan(
   const provider: LlmProvider = await buildProvider(input.profile);
   const run = await runOpeningPlanJob({
     db: runtime.db, planStore, worldStore: runtime.worldStore, provider, profile: input.profile,
+    onStage: onPhase,
   }, jobId, {
     anchorTitle: input.anchorTitle,
     playerName: input.protagonist.name,
     protagonistSkills: input.protagonistSkills.filter(skill => typeof skill === 'string'),
     openingGoalSuggestions: input.goalSuggestions ?? [],
   });
-  if (run.status === 'candidate_ready') {
-    onPhase?.('validating');
+  if (run.status === 'candidate_ready' || run.status === 'already_ready') {
     onPhase?.('ready');
     return { setupId: intent.setupId, jobId, phase: 'ready', candidateId: run.candidateId };
   }
@@ -133,6 +140,52 @@ export async function prepareCampaignPlan(
   }
   return { setupId: intent.setupId, jobId, phase: 'failed', candidateId: run.candidateId,
     error: run.errors.slice(0, 3).join('；') || '提案校验未通过。' };
+}
+
+/** Restore the same persisted character/intent; completed model responses are reused. */
+export async function restoreCampaignPreparation(worldId: string, profile: ApiProfile): Promise<{
+  input: PreparePlanInput; setupId: string; proposal: ProposalView | null; phase: PlanningPhase;
+} | null> {
+  const runtime = await getDatabaseRuntime();
+  const planStore = new SqliteCampaignPlanStore(runtime.db);
+  const row = await runtime.db.queryOne<{ setup_id: string }>(
+    "SELECT setup_id FROM campaign_setups WHERE world_id=? AND status IN ('planning','proposal_ready') ORDER BY updated_at DESC LIMIT 1", [worldId]);
+  const setup = row ? await planStore.getSetup(row.setup_id) : null;
+  if (!setup) return null;
+  const intent = setup.intent;
+  const proposal = await readReadyProposal(setup.setupId);
+  return { setupId: setup.setupId, proposal, phase: proposal ? 'ready' : 'preparing', input: {
+    profile, worldId, worldTitle: '', packageRevision: setup.packageRevision,
+    packageContentHash: intent.sourceCoverageBinding.packageContentHash, anchor: intent.openingAnchor,
+    anchorTitle: '已保存的开局时刻', protagonist: intent.protagonistBinding,
+    protagonistSkills: intent.protagonistBinding.initialSkills ?? [], companions: intent.companionBindings,
+    goal: intent.rawIntent, goalMode: intent.goalMode, lengthPreference: intent.lengthPreference,
+    tone: intent.tone, userConstraints: intent.userConstraints, coverageWorldTimeOrder: intent.sourceCoverageBinding.coverageWorldTimeOrder,
+  } };
+}
+
+export async function resumeCampaignPreparation(setupId: string, input: PreparePlanInput, onPhase: (phase: PlanningPhase) => void): Promise<ProposalView> {
+  const runtime = await getDatabaseRuntime();
+  const planStore = new SqliteCampaignPlanStore(runtime.db);
+  const jobId = `job-${setupId}`;
+  const job = await planStore.getJob(jobId);
+  if (!job) throw new Error('保存的规划任务缺失。');
+  onPhase('planning');
+  const run = await runOpeningPlanJob({ db: runtime.db, planStore, worldStore: runtime.worldStore,
+    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase }, jobId,
+    { anchorTitle: input.anchorTitle, playerName: input.protagonist.name, protagonistSkills: input.protagonistSkills, openingGoalSuggestions: [] });
+  const proposal = await readReadyProposal(setupId);
+  if (!proposal) throw new Error(run.errors.join('；') || '任务仍在运行，请稍后恢复；不会重复发送已完成请求。');
+  onPhase('ready');
+  return proposal;
+}
+
+export async function cancelCampaignPreparation(setupId: string): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  await runtime.db.transaction(async tx => {
+    await tx.execute("UPDATE campaign_setups SET status='cancelled',current_candidate_id=NULL,updated_at=? WHERE setup_id=? AND status<>'adopted'", [new Date().toISOString(), setupId]);
+    await tx.execute("UPDATE campaign_plan_jobs SET status='cancelled',fencing_token=fencing_token+1 WHERE setup_id=? AND status IN ('queued','running','candidate_ready','retryable_failed')", [setupId]);
+  });
 }
 
 export interface ProposalView {
@@ -150,12 +203,13 @@ export interface ProposalView {
 
 /** Reads a persisted proposal for wizard resume (A08: placeholder never ready). */
 export async function readReadyProposal(setupId: string): Promise<ProposalView | null> {
+  const { isIntactReadyCandidate } = await import('../../src/application/campaignPlan/candidateIntegrity');
   const runtime = await getDatabaseRuntime();
   const planStore = new SqliteCampaignPlanStore(runtime.db);
   const setup = await planStore.getSetup(setupId);
   if (!setup || setup.status !== 'proposal_ready' || !setup.currentCandidateId) return null;
   const candidate = await planStore.getCandidate(setup.currentCandidateId);
-  if (!candidate || candidate.stage !== 'ready' || !candidate.plan) return null;
+  if (!isIntactReadyCandidate(candidate)) return null;
   const plan = candidate.plan;
   const firstStage = plan.nodes.find(node => plan.startNodeIds.includes(node.nodeId))
     ?? plan.nodes[0];

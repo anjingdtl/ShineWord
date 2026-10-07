@@ -53,6 +53,11 @@ test('P9-5: local trigger evaluation is deterministic and never fires on idle pl
     };
     const reasonsWithActorCondition = evaluateReplanTriggers({ plan: actorConditionPlan, runtime, state: withActor });
     assert.ok(reasonsWithActorCondition.includes('critical_actor_fate'), 'future-node actor death fires the trigger');
+    const templateAliasPlan = { ...plan, nodes: plan.nodes.map(node => node.nodeId === 'stage-2'
+      ? { ...node, completion: { kind: 'actor_alive', actorId: 'tpl-lin' } } : node) };
+    assert.ok(evaluateReplanTriggers({ plan: templateAliasPlan, runtime, state: withActor }).includes('critical_actor_fate'));
+    const rescued = { ...withActor, actors: { ...withActor.actors, 'npc-tpl-lin': { ...withActor.actors['npc-tpl-lin'], resources: { hp: 2 }, lifeStatus: 'active' } } };
+    assert.ok(!evaluateReplanTriggers({ plan: templateAliasPlan, runtime, state: rescued }).includes('critical_actor_fate'), 'current survival overrides an earlier planned fate');
 
     // Primary failure fires its trigger.
     const failedRuntime = {
@@ -124,6 +129,14 @@ test('P9-5: adoptReplanCandidate refuses while a turn is in flight and stales ag
     const plan = JSON.parse(planRow.plan_json);
     const artifactRow = await h.adapter.queryOne('SELECT artifact_json FROM campaign_content_artifacts WHERE artifact_id=?', [plan.contentArtifactRefs[0]]);
     const candidateId = 'cand-replan-1';
+    const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPlan/hashing');
+    const artifact = { ...JSON.parse(artifactRow.artifact_json), artifactId: 'artifact-replan-1', planRevision: 2 };
+    const nextPlan = { ...plan, revision: 2, parentRevision: 1, contentArtifactRefs: [artifact.artifactId] };
+    for (const value of [artifact, nextPlan]) {
+      const { contentHash, ...body } = value;
+      value.contentHash = sha256HexOf(canonicalJsonOf(body));
+    }
+    const candidateHash = sha256HexOf(canonicalJsonOf({ plan: nextPlan, artifact }));
     await h.planStore.insertJob({
       jobId: 'job-replan-1', setupId: 'replan:c-t', campaignId: h.campaignId, branchId: h.branchId,
       jobKind: 'replan', triggerReasons: ['goal_changed'],
@@ -137,8 +150,8 @@ test('P9-5: adoptReplanCandidate refuses while a turn is in flight and stales ag
     await h.planStore.upsertCandidate({
       candidateId, jobId: 'job-replan-1', setupId: 'replan:c-t', attemptGroup: 'a1', attemptNo: 1,
       stage: 'ready', rawResponseRef: null, rawResponseText: 'fixture', parseResultJson: null,
-      validationErrors: [], repairUsed: false, candidateHash: 'x'.repeat(64),
-      plan: { ...plan, revision: 2, parentRevision: 1 }, artifact: JSON.parse(artifactRow.artifact_json),
+      validationErrors: [], repairUsed: false, candidateHash,
+      plan: nextPlan, artifact,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     // In-flight turn on the branch ⇒ adoption refuses (stable boundary).

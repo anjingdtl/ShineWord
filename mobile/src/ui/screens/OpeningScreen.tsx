@@ -18,7 +18,7 @@ import type { CompanionDirective } from '../../../../src/domain/characters/card'
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
 import { getSegmentReadiness } from '../../segmentRuntime';
-import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
+import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation, cancelCampaignPreparation, type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
 import { CampaignProposalCard, PlanningStatus } from '../features/opening/CampaignProposalCard';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
@@ -74,9 +74,17 @@ export function OpeningScreen(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [planningPhase, setPlanningPhase] = useState<string | null>(null);
+  const planningScroll = React.useRef<ScrollView>(null);
   const [planningError, setPlanningError] = useState<string | null>(null);
   const [proposal, setProposal] = useState<ProposalView | null>(null);
+  useEffect(() => {
+    if (planningPhase || proposal || error) planningScroll.current?.scrollTo({ y: 0, animated: true });
+  }, [planningPhase, proposal, error]);
   const pendingCreate = React.useRef<PreparePlanInput | null>(null);
+  const planningSetupId = React.useRef<string | null>(null);
+  const selectionBinding = React.useRef<string | null>(null);
+  const actionInFlight = React.useRef(false);
+  const [lengthPreference, setLengthPreference] = useState<'short' | 'medium' | 'long'>('medium');
   const [noPackage, setNoPackage] = useState(false);
   const [repairMessage, setRepairMessage] = useState<string | null>(null);
 
@@ -98,6 +106,25 @@ export function OpeningScreen(): React.JSX.Element {
           return;
         }
         setSetup(worldSetup);
+        const restored = await restoreCampaignPreparation(worldId, profile);
+        if (cancelled) return;
+        if (restored) {
+          const input = { ...restored.input, worldTitle: title };
+          pendingCreate.current = input;
+          planningSetupId.current = restored.setupId;
+          setName(input.protagonist.name); setKind(input.protagonist.kind);
+          setCanonEntityId(input.protagonist.canonEntityId ?? '');
+          setCharacterDescription(input.protagonist.description ?? '');
+          if (input.protagonist.attributes) setPoints(input.protagonist.attributes);
+          setChosenSkills([...input.protagonistSkills]); setQuickAdvancedOpen(true);
+          setGoal(input.goal); setLengthPreference(input.lengthPreference ?? 'medium');
+          setAnchorEventId(input.anchor.anchorEventId ?? ''); setLocationId(input.anchor.locationId);
+          setCompanions(input.companions.map(c => c.templateId));
+          setCompanionDirectives(Object.fromEntries(input.companions.map(c => [c.templateId, (c.directive ?? 'protect') as CompanionDirective])));
+          setQuickRecommendationsInitialized(true); setQuickStep(1);
+          setProposal(restored.proposal); setPlanningPhase(restored.phase);
+          return;
+        }
         const firstAnchor = worldSetup.anchorEvents[0];
         if (firstAnchor) setAnchorEventId(firstAnchor.eventId);
         if (worldSetup.locations.length > 0) setLocationId(worldSetup.locations[0]);
@@ -112,6 +139,18 @@ export function OpeningScreen(): React.JSX.Element {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldId, profile]);
+
+  const selectionKey = JSON.stringify({ name, kind, canonEntityId, characterDescription, points, chosenSkills,
+    anchorEventId, locationId, companions, companionDirectives, goal, lengthPreference, advancedWizard, quickAdvancedOpen });
+  useEffect(() => {
+    if (!planningSetupId.current) return;
+    if (selectionBinding.current === null) { selectionBinding.current = selectionKey; return; }
+    if (selectionBinding.current === selectionKey) return;
+    const staleSetup = planningSetupId.current;
+    planningSetupId.current = null; selectionBinding.current = null; pendingCreate.current = null;
+    setProposal(null); setPlanningPhase(null);
+    void cancelCampaignPreparation(staleSetup).catch(e => setError(e instanceof Error ? e.message : String(e)));
+  }, [selectionKey]);
 
   useEffect(() => {
     if (!profile) return;
@@ -276,6 +315,8 @@ export function OpeningScreen(): React.JSX.Element {
         kind,
         name: actorName,
         ...(kind === 'canon' ? { canonEntityId } : {}),
+        ...(characterDescription.trim() ? { description: characterDescription.trim() } : {}),
+        ...(kind === 'original' ? { attributes: characterAttributes, initialSkills: characterSkills } : {}),
       },
       protagonistSkills: characterSkills,
       companions: companions.map((templateId, index) => ({
@@ -284,6 +325,7 @@ export function OpeningScreen(): React.JSX.Element {
         directive: companionDirectives[templateId] ?? 'protect',
       })),
       goal: goal.trim(),
+      lengthPreference,
       goalSuggestions,
       // Extra creation fields ride along for adoption (kept out of intent).
       ...({} as Record<string, never>),
@@ -292,7 +334,8 @@ export function OpeningScreen(): React.JSX.Element {
 
   /** P9 two-phase start: generate the campaign proposal (real phases). */
   async function create() {
-    if (!profile || busy) return;
+    if (!profile || busy || actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     setPlanningError(null);
@@ -300,8 +343,10 @@ export function OpeningScreen(): React.JSX.Element {
     try {
       const input = await collectPlanInput();
       pendingCreate.current = input;
+      selectionBinding.current = selectionKey;
       setPlanningPhase('preparing');
-      const result = await prepareCampaignPlan(input, phase => setPlanningPhase(phase));
+      const result = await prepareCampaignPlan(input, phase => setPlanningPhase(phase), id => { planningSetupId.current = id; });
+      if (planningSetupId.current !== result.setupId) return;
       if (result.phase === 'ready') {
         const view = await readReadyProposal(result.setupId);
         if (!view) throw new Error('提案已生成但读取失败，请重新生成。');
@@ -314,13 +359,30 @@ export function OpeningScreen(): React.JSX.Element {
       setError(e instanceof Error ? e.message : String(e));
       setPlanningPhase(null);
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
 
   /** One click adopts the ready proposal atomically (A09 idempotent). */
+  function discardPreparation() {
+    const id = planningSetupId.current;
+    planningSetupId.current = null; pendingCreate.current = null; selectionBinding.current = null;
+    setProposal(null); setPlanningPhase(null); setPlanningError(null);
+    if (id) void cancelCampaignPreparation(id).catch(e => setError(e instanceof Error ? e.message : String(e)));
+  }
+
+  async function resumePreparation() {
+    if (!pendingCreate.current || !planningSetupId.current || busy || actionInFlight.current) return;
+    actionInFlight.current = true; setBusy(true); setPlanningError(null);
+    try { setProposal(await resumeCampaignPreparation(planningSetupId.current, pendingCreate.current, setPlanningPhase)); }
+    catch (e) { setPlanningError(e instanceof Error ? e.message : String(e)); setPlanningPhase('failed'); }
+    finally { actionInFlight.current = false; setBusy(false); }
+  }
+
   async function startAdventure() {
-    if (!profile || busy || !proposal || !pendingCreate.current) return;
+    if (!profile || busy || actionInFlight.current || !proposal || !pendingCreate.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -343,22 +405,22 @@ export function OpeningScreen(): React.JSX.Element {
         anchor: input.anchor,
         protagonist: {
           actorId: 'actor-player',
-          kind,
+          kind: input.protagonist.kind,
           name: input.protagonist.name,
-          description: characterDescription.trim() || undefined,
-          ...(kind === 'original'
+          description: input.protagonist.description,
+          ...(input.protagonist.kind === 'original'
             ? {
                 attributes: {
-                  physique: characterAttributes.physique,
-                  agility: characterAttributes.agility,
-                  insight: characterAttributes.insight,
-                  knowledge: characterAttributes.knowledge,
-                  willpower: characterAttributes.willpower,
-                  social: characterAttributes.social,
+                  physique: input.protagonist.attributes?.physique ?? characterAttributes.physique,
+                  agility: input.protagonist.attributes?.agility ?? characterAttributes.agility,
+                  insight: input.protagonist.attributes?.insight ?? characterAttributes.insight,
+                  knowledge: input.protagonist.attributes?.knowledge ?? characterAttributes.knowledge,
+                  willpower: input.protagonist.attributes?.willpower ?? characterAttributes.willpower,
+                  social: input.protagonist.attributes?.social ?? characterAttributes.social,
                 },
-                initialSkills: characterSkills,
+                initialSkills: input.protagonist.initialSkills ?? characterSkills,
               }
-            : { canonEntityId }),
+            : { canonEntityId: input.protagonist.canonEntityId }),
         },
         companions: input.companions,
       });
@@ -366,6 +428,7 @@ export function OpeningScreen(): React.JSX.Element {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -436,6 +499,7 @@ export function OpeningScreen(): React.JSX.Element {
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={theme.space.sm} style={{ flex: 1 }}><ScrollView
+        ref={planningScroll}
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, paddingBottom: theme.space.xxl }}>
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
         {planningPhase && !proposal ? <PlanningStatus phase={planningPhase} error={planningError ?? undefined} /> : null}
@@ -444,9 +508,17 @@ export function OpeningScreen(): React.JSX.Element {
             proposal={proposal}
             busy={busy}
             onStart={startAdventure}
-            onRegenerate={() => { setProposal(null); setPlanningPhase(null); }}
-            onEditIntent={() => { setProposal(null); setPlanningPhase(null); }} />
+            onRegenerate={discardPreparation}
+            onEditIntent={discardPreparation} />
         ) : null}
+        {planningPhase && !proposal && planningSetupId.current ? <View style={{ gap: theme.space.sm }}>
+          {!busy ? <Button label="恢复已保存的规划" variant="secondary" onPress={resumePreparation} testID="campaign-resume-preparation" /> : null}
+          <Button label="取消这次规划" variant="secondary" onPress={discardPreparation} testID="campaign-cancel-preparation" />
+        </View> : null}
+        {(!advancedWizard && quickStep === 1) || (advancedWizard && step === 3) ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>
+          {(['short','medium','long'] as const).map(length => <Button key={length} label={length === 'short' ? '短篇冒险' : length === 'long' ? '长篇冒险' : '中篇冒险'}
+            variant="chip" selected={lengthPreference === length} disabled={busy} onPress={() => setLengthPreference(length)} testID={`campaign-length-${length}`} />)}
+        </View> : null}
         {setup && setup.locations.length === 0 ? (
           <View style={{ gap: theme.space.sm }}>
             <StatusBanner tone="warning" title="需要补齐原著开局资料"

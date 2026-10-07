@@ -42,7 +42,8 @@ function candidateModel() {
         nodeId: 'stage-1', role: 'main', title: '查明隐患', publicObjective: '弄清青石巷里发生了什么',
         gmPurpose: '让玩家在现场找到第一批证据，建立对局势的基本判断。',
         coverage: 'concrete', activation: null,
-        completion: { kind: 'situation_resolved', situationId: 'self' },
+        completion: { kind: 'all', of: [{ kind: 'situation_resolved', situationId: 'self' },
+          { kind: 'counter_at_least', situationId: 'self', counterId: 'evidence', minimum: 1 }] },
         failure: null, cancellation: null, dependsOn: [], alternatives: [], next: ['stage-2'],
         provenance: { kind: 'design_fill', rationale: 'opening stage' },
       },
@@ -72,7 +73,7 @@ function candidateModel() {
           requires: {}, tradeoffs: '花费时间', preparation: '无',
           outcomes: {
             full_success: { resultFact: '你把现场看得一清二楚，找到了关键细节。', effects: [{ template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 2 }, { template: 'record_event', eventType: 'scene_swept', summary: '现场被彻底检查' }] },
-            success: { resultFact: '你确认了异常的大致来源。', effects: [{ template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 1 }] },
+            success: { resultFact: '你确认了异常的大致来源，现场问题得到解决。', effects: [{ template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 1 }, { template: 'situation_status', situationId: 'self', status: 'resolved', resolution: '调查证据明确了问题' }] },
             failure: { resultFact: '你没有看出额外的线索。', effects: [] },
             severe_failure: { resultFact: '你打翻了货箱，惊动了旁人。', effects: [{ template: 'record_event', eventType: 'alert_raised', summary: '动静引起了注意' }] },
           },
@@ -127,7 +128,11 @@ async function builtWorld() {
       const body = JSON.parse(request.body);
       let output;
       if (body.messages[0].content.includes('WorldMapper')) {
-        output = { skills: [], constraints: [], actorTemplates: [], items: [], lore: [], ruleMappings: [] };
+        output = { skills: [], constraints: [], actorTemplates: [{ id: 'tpl-lin', name: '林凡', category: 'human',
+          description: '站在青石巷的知情人。', attributes: {}, skills: {}, hp: 5, stamina: 3, defense: 1,
+          attacks: [], abilities: [], behavior: { goal: '留意巷口', retreatThreshold: 0.2, morale: 'steady' },
+          lootItemIds: [], threat: { damage: 0, durability: 1, actions: 1, control: 0, environment: 0 },
+          provenanceKind: 'design_fill', evidenceFactIds: [], rationale: '为开局知情人提供可执行模板' }], items: [], lore: [], ruleMappings: [] };
       } else if (body.messages[0].content.includes('Extractor')) {
         const entities = [['lin', 'character', '林凡'], ['alley', 'location', '青石巷'], ['key', 'item', '铜钥'],
           ['guild', 'faction', '青岚会'], ['wind', 'ability', '听风术'], ['rule', 'rule', '入夜禁行']]
@@ -158,7 +163,8 @@ async function seedSetup(h, overrides = {}) {
     openingAnchor: { worldTimeOrder: 0, locationId: '青石巷' },
     companionBindings: [], lengthPreference: 'short', userConstraints: [], requestedCanonTargets: [],
     knowledgePolicy: 'anchor_projection',
-    sourceCoverageBinding: { worldId: h.imported.worldId, packageRevision: h.revision, coverageWorldTimeOrder: 0, packageContentHash: 'h'.repeat(64) },
+    sourceCoverageBinding: { worldId: h.imported.worldId, packageRevision: h.revision, coverageWorldTimeOrder: 0,
+      packageContentHash: (await h.runtime.worldStore.getWorldPackage(h.imported.worldId, h.revision)).manifest.contentHash },
     createdAt: NOW,
     ...overrides,
   };
@@ -167,7 +173,7 @@ async function seedSetup(h, overrides = {}) {
   await planStore.insertJob({
     jobId: 'job-p1', setupId: intent.setupId, campaignId: null, branchId: null, jobKind: 'opening_plan',
     triggerReasons: ['user_requested'], baseStateVersion: null, basePlanId: null, basePlanRevision: null,
-    intentHash: 'i'.repeat(64), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
+    intentHash: require('../dist/application/campaignPlan/hashing').sha256HexOf(require('../dist/application/campaignPlan/hashing').canonicalJsonOf(intent)), contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
     status: 'queued', leaseOwner: null, leaseExpiresAt: null, fencingToken: 0, attemptCount: 0,
     nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: null, lastError: null, createdAt: NOW, updatedAt: NOW,
   });

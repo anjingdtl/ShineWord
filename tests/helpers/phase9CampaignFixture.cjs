@@ -48,7 +48,7 @@ function baseEntries() {
       actors: ['tpl-lin'], visibleItems: [], hazards: [], clues: [],
     }, { dependencyIds: ['tpl-lin'] }),
     entry('lore-crates', 'lore', { name: '可疑的货箱', text: '巷尾堆着不属于这里的货箱。' }, {
-      visibility: 'discoverable',
+      visibility: 'public',
       provenance: { kind: 'explicit', sourceFactIds: ['fact-crates'], rationale: '现场线索' },
     }),
   ];
@@ -68,7 +68,8 @@ function candidateModel() {
         nodeId: 'stage-1', role: 'main', title: '查明隐患', publicObjective: '弄清青石巷里发生了什么',
         gmPurpose: '让玩家在现场取得第一批证据。',
         coverage: 'concrete', activation: null,
-        completion: { kind: 'situation_resolved', situationId: 'self' },
+        completion: { kind: 'all', of: [{ kind: 'situation_resolved', situationId: 'self' },
+          { kind: 'counter_at_least', situationId: 'self', counterId: 'evidence', minimum: 1 }] },
         failure: null, cancellation: null, dependsOn: [], alternatives: [], next: ['stage-2'],
         provenance: { kind: 'design_fill', rationale: 'opening stage' },
       },
@@ -114,9 +115,11 @@ function candidateModel() {
           requires: {}, tradeoffs: '对方不一定愿意多说', preparation: '无',
           outcomes: {
             full_success: { resultFact: '林凡把知道的全告诉了你，并愿意作证。', effects: [
+              { template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 1 },
               { template: 'situation_status', situationId: 'self', status: 'resolved', resolution: '威胁来源被林凡指认' },
               { template: 'schedule_consequence', consequenceId: 'lin-favor' }] },
             success: { resultFact: '林凡透露了关键信息，愿意作证。', effects: [
+              { template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 1 },
               { template: 'situation_status', situationId: 'self', status: 'resolved', resolution: '威胁来源被林凡指认' },
               { template: 'schedule_consequence', consequenceId: 'lin-favor' }] },
             failure: { resultFact: '林凡摇了摇头，不愿多说。', effects: [] },
@@ -137,7 +140,8 @@ function candidateModel() {
   };
 }
 
-async function fixture() {
+async function fixture(options = {}) {
+  const entries = options.entries ?? baseEntries();
   const db = new DatabaseSync(':memory:');
   for (const sql of BUILTIN_MIGRATIONS[0].sql.split(';').map(part => part.trim()).filter(Boolean)) db.exec(sql);
   const adapter = new NodeSqliteAdapter(db);
@@ -179,7 +183,7 @@ async function fixture() {
   }, NOW);
   const published = await publishWorldPackage({
     worldStore: worlds, sha256Hex: sha.sha256Hex, worldId: 'w', sourceSha256: 'a'.repeat(64),
-    mappingVersion: 'p9-test', entries: baseEntries(), sections: [], createdAt: NOW,
+    mappingVersion: 'p9-test', entries, sections: [], createdAt: NOW,
   });
   await worlds.upsertEntity({ worldId: 'w', entityId: 'ent-lin', type: 'character', name: '林凡', aliases: [], firstSeenChapterId: 'ch' }, NOW);
   await worlds.saveFact({
@@ -203,12 +207,12 @@ async function fixture() {
   const rules = requireCompiledRules((await worlds.getWorldPackage('w', published.manifest.revision)).manifest.ruleConfiguration);
   const { canonicalJsonOf, sha256HexOf } = require('../../dist/application/campaignPlan/hashing');
   const compiled = compileCampaignPlan({
-    model: candidateModel(), intent,
+    model: options.model ?? candidateModel(), intent,
     ctx: {
       worldId: 'w', packageRevision: published.manifest.revision, packageContentHash: published.manifest.contentHash,
       coverageWorldTimeOrder: 1,
       ruleBindingHash: sha256HexOf(canonicalJsonOf(rules.binding)),
-      visibleEntries: baseEntries(),
+      visibleEntries: entries,
       openingActorIds: new Set(['pc']), openingTemplateIds: new Set(['tpl-lin']),
       openingLocationId: '青石巷', protagonistSkills: new Set(['skill-observation']),
       availableFactIds: new Set(['fact-crates']),
@@ -251,6 +255,7 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
   // its stable candidateRef; narrator returns faithful text.
   const provider = {
     async complete(request) {
+      options.onRequest?.(request);
       const value = JSON.parse(request.user);
       if (request.role === 'Planner') {
         const intentText = String(value.playerIntent ?? '');
@@ -279,7 +284,7 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
   const session = new CampaignSession(
     { db: adapter, turns, game, worldStore: worlds, narratives, hashProvider: sha,
       random: { nextIntInclusive: () => 6 } },
-    provider,
+    options.provider ?? provider,
     { endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
       capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } },
   );

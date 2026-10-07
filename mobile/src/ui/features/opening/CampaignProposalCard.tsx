@@ -8,7 +8,7 @@ import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Button } from '../../components/Button';
 import { StatusBanner } from '../../components/StatusBanner';
-import { typeStyle } from '../../components/typography';
+import { textStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import type { ProposalView } from '../../../campaignPlanning';
 
@@ -33,7 +33,7 @@ export function PlanningStatus({ phase, error }: { phase: string; error?: string
         borderColor: theme.border.color, backgroundColor: theme.bg.raised, gap: theme.space.xs }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}>
         {pending ? <ActivityIndicator size="small" /> : null}
-        <Text style={typeStyle(theme, theme.type.title)}>{pending ? '正在准备这次冒险' : PHASE_LABELS[phase] ?? phase}</Text>
+        <Text style={textStyle(theme, theme.type.title, theme.onRaised.primary)}>{pending ? '正在准备这次冒险' : PHASE_LABELS[phase] ?? phase}</Text>
       </View>
       <View style={{ gap: 4 }}>
         {PHASE_ORDER.map(key => {
@@ -44,8 +44,8 @@ export function PlanningStatus({ phase, error }: { phase: string; error?: string
           const marker = state === 'done' ? '✓' : state === 'active' ? '•' : '·';
           return (
             <View key={key} style={{ flexDirection: 'row', gap: theme.space.sm, alignItems: 'center' }}>
-              <Text style={[typeStyle(theme, theme.type.body), { color: state === 'active' ? theme.text.primary : theme.text.secondary }]}>{marker}</Text>
-              <Text style={[typeStyle(theme, theme.type.body), { opacity: state === 'pending' ? 0.5 : 1 }]}>{PHASE_LABELS[key]}</Text>
+              <Text style={textStyle(theme, theme.type.body, state === 'active' ? theme.onRaised.primary : theme.onRaised.secondary)}>{marker}</Text>
+              <Text style={[textStyle(theme, theme.type.body, theme.onRaised.primary), { opacity: state === 'pending' ? 0.5 : 1 }]}>{PHASE_LABELS[key]}</Text>
             </View>
           );
         })}
@@ -73,7 +73,7 @@ export function CampaignProposalCard(props: {
       testID="campaign-proposal-card"
       style={{ padding: theme.space.md, borderRadius: theme.radius.md, borderWidth: 1,
         borderColor: theme.border.colorStrong, backgroundColor: theme.bg.raised, gap: theme.space.sm }}>
-      <Text style={typeStyle(theme, theme.type.title)}>这次冒险</Text>
+      <Text style={textStyle(theme, theme.type.title, theme.onRaised.primary)}>这次冒险</Text>
       <ProposalRow label="核心目标" value={props.proposal.longTermGoal} />
       <ProposalRow label="故事基调" value={`${props.proposal.tone} · ${lengthLabel(props.proposal.lengthPreference)}`} />
       <ProposalRow label="冒险引子" value={props.proposal.publicPitch} multiline />
@@ -101,8 +101,8 @@ function ProposalRow(props: { label: string; value: string; multiline?: boolean 
   const { theme } = useTheme();
   return (
     <View style={{ gap: 2 }}>
-      <Text style={[typeStyle(theme, theme.type.caption), { opacity: 0.75 }]}>{props.label}</Text>
-      <Text style={typeStyle(theme, theme.type.body)} numberOfLines={props.multiline ? undefined : 2}>
+      <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>{props.label}</Text>
+      <Text style={textStyle(theme, theme.type.body, theme.onRaised.primary)} numberOfLines={props.multiline ? undefined : 2}>
         {props.value}
       </Text>
     </View>

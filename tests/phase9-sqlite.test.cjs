@@ -38,6 +38,11 @@ class NodeSqliteAdapter {
 
 const sha = { async sha256Hex(input) { return require('node:crypto').createHash('sha256').update(input, 'utf8').digest('hex'); } };
 const NOW = '2026-10-06T00:00:00.000Z';
+const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPlan/hashing');
+function seal(value) {
+  const { contentHash, ...body } = value;
+  return { ...body, contentHash: sha256HexOf(canonicalJsonOf(body)) };
+}
 
 function freshDb() {
   const db = new DatabaseSync(':memory:');
@@ -59,16 +64,16 @@ const intent = {
 };
 
 function planFixture() {
-  return {
+  return seal({
     schemaVersion: 'campaign-plan-1', planId: 'plan-1', revision: 1, parentRevision: null,
-    intentHash: 'i'.repeat(64),
+    intentHash: sha256HexOf(canonicalJsonOf(intent)),
     baseWorldBinding: { worldId: 'w1', packageRevision: 1, packageContentHash: 'h'.repeat(64), coverageWorldTimeOrder: 3 },
     ruleBindingHash: 'r'.repeat(64),
     longTermGoal: '保护安娜', publicPitch: '一场围绕酒馆威胁的冒险。', gmPremise: 'gm premise detail here',
     tone: '写实', lengthPreference: 'medium', startNodeIds: ['stage-1'],
     nodes: [], possibleEndings: [], unresolvedDependencies: [], contentArtifactRefs: ['art-1'],
     compilerVersion: 'campaign-plan-compiler-1', contentHash: 'p'.repeat(64), createdAt: NOW,
-  };
+  });
 }
 
 test('P9G5: setup lifecycle — upsert, candidate invalidation on intent edit, delete cancels in-flight jobs', async () => {
@@ -185,13 +190,13 @@ test('P9G6: plan revisions and artifacts archive immutably and reload by identit
   const adapter = new NodeSqliteAdapter(freshDb());
   const store = new SqliteCampaignPlanStore(adapter);
   const plan = planFixture();
-  const artifact = {
+  const artifact = seal({
     schemaVersion: 'campaign-content-1', artifactId: 'art-1', campaignId: 'camp-1', scope: 'campaign',
     planId: 'plan-1', planRevision: 1, namespace: 'campaign', situations: [], rewardPolicies: [],
     consequenceTemplates: [], dependencies: { worldEntryIds: [] },
     provenance: { kind: 'design_fill', sourceFactIds: [], rationale: 'test' },
     contentHash: 'a'.repeat(64), createdAt: NOW,
-  };
+  });
   await adapter.transaction(async tx => {
     await store.archivePlanRevision(tx, { plan, intent, setupId: 'setup-1', campaignId: 'camp-1', sourceTrigger: 'opening', intentHash: plan.intentHash, adoptedAt: NOW });
     await store.archiveArtifact(tx, artifact, NOW);
@@ -216,13 +221,13 @@ test('P9G6: save-10 carries campaign plan/artifact sections and restores them un
   db.prepare("INSERT INTO campaigns (campaign_id,world_id,title,ruleset_id,ruleset_version,world_mapping_version,opening_json,created_at,package_revision,anchor_json,status) VALUES ('c1','w1','T','shineword-core','0.4.0','m','{}',?,1,'{}','active')").run(NOW);
   db.prepare("INSERT INTO branches (branch_id,campaign_id,state_version,created_at) VALUES ('b1','c1',1,?)").run(NOW);
   const plan = planFixture();
-  const artifact = {
+  const artifact = seal({
     schemaVersion: 'campaign-content-1', artifactId: 'art-1', campaignId: 'c1', scope: 'campaign',
     planId: 'plan-1', planRevision: 1, namespace: 'campaign', situations: [], rewardPolicies: [],
     consequenceTemplates: [], dependencies: { worldEntryIds: [] },
     provenance: { kind: 'design_fill', sourceFactIds: [], rationale: 'test' },
     contentHash: 'a'.repeat(64), createdAt: NOW,
-  };
+  });
   await adapter.transaction(async tx => {
     await store.archivePlanRevision(tx, { plan, intent, setupId: 'setup-1', campaignId: 'c1', sourceTrigger: 'opening', intentHash: plan.intentHash, adoptedAt: NOW });
     await store.archiveArtifact(tx, artifact, NOW);

@@ -1,6 +1,7 @@
 import type { CampaignEffectSpec } from '../../domain/campaignPlan/types';
 import { CAMPAIGN_EFFECT_TEMPLATES } from '../../domain/campaignPlan/types';
 import type { SituationTransitionOp } from '../../domain/situations/types';
+import { SKILL_RANKS, type SkillRank } from '../../domain/rules/types';
 
 /**
  * Campaign plan candidate model (plan §6.2): the model's ONLY authoring
@@ -164,6 +165,76 @@ function clampDisplayString(value: unknown, min: number, max: number): string | 
 function isBoundedString(value: unknown, min: number, max: number): boolean {
   return typeof value === 'string' && value.trim().length >= min && value.trim().length <= max;
 }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function isId(value: unknown): value is string {
+  return typeof value === 'string' && ID_PATTERN.test(value);
+}
+// References retain the world's existing ID spelling (locations may be
+// Chinese names). The compiler, rather than an authoring-ID regex, checks scope.
+function isReference(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+function isOneOf(value: unknown, choices: readonly string[]): value is string {
+  return typeof value === 'string' && choices.includes(value);
+}
+
+function parseRequirements(value: unknown, errors: string[], prefix: string): MethodSpec['requires'] | null {
+  if (value === undefined || value === null) return {};
+  if (!isRecord(value)) { errors.push(`${prefix}: requirements object required.`); return null; }
+  // Optional nulls mean "no gate", as in the existing first-step adapter.
+  // Keep that wire compatibility without coercing non-string IDs or ranks.
+  const gates = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null));
+  const idFields = ['skillId', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'actorAlive'];
+  const allowed = [...idFields, 'minRank', 'minCloseness'];
+  if (Object.keys(value).some(field => !allowed.includes(field))) {
+    errors.push(`${prefix}: unsupported requirement field.`); return null;
+  }
+  for (const field of idFields) {
+    if (gates[field] !== undefined && !isReference(gates[field])) {
+      errors.push(`${prefix}.${field}: stable string id required.`); return null;
+    }
+  }
+  if (gates.minRank !== undefined && (!isOneOf(gates.minRank, SKILL_RANKS) || gates.skillId === undefined)) {
+    errors.push(`${prefix}.minRank: skillId and a string rank (${SKILL_RANKS.join(' | ')}) required.`); return null;
+  }
+  if (gates.minCloseness !== undefined && (gates.relationshipTo === undefined || !Number.isInteger(gates.minCloseness)
+    || Number(gates.minCloseness) < 0 || Number(gates.minCloseness) > 100)) {
+    errors.push(`${prefix}.minCloseness: relationshipTo and an integer within 0..100 required.`); return null;
+  }
+  return gates as MethodSpec['requires'];
+}
+
+function parseRewards(value: readonly unknown[], errors: string[], prefix: string): RewardSpec['rewards'] | null {
+  const rewards: Array<RewardSpec['rewards'][number]> = [];
+  for (const [index, raw] of value.entries()) {
+    const at = `${prefix}.rewards[${index}]`;
+    if (!isRecord(raw) || !isOneOf(raw.kind, ['skill_rank','item','knowledge','relationship','resource_cap'])) {
+      errors.push(`${at}: reward object with a supported kind required.`); return null;
+    }
+    if (!isReference(raw.targetId)) {
+      errors.push(`${at}.targetId: stable target id required.`); return null;
+    }
+    if (raw.toActorId !== undefined && !isReference(raw.toActorId)) {
+      errors.push(`${at}.toActorId: stable actor id required.`); return null;
+    }
+    if (raw.kind === 'relationship' && !isReference(raw.toActorId)) {
+      errors.push(`${at}: relationship reward requires targetId and toActorId.`); return null;
+    }
+    if (raw.rank !== undefined && (typeof raw.rank !== 'string' || !SKILL_RANKS.includes(raw.rank as SkillRank))) {
+      errors.push(`${at}.rank: use a string rank: ${SKILL_RANKS.join(' | ')}; numeric ranks are invalid.`); return null;
+    }
+    if (raw.delta !== undefined && (!Number.isInteger(raw.delta) || Math.abs(Number(raw.delta)) > (raw.kind === 'relationship' ? 3 : 10))) {
+      errors.push(`${at}.delta: bounded integer required.`); return null;
+    }
+    rewards.push({ kind: raw.kind as RewardSpec['rewards'][number]['kind'], targetId: raw.targetId,
+      ...(raw.toActorId !== undefined ? { toActorId: raw.toActorId as string } : {}),
+      ...(raw.rank !== undefined ? { rank: raw.rank as string } : {}),
+      ...(raw.delta !== undefined ? { delta: raw.delta as number } : {}) });
+  }
+  return rewards;
+}
 
 function parseEffects(value: unknown, errors: string[], prefix: string): CampaignEffectSpec[] {
   if (!Array.isArray(value) || value.length > 8) {
@@ -172,24 +243,29 @@ function parseEffects(value: unknown, errors: string[], prefix: string): Campaig
   }
   const out: CampaignEffectSpec[] = [];
   for (const [index, raw] of value.entries()) {
-    if (!raw || typeof raw !== 'object') { errors.push(`${prefix}.effects[${index}]: must be an object.`); continue; }
+    if (!isRecord(raw)) { errors.push(`${prefix}.effects[${index}]: must be an object.`); continue; }
     const spec = raw as Record<string, unknown>;
-    const template = String(spec.template);
-    if (!CAMPAIGN_EFFECT_TEMPLATES.includes(template)) {
-      errors.push(`${prefix}.effects[${index}]: unknown effect template ${template}.`);
+    if (!isOneOf(spec.template, CAMPAIGN_EFFECT_TEMPLATES)) {
+      errors.push(`${prefix}.effects[${index}]: unknown effect template ${String(spec.template)}.`);
       continue;
     }
-    // Model-drift adapter: a non-enum status on situation_status is a STATE
-    // MARKER the model wants to set — express it as a counter on the same
-    // situation so the runtime enum stays closed; refs still validate later.
-    if (template === 'situation_status' && typeof spec.situationId === 'string'
-      && typeof spec.status === 'string' && !['dormant', 'eligible', 'active', 'resolved', 'suppressed'].includes(spec.status)) {
-      out.push({
-        template: 'situation_counter',
-        situationId: spec.situationId,
-        counterId: `status:${String(spec.status).slice(0, 40)}`,
-        delta: 1,
-      });
+    const template = spec.template;
+    const required: Record<string, string[]> = {
+      situation_counter: ['counterId'], promise_create: ['promiseId','promisorActorId','description'],
+      promise_fulfill: ['promiseId'], promise_break: ['promiseId'], grant_knowledge: ['entryId'],
+      grant_item: ['itemId','toActorId'], relationship_shift: ['fromActorId','toActorId'],
+      condition_apply: ['actorId','conditionId'], condition_remove: ['actorId','conditionId'],
+      resource_change: ['actorId','resourceId'], record_event: ['eventType','summary'],
+      suppress_reference_event: ['eventKey','reason'], schedule_consequence: ['consequenceId'],
+    };
+    if ((required[template] ?? []).some(field => typeof spec[field] !== 'string' || !(spec[field] as string).trim())) {
+      errors.push(`${prefix}: ${template} has missing required fields.`); continue;
+    }
+    if (template === 'clock_advance' && (!Number.isInteger(spec.minutes) || Number(spec.minutes) < 1 || Number(spec.minutes) > 240)) {
+      errors.push(`${prefix}: invalid clock advance.`); continue;
+    }
+    if (template === 'situation_status' && !isOneOf(spec.status, ['dormant','eligible','active','resolved','suppressed'])) {
+      errors.push(prefix + ': unknown situation status.');
       continue;
     }
     if (['situation_status', 'situation_counter', 'promise_create', 'promise_fulfill', 'promise_break', 'suppress_reference_event'].includes(template)
@@ -214,7 +290,8 @@ function parseEffects(value: unknown, errors: string[], prefix: string): Campaig
       continue;
     }
     if (template === 'clock_advance' && (!Number.isInteger(spec.minutes) || Number(spec.minutes) < 1 || Number(spec.minutes) > 240)) {
-      continue; // no time semantics — dropped
+      errors.push(`${prefix}.effects[${index}]: clock minutes must be an integer within 1..240.`);
+      continue;
     }
     if (template === 'record_event' && (!EVENT_TYPE_PATTERN.test(String(spec.eventType)) || !isBoundedString(spec.summary, 1, 200))) {
       errors.push(`${prefix}.effects[${index}]: record_event needs snake_case type and a summary.`);
@@ -231,35 +308,37 @@ function parseEffects(value: unknown, errors: string[], prefix: string): Campaig
 
 function parseCondition(value: unknown, errors: string[], prefix: string, depth = 0): ConditionTemplateNode | null {
   if (depth > 3) { errors.push(`${prefix}: condition nesting exceeds 3 levels.`); return null; }
-  if (!value || typeof value !== 'object') { errors.push(`${prefix}: condition must be an object.`); return null; }
+  if (!isRecord(value)) { errors.push(`${prefix}: condition must be an object.`); return null; }
   const node = value as Record<string, unknown>;
-  const kind = String(node.kind);
+  if (typeof node.kind !== 'string') { errors.push(`${prefix}: string condition kind required.`); return null; }
+  const kind = node.kind;
   if (kind === 'all' || kind === 'any' || kind === 'not') {
     const of = node.of;
-    if (kind === 'not' && !Array.isArray(of)) return null; // degraded — informational
     let children: unknown[] | null = kind === 'not'
-      ? ((of as unknown[]).length === 1 ? of as unknown[] : null)
+      ? (Array.isArray(of) ? (of.length === 1 ? of : null) : of && typeof of === 'object' ? [of] : null)
       : (Array.isArray(of) ? of : null);
     if (!Array.isArray(children)) {
-      return null; // degraded — informational
+      errors.push(`${prefix}: invalid condition children.`); return null;
     }
-    // Model drift: an EMPTY of carries no conditions (degrade to absent —
-    // the caller treats null as "not provided"); an oversized list clamps to
-    // the first 6 instead of rejecting the whole plan.
-    if (children.length === 0) return null;
-    if (children.length > 6) children = children.slice(0, 6);
+    // Invalid condition semantics must never become an absent condition.
+    if (children.length === 0) { errors.push(`${prefix}: empty condition children.`); return null; }
+    if (children.length > 6) { errors.push(prefix + ': too many conditions; refusing to truncate.'); return null; }
     const parsed = children.map((child, index) => parseCondition(child, errors, `${prefix}.${kind}[${index}]`, depth + 1));
     if (parsed.some(child => child === null)) return null;
     return { kind, of: parsed as ConditionTemplateNode[] };
   }
-  // Model drift: effect-template names (condition_apply etc.) sometimes leak
-  // into trigger positions. They carry no CONDITION semantics — degrade to
-  // absent (null) rather than rejecting the enclosing plan.
+  // Effect-template names cannot be interpreted as condition semantics.
   if (!(CONDITION_TEMPLATE_KINDS as readonly string[]).includes(kind)) {
-    void errors; // informational only in lenient callers
+    errors.push(prefix + ': unknown condition kind ' + kind);
     return null;
   }
   const out: ConditionTemplateNode = { kind: kind as ConditionTemplateKind };
+  if (kind === 'situation_status') {
+    if (!isOneOf(node.status, ['dormant','eligible','active','resolved','suppressed'])) {
+      errors.push(`${prefix}: unknown situation status.`); return null;
+    }
+    out.status = String(node.status);
+  }
   // Field-name tolerance: models emit situation/situationId, minimum/count/
   // value etc. interchangeably; normalize before the strict checks below.
   const norm = {
@@ -298,8 +377,7 @@ function parseCondition(value: unknown, errors: string[], prefix: string, depth 
   if (kind === 'quest_succeeded' && !out.questId) { errors.push(`${prefix}.quest_succeeded: questId required.`); return null; }
   if (kind === 'committed_event' && !out.eventType) { errors.push(`${prefix}.committed_event: eventType required.`); return null; }
   if (kind === 'counter_at_least' && out.counterId === undefined) { errors.push(`${prefix}.counter_at_least: counterId required.`); return null; }
-  // Models frequently omit the threshold — a marker counter needs ≥1.
-  if (kind === 'counter_at_least' && out.minimum === undefined) out.minimum = 1;
+  if (kind === 'counter_at_least' && out.minimum === undefined) { errors.push(`${prefix}.counter_at_least: integer minimum required.`); return null; }
   if (kind === 'promise_fulfilled' && !out.promiseId) { errors.push(`${prefix}.promise_fulfilled: promiseId required.`); return null; }
   if (kind === 'knowledge_known' && !out.entryId) { errors.push(`${prefix}.knowledge_known: entryId required.`); return null; }
   if (kind === 'relationship_at_least' && (out.fromActorId === undefined || out.toActorId === undefined || out.closeness === undefined)) { errors.push(`${prefix}.relationship_at_least: from/to/closeness required.`); return null; }
@@ -310,7 +388,7 @@ function parseCondition(value: unknown, errors: string[], prefix: string, depth 
 }
 
 function parseOutcome(value: unknown, errors: string[], prefix: string): OutcomeTemplateSpec | null {
-  if (!value || typeof value !== 'object') { errors.push(`${prefix}: outcome must be an object.`); return null; }
+  if (!isRecord(value)) { errors.push(`${prefix}: outcome must be an object.`); return null; }
   const record = value as Record<string, unknown>;
   if (!isBoundedString(record.resultFact, 4, 160)) { errors.push(`${prefix}.resultFact: 4..160 chars required.`); return null; }
   const effects = parseEffects(record.effects, errors, `${prefix}.effects`);
@@ -318,14 +396,14 @@ function parseOutcome(value: unknown, errors: string[], prefix: string): Outcome
 }
 
 function parseMethod(value: unknown, errors: string[], prefix: string): MethodSpec | null {
-  if (!value || typeof value !== 'object') { errors.push(`${prefix}: method must be an object.`); return null; }
+  if (!isRecord(value)) { errors.push(`${prefix}: method must be an object.`); return null; }
   const m = value as Record<string, unknown>;
-  if (!ID_PATTERN.test(String(m.methodId))) { errors.push(`${prefix}.methodId: stable id required.`); return null; }
+  if (!isId(m.methodId)) { errors.push(`${prefix}.methodId: stable id required.`); return null; }
   // Alias: models alternate title/name; the goal text may live at method
   // level (goal/description) or inside firstStep.description.
   const clampedTitle = clampDisplayString(m.title ?? m.name, 2, 24);
   if (clampedTitle === null) { errors.push(`${prefix}.title: 2..24 chars.`); return null; }
-  const firstStepRecord = typeof m.firstStep === 'object' && m.firstStep !== null ? m.firstStep as Record<string, unknown> : undefined;
+  const firstStepRecord = isRecord(m.firstStep) ? m.firstStep : undefined;
   const goalSource = typeof m.goal === 'string' && m.goal.trim().length >= 4 ? m.goal
     : (typeof m.description === 'string' && m.description.trim().length >= 4 ? m.description
       : (typeof firstStepRecord?.description === 'string' ? firstStepRecord.description
@@ -336,7 +414,7 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
     ?? clampDisplayString(m.risks, 2, 120)
     ?? '风险由检定结果决定';
   const clampedPreparation = clampDisplayString(m.preparation === '' ? '无' : m.preparation, 1, 120) ?? '无';
-  let step = m.firstStep as Record<string, unknown> | undefined;
+  let step = firstStepRecord;
   // Adapter: firstStep may be a plain STRING (the intent text) — wrap it with
   // the method-level skill, if any.
   const methodSkill = typeof m.skill === 'string' ? m.skill
@@ -364,9 +442,16 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
     step = { ...step, actionKind: 'skill_check', skillId: step.skill };
   }
   if (!step || !isBoundedString(step.intent, 6, 160)) { errors.push(`${prefix}.firstStep.intent: 6..160 chars.`); return null; }
-  if (!['skill_check', 'ability', 'observe', 'talk', 'interact', 'move'].includes(String(step.actionKind))) {
+  if (!isOneOf(step.actionKind, ['skill_check', 'ability', 'observe', 'talk', 'interact', 'move'])) {
     errors.push(`${prefix}.firstStep.actionKind: unknown kind.`); return null;
   }
+  for (const field of ['skillId', 'itemId', 'abilityId', 'targetEntryId', 'destinationId']) {
+    if (step[field] !== undefined && step[field] !== null && !isReference(step[field])) {
+      errors.push(`${prefix}.firstStep.${field}: stable string id required.`); return null;
+    }
+  }
+  const requires = parseRequirements(m.requires, errors, `${prefix}.requires`);
+  if (!requires) return null;
   // Model-drift adapter: outcomes may arrive as an ARRAY of
   // {tier, resultFact, effects} — normalize to the per-grade record.
   let outcomes = m.outcomes as Record<string, unknown> | undefined;
@@ -406,7 +491,7 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
       ...(typeof step.targetEntryId === 'string' ? { targetEntryId: step.targetEntryId } : {}),
       ...(typeof step.destinationId === 'string' ? { destinationId: step.destinationId } : {}),
     },
-    requires: (m.requires as MethodSpec['requires']) ?? {},
+    requires,
     tradeoffs: clampedTradeoffs,
     preparation: clampedPreparation,
     outcomes: parsedOutcomes as MethodSpec['outcomes'],
@@ -416,9 +501,9 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
 /** Strict parse of the raw model text into a candidate model. */
 const DBG = (phase: string) => { if ((globalThis as { __P9_PARSE_DEBUG__?: boolean }).__P9_PARSE_DEBUG__) console.error('[parse]', phase); };
 export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): CampaignPlanCandidateModelV1 | null {
-  if (!raw || typeof raw !== 'object') { errors.push('candidate: must be a JSON object.'); return null; }
+  if (!isRecord(raw)) { errors.push('candidate: must be a JSON object.'); return null; }
   const c = raw as Record<string, unknown>;
-  if (c.modelVersion !== undefined && !/^campaign-(plan-model-1|revision)/.test(String(c.modelVersion))) {
+  if (c.modelVersion !== undefined && (typeof c.modelVersion !== 'string' || !/^campaign-(plan-model-1|revision)/.test(c.modelVersion))) {
     // Tolerate omitted modelVersion (gateway strips it) and the model's
     // revision-style spellings; the SHAPE checks below stay strict.
     errors.push(`candidate: unknown modelVersion ${String(c.modelVersion)}.`);
@@ -440,9 +525,10 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
   const stages: StageSpec[] = [];
   const nodeIds = new Set<string>();
   for (const [index, rawStage] of c.stages.entries()) {
-    const s = rawStage as Record<string, unknown>;
     const prefix = `stages[${index}]`;
-    if (!ID_PATTERN.test(String(s.nodeId))) { errors.push(`${prefix}.nodeId: stable id required.`); return null; }
+    if (!isRecord(rawStage)) { errors.push(`${prefix}: stage object required.`); return null; }
+    const s = rawStage;
+    if (!isId(s.nodeId)) { errors.push(`${prefix}.nodeId: stable id required.`); return null; }
     if (nodeIds.has(String(s.nodeId))) { errors.push(`${prefix}.nodeId: duplicate.`); return null; }
     nodeIds.add(String(s.nodeId));
     // Display-field fallbacks (replan models sometimes drop them): title
@@ -464,9 +550,7 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     // REQUIRED completion condition above stays strict.
     const parseOptionalCondition = (value: unknown, field: string): ConditionTemplateNode | null => {
       if (value === null || value === undefined || value === '' || value === false) return null;
-      if (typeof value !== 'object') {
-        return null; // degraded to absent — informational, never a rejection
-      }
+      if (typeof value !== 'object') { errors.push(`${prefix}.${field}: condition must be an object or null.`); return null; }
       return parseCondition(value, errors, `${prefix}.${field}`);
     };
     const activation = parseOptionalCondition(s.activation, 'activation');
@@ -476,10 +560,8 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     // stage (a hole in the node chain fails validation worse). The first
     // stage completes with its situation; later stages complete with their
     // predecessor — an explicit, honest compiler default.
-    const effectiveCompletion = completion
-      ?? (stages.length === 0
-        ? { kind: 'situation_resolved', situationId: 'self' } as const
-        : { kind: 'node_succeeded', nodeId: stages[stages.length - 1]!.nodeId } as const);
+    if (!completion) { errors.push(`${prefix}.completion: valid completion required.`); return null; }
+    const effectiveCompletion = completion;
     stages.push({
       nodeId: String(s.nodeId), role: stageRole as 'main' | 'optional',
       title: stageTitle, publicObjective: stageObjective, gmPurpose: stagePurpose,
@@ -509,14 +591,14 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
   for (const [index, rawEnding] of c.endings.entries()) {
     const e = rawEnding as Record<string, unknown>;
     const prefix = `endings[${index}]`;
-    if (!e || typeof e !== 'object') continue;
-    if (!ID_PATTERN.test(String(e.endingId)) || !isBoundedString(e.title, 2, 40)
+    if (!isRecord(e)) { errors.push(`${prefix}: ending object required.`); return null; }
+    if (!isId(e.endingId) || !isBoundedString(e.title, 2, 40)
       || !isBoundedString(e.publicDescription, 4, 200)
-      || !['success', 'pyrrhic', 'failure', 'open'].includes(String(e.outcomeKind))) {
-      continue; // malformed ending dropped; compiler fills terminal endings
+      || !isOneOf(e.outcomeKind, ['success', 'pyrrhic', 'failure', 'open'])) {
+      errors.push(`${prefix}: malformed ending.`); return null;
     }
     const condition = parseCondition(e.condition, errors, `${prefix}.condition`);
-    if (!condition) continue; // degraded ending dropped; compiler fills terminal endings
+    if (!condition) { errors.push(`${prefix}: invalid ending condition.`); return null; }
     endings.push({
       endingId: String(e.endingId), title: String(e.title).trim(),
       publicDescription: String(e.publicDescription).trim(),
@@ -554,16 +636,31 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     methods.push(method);
   }
   DBG('consequences-start');
+  // Some providers nest these complete arrays in firstSituation. Lift them
+  // without synthesizing definitions; ambiguous dual placement is rejected.
+  const locatedArray = (field: 'consequences' | 'rewards'): unknown => {
+    const root = c[field]; const nested = situation?.[field];
+    if (root !== undefined && nested !== undefined) {
+      errors.push(`${field}: define at one location only.`);
+      return undefined;
+    }
+    const value = root ?? nested;
+    if (value !== undefined && !Array.isArray(value)) errors.push(`${field}: must be an array.`);
+    return value;
+  };
+  const consequenceArray = locatedArray('consequences');
+  const rewardArray = locatedArray('rewards');
   const consequences: ConsequenceSpec[] = [];
-  if (Array.isArray(c.consequences)) {
-    for (const [index, rawConsequence] of c.consequences.entries()) {
-      const cs = rawConsequence as Record<string, unknown>;
+  if (Array.isArray(consequenceArray)) {
+    for (const [index, rawConsequence] of consequenceArray.entries()) {
       const prefix = `consequences[${index}]`;
-      if (!ID_PATTERN.test(String(cs.consequenceId)) || !isBoundedString(cs.description, 4, 160)) {
+      if (!isRecord(rawConsequence)) { errors.push(`${prefix}: consequence object required.`); return null; }
+      const cs = rawConsequence;
+      if (!isId(cs.consequenceId) || !isBoundedString(cs.description, 4, 160)) {
         errors.push(`${prefix}: consequenceId/description required.`); return null;
       }
       const trigger = parseCondition(cs.trigger, errors, `${prefix}.trigger`);
-      if (!trigger) continue; // unparseable trigger drops THIS consequence only
+      if (!trigger) { errors.push(`${prefix}: invalid trigger.`); return null; }
       const effects = parseEffects(cs.effects, errors, `${prefix}.effects`);
       consequences.push({
         consequenceId: String(cs.consequenceId), description: String(cs.description).trim(),
@@ -573,21 +670,25 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     }
   }
   const rewards: RewardSpec[] = [];
-  if (Array.isArray(c.rewards)) {
-    for (const [index, rawReward] of c.rewards.entries()) {
-      const r = rawReward as Record<string, unknown>;
+  if (Array.isArray(rewardArray)) {
+    for (const [index, rawReward] of rewardArray.entries()) {
       const prefix = `rewards[${index}]`;
-      if (!ID_PATTERN.test(String(r.policyId)) || !isBoundedString(r.description, 4, 120)
+      if (!isRecord(rawReward)) { errors.push(`${prefix}: reward policy object required.`); return null; }
+      const r = rawReward;
+      if (!isId(r.policyId) || !isId(r.nodeId) || !isBoundedString(r.description, 4, 120)
         || !Array.isArray(r.rewards) || r.rewards.length === 0 || r.rewards.length > 4) {
-        errors.push(`${prefix}: policyId/description/rewards required.`); return null;
+        errors.push(`${prefix}: policyId/nodeId/description/rewards required.`); return null;
       }
+      const parsedRewards = parseRewards(r.rewards, errors, prefix);
+      if (!parsedRewards) return null;
       rewards.push({
         policyId: String(r.policyId), nodeId: String(r.nodeId ?? ''),
         description: String(r.description).trim(),
-        rewards: (r.rewards as RewardSpec['rewards']).slice(),
+        rewards: parsedRewards,
       });
     }
   }
+  if (errors.length > 0) return null;
   return {
     modelVersion: CAMPAIGN_PLAN_MODEL_VERSION,
     proposal: {
@@ -607,7 +708,7 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
         ? { deadlineClockSeconds: Math.round(situation.deadlineClockSeconds as number) } : {}),
       methods,
       signs: Array.isArray(situation?.signs)
-        ? ((situation as Record<string, unknown>).signs as Array<Record<string, unknown>>).filter(s => isBoundedString(s.text, 2, 120)).map(s => ({ text: String(s.text).trim() }))
+        ? ((situation as Record<string, unknown>).signs as unknown[]).filter(isRecord).filter(s => isBoundedString(s.text, 2, 120)).map(s => ({ text: String(s.text).trim() }))
         : [],
     },
     consequences, rewards,

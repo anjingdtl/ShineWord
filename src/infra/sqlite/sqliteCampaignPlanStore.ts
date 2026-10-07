@@ -159,8 +159,8 @@ export class SqliteCampaignPlanStore {
 
   // ---------------- jobs (lease + fence + single-flight) ----------------
 
-  async insertJob(job: CampaignPlanJobRecord): Promise<void> {
-    await this.db.execute(
+  async insertJob(job: CampaignPlanJobRecord, tx: SqliteTransaction = this.db): Promise<void> {
+    await tx.execute(
       `INSERT INTO campaign_plan_jobs
         (job_id, setup_id, campaign_id, branch_id, job_kind, trigger_reasons_json, base_state_version,
          base_plan_id, base_plan_revision, intent_hash, content_manifest_hash, knowledge_policy_hash,
@@ -170,8 +170,8 @@ export class SqliteCampaignPlanStore {
       [job.jobId, job.setupId, job.campaignId, job.branchId, job.jobKind,
         JSON.stringify(job.triggerReasons), job.baseStateVersion, job.basePlanId, job.basePlanRevision,
         job.intentHash, job.contentManifestHash, job.knowledgePolicyHash,
-        JSON.stringify(job.triggerEventRefs), job.status, null, null, 0, 0,
-        null, job.physicalRequestBudget, null, null, job.createdAt, job.updatedAt],
+        JSON.stringify(job.triggerEventRefs), job.status, job.leaseOwner, job.leaseExpiresAt, job.fencingToken, job.attemptCount,
+        job.nextRetryAt, job.physicalRequestBudget, job.freezeRootId, job.lastError, job.createdAt, job.updatedAt],
     );
   }
 
@@ -181,23 +181,35 @@ export class SqliteCampaignPlanStore {
    * surviving job id and whether an existing job absorbed the trigger.
    */
   async enqueueJobMergingTriggers(job: CampaignPlanJobRecord, newReasons: string[], now: string): Promise<{ jobId: string; merged: boolean }> {
-    if (job.branchId) {
-      const existing = await this.db.queryOne<{ job_id: string; trigger_reasons_json: string }>(
-        `SELECT job_id, trigger_reasons_json FROM campaign_plan_jobs
-         WHERE branch_id=? AND job_kind=? AND status IN ('queued','running','candidate_ready')
-         ORDER BY created_at DESC LIMIT 1`,
-        [job.branchId, job.jobKind]);
-      if (existing) {
-        const reasons = JSON.parse(existing.trigger_reasons_json) as string[];
-        const mergedReasons = [...new Set([...reasons, ...newReasons])];
-        await this.db.execute(
-          'UPDATE campaign_plan_jobs SET trigger_reasons_json=?, updated_at=? WHERE job_id=?',
-          [JSON.stringify(mergedReasons), now, existing.job_id]);
-        return { jobId: existing.job_id, merged: true };
+    return this.db.transaction(async tx => {
+      if (job.branchId) {
+        const row = await tx.queryOne<JobRow>(
+          'SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? ORDER BY created_at DESC LIMIT 1', [job.branchId, job.jobKind]);
+        if (row) {
+          const existing = rowToJob(row);
+          const sameIntent = existing.intentHash === job.intentHash;
+          const samePlan = existing.basePlanId === job.basePlanId && existing.basePlanRevision === job.basePlanRevision;
+          const mergedReasons = [...new Set([...existing.triggerReasons, ...newReasons])];
+          if (sameIntent && samePlan && (['queued','running','candidate_ready','retryable_failed','outcome_unknown'].includes(existing.status)
+            || newReasons.every(reason => existing.triggerReasons.includes(reason)))) {
+            if (existing.status === 'queued') await tx.execute(
+              'UPDATE campaign_plan_jobs SET trigger_reasons_json=?,base_state_version=?,updated_at=? WHERE job_id=?',
+              [JSON.stringify(mergedReasons), job.baseStateVersion, now, existing.jobId]);
+            return { jobId: existing.jobId, merged: true };
+          }
+          if (existing.status === 'outcome_unknown') return { jobId: existing.jobId, merged: true };
+          if (existing.status === 'queued' && !existing.freezeRootId) {
+            await tx.execute('UPDATE campaign_plan_jobs SET intent_hash=?,trigger_reasons_json=?,base_state_version=?,updated_at=? WHERE job_id=?',
+              [job.intentHash, JSON.stringify(mergedReasons), job.baseStateVersion, now, existing.jobId]);
+            return { jobId: existing.jobId, merged: true };
+          }
+          if (['running','candidate_ready','retryable_failed'].includes(existing.status)) await tx.execute(
+            "UPDATE campaign_plan_jobs SET status='stale',fencing_token=fencing_token+1,updated_at=? WHERE job_id=?", [now, existing.jobId]);
+        }
       }
-    }
-    await this.insertJob(job);
-    return { jobId: job.jobId, merged: false };
+      await this.insertJob(job, tx);
+      return { jobId: job.jobId, merged: false };
+    });
   }
 
   async getJob(jobId: string): Promise<CampaignPlanJobRecord | null> {
@@ -207,7 +219,7 @@ export class SqliteCampaignPlanStore {
 
   async findActiveJob(branchId: string, kind: 'opening_plan' | 'replan'): Promise<CampaignPlanJobRecord | null> {
     const row = await this.db.queryOne<JobRow>(
-      `SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? AND status IN ('queued','running','candidate_ready')
+      `SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? AND status IN ('queued','running','candidate_ready','retryable_failed')
        ORDER BY created_at DESC LIMIT 1`, [branchId, kind]);
     return row ? rowToJob(row) : null;
   }
@@ -240,19 +252,19 @@ export class SqliteCampaignPlanStore {
     patch: { lastError?: string | null; nextRetryAt?: string | null; freezeRootId?: string | null; attemptCount?: number } = {},
     now = new Date().toISOString()): Promise<boolean> {
     const updated = await this.db.execute(
-      `UPDATE campaign_plan_jobs SET status=?, last_error=?, next_retry_at=?, freeze_root_id=?, attempt_count=?,
+      `UPDATE campaign_plan_jobs SET status=?, last_error=?, next_retry_at=?, freeze_root_id=COALESCE(?,freeze_root_id), attempt_count=COALESCE(?,attempt_count),
          lease_owner=NULL, lease_expires_at=NULL, updated_at=?
-       WHERE job_id=? AND fencing_token=?`,
+       WHERE job_id=? AND fencing_token=? AND status NOT IN ('cancelled','stale','adopted','invalid')`,
       [next, patch.lastError ?? null, patch.nextRetryAt ?? null, patch.freezeRootId ?? null,
-        patch.attemptCount ?? 0, now, jobId, expectedFencingToken],
+        patch.attemptCount ?? null, now, jobId, expectedFencingToken],
     );
     return updated === 1;
   }
 
   // ---------------- candidates ----------------
 
-  async upsertCandidate(candidate: CampaignPlanCandidateRecord): Promise<void> {
-    await this.db.execute(
+  async upsertCandidate(candidate: CampaignPlanCandidateRecord, tx: SqliteTransaction = this.db): Promise<void> {
+    await tx.execute(
       `INSERT INTO campaign_plan_candidates
         (candidate_id, job_id, setup_id, attempt_group, attempt_no, stage, raw_response_ref, raw_response_text,
          parse_result_json, validation_errors_json, repair_used, candidate_hash, plan_json, artifact_json, created_at, updated_at)
@@ -296,7 +308,7 @@ export class SqliteCampaignPlanStore {
     intentHash: string; adoptedAt: string;
   }): Promise<void> {
     await tx.execute(
-      `INSERT OR REPLACE INTO campaign_plan_revisions
+      `INSERT INTO campaign_plan_revisions
         (plan_id, revision, parent_revision, setup_id, campaign_id, source_trigger, intent_json, plan_json, intent_hash, content_hash, adopted_at, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [input.plan.planId, input.plan.revision, input.plan.parentRevision, input.setupId, input.campaignId,
@@ -313,7 +325,7 @@ export class SqliteCampaignPlanStore {
 
   async archiveArtifact(tx: SqliteTransaction, artifact: CampaignContentArtifactV1, now: string): Promise<void> {
     await tx.execute(
-      `INSERT OR REPLACE INTO campaign_content_artifacts
+      `INSERT INTO campaign_content_artifacts
         (artifact_id, campaign_id, plan_id, plan_revision, scope, artifact_json, content_hash, created_at)
        VALUES (?,?,?,?,?,?,?,?)`,
       [artifact.artifactId, artifact.campaignId, artifact.planId, artifact.planRevision,

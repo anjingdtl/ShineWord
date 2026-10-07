@@ -57,6 +57,7 @@ export interface BuildSituationPacketInput {
   cards?: readonly ActorCard[];
   allowedCandidates?: readonly AllowedCandidateV1[];
   preferredCandidateRef?: string;
+  preferredSituationId?: string;
 }
 
 function summarizeChanges(prepared: PreparedTurnResolution, names: ReadonlyMap<string, string>): string[] {
@@ -130,7 +131,10 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
     situationStatuses,
     causalWorldTimeOrder: causalOrder,
   };
-  const candidates = input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions, context });
+  const prioritizedDefinitions = [...situationDefinitions].sort((a, b) =>
+    Number(b.situationId === input.preferredSituationId) - Number(a.situationId === input.preferredSituationId));
+  const candidates = [...(input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions: prioritizedDefinitions, context }))];
+  candidates.sort((a, b) => Number(b.situationId === input.preferredSituationId) - Number(a.situationId === input.preferredSituationId));
   // Bound model input even after many regions have been built. Keep current
   // situation methods and legal base actions within a fixed public envelope.
   const allowedCandidates = [...candidates.filter(c => c.methodId).slice(0, 8), ...candidates.filter(c => !c.methodId).slice(0, 4)];
@@ -176,6 +180,7 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   void candidateIds;
 
   return {
+    ...(input.preferredSituationId ? { preferredSituationId: input.preferredSituationId } : {}),
     changes: summarizeChanges(prepared, new Map([...input.visibleActorNames, [playerCard.actorId, playerCard.name]])),
     opportunities: opportunities.slice(0, 5),
     pressures: pressures.slice(0, 5),

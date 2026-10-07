@@ -2,6 +2,8 @@ import { assertMemoryCheckpointChain } from '../memory/storyMemoryChain';
 import { emptyStoryMemoryState, storyMemoryContentHash } from '../memory/storyMemoryTypes';
 import { mergeStoryMemoryPatch } from '../memory/storyMemoryMerger';
 import { requireCompiledRules } from '../content/runtimeRules';
+import { canonicalJsonOf, sha256HexOf } from '../campaignPlan/hashing';
+import { campaignContentBindingHash } from '../campaignPlan/contentBinding';
 import { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
 import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
@@ -805,18 +807,35 @@ export async function validateSaveJsonBytes(
       || (campaign.planRevisions as unknown[]).some(plan => !plan || typeof plan !== 'object')) {
       errors.push('campaign must pair planRevisions and intents 1:1.');
     } else {
+      const plans = campaign.planRevisions as import('../../domain/campaignPlan/types').CampaignPlanV1[];
+      const intents = campaign.intents as import('../../domain/campaignPlan/types').CampaignIntentV1[];
+      const artifacts = (Array.isArray(campaign.artifacts) ? campaign.artifacts : []) as import('../../domain/campaignPlan/types').CampaignContentArtifactV1[];
+      const intactHash = (value: { contentHash: string }): boolean => {
+        const { contentHash, ...body } = value;
+        return contentHash === sha256HexOf(canonicalJsonOf(body));
+      };
+      for (const [index, plan] of plans.entries()) {
+        if (plan.schemaVersion !== 'campaign-plan-1' || !intactHash(plan)
+          || plan.intentHash !== sha256HexOf(canonicalJsonOf(intents[index]))) errors.push(`Campaign plan ${index} schema/hash/intent integrity mismatch.`);
+      }
+      for (const [index, artifact] of artifacts.entries()) {
+        if (!artifact || artifact.schemaVersion !== 'campaign-content-1' || !intactHash(artifact)
+          || !plans.some(p => p.planId === artifact.planId && p.revision === artifact.planRevision)) errors.push(`Campaign artifact ${index} schema/hash/plan integrity mismatch.`);
+      }
       const carriedPlans = new Set((campaign.planRevisions as Array<{ planId?: unknown; revision?: unknown; contentHash?: unknown }>)
         .filter(p => typeof p.planId === 'string' && Number.isInteger(p.revision))
         .map(p => `${String(p.planId)}\u0000${Number(p.revision)}`));
       const carriedArtifacts = new Set((Array.isArray(campaign.artifacts) ? campaign.artifacts as Array<{ artifactId?: unknown }> : [])
         .filter(a => a && typeof a.artifactId === 'string').map(a => String(a.artifactId)));
       const snapshotsToCheck = [parsed.state, ...(Array.isArray(parsed.snapshotHistory)
-        ? (parsed.snapshotHistory as Array<{ snapshot?: { campaignRuntime?: { planBinding?: { planId: string; revision: number } }; campaignContentBinding?: { artifactIds?: string[] } } }>).map(item => item.snapshot) : [])];
+        ? (parsed.snapshotHistory as Array<{ snapshot?: { campaignRuntime?: { planBinding?: { planId: string; revision: number; contentHash: string } }; campaignContentBinding?: { artifactIds?: string[] } } }>).map(item => item.snapshot) : [])];
       for (const [index, snapshot] of snapshotsToCheck.entries()) {
         const binding = snapshot?.campaignRuntime?.planBinding;
         if (binding && !carriedPlans.has(`${binding.planId}\u0000${binding.revision}`)) {
           errors.push(`Snapshot ${index} binds a plan revision the save does not carry.`);
         }
+        const plan = binding && plans.find(p => p.planId === binding.planId && p.revision === binding.revision);
+        if (plan && plan.contentHash !== binding?.contentHash) errors.push(`Snapshot ${index} plan content hash mismatch.`);
         for (const artifactId of snapshot?.campaignContentBinding?.artifactIds ?? []) {
           if (!carriedArtifacts.has(artifactId)) {
             errors.push(`Snapshot ${index} binds a content artifact the save does not carry: ${artifactId}.`);
@@ -1116,6 +1135,51 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
   const rules = requireCompiledRules(lockedRulesPackage.manifest.ruleConfiguration);
   if (requireCompiledRules(save.state.ruleConfiguration).binding.configurationHash !== rules.binding.configurationHash) throw new Error('Save rules differ from the installed world configuration.');
   await db.transaction(async tx => {
+    // Archive identities are global. Import into an occupied database must
+    // clone their identities, never replace the source campaign's history.
+    const planIds = new Map<string, string>();
+    const artifactIds = new Map<string, string>();
+    const importSuffix = sha256HexOf(input.newCampaignId).slice(0, 16);
+    for (const plan of save.campaign?.planRevisions ?? []) {
+      if (planIds.has(plan.planId)) continue;
+      const occupied = await tx.queryOne('SELECT plan_id FROM campaign_plan_revisions WHERE plan_id=? LIMIT 1', [plan.planId]);
+      planIds.set(plan.planId, occupied ? `${plan.planId}:import:${importSuffix}` : plan.planId);
+    }
+    for (const artifact of save.campaign?.artifacts ?? []) {
+      const occupied = await tx.queryOne('SELECT artifact_id FROM campaign_content_artifacts WHERE artifact_id=?', [artifact.artifactId]);
+      artifactIds.set(artifact.artifactId, occupied ? `${artifact.artifactId}:import:${importSuffix}` : artifact.artifactId);
+    }
+    const reboundIntents = (save.campaign?.intents ?? []).map(intent => ({ ...intent,
+      sourceCoverageBinding: { ...intent.sourceCoverageBinding, worldId: resolvedWorldId, packageRevision: resolvedRevision } }));
+    const reboundPlans = (save.campaign?.planRevisions ?? []).map((plan, index) => {
+      const { contentHash: _hash, ...body } = plan;
+      const rebound = { ...body, planId: planIds.get(plan.planId)!,
+        baseWorldBinding: { ...plan.baseWorldBinding, worldId: resolvedWorldId, packageRevision: resolvedRevision },
+        intentHash: sha256HexOf(canonicalJsonOf(reboundIntents[index])),
+        contentArtifactRefs: plan.contentArtifactRefs.map(id => artifactIds.get(id) ?? id) };
+      return { ...rebound, contentHash: sha256HexOf(canonicalJsonOf(rebound)) };
+    });
+    const reboundArtifacts = (save.campaign?.artifacts ?? []).map(artifact => {
+      const { contentHash: _hash, ...body } = artifact;
+      const rebound = { ...body, artifactId: artifactIds.get(artifact.artifactId)!,
+        campaignId: input.newCampaignId, planId: planIds.get(artifact.planId) ?? artifact.planId };
+      return { ...rebound, contentHash: sha256HexOf(canonicalJsonOf(rebound)) };
+    });
+    const rebindCampaignSnapshot = (snapshot: GameStateSnapshot): Partial<GameStateSnapshot> => {
+      const runtime = snapshot.campaignRuntime;
+      const plan = runtime ? reboundPlans.find(p => p.planId === planIds.get(runtime.planBinding.planId)
+        && p.revision === runtime.planBinding.revision) : undefined;
+      const refs = snapshot.campaignContentBinding?.artifactIds.map(id => artifactIds.get(id) ?? id);
+      const boundArtifacts = refs?.map(id => reboundArtifacts.find(a => a.artifactId === id)!);
+      return {
+        ...(runtime && plan ? { campaignRuntime: { ...runtime, branchId: input.newBranchId,
+          planBinding: { planId: plan.planId, revision: plan.revision, contentHash: plan.contentHash },
+          ...(runtime.intent ? { intent: { ...runtime.intent,
+            sourceCoverageBinding: { ...runtime.intent.sourceCoverageBinding, worldId: resolvedWorldId, packageRevision: resolvedRevision } } } : {}) } } : {}),
+        ...(snapshot.campaignContentBinding && refs ? { campaignContentBinding: { artifactIds: refs,
+          contentHash: campaignContentBindingHash(boundArtifacts ?? []) } } : {}),
+      };
+    };
     await tx.execute(
       `INSERT INTO campaigns
         (campaign_id, world_id, title, ruleset_id, ruleset_version, world_mapping_version,
@@ -1169,6 +1233,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
 
     const state: GameStateSnapshot = {
       ...save.state,
+      ...rebindCampaignSnapshot(save.state),
       ...(save.state.ruleConfiguration ? { ruleConfiguration: { ...save.state.ruleConfiguration, worldId: resolvedWorldId } } : {}),
       branchId: input.newBranchId,
       encounters: save.state.encounters ?? [],
@@ -1197,7 +1262,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
     for (const item of history) {
       const restoredSnapshot: GameStateSnapshot = item.stateVersion === state.stateVersion
         ? state
-        : { ...item.snapshot, branchId: input.newBranchId,
+        : { ...item.snapshot, ...rebindCampaignSnapshot(item.snapshot), branchId: input.newBranchId,
             ...(item.snapshot.ruleConfiguration ? { ruleConfiguration: { ...item.snapshot.ruleConfiguration, worldId: resolvedWorldId } } : {}),
             ...(item.snapshot.segmentContentBinding ? { segmentContentBinding: { ...item.snapshot.segmentContentBinding, branchId: input.newBranchId } } : {}),
             ...(item.snapshot.contentManifest ? {
@@ -1380,17 +1445,16 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
         );
       }
     }
-    // P9 (save-10): plan revisions, intents and content artifacts restore
-    // verbatim under the NEW campaign id — history snapshots bind them by
-    // planId+revision, and imports never regenerate plans (plan §12.3).
+    // P9 archives restore with typed identities; committed evidence and
+    // immutable node/method definitions remain intact, without regeneration.
     if (save.campaign) {
       if (save.campaign.intents.length !== save.campaign.planRevisions.length) {
         throw new Error('Save campaign section pairs each plan revision with exactly one intent.');
       }
-      for (const [index, plan] of save.campaign.planRevisions.entries()) {
-        const intent = save.campaign.intents[index]!;
+      for (const [index, plan] of reboundPlans.entries()) {
+        const intent = reboundIntents[index]!;
         await tx.execute(
-          `INSERT OR REPLACE INTO campaign_plan_revisions
+          `INSERT INTO campaign_plan_revisions
             (plan_id, revision, parent_revision, setup_id, campaign_id, source_trigger, intent_json, plan_json, intent_hash, content_hash, adopted_at, created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
           [plan.planId, plan.revision, plan.parentRevision, intent.setupId, input.newCampaignId,
@@ -1398,10 +1462,9 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
             plan.contentHash, input.createdAt, input.createdAt],
         );
       }
-      for (const artifact of save.campaign.artifacts) {
-        const rebound = { ...artifact, campaignId: input.newCampaignId };
+      for (const rebound of reboundArtifacts) {
         await tx.execute(
-          `INSERT OR REPLACE INTO campaign_content_artifacts
+          `INSERT INTO campaign_content_artifacts
             (artifact_id, campaign_id, plan_id, plan_revision, scope, artifact_json, content_hash, created_at)
            VALUES (?,?,?,?,?,?,?,?)`,
           [rebound.artifactId, input.newCampaignId, rebound.planId, rebound.planRevision,

@@ -6,9 +6,10 @@
  */
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
-import { typeStyle } from '../../components/typography';
+import { textStyle } from '../../components/typography';
 import { useTheme } from '../../theme/ThemeContext';
 import { createReadOnlySession } from '../../../runtime';
+import { Button } from '../../components/Button';
 
 export interface CampaignProgressData {
   status: string;
@@ -44,6 +45,10 @@ export function CampaignProgressCard(props: {
   progress: CampaignProgressData | null;
   expanded: boolean;
   onToggle: () => void;
+  busy?: boolean;
+  onPauseResume?: () => void;
+  onAdjustGoal?: () => void;
+  onReplan?: () => void;
 }): React.JSX.Element | null {
   const { theme } = useTheme();
   const progress = props.progress;
@@ -56,36 +61,42 @@ export function CampaignProgressCard(props: {
       style={{ padding: theme.space.md, borderRadius: theme.radius.md, borderWidth: 1,
         borderColor: theme.border.color, backgroundColor: theme.bg.raised, gap: theme.space.xs }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={typeStyle(theme, theme.type.title)} numberOfLines={1}>战役主线</Text>
-        <Text style={typeStyle(theme, theme.type.caption)} onPress={props.onToggle}>{props.expanded ? '收起' : '展开'}</Text>
+        <Text style={textStyle(theme, theme.type.title, theme.onRaised.primary)} numberOfLines={1}>战役主线</Text>
+        <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)} onPress={props.onToggle}>{props.expanded ? '收起' : '展开'}</Text>
       </View>
-      <Text style={typeStyle(theme, theme.type.body)} numberOfLines={2}>
-        {progress.status === 'active' ? progress.currentObjective : `战役已结束 · ${progress.ending?.title ?? progress.status}`}
+      <Text style={textStyle(theme, theme.type.body, theme.onRaised.primary)} numberOfLines={2}>
+        {['active','paused'].includes(progress.status) ? `${progress.status === 'paused' ? '主线已暂停 · ' : ''}${progress.currentObjective}` : `战役已结束 · ${progress.ending?.title ?? progress.status}`}
       </Text>
       {latest ? (
-        <Text style={[typeStyle(theme, theme.type.caption), { opacity: 0.85 }]} numberOfLines={2}>最近进展：{latest.text}</Text>
+        <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)} numberOfLines={2}>最近进展：{latest.text}</Text>
       ) : null}
       {props.expanded ? (
         <View style={{ gap: theme.space.xs }}>
-          <Text style={typeStyle(theme, theme.type.caption)}>长期目标：{progress.longTermGoal}</Text>
+          <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>长期目标：{progress.longTermGoal}</Text>
           {progress.completedStages.length > 0 ? (
             <View style={{ gap: 2 }}>
-              <Text style={typeStyle(theme, theme.type.caption)}>已完成阶段</Text>
+              <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>阶段结果</Text>
               {progress.completedStages.map(stage => (
-                <Text key={stage.nodeId} style={typeStyle(theme, theme.type.body)}>
-                  ✓ {stage.title}{stage.resolution ? `（${stage.resolution}）` : ''}
+                <Text key={stage.nodeId} style={textStyle(theme, theme.type.body, theme.onRaised.primary)}>
+                  {stage.resolution === 'pressure_deadline_passed' ? '⚠' : '✓'} {stage.title}{stage.resolution
+                    ? `（${stage.resolution === 'pressure_deadline_passed' ? '期限已过，目标结果需复核' : stage.resolution}）` : ''}
                 </Text>
               ))}
             </View>
           ) : null}
           {progress.pendingConsequences.length > 0 ? (
             <View style={{ gap: 2 }}>
-              <Text style={typeStyle(theme, theme.type.caption)}>待回应的后果</Text>
+              <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>待回应的后果</Text>
               {progress.pendingConsequences.map((text, index) => (
-                <Text key={String(index)} style={typeStyle(theme, theme.type.body)} numberOfLines={2}>· {text}</Text>
+                <Text key={String(index)} style={textStyle(theme, theme.type.body, theme.onRaised.primary)} numberOfLines={2}>· {text}</Text>
               ))}
             </View>
           ) : null}
+          {['active','paused'].includes(progress.status) ? <View style={{ gap: theme.space.sm }}>
+            <Button label={progress.status === 'paused' ? '继续主线' : '暂时搁置主线'} variant="secondary" disabled={props.busy} onPress={props.onPauseResume} testID="campaign-pause-resume" />
+            <Button label="调整冒险目标" variant="secondary" disabled={props.busy} onPress={props.onAdjustGoal} testID="campaign-change-goal" />
+            <Button label="准备后续主线" variant="secondary" disabled={props.busy} onPress={props.onReplan} testID="campaign-replan" />
+          </View> : null}
         </View>
       ) : null}
     </View>

@@ -9,7 +9,7 @@ import type {
 } from './types';
 import { CAMPAIGN_RUNTIME_SCHEMA } from './types';
 import type { GameStateSnapshot } from '../state/types';
-import type { ConditionFacts } from '../situations/conditions';
+import type { ConditionFacts, ConditionValue } from '../situations/conditions';
 import { evaluateCondition, snapshotConditionFacts } from '../situations/conditions';
 import type { SituationCondition } from '../situations/types';
 
@@ -50,6 +50,7 @@ export interface ProgressReducerInput {
   artifact?: CampaignContentArtifactV1;
   turnId: string;
   nextStateVersion: number;
+  consequenceTriggerBudget?: number;
 }
 
 export interface CampaignRewardGrant {
@@ -79,6 +80,32 @@ function isFalse(condition: SituationCondition | null, facts: ConditionFacts): b
   if (condition === null) return false;
   const result = evaluateCondition(condition, facts);
   return !result.value && !result.unknown;
+}
+
+/** A deadline closes a situation, but cannot supply positive completion
+ * evidence. Preserve actual status for negative guards and other consumers. */
+function completionValue(condition: SituationCondition, facts: ConditionFacts,
+  expired: ReadonlySet<string>, positive = true): ConditionValue {
+  if (condition.kind === 'all' || condition.kind === 'any') {
+    const values = condition.of.map(child => completionValue(child, facts, expired, positive));
+    const any = condition.kind === 'any';
+    if (values.some(value => !value.unknown && value.value === any)) return { value: any, unknown: false };
+    return values.some(value => value.unknown) ? { value: false, unknown: true } : { value: !any, unknown: false };
+  }
+  if (condition.kind === 'not') {
+    const inner = completionValue(condition.of, facts, expired, !positive);
+    return inner.unknown ? inner : { value: !inner.value, unknown: false };
+  }
+  if (positive && condition.kind === 'situation_status' && condition.status === 'resolved'
+    && expired.has(condition.situationId)) return { value: false, unknown: false };
+  return evaluateCondition(condition, facts);
+}
+
+function completionResult(condition: SituationCondition, facts: ConditionFacts,
+  expired: ReadonlySet<string>): ConditionValue {
+  // Retain the shared AST/depth checks before the context-specific evaluation.
+  const value = evaluateCondition(condition, facts);
+  return expired.size ? completionValue(condition, facts, expired) : value;
 }
 
 function eventMatches(
@@ -171,6 +198,8 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   const progressLines: string[] = [];
   const stateById = new Map(runtime.nodeStates.map(node => [node.nodeId, node]));
   const nodeById = new Map(input.plan.nodes.map(node => [node.nodeId, node]));
+  const expiredSituations = new Set((input.state.situations ?? [])
+    .filter(s => s.status === 'resolved' && s.resolution === 'pressure_deadline_passed').map(s => s.situationId));
   const facts = () => campaignConditionFacts({
     state: input.state,
     runtime,
@@ -201,7 +230,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   let transitions = 0;
 
   // --- Node lifecycle evaluation (bounded batch) ---
-  for (let round = 0; round < NODE_TRANSITION_BATCH_LIMIT; round += 1) {
+  for (let round = 0; runtime.campaignStatus === 'active' && round < NODE_TRANSITION_BATCH_LIMIT; round += 1) {
     const currentFacts = facts();
     let roundChanged = false;
 
@@ -224,8 +253,9 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
       }
       // Early completion (A17): evidence may already satisfy a stage the plan
       // expected later — pending nodes also check completion, not just active.
+      const completed = completionResult(node.completion, currentFacts, expiredSituations);
       if (['planned', 'available', 'suspended', 'active'].includes(entry.status)
-        && isTrue(node.completion, currentFacts)) {
+        && completed.value && !completed.unknown) {
         const evidence = collectCompletionEvidence(node, input);
         if (setStatus(node.nodeId, 'succeeded', { completedEvidence: evidence })) {
           transitions += 1;
@@ -249,28 +279,37 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         continue;
       }
       entryGuard: if (entry.status === 'available' || entry.status === 'suspended' || entry.status === 'active') {
-        if (isFalse(node.completion, currentFacts) && node.failure !== null && isTrue(node.failure, currentFacts)) {
-          if (setStatus(node.nodeId, 'failed', {})) { transitions += 1; roundChanged = true; }
+        if (!completed.value && !completed.unknown && node.failure !== null && isTrue(node.failure, currentFacts)) {
+          if (setStatus(node.nodeId, 'failed', {})) {
+            transitions += 1; roundChanged = true;
+            progressLines.push(`目标受阻：${node.title}未能完成，后续方向需要调整。`);
+          }
           break entryGuard;
         }
         if (node.cancellation !== null && isTrue(node.cancellation, currentFacts)) {
-          if (setStatus(node.nodeId, 'cancelled', {})) { transitions += 1; roundChanged = true; }
+          if (setStatus(node.nodeId, 'cancelled', {})) {
+            transitions += 1; roundChanged = true;
+            progressLines.push(`阶段已取消：${node.title}。`);
+          }
           break entryGuard;
         }
-        if (entry.status !== 'active' && runtime.primaryNodeId === null) {
+        if (entry.status !== 'active' && (runtime.primaryNodeId === null
+          || (runtime.primaryNodeId === node.nodeId && node.coverage === 'concrete'))) {
           const depsMet = node.statusDependencies.every(depId => {
             const dep = stateById.get(depId);
             return dep !== undefined && ['succeeded', 'superseded', 'cancelled'].includes(dep.status);
           }) || node.statusDependencies.length === 0;
           if (depsMet) {
-            entry.status = 'active';
-            entry.activatedAtVersion = input.nextStateVersion;
+            if (node.coverage === 'concrete') {
+              entry.status = 'active';
+              entry.activatedAtVersion = input.nextStateVersion;
+              events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
+            }
             runtime.primaryNodeId = node.nodeId;
             runtime.publicObjectiveProjection = node.publicObjective;
-            events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
             transitions += 1;
             roundChanged = true;
-            progressLines.push(`当前目标：${node.publicObjective}`);
+            progressLines.push(`${node.coverage === 'concrete' ? '当前目标' : '后续方向待准备'}：${node.publicObjective}`);
           }
         }
       }
@@ -303,13 +342,15 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         for (const node of input.plan.nodes) {
           const entry = stateById.get(node.nodeId);
           if (entry && entry.status === 'available') {
-            entry.status = 'active';
-            entry.activatedAtVersion = input.nextStateVersion;
+            if (node.coverage === 'concrete') {
+              entry.status = 'active';
+              entry.activatedAtVersion = input.nextStateVersion;
+              events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
+            }
             runtime.primaryNodeId = node.nodeId;
             runtime.publicObjectiveProjection = node.publicObjective;
-            events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
             roundChanged = true;
-            progressLines.push(`当前目标：${node.publicObjective}`);
+            progressLines.push(`${node.coverage === 'concrete' ? '当前目标' : '后续方向待准备'}：${node.publicObjective}`);
             break;
           }
         }
@@ -333,7 +374,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   // --- Deferred consequences: evaluate pending triggers (bounded) ---
   let triggered = 0;
   for (const consequence of runtime.deferredConsequences) {
-    if (triggered >= CONSEQUENCE_TRIGGER_LIMIT) break;
+    if (triggered >= Math.min(CONSEQUENCE_TRIGGER_LIMIT, input.consequenceTriggerBudget ?? CONSEQUENCE_TRIGGER_LIMIT)) break;
     if (consequence.status !== 'pending') continue;
     if (isTrue(consequence.triggerCondition, facts())) {
       consequence.status = 'triggered';
@@ -356,7 +397,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
       const nodeEntry = stateById.get(policy.nodeId);
       if (!nodeEntry || nodeEntry.status !== 'succeeded') continue;
       const grantKey = `${input.runtime.branchId}:${policy.nodeId}:${policy.policyId}`;
-      if (runtime.grantedRewardKeys.includes(grantKey)) continue;
+      if (runtime.grantedRewardKeys.some(key => key === grantKey || key.endsWith(`:${policy.nodeId}:${policy.policyId}`))) continue;
       runtime.grantedRewardKeys.push(grantKey);
       rewards.push({ policyId: policy.policyId, nodeId: policy.nodeId, grantKey, policy });
       changed = true;
@@ -399,7 +440,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
 
   // --- Bookkeeping ---
   runtime.stateVersion = input.nextStateVersion;
-  runtime.lastProgressVersion = input.nextStateVersion;
+  if (changed || events.length > 0) runtime.lastProgressVersion = input.nextStateVersion;
   if (progressLines.length > 0) {
     runtime.recentProgressLines = [
       ...runtime.recentProgressLines,

@@ -68,6 +68,8 @@ export interface CreateCampaignInput {
     intent: CampaignIntentV1;
     artifact: CampaignContentArtifactV1;
     sourceTrigger: string;
+    /** Setup/candidate CAS participates in this creation transaction. */
+    guard?: (tx: import('../ports/sqlite').SqliteTransaction) => Promise<void>;
   };
 }
 
@@ -462,6 +464,23 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       basePackage: { revision: input.packageRevision, contentHash: pkg.manifest.contentHash },
     });
   }
+
+  for (const card of cards) {
+    const sceneEntry = pkg.entries.find(entry => entry.kind === 'scene' &&
+      (entry.definition as { locationId?: string }).locationId === input.anchor.locationId);
+    const initialZoneId = sceneEntry
+      ? ((sceneEntry.definition as { zones?: Array<{ zoneId: string }> }).zones?.[0]?.zoneId)
+      : undefined;
+    snapshot.actors[card.actorId] = {
+      actorId: card.actorId,
+      locationId: input.anchor.locationId,
+      ...(initialZoneId ? { zoneId: initialZoneId } : {}),
+      resources: { ...card.resourceMax },
+      conditions: [],
+      lifeStatus: 'active',
+    };
+  }
+
   // P9 adoption pass: initial mainline runtime is part of the creation
   // transaction — the start node activates from evaluated conditions, never
   // from model claims, and the content artifact binds to the branch snapshot.
@@ -500,28 +519,15 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       throw new Error(`提案的结局「${adoptionPass.runtime.ending.title}」在开局状态即成立，拒绝采用该提案；请重新生成。`);
     }
     snapshot.campaignRuntime = adoptionPass.runtime;
+    snapshot.campaignRuntime.intent = input.adoption.intent;
     snapshot.campaignContentBinding = {
       artifactIds: [input.adoption.artifact.artifactId],
       contentHash: input.adoption.artifact.contentHash,
     };
   }
-  for (const card of cards) {
-    const sceneEntry = pkg.entries.find(entry => entry.kind === 'scene' &&
-      (entry.definition as { locationId?: string }).locationId === input.anchor.locationId);
-    const initialZoneId = sceneEntry
-      ? ((sceneEntry.definition as { zones?: Array<{ zoneId: string }> }).zones?.[0]?.zoneId)
-      : undefined;
-    snapshot.actors[card.actorId] = {
-      actorId: card.actorId,
-      locationId: input.anchor.locationId,
-      ...(initialZoneId ? { zoneId: initialZoneId } : {}),
-      resources: { ...card.resourceMax },
-      conditions: [],
-      lifeStatus: 'active',
-    };
-  }
 
   await input.db.transaction(async tx => {
+    await input.adoption?.guard?.(tx);
     const campaignExists = await tx.queryOne('SELECT campaign_id FROM campaigns WHERE campaign_id = ?', [input.campaignId]);
     if (campaignExists) throw new Error(`Campaign already exists: ${input.campaignId}.`);
     const branchExists = await tx.queryOne('SELECT branch_id FROM branches WHERE branch_id = ?', [branchId]);

@@ -17,6 +17,11 @@ import { validateConditionShape } from '../situations/conditions';
 export const MAX_PLAN_NODES = 12;
 export const MAX_PLAN_ENDINGS = 4;
 export const MIN_MAIN_NODES = 2;
+function canonicalStructure(value: unknown): string {
+  const sort = (item: unknown): unknown => Array.isArray(item) ? item.map(sort)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)).map(([key, nested]) => [key, sort(nested)])) : item;
+  return JSON.stringify(sort(value));
+}
 
 export interface PlanValidationContext {
   /** World entry ids visible to the player at the opening anchor. */
@@ -31,6 +36,68 @@ export interface PlanValidationContext {
   knownLocationIds?: ReadonlySet<string>;
   /** Protagonist opening skills (for first-stage method availability). */
   protagonistSkills?: ReadonlySet<string>;
+  presentActorRefs?: readonly string[];
+  protagonistSkillRanks?: Readonly<Record<string, string>>;
+  /** Current-state assessment from the same eligibility gate used in play. */
+  executableMethodIds?: ReadonlySet<string>;
+  /** Promise identity belongs to its committed situation, never its id alone. */
+  knownPromiseRefs?: ReadonlyArray<{ situationId: string; promiseId: string }>;
+}
+
+function artifactEffects(artifact: CampaignContentArtifactV1): import('./types').CampaignEffectSpec[] {
+  return [...artifact.situations.flatMap(s => s.definition.methods.flatMap(m => Object.values(m.outcomeTemplates ?? {}).flatMap(o => o.effects))),
+    ...artifact.consequenceTemplates.flatMap(c => c.effectSpecs)];
+}
+
+function promiseRefs(ctx: PlanValidationContext, artifact: CampaignContentArtifactV1): NonNullable<PlanValidationContext['knownPromiseRefs']> {
+  return [...(ctx.knownPromiseRefs ?? []), ...artifactEffects(artifact).flatMap(e => e.template === 'promise_create'
+    ? [{ situationId: e.situationId, promiseId: e.promiseId }] : [])];
+}
+
+/** New current content cannot rely on a local state change with no producer.
+ * Other world/engine conditions remain governed by their existing contracts. */
+function currentCompletionHasProducer(condition: SituationCondition, artifact: CampaignContentArtifactV1): boolean {
+  const own = new Set(artifact.situations.map(s => s.entryId));
+  const effects = artifactEffects(artifact);
+  const possible = (c: SituationCondition): boolean => {
+    if (c.kind === 'all') return c.of.every(possible);
+    if (c.kind === 'any') return c.of.some(possible);
+    if (c.kind === 'not') return true;
+    if (!('situationId' in c) || !own.has(c.situationId)) return true;
+    if (c.kind === 'situation_status') return c.status === 'active' || effects.some(e => e.template === 'situation_status' && e.situationId === c.situationId && e.status === c.status);
+    if (c.kind === 'situation_counter_at_least') return c.minimum <= 0 || effects.some(e => e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId && e.delta > 0);
+    if (c.kind === 'promise_status') return effects.some(e => 'situationId' in e && e.situationId === c.situationId && 'promiseId' in e && e.promiseId === c.promiseId
+      && (c.status === 'open' ? e.template === 'promise_create' : c.status === 'fulfilled' ? e.template === 'promise_fulfill' : e.template === 'promise_break'));
+    return true;
+  };
+  return possible(condition);
+}
+
+/** Expiration resolves a timed situation too. Resolution alone is not
+ * evidence of success; every alternative using it needs a separate marker. */
+function completionCanUseDeadlineAlone(condition: SituationCondition, artifact: CampaignContentArtifactV1): boolean {
+  const timed = new Set(artifact.situations.filter(s => s.definition.pressure?.deadlineClockSeconds !== undefined)
+    .map(s => s.entryId));
+  const includesDeadline = (c: SituationCondition): boolean => {
+    if (c.kind === 'all' || c.kind === 'any') return c.of.some(includesDeadline);
+    if (c.kind === 'not') return false;
+    return c.kind === 'situation_status' && c.status === 'resolved' && timed.has(c.situationId);
+  };
+  const successEvents = new Set(artifact.situations.flatMap(s => s.definition.methods.flatMap(m =>
+    ['success', 'full_success'].flatMap(grade => m.outcomeTemplates?.[grade as 'success' | 'full_success']?.effects ?? [])))
+    .flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
+  const failureEvents = new Set(artifact.situations.flatMap(s => s.definition.methods.flatMap(m =>
+    ['failure', 'severe_failure'].flatMap(grade => m.outcomeTemplates?.[grade as 'failure' | 'severe_failure']?.effects ?? [])))
+    .flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
+  const withoutMarker = (c: SituationCondition): boolean => {
+    if (c.kind === 'all') return c.of.every(withoutMarker);
+    if (c.kind === 'any') return c.of.some(withoutMarker);
+    if (c.kind === 'situation_counter_at_least' && timed.has(c.situationId) && c.minimum > 0) return false;
+    if (c.kind === 'promise_status' && timed.has(c.situationId) && c.status === 'fulfilled') return false;
+    if (c.kind === 'committed_event' && successEvents.has(c.eventType) && !failureEvents.has(c.eventType)) return false;
+    return true;
+  };
+  return includesDeadline(condition) && withoutMarker(condition);
 }
 
 export function validateCampaignIntent(intent: CampaignIntentV1): string[] {
@@ -68,6 +135,11 @@ export function validateCampaignIntent(intent: CampaignIntentV1): string[] {
     errors.push('intent: sourceCoverageBinding incomplete.');
   }
   return errors;
+}
+
+function actorInScope(id: unknown, ctx: PlanValidationContext): boolean {
+  return typeof id === 'string' && (ctx.openingActorIds.has(id) || ctx.openingTemplateIds.has(id)
+    || (id.startsWith('npc-') && ctx.openingTemplateIds.has(id.slice(4))));
 }
 
 function validateNodeCondition(
@@ -114,7 +186,7 @@ function validateConditionReferences(
     case 'actor_alive':
     case 'actor_at':
     case 'actor_condition': {
-      if (!ctx.openingActorIds.has(condition.actorId) && !ctx.openingTemplateIds.has(condition.actorId)) {
+      if (!actorInScope(condition.actorId, ctx)) {
         errors.push(`${prefix}: actor ${condition.actorId} not in opening scope.`);
       }
       return;
@@ -123,6 +195,13 @@ function validateConditionReferences(
       if (!ctx.visibleWorldEntryIds.has(condition.itemId)) {
         errors.push(`${prefix}: item ${condition.itemId} not a visible world entry.`);
       }
+      if (!actorInScope(condition.actorId, ctx)) errors.push(`${prefix}: item owner actor is outside scope.`);
+      return;
+    case 'relationship_at_least':
+      for (const id of [condition.fromActorId, condition.toActorId]) {
+        if (!actorInScope(id, ctx)) errors.push(`${prefix}: relationship actor ${id} is outside scope.`);
+      }
+      if (condition.closeness < 0 || condition.closeness > 100) errors.push(`${prefix}: unreachable relationship threshold; closeness must be within 0..100.`);
       return;
     case 'knowledge_known':
       if (!ctx.visibleWorldEntryIds.has(condition.entryId)) {
@@ -135,6 +214,10 @@ function validateConditionReferences(
       if (!ctx.visibleWorldEntryIds.has(condition.situationId)
         && !(ctx.artifactSituationIds?.has(condition.situationId) ?? false)) {
         errors.push(`${prefix}: situation ${condition.situationId} not in world or campaign content.`);
+      }
+      if (condition.kind === 'promise_status' && ctx.knownPromiseRefs
+        && !ctx.knownPromiseRefs.some(p => p.situationId === condition.situationId && p.promiseId === condition.promiseId)) {
+        errors.push(`${prefix}: unknown promise ${condition.situationId}:${condition.promiseId}.`);
       }
       return;
     }
@@ -149,6 +232,8 @@ export function validateCampaignPlan(
   artifact?: CampaignContentArtifactV1,
 ): string[] {
   const errors: string[] = [];
+  if (artifact) ctx = { ...ctx, knownPromiseRefs: promiseRefs(ctx, artifact),
+    artifactSituationIds: new Set([...(ctx.artifactSituationIds ?? []), ...artifact.situations.map(s => s.entryId)]) };
   if (plan.schemaVersion !== CAMPAIGN_PLAN_SCHEMA) errors.push('plan: unknown schemaVersion.');
   if (plan.compilerVersion !== CAMPAIGN_PLAN_COMPILER_VERSION) errors.push('plan: unknown compilerVersion.');
   if (!plan.planId) errors.push('plan: planId required.');
@@ -194,8 +279,15 @@ export function validateCampaignPlan(
     validateNodeCondition(node, 'completion', errors);
     validateNodeCondition(node, 'failure', errors);
     validateNodeCondition(node, 'cancellation', errors);
+    if (!plan.retiredNodeIds?.includes(node.nodeId)) {
+      for (const field of ['completion', 'failure', 'cancellation'] as const) {
+        if (collectConditionNodeRefs(node[field]).includes(node.nodeId)) errors.push(`node ${node.nodeId}.${field}: self-dependent progress condition.`);
+      }
+    }
     validateConditionReferences(node.activation, ctx, errors, `node ${node.nodeId}.activation`);
     validateConditionReferences(node.completion, ctx, errors, `node ${node.nodeId}.completion`);
+    validateConditionReferences(node.failure, ctx, errors, `node ${node.nodeId}.failure`);
+    validateConditionReferences(node.cancellation, ctx, errors, `node ${node.nodeId}.cancellation`);
     for (const ref of [...node.statusDependencies, ...node.alternativeNodeIds, ...node.nextNodeIds]) {
       if (!nodeIds.has(ref)) errors.push(`node ${node.nodeId}: unknown node ref ${ref}.`);
     }
@@ -208,6 +300,7 @@ export function validateCampaignPlan(
   }
   for (const ending of plan.possibleEndings) {
     validateConditionShape(ending.condition, errors, `ending ${ending.endingId}`);
+    validateConditionReferences(ending.condition, ctx, errors, `ending ${ending.endingId}`);
     for (const nodeId of collectConditionNodeRefs(ending.condition)) {
       if (!nodeIds.has(nodeId)) errors.push(`ending ${ending.endingId}: unknown node ref ${nodeId}.`);
       if (nodeId === ending.endingId) errors.push(`ending ${ending.endingId}: self-dependent ending.`);
@@ -232,6 +325,7 @@ export function validateCampaignPlan(
     queue.push(...node.nextNodeIds, ...node.alternativeNodeIds);
   }
   for (const node of plan.nodes.filter(n => n.role === 'main')) {
+    if (plan.retiredNodeIds?.includes(node.nodeId)) continue;
     if (!reachable.has(node.nodeId)) {
       errors.push(`plan: main node ${node.nodeId} unreachable from start (主路径必须结构可达).`);
     }
@@ -256,6 +350,7 @@ export function validateCampaignPlan(
   for (const node of plan.nodes) visitDeps(node.nodeId);
   // Terminal main nodes must have an exit: success/failure condition or a next hop.
   for (const node of plan.nodes.filter(n => n.role === 'main' && n.nextNodeIds.length === 0)) {
+    if (plan.retiredNodeIds?.includes(node.nodeId)) continue;
     const endingTouches = plan.possibleEndings.some(e => collectConditionNodeRefs(e.condition).includes(node.nodeId));
     if (!endingTouches) {
       errors.push(`plan: terminal main node ${node.nodeId} has no ending condition (节点需要明确退出方式).`);
@@ -276,10 +371,26 @@ export function validateContentArtifact(
   ctx: PlanValidationContext,
 ): string[] {
   const errors: string[] = [];
+  ctx = { ...ctx, knownPromiseRefs: promiseRefs(ctx, artifact),
+    artifactSituationIds: new Set([...(ctx.artifactSituationIds ?? []), ...artifact.situations.map(s => s.entryId)]) };
   if (artifact.schemaVersion !== 'campaign-content-1') errors.push('artifact: unknown schemaVersion.');
   if (artifact.namespace !== 'campaign') errors.push('artifact: namespace must be campaign.');
   if (artifact.planId !== plan.planId) errors.push('artifact: planId mismatch.');
-  const situationIds = new Set(artifact.situations.map(s => s.entryId));
+  const situationIds = new Set([...artifact.situations.map(s => s.entryId), ...(ctx.artifactSituationIds ?? [])]);
+  const promises = promiseRefs(ctx, artifact);
+  const checkEffectActors = (spec: import('./types').CampaignEffectSpec): void => {
+    if ((spec.template === 'promise_fulfill' || spec.template === 'promise_break')
+      && !promises.some(p => p.situationId === spec.situationId && p.promiseId === spec.promiseId)) {
+      errors.push(`artifact: unknown promise ${spec.situationId}:${spec.promiseId}; use its committed situation or create it explicitly.`);
+    }
+    if (spec.template === 'resource_change' && !['hp','stamina'].includes(spec.resourceId)) errors.push('artifact: resource_change requires hp or stamina; unknown resources cannot be settled.');
+    for (const field of ['actorId','toActorId','fromActorId','promisorActorId','promiseeActorId'] as const) {
+      const id = (spec as unknown as Record<string, unknown>)[field];
+      if (typeof id === 'string' && !['pc','player','self','__player__','玩家'].includes(id) && !actorInScope(id, ctx)) {
+        errors.push(`artifact: effect actor ${id} is outside scope.`);
+      }
+    }
+  };
   for (const situation of artifact.situations) {
     if (!situation.definition.methods || situation.definition.methods.length === 0) {
       errors.push(`artifact ${situation.entryId}: situation needs methods.`);
@@ -297,23 +408,46 @@ export function validateContentArtifact(
     errors.push(`artifact: start node ${startNode.nodeId} has no situation (situationRef unresolved).`);
     return errors;
   }
+  if (!currentCompletionHasProducer(startNode.completion, artifact)) {
+    errors.push(`artifact: current stage ${startNode.nodeId} completion has no local effect producer; provide a realizable outcome path.`);
+  }
+  if (completionCanUseDeadlineAlone(startNode.completion, artifact)) {
+    errors.push(`artifact: current stage ${startNode.nodeId} can mistake a pressure deadline for success; require independent success evidence on every completion route.`);
+  }
   const methods = startSituation.definition.methods ?? [];
   if (methods.length < 2) {
     errors.push('artifact: first stage needs ≥2 methods (至少两条机制不同的路线).');
   }
   const signatures = new Set<string>();
   for (const method of methods) {
-    signatures.add(`${method.firstStep.actionKind}:${method.firstStep.skillId ?? '-'}:${method.firstStep.targetEntryId ?? '-'}:${method.firstStep.destinationId ?? '-'}`);
+    const outcomes = Object.entries(method.outcomeTemplates ?? {}).map(([grade, outcome]) => [grade, outcome.effects.map(spec => {
+      if (spec.template === 'record_event') return { template: spec.template, eventType: spec.eventType };
+      if (spec.template === 'situation_status') { const { resolution, ...effect } = spec; return effect; }
+      return spec;
+    })]);
+    signatures.add(`${method.firstStep.actionKind}:${method.firstStep.skillId ?? '-'}:${method.firstStep.targetEntryId ?? '-'}:${method.firstStep.destinationId ?? '-'}:${canonicalStructure(outcomes)}`);
   }
   if (signatures.size < 2) {
     errors.push('artifact: first-stage methods are mechanically identical (同效果路线不算差异).');
   }
   const protagonistSkills = ctx.protagonistSkills ?? new Set<string>();
   const executableAtStart = methods.some(method => {
-    const skill = method.requires.skillId;
+    if (ctx.executableMethodIds) return ctx.executableMethodIds.has(method.methodId);
+    const req = method.requires;
+    const step = method.firstStep;
+    if (ctx.presentActorRefs && step.targetEntryId && !ctx.presentActorRefs.includes(step.targetEntryId)) return false;
+    if (ctx.knownLocationIds && step.destinationId && !ctx.knownLocationIds.has(step.destinationId)) return false;
+    // A gated route remains useful, but cannot prove an unprepared entrance.
+    if (req.itemId || step.itemId || step.abilityId || req.knowledgeEntryId || req.relationshipTo
+      || req.condition || req.actorAt || method.visibility) return false;
+    if (ctx.presentActorRefs && req.actorAlive && !ctx.presentActorRefs.includes(req.actorAlive)) return false;
+    const skill = req.skillId ?? (step.actionKind === 'skill_check' ? step.skillId : undefined);
     if (!skill) return true;
-    return protagonistSkills.has(skill) || protagonistSkills.has(skill.replace(/^skill-/, ''))
-      || method.requires.minRank === 'untrained';
+    const ranks = ['untrained', 'novice', 'trained', 'expert', 'master'];
+    const actual = Object.entries(ctx.protagonistSkillRanks ?? {}).find(([id]) => id.replace(/^skill-/, '') === skill.replace(/^skill-/, ''))?.[1];
+    const held = protagonistSkills.has(skill) || protagonistSkills.has(skill.replace(/^skill-/, ''));
+    return (held || req.minRank === 'untrained')
+      && (!req.minRank || ranks.indexOf(actual ?? (held ? 'novice' : 'untrained')) >= ranks.indexOf(req.minRank));
   });
   if (!executableAtStart) {
     errors.push('artifact: no first-stage method executable at start (至少一个当前可执行入口).');
@@ -327,6 +461,7 @@ export function validateContentArtifact(
         if (typeof template.achieved !== 'boolean') errors.push(`artifact: outcome ${grade} achieved must be boolean.`);
         if (!template.resultFact.trim()) errors.push(`artifact: outcome ${grade} resultFact required.`);
         for (const spec of template.effects) {
+          checkEffectActors(spec);
           if (spec.template === 'situation_status' || spec.template === 'situation_counter'
             || spec.template === 'promise_create' || spec.template === 'promise_fulfill'
             || spec.template === 'promise_break' || spec.template === 'suppress_reference_event') {
@@ -352,6 +487,27 @@ export function validateContentArtifact(
   for (const policy of artifact.rewardPolicies) {
     if (!plan.nodes.some(n => n.nodeId === policy.nodeId)) {
       errors.push(`artifact: reward policy ${policy.policyId} references unknown node.`);
+    }
+    for (const reward of policy.rewards) {
+      if (!['skill_rank','item','knowledge','relationship','resource_cap'].includes(reward.kind)) errors.push('artifact: unknown reward kind.');
+      if (reward.toActorId && !actorInScope(reward.toActorId, ctx)) errors.push(`artifact: reward actor ${reward.toActorId} is outside scope.`);
+      if (reward.kind === 'relationship' && (!reward.toActorId || !actorInScope(reward.targetId, ctx))) errors.push('artifact: relationship reward requires two actors in scope.');
+      if (reward.kind === 'resource_cap' && !['hp','stamina'].includes(reward.targetId)) errors.push('artifact: unknown resource cap reward.');
+      if (['item','knowledge','skill_rank'].includes(reward.kind) && !ctx.visibleWorldEntryIds.has(reward.targetId)
+        && ![...ctx.visibleWorldEntryIds].some(id => id.replace(/^skill-/, '') === reward.targetId)) errors.push(`artifact: reward target ${reward.targetId} is outside scope.`);
+      if (reward.rank && !['untrained','novice','trained','expert','master'].includes(reward.rank)) errors.push('artifact: unknown skill reward rank.');
+      if (reward.delta !== undefined && (!Number.isInteger(reward.delta) || Math.abs(reward.delta) > (reward.kind === 'relationship' ? 3 : 10))) errors.push('artifact: reward delta outside bounds.');
+    }
+  }
+  for (const consequence of artifact.consequenceTemplates) {
+    validateConditionShape(consequence.triggerCondition, errors, `consequence.${consequence.consequenceId}`);
+    validateConditionReferences(consequence.triggerCondition, ctx, errors, `consequence.${consequence.consequenceId}`);
+    for (const effect of consequence.effectSpecs) {
+      checkEffectActors(effect);
+      if (effect.template === 'schedule_consequence') errors.push('artifact: nested consequence scheduling is not supported.');
+      if ('situationId' in effect && !situationIds.has(effect.situationId) && !ctx.visibleWorldEntryIds.has(effect.situationId)) errors.push('artifact: consequence situation is outside scope.');
+      if (effect.template === 'grant_item' && !ctx.visibleWorldEntryIds.has(effect.itemId)) errors.push('artifact: consequence item is outside scope.');
+      if (effect.template === 'grant_knowledge' && !ctx.visibleWorldEntryIds.has(effect.entryId)) errors.push('artifact: consequence knowledge is outside scope.');
     }
   }
   return errors;

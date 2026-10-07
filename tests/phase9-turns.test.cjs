@@ -66,7 +66,8 @@ test('P9-4: the alternate route resolves the stage, grants rewards and schedules
     assert.equal(situation.status, 'resolved', 'route B resolves the situation — a different authoritative outcome than route A');
     const runtime = after.campaignRuntime;
     assert.equal(runtime.nodeStates.find(n => n.nodeId === 'stage-1').status, 'succeeded', 'stage completed from the resolved condition');
-    assert.equal(runtime.nodeStates.find(n => n.nodeId === 'stage-2').status, 'active', 'stage-2 activates once its dependency resolved');
+    assert.equal(runtime.nodeStates.find(n => n.nodeId === 'stage-2').status, 'available', 'provisional directions wait for concrete content before activation');
+    assert.equal(runtime.nodeStates.find(n => n.nodeId === 'stage-2').activatedAtVersion, undefined);
     assert.equal(runtime.primaryNodeId, 'stage-2');
     assert.equal(runtime.grantedRewardKeys.length, 1, 'stage reward granted exactly once');
     assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates'), 'knowledge reward applied (lore-crates)');

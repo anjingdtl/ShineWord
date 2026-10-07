@@ -33,7 +33,7 @@ export function AboutCard(): React.JSX.Element {
           数据库 `shineword.db` · 存档扩展名 `.shineword-save.json` · 世界包 `.shineword-world.zip`
         </Text>
         <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
-          以上内部标识保持不变，以兼容既有安装与旧存档。
+          以上内部标识保持不变，更新安装会保留应用数据。存档是否可导入以格式校验结果为准。
         </Text>
       </View>
     </Card>

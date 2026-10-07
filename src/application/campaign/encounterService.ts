@@ -52,6 +52,10 @@ export interface EncounterDeps {
   narratives: SqliteNarrativeStore;
   hashProvider: Sha256HexProvider;
   random: RandomSource;
+  /** Session-owned campaign authority, preloaded before the local atomic commit. */
+  prepareAuthority?: (input: { campaignId: string; state: GameStateSnapshot; contract: ActionContract; grade: RollGrade;
+    events?: Array<{ eventType: string; payload: unknown }> }) => Promise<(nextState: GameStateSnapshot) => Array<{ eventType: string; payload: unknown }>>;
+  afterCommit?: (campaignId: string, branchId: string) => Promise<void>;
 }
 
 export interface ZoneNode {
@@ -299,6 +303,7 @@ export class EncounterService {
       summary: `遭遇 ${encounterId} 开始`,
     });
     Object.assign(contract, bindRuleContract(contract, state));
+    const applyAuthority = await this.deps.prepareAuthority?.({ campaignId: input.campaignId, state, contract, grade: 'success' });
     const result = await commitResolvedTurn({
       store: this.deps.turns,
       branchId: input.branchId,
@@ -306,6 +311,7 @@ export class EncounterService {
       contractHash: await this.deps.hashProvider.sha256Hex(JSON.stringify(contract)),
       outcomeGrade: 'success',
       contractOrigin: 'engine',
+      applyAuthoritativeState: applyAuthority,
       updateNextState: next => {
         for (const insert of transientInserts) {
           next.actors[insert.actorId] = {
@@ -331,6 +337,7 @@ export class EncounterService {
       },
       committedAt: createdAt,
     });
+    await this.deps.afterCommit?.(input.campaignId, input.branchId);
     if (result.replayed) return this.getView(input.campaignId, input.branchId, encounterId);
     return this.buildView(encounter, zones, exitIds, zoneMap, null, null, allCards, state.stateVersion + 1);
   }
@@ -391,6 +398,7 @@ export class EncounterService {
     const now = new Date().toISOString();
     const entry = makeEncounterSnapshot(nextEncounter, ctx.zones, ctx.exits, ctx.zoneMap,
       existingEntry?.createdAt ?? now, null);
+    const applyAuthority = await this.deps.prepareAuthority?.({ campaignId: input.campaignId, state: ctx.state, contract, grade: 'success' });
     await commitResolvedTurn({
       store: this.deps.turns,
       branchId: input.branchId,
@@ -399,8 +407,10 @@ export class EncounterService {
       outcomeGrade: 'success',
       contractOrigin: 'engine',
       committedAt: now,
+      applyAuthoritativeState: applyAuthority,
       updateNextState: next => { next.encounters = upsertEncounter(next.encounters ?? [], entry); },
     });
+    await this.deps.afterCommit?.(input.campaignId, input.branchId);
     return this.getView(input.campaignId, input.branchId, input.encounterId);
   }
 
@@ -1247,6 +1257,13 @@ export class EncounterService {
           loot: [...(settlement?.loot ?? []), ...(encounterRewards.loot ?? [])],
         }
       : undefined;
+    const combatEvents = [
+      ...(roundClockSeconds > 0 ? [{ eventType: 'combat_round_completed',
+        payload: { encounterId: ctx.encounter.encounterId, round: nextEncounter.round, clockSeconds: roundClockSeconds } }] : []),
+      ...(newlyJoinedActorIds.length > 0 ? [{ eventType: 'combat_actors_joined',
+        payload: { encounterId: ctx.encounter.encounterId, actorIds: newlyJoinedActorIds } }] : []),
+    ];
+    const applyAuthority = await this.deps.prepareAuthority?.({ campaignId: ctx.campaignId, state: ctx.state, contract, grade, events: combatEvents });
     const result = await commitResolvedTurn({
       store: this.deps.turns,
       branchId,
@@ -1257,6 +1274,7 @@ export class EncounterService {
       settlement: effectiveSettlement,
       contractOrigin: 'engine',
       coordinationFence: ctx.operationFence,
+      applyAuthoritativeState: applyAuthority,
       committedAt: now,
       updateNextState: nextState => {
         for (const actorId of removedActorIds) delete nextState.actors[actorId];
@@ -1271,18 +1289,10 @@ export class EncounterService {
         }
         nextState.encounters = upsertEncounter(nextState.encounters ?? [], entry);
       },
-      events: [
-        ...(roundClockSeconds > 0 ? [{
-          eventType: 'combat_round_completed',
-          payload: { encounterId: ctx.encounter.encounterId, round: nextEncounter.round, clockSeconds: roundClockSeconds },
-        }] : []),
-        ...(newlyJoinedActorIds.length > 0 ? [{
-          eventType: 'combat_actors_joined',
-          payload: { encounterId: ctx.encounter.encounterId, actorIds: newlyJoinedActorIds },
-        }] : []),
-      ],
+      events: combatEvents,
     });
     void result;
+    await this.deps.afterCommit?.(ctx.campaignId, branchId);
     const refreshed = await this.context(ctx.campaignId, branchId, ctx.encounter.encounterId);
     return {
       encounter: refreshed.encounter,
