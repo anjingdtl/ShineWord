@@ -293,8 +293,14 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
           }
           break entryGuard;
         }
+        // A coarse direction can remain available in a revision while the
+        // newly prepared concrete stage precedes it. Do not let that retained
+        // pointer strand the ready content after adoption. An active concrete
+        // stage keeps ownership; ordinary exploration never steals it.
+        const primaryNode = runtime.primaryNodeId === null ? undefined : nodeById.get(runtime.primaryNodeId);
         if (entry.status !== 'active' && (runtime.primaryNodeId === null
-          || (runtime.primaryNodeId === node.nodeId && node.coverage === 'concrete'))) {
+          || (runtime.primaryNodeId === node.nodeId && node.coverage === 'concrete')
+          || (node.coverage === 'concrete' && primaryNode?.coverage === 'provisional'))) {
           const depsMet = node.statusDependencies.every(depId => {
             const dep = stateById.get(depId);
             return dep !== undefined && ['succeeded', 'superseded', 'cancelled'].includes(dep.status);

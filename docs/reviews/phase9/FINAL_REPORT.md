@@ -1,39 +1,36 @@
-# Phase 9 收尾复验报告
+# Phase 9 接手收尾复验报告
 
-2026-10-07，Asia/Shanghai。工程修复通过核心与构建门禁，整体第九阶段尚未通过。旧“90有效决定、技术验收完成”撤销；未提交、结束后探索和机械重复不计最低80，主机不替代必需设备决定。
+2026-10-07，Asia/Shanghai。本轮工程门禁与受影响模拟器链路通过，**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED。
 
-| 身份/门禁 | 结果 |
+| 身份/门禁 | 最终结果 |
 |---|---|
-| 起始HEAD | fab6f171fba075c69fbe0bb1ecec4058fd9e0cae，起始干净 |
-| 最终生产源码SHA-256 | c12623bd95252b9f774231b68e1c4590913865e073a8f56f9ff6474386d6bc18，identity scope v2（含Android原生/构建输入；final17为980cb370…，final18仅candidateModel/generationService两文件变化，移动/原生显示源码与final14逐文件相同） |
-| Debug APK | dist/apk/debug/ShineWord-V1.0.0-debug.apk，109,436,143 bytes / 104.37MB |
-| APK SHA-256 | 7b7ebd3411bd882a697c54a047ce5d78de36b52900af1056b919c70474af53ca |
-| Android | emulator-5556 / API37，保留数据安装，V1.0.0 / 1000000 |
-| 核心全量 | verify:core 1005/1005，失败0跳过0（final18，reaccept-core-final18.log）；16项跨模块flow集成；解析/规划/flow组56项 |
-| 移动类型检查 | typecheck通过（reaccept-mobile-final18.log） |
-| APK构建 | debug通过（reaccept-apk-final18.log） |
-| 版本/diff | verify:version与git diff --check通过 |
-| 共享预算 | 1100上限，接手时959，最终1045（余55）；含接手轮复现回合2、final18 J1全程与J4分支10 |
-| 设备UI旅程 | **J1 UI 23决定（≥20）+ J4 UI分支10决定，同final18身份完成**；真实阶段失败×3→自动重规划→second-chance→再推进全程发生；重规划内容full_success门致停滞4次（A36证据） |
-| 私有身份/日志 | .tmp/phase9/reaccept-identity-final18b.json、reaccept-device/identity.json（final18）、journey-ui-j1-final18.jsonl、journey-ui-j4-final18.jsonl |
+| 本次接手HEAD | 5a6e07712176fbba1b780bc21ead2d8cfa1aa1e4，接手时干净；前轮4fb5519修复及5a6e077报告已提交 |
+| final21修复归档 | 纳入本次修复提交；提交ID见Git历史。未推送或发布；源码身份为工作树指纹，非Git提交SHA |
+| 生产源码SHA-256 | 7813f21fae13fb2a3538f9601d6d381f8049670bc5e274ca7bd168b50a041ceb，identity scope v3，含原生/构建输入与实际打包version.json |
+| Debug APK | dist/apk/debug/ShineWord-V1.0.0-debug.apk，109439951 bytes |
+| APK SHA-256 | 42bbcd35cc600c9d42a127fd9552fcc13605b80e58ff81acf2ec77bcc8d66eb8，设备实际安装包hash一致 |
+| 设备 | emulator-5556 / ShineWord_P8_Reacceptance / API37；保留数据安装，V1.0.0 / 1000000 |
+| 完整核心 | verify:core 1017/1017，0失败0跳过，36.076s；reaccept-core-final21.log |
+| 移动/构建 | typecheck通过；debug APK构建35s，reaccept-mobile-final21.log / reaccept-apk-final21.log |
+| 版本/diff | verify:version与git diff --check通过，日志reaccept-version-final21.log / reaccept-diff-final21.log |
+| 持久共享预算 | 上限1100，当前1055，余45；不重置；历史起始313含估计，不称全历史精确账 |
 
-先梳理M0–M9全流程权威与交接，再按模块修复并做生产Session/SQLite交叉回归。修复覆盖冻结/响应恢复、候选hash/fence、原子管理提交、事件/本地动作/战斗同提交结算、技能/关系/资源投影、重规划有效原文与旧承诺、失败清primary后排队、期限与部分成功的区分、存档重绑、生成示例/事件名合同、当前主线指引及Android字体/键盘/阅读布局。零资源原回合按原输入恢复成功，仅增1次Narrator，保留严格正数验证。具体见FLOW_REVIEW和IMPLEMENTATION_PROGRESS；工程通过不能代替内容门。
+先核对M0–M9全流程权威与交接，再在共用边界修复，详见FLOW_REVIEW。R22使新候选的普通成功完成条件必须有必要效果来源，并保留合法替代/延迟语义；R23由提示与解析共用前置字段合同和具体修复反馈。R24纠正QA代理派发后异常伪装503的问题，真实生产账本按未知结果禁止重发，通用错误自动重试与无主线generic兜底已删除。R25纠正有效决定计数及源码身份范围。
 
-final14 Android显示复验通过：360/411dp×1.3/2字号四组完整冷启动、行动与目标键盘、主线滚动底部、关闭及前后台；三次前台动态字号变化；未提交目标草稿和个人页路由保留；四主题主线卡/展开面板八张实际截图可读可操作。显示测试无HTTP、旧分支v24未变。final17逐文件确认全部移动/原生显示源码与final14相同，证据身份保留；final15 APK实际恢复原奖励缺字段响应，将误分类的retryable_failed纠正为invalid，该任务仍为原两次HTTP，恢复没有重发。重新进入开局另有一次opening_goal请求，分开记账。final10/12/13失败证据保留，未用最终成功覆盖历史失败。A01–A40目前28 PASS、2 FAIL、10 NOT RUN。
+R26修正统一进度归约中新准备具体阶段被旧粗节点primary遮蔽的问题。R27明确完整权威归档与当前可用行动的读职责，编译、Planner、准备态Narrator、立即保存和冷启动指引共用生命周期投影；事件完成但局面仍active时旧方法退出，历史、冻结合同、旧承诺和延迟后果完整保留。四项新增生命周期回归和全量核心通过，未通过人工改SQL或UI独有屏蔽修复。
 
-100/300/1000生产Session本地累积实际通过：快照5128/5129/5133 bytes，runtime1414/1414/1415 bytes，结构1412恒定，jobs=1，查询约1.21/2.77/5.33ms。边界使用模拟LLM/RNG，生产Session和SQLite真实运行；范围为已准备局面，不外推无限重规划归档。证据 reaccept-longrun.json。
+真实模拟器主分支camp-muxpraio-main：final19 UI生成加修复后r7采用到v29，暴露R26；final20本地短休v30激活原r7新主线办法（额外1次narrator_guidance刷新有账），UI回报v31普通success同时兑现v23旧承诺，自动r8采用v32并正确激活；UI进言v33普通success自然completed/改判之约，立即停止。实际结局仅取得代安娜发言资格，不能宣称安娜获救或原著死亡被改写。新增后果同v31立即触发，不计隔两决定证据。
 
-J2九决定自然completed停止；J3原回合恢复，另有新长篇3决定失败诊断和8决定节奏停滞诊断。设备J1跨身份不计完整最终20；J4同v12分叉有，但10+10未齐。质量各维独立评分，仍有低于3。A01–A40见ACCEPTANCE_MATRIX，不使用PART。
+final20结束后旧夜攀城墙按钮复现的失败截图保留。final21在原v33保留数据冷启动验证：结束主线卡、阶段列表、最终叙事、campaign_ending事件和runtime一致；旧战役方法退出，世界探索保留。runtime/全部归档hash不变，旧承诺仍fulfilled，分叉仍v37；新增0玩家决定、0HTTP。A34据此PASS，A38完整最终旅程仍NOT RUN。证据reaccept-device/final21-ending-reacceptance.json及final21-natural-ending、ending-review、ending-narrative.png。
 
-剩余合同范围：
+前轮“final18 J1 UI23≥20、J4 UI10完成必需设备配额”撤销。只读审计证明J1 v24–28五次空效果重复必须排除，余18仅为可评估上限；J4新增v28–37十次全为无新事实/进度/后续机会的重复，全部排除。重启停滞守卫不能补数。final20三个新增决定跨身份只作诊断，不拼成最终同身份20。旧503账本记录与随后过期指引安全拒绝分别留存，不由后者推断前者上游结果已知。
 
-- 最终同身份host J1/J2/J3各20、J4各10（设备必需UI20+10已于final18完成；J1实际23、J4分支10）。
-- 两个持续后果隔两次决定影响人物/办法：final18 J1战役模型未生成持续后果；完整三意图六维均达到3仍未满足（full_success门控停滞复现）。
-- 原著角色换起点、后段按需补建、救援成功后存活、模板外组合完整真实场景。
-- 设备自然结束一致性（final18 J1停在verdict-day开放，未到自然结局）；匹配设备/模型/范围的10基线+10新回合性能。
+100/300/1000生产Session/SQLite本地累积实际通过：snapshot5128/5129/5133 bytes，runtime1414/1414/1415、结构1412恒定，jobs=1；查询约0.912/2.395/5.871ms。LLM/RNG为确定性边界，范围是已准备局面，不外推无限重规划或真实模型性能。证据reaccept-longrun.json。
 
-接手轮（2026-10-07下午）补充：codex额度中断后接手，final18门禁复核全绿（1005/1005），旅程5/20停止原因定谳为驱动器把过期提交安全拒绝误判硬失败（产品无缺陷，驱动器已改有界重试）；环境恢复后以final18身份新开camp-muxpraio完成J1 UI 23决定与J4 UI分支10决定。预算1045/1100。QA代理进程（18691）与设备LLM配置（P9GLM→10.0.2.2:18691）保持原状，ADBKeyBoard临时IME已卸载、系统IME已恢复，旅程JSONL/截图与DB快照存.tmp/phase9/reaccept-device/。仍未提交、推送或发布。
+final14显示实测保留自身身份：360/411dp×1.3/2字号、行动/目标键盘、前后台、动态字体、草稿、四主题截图。final21移动/原生显示和共用构建输入逐文件与final14一致，打包版本元数据独立登记，见final21-display-source-equivalence.json；没有将历史截图改写成新身份。当前结束界面另有final21实际截图。
 
-共享测试上限1100，当前已预留934，余166。历史起始313含估计，不称全历史精确账。新派发持久预留，未知不自动重放，每任务生成加修复最多两物理请求。误启动父目录导入的2个sent未知请求已停止并单列，未重放。正确invalid只证明安全门有效。
+剩余合同：最终同身份J1/J2/J3各20、J4-A/B各10有效决定及必需Android UI20+10；两个隔两次有意义决定仍影响人物/办法的持续后果；三意图六维均≥3；原著角色换起点、后段按需补建、成功救援后存活、模板外组合；同设备/模型/范围10基线+10新回合性能对照。独立玩家体验未验。不能以工程门禁、必要结构门或累计提交次数替代这些证据。
 
-未卸载、清数据或覆盖设备SQLite；旧库/分支保留。临时代理及字体/分辨率在设备复验结束后恢复并记录。未提交、推送或发布。独立玩家体验未验。
+清理已通过正式模型配置UI恢复真实GLM端点，Keychain引用保留；只读核对持久配置后，按PID/命令行/监听端口验证停止本轮QA代理。字体1.0、物理1080×2400、Gboard；原模拟器/数据库保留，App在配置保存后force-stop。没有卸载、清数据或替换设备SQLite。证据final21-cleanup.json。
+
+2026-10-07后续：用户授权先commit再推进剩余验收。本次提交保存final21修复与真实复验检查点；完整阶段验收结论保持未通过。

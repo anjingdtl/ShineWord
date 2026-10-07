@@ -13,7 +13,7 @@
 | P9-6 | 实现修复，完整验收未完成 | 冷启动提案恢复、主线指引优先、独立当前决定点、后台采用后刷新、滚动展开面板 |
 | P9-7 | 未通过 | 真实决策矩阵、两个持续后果、六维质量和匹配性能基线仍未满足合同 |
 
-核心全量1004/1004，0失败0跳过，包含生产Session的100/300/1000本地累积；最终16项flow集成，解析/规划/flow组55项。移动类型检查与debug APK构建通过，日志为 .tmp/phase9/reaccept-core-final17.log、reaccept-mobile-final17.log、reaccept-apk-final17.log。R19–R21涉及核心解析、校验与生成/修复提示，重新完整运行门禁并构建对应APK；移动/原生显示源码逐文件与final14相同，显示证据身份保留。此前构建并行时短租约测试超时，独立完整回归通过；没有删测试或放宽断言。
+当前核心全量1017/1017，0失败0跳过（final21）；历史final17为1004/1004，包含生产Session的100/300/1000本地累积；16项flow集成及全部核心覆盖；移动类型检查与debug APK构建通过，当前日志为 .tmp/phase9/reaccept-core-final21.log、reaccept-mobile-final21.log、reaccept-apk-final21.log。R19–R21涉及核心解析、校验与生成/修复提示，重新完整运行门禁并构建对应APK；移动/原生显示源码逐文件与final14相同，显示证据身份保留。此前构建并行时短租约测试超时，独立完整回归通过；没有删测试或放宽断言。
 
 修复要点：
 
@@ -38,7 +38,7 @@
 
 真实零体力故障原回合已复用Planner恢复成功，新增1次Narrator。自动计划后果定义缺失仍按两次请求invalid；完整内容门另验。管理、轮询、未提交重试、无关重复和结束后动作不计最低80。
 
-## 交接续跑轮（2026-10-07下午，本地开发机，接手codex因额度中断的收尾）
+## 历史交接续跑轮（final18；下述完成计数与故障定谳已被接手审计纠正）
 
 接手现场：final17门禁后codex又修改candidateModel/generationService（R21严格引用类型门+回归，测试1004→1005），重跑final18全门禁（core 1005/1005、mobile typecheck、APK构建均0，日志reaccept-*-final18.log、身份reaccept-core-identity-final18.json，源码哈希c12623bd95252b9f…）后额度耗尽。设备J1 UI旅程（camp-muxn9k9t，final17身份）停在5/20。
 
@@ -46,7 +46,19 @@
 
 1. **旅程停止原因定谳（产品无缺陷）**：round2日志+现场复现证明，决定5在v6触发cons-guard-grudge后果后指引异步刷新，驱动器9秒后按旧方法卡提交，被过期选择门（session.ts"所选路径已不在当前可用办法中，请刷新后重新选择。"）安全拒绝并显示"操作未完成"；同界面重新点选同动作即提交成功（v7入账）。这是可恢复的竞态拒绝，非产品缺陷；device-journey.cjs已把该横幅改为有界重试（2次，记录横幅原文），保留真失败即停的安全语义。
 2. **环境恢复**：emulator-5556（ShineWord_P8_Reacceptance）重启；codex的QA代理进程（18691端口）存活复用；final18 APK重建（gradle输入校验复用13:20产物，APK SHA 7b7ebd34…）install -r保留数据；reaccept-device/identity.json更新为final18。
-3. **final18同身份新J1**：经正式开局入口新建camp-muxpraio（序7罗兰决定探视女巫、边陲镇、原创J1Final、长篇、推荐保护探视目标——模型opening_goal原文，因ADBKeyBoard与Maestro中文输入在API37均不可用而采用推荐芯片原文，未手写裁剪意图）；生成1HTTP一次通过ready（无修复请求），采用后首局面直接active（R04修复生效）。
+3. **final18同身份新J1**：经正式开局入口新建camp-muxpraio（序7罗兰决定探视女巫、边陲镇、原创J1Final、长篇、推荐探视/查真相目标（未含明确救援承诺）——模型opening_goal原文，因ADBKeyBoard与Maestro中文输入在API37均不可用而采用推荐芯片原文，未手写裁剪意图）；生成1HTTP一次通过ready（无修复请求），采用后首局面直接active（R04修复生效）。
 4. J1 UI 20旅程（PHASE9_UI_JOURNEY=j1-final18）进行中；J4分支UI10待J1完成后同身份执行。预算manifest记账：959（接手时）+复现回合2+opening_goal 1+生成1（+后续每决定约2与阶段重规划）。
 
-**接手轮结果（同日晚些时候）**：J1 UI旅程完成——camp-muxpraio-main共23个已提交玩家决定（≥20），阶段轨迹meet-anna成功→roland-trust失败→mine-collapse失败→自动重规划second-chance失败→anna-bond成功→walls-and-gates成功→verdict-day开放；3节点奖励入账；rev1→rev6共5轮重规划采用、1次invalid正确拒绝零重发；UI分叉camp-muxpraio-bmuxs9rng（v27基点）后完成J4 UI 10决定（v37），分支隔离经DB验证。旅程中无产品缺陷：4次停滞守卫自停均为重规划内容full_success门控（success档只推未接入completion的计数），属A36内容质量缺陷，按J3-final先例不新增硬门禁、如实记录；1次"No meaningful UI route"为重规划候选candidate_ready待稳定边界采用（回前台触发采用成功）。最终预算1045/1100（余55）。QA驱动器最终形态：过期提交有界重试(2次)+方法推导空缺时按可见按钮兜底+停滞守卫保持不变。清理：ADBKeyBoard卸载、IME恢复Gboard；QA代理进程与设备LLM配置保持原状待整体收尾决定。
+**历史结果声明（有效决定数及无缺陷结论已撤销，原日志保留）**：J1 UI旅程完成——camp-muxpraio-main共23个已提交玩家决定（≥20），阶段轨迹meet-anna成功→roland-trust失败→mine-collapse失败→自动重规划second-chance失败→anna-bond成功→walls-and-gates成功→verdict-day开放；3节点奖励入账；rev1→rev6共5轮重规划采用、1次invalid正确拒绝零重发；UI分叉camp-muxpraio-bmuxs9rng（v27基点）后完成J4 UI 10决定（v37），分支隔离经DB验证。旅程中无产品缺陷：4次停滞守卫自停均为重规划内容full_success门控（success档只推未接入completion的计数），属A36内容质量缺陷，按J3-final先例不新增硬门禁、如实记录；1次"No meaningful UI route"为重规划候选candidate_ready待稳定边界采用（回前台触发采用成功）。最终预算1045/1100（余55）。QA驱动器最终形态：过期提交有界重试(2次)+方法推导空缺时按可见按钮兜底+停滞守卫保持不变。清理：ADBKeyBoard卸载、IME恢复Gboard；QA代理进程与设备LLM配置保持原状待整体收尾决定。
+
+## final19模拟器接手复核（2026-10-07）
+
+此前交接轮的“23提交≥20、分支10完成UI10”声明撤销：J1 v24–28与J4新增v28–37均为空效果机械重复，不能计合同有效决定。启动原AVD并保留SQLite，安装最终APK前后版本/分支核对；旧代理已停止，改用不会伪造503的有界预算代理。旧503账本记录与后来的过期指引拒绝分别留存，通用错误不再自动重复提交。
+
+新增R22普通成功效果来源门、R23前置字段合同与具体修复反馈、R24代理未知结果分类、R25验收计数与身份范围纠正，详见FLOW_REVIEW。完整1012/1012、移动typecheck、APK构建、版本与diff检查通过。此轮修改未提交或推送；接手前HEAD已有4fb5519/5a6e077两次提交，记录不再称整个既有收尾未提交。P9-7总体仍未通过。
+
+## final21架构边界收尾
+
+R26在共用CampaignProgressReducer修正primary选择：具体近期内容可接替保留的粗节点方向，但不抢占活动具体阶段、不绕依赖、不恢复暂停状态。R27明确两种读职责：完整不可变内容供权威结算、冻结恢复、历史/承诺/延迟后果引用；当前行动内容由同一projectPlayableSituations按runtime投影，供编译、Planner、准备态Narrator、立即保存与冷启动指引。没有额外写回局面状态，也没有UI独有屏蔽规则。四项生命周期回归包含原active局面的旧承诺跨阶段兑现、普通事件完成但局面仍active、自然结束、同版本旧缓存、旧选项0HTTP和归档字节不变；全部门禁1017/1017与最终APK通过。
+
+真实UI恢复新主线办法→旧承诺兑现→新候选自动采用→普通成功自然结局已跑通；最终APK在原v33验证结束指引，历史/分叉均保持原样。整体P9-7仍未通过，A01–A40为29PASS/2FAIL/9NOT RUN。预算1055/1100，清理恢复直连端点并停止本轮代理。此轮新增修改尚未提交或推送。

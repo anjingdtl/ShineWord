@@ -12,7 +12,7 @@ import type { ContentEntry } from '../../domain/content/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { SKILL_RANKS } from '../../domain/rules/types';
 import type { LocalCompileContext } from './localCompile';
-import { CAMPAIGN_PLAN_MODEL_VERSION, extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
+import { CAMPAIGN_PLAN_MODEL_VERSION, METHOD_REQUIREMENT_FIELDS, extractJsonObject, parseCampaignPlanCandidate, type CampaignPlanCandidateModelV1 } from './candidateModel';
 
 /**
  * Campaign plan generation (plan §6.2): freeze → generate → strict parse →
@@ -92,6 +92,7 @@ export function buildPlanRequestMaterials(input: {
     '- situation_status 的 status 只允许 dormant / eligible / active / resolved / suppressed。failed、completed、cancelled 都不是局面状态。失败或取消条件可用 committed_event，且对应 outcomes 必须用 record_event 产生那个事件；不需要的 failure/cancellation 写 null。',
     '- 每个末端主阶段必须有 endings.condition 中的 node_succeeded 引用（包括失败/开放结局）。本地不会代你补造结局。',
     '- method 完整形状：{"methodId":"stable-id","title":"办法标题","goal":"要实现什么","firstStep":{"intent":"玩家直接可执行的第一步描述","actionKind":"observe|talk|interact|skill_check|ability|move","skillId":"仅检定时填写已给出的技能 ID","targetEntryId":"可选的在场人物模板 ID"},"requires":{},"preparation":"无","tradeoffs":"具体代价","outcomes":{"full_success":{"resultFact":"本档结果事实","effects":[]},"success":{"resultFact":"本档结果事实","effects":[]},"failure":{"resultFact":"本档结果事实","effects":[]},"severe_failure":{"resultFact":"本档结果事实","effects":[]}}}。不同办法应改变不同的关系、承诺、知识、代价或后续机会。',
+    `- requires 仅支持这些字段：${METHOD_REQUIREMENT_FIELDS.join(', ')}。ID 必须是白名单中的字符串；minRank 必须与 skillId 配对，等级为 ${SKILL_RANKS.join(' / ')}；minCloseness 必须与 relationshipTo 配对且为0..100整数。不要发明 knowledge、promise、counter、event、condition 等 requires 字段；无法表示的准备条件应改为已支持的知识/物品/关系门槛或另一条可执行办法，不能删除真实限制。`,
     '- 每个 schedule_consequence 的 consequenceId 必须在根对象 consequences 数组中完整定义；consequences.trigger 必须是条件 JSON 对象，不是文字。条件字段用 kind，效果字段用 template。',
     '- 输出前核对每一个 schedule_consequence.consequenceId 与 consequences[].consequenceId 完全一致。没有定义就不得安排；不用延迟后果时 consequences=[] 且 outcomes 中没有 schedule_consequence。不要照抄上面的示例事件，事件必须有本次后续办法的 record_event 来源。',
     '- 阶段 completion/failure/cancellation 不能引用该阶段自身的 node_succeeded；那会成为无法推进的循环。未来未构建的阶段保持 provisional。',

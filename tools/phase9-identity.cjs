@@ -14,19 +14,20 @@ function codeIdentity() {
     }
   }
   walk('src'); walk('mobile/src');
-  // v2 includes native sources/resources and build inputs. Generated bundles,
+  // v3 also includes the version metadata actually bundled into the UI.
+  // Native sources/resources and build inputs are included. Generated bundles,
   // local SDK/signing properties and credentials are deliberately excluded.
   const nativeFiles = cp.execFileSync('git', ['ls-files', 'mobile/android'], { cwd: root, encoding: 'utf8' })
     .trim().split(/\r?\n/).filter(Boolean);
   files.push(...nativeFiles, ...[
-    'mobile/scripts/build-apk.js', 'mobile/App.tsx', 'mobile/index.js',
+    'mobile/scripts/build-apk.js', 'mobile/App.tsx', 'mobile/index.js', 'mobile/src/version.json',
     'mobile/app.json', 'mobile/babel.config.js', 'mobile/metro.config.js',
     'package.json', 'package-lock.json', 'tsconfig.json',
     'mobile/package.json', 'mobile/package-lock.json', 'mobile/tsconfig.json',
   ].filter(file => fs.existsSync(path.join(root, file))));
   const fileHashes = Object.fromEntries(files.sort().map(file => [file, hash(fs.readFileSync(path.join(root, file)))]));
   const apk = path.join(root, 'dist/apk/debug/ShineWord-V1.0.0-debug.apk');
-  return { identityScopeVersion: 2, head: cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  return { identityScopeVersion: 3, head: cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     productionSourcesHash: hash(JSON.stringify(fileHashes)), fileHashes,
     ...(fs.existsSync(apk) ? { apkSha256: hash(fs.readFileSync(apk)), apkBytes: fs.statSync(apk).size } : {}) };
 }

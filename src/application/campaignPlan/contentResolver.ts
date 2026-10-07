@@ -1,5 +1,6 @@
 import type { ContentEntry } from '../../domain/content/types';
-import type { CampaignContentArtifactV1 } from '../../domain/campaignPlan/types';
+import type { CampaignContentArtifactV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
+import type { SituationDefinitionV1 } from '../../domain/situations/types';
 
 /**
  * Unified read-only content resolution (plan §7): world published entries +
@@ -42,18 +43,42 @@ export function resolveCampaignContent(
   return merged;
 }
 
+/**
+ * The archive remains the complete authority catalog for frozen contracts,
+ * history, promises and deferred consequences. Player affordances are a
+ * separate read projection of that catalog at the supplied runtime boundary.
+ * An event can finish a node without resolving its situation: situation.active
+ * alone must never resurrect that node's methods, opportunities or pressure.
+ * Guidance and compilation consume this SAME projection; post-turn callers
+ * supply the prepared runtime, not the pre-turn runtime.
+ */
+export function projectPlayableSituations<T extends { situationId: string; definition: SituationDefinitionV1 }>(
+  definitions: readonly T[], artifacts: readonly CampaignContentArtifactV1[], runtime?: CampaignRuntimeV1,
+): T[] {
+  if (!runtime) return [...definitions];
+  const ended = ['completed', 'failed', 'ended'].includes(runtime.campaignStatus);
+  const closedNodes = new Set(runtime.nodeStates
+    .filter(node => ['succeeded', 'failed', 'superseded', 'cancelled'].includes(node.status))
+    .map(node => node.nodeId));
+  const retiredSituations = new Set(artifacts.flatMap(artifact => artifact.situations
+    .filter(situation => ended || closedNodes.has(situation.nodeId)).map(situation => situation.entryId)));
+  return definitions.filter(situation => !retiredSituations.has(situation.situationId));
+}
+
 /** Campaign methods offered to a turn, keyed for the compile path. */
 export function campaignMethodsForTurn(
   artifacts: readonly CampaignContentArtifactV1[],
   activeSituationIds: ReadonlySet<string>,
+  runtime?: CampaignRuntimeV1,
 ): Array<{ situationId: string; method: import('../../domain/situations/types').MethodTemplateV1 }> {
   const out: Array<{ situationId: string; method: import('../../domain/situations/types').MethodTemplateV1 }> = [];
-  for (const artifact of artifacts) {
-    for (const situation of artifact.situations) {
-      if (activeSituationIds.size > 0 && !activeSituationIds.has(situation.entryId)) continue;
-      for (const method of situation.definition.methods ?? []) {
-        out.push({ situationId: situation.entryId, method });
-      }
+  const definitions = artifacts.flatMap(artifact => artifact.situations.map(situation => ({
+    situationId: situation.entryId, definition: situation.definition,
+  })));
+  for (const situation of projectPlayableSituations(definitions, artifacts, runtime)) {
+    if (activeSituationIds.size > 0 && !activeSituationIds.has(situation.situationId)) continue;
+    for (const method of situation.definition.methods ?? []) {
+      out.push({ situationId: situation.situationId, method });
     }
   }
   return out;

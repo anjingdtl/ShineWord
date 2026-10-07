@@ -68,3 +68,32 @@ flowchart TD
 final14设备显示复测：360/411dp × 1.3/2字号四组均完成冷启动、行动键盘、主线底部、目标键盘、关闭与前后台；另做前台1.3→2→1.3→2动态变化。未提交目标FontChangeDraft在字号变化后滚动可达、内容保留，关闭后无Modal/IME，个人页路由与主题入口保留。四主题各检查主线卡和展开面板实际截图，共八张；全过程旧分支v24不变、未派发HTTP。证据为reaccept-device/final14-layout.json、final14-dynamic.json、final14-font-draft.json、final14-themes.json及同前缀PNG。测试脚本最初把离屏输入当丢失、ADB按键未等待输入完成，已修定位与等待后复测，未因此修改产品状态或代码。
 
 第二批修复：受影响flow/closeout/replan/turns共52项通过。round2首次全量两项planning夹具缺少超时与成功的区分，已补成功计数条件；同时出现100ms租约心跳测试超时，构建结束后独立完整997回归通过，旧失败日志保留。最新日志：reaccept-parser-flow-final17.log（解析/规划/flow 55项，可选null兼容另在完整核心覆盖）、reaccept-core-final17.log（1004项）、reaccept-mobile-final17.log、reaccept-apk-final17.log（35s）。最新身份reaccept-identity-final17.json；final17全部移动/原生显示源码逐文件与final14相同，final15实际恢复原奖励响应为invalid，该规划任务两次请求未重发。identity scope v2同时包含原生Android与构建输入，旧样本不被改写为最终身份。
+
+## final19接手收尾
+
+延续M0–M9交接审查，集中修复后再完整回归，R22–R25如下：
+
+- R22：真实r2/r5与旧J3都允许success反复增加计数，completion却等full_success专属resolved/事件。提示已要求普通成功路径，但模型仍违约；新候选任务增加必要的效果来源门，all/any保持语义，已调度且触发有来源的延迟效果可参与闭包，未调度/循环/仅大成功调度不能补足普通成功缺失的标记。门只用于新生成候选的共享校验/一次修复，不重解释已经采用的归档。它不是完整可达性或文学质量证明；外部事实、资格和否定条件仍由既有门负责。生产两次success计数完成、修复后ready、两响应invalid/零发送重入、替代条件与延迟条件回归通过。
+- R23：requires拒绝只说unsupported field，提示未列完整字段，模型无法可靠修正。解析与生成提示共用METHOD_REQUIREMENT_FIELDS；错误写出未知字段及允许字段，要求用支持的知识/物品/关系门槛或另一办法保留准备限制，不静默删除。实际生产修复从knowledge字段转为knowledgeEntryId、归档保留合法知识门，2请求ready。仍拒绝未支持的任意条件，不新增未经审查的引擎权限。
+- R24：QA代理将任何错误合成503，丢失“上游可能完成”的语义。预留失败在派发前返回429；派发后异常关闭连接，生产账本记network_unknown/outcome_unknown并禁止重发；真实上游503及Retry-After原样转发。三个localhost真实HTTP+生产SQLite账本测试通过，测试不使用真实凭据或消耗共享预算。通用错误自动重试与无主线generic兜底已从私有UI驱动器移除。
+- R25：接手记录将提交次数等同有效决定，撤销UI20+10完成声明。保留原JSONL/SQL证据，J1最后五次与J4新增十次不计。源码身份scope v3补入实际打包的mobile/src/version.json，旧scope v2身份保留，避免buildTime改变未被身份覆盖。
+
+最终工程门：verify:core 1012/1012，0失败0跳过；跨模块/domain/turns/planning/replan/proxy组42/42；mobile typecheck、debug APK、verify:version、diff --check通过。日志reaccept-*-final19.log。当前设备复验使用reaccept-identity-final19.json对应APK，不将旧流水更名为最终流水。
+
+## final21：以状态边界统一模块交接
+
+重新核对M0–M9全局依赖后，本轮将根因落在M4/M5/M7的生命周期边界，没有在Android隐藏按钮或人工改写存档。
+
+- R26：重新规划采用保留旧粗节点available/primary，新concrete首局面也available。共用progressReducer依据coverage和依赖选择可用具体阶段，保留活动具体阶段优先权与暂停语义；生产采用同提交的primary/publicObjective/节点状态一致。final19失败v29保存，final20原归档上短休v30激活，v31普通成功完成并兑现旧承诺，下一次自动采用v32也正确激活。
+- R27：阶段可以由事件/承诺完成，而Situation仍active。完整历史目录被同时当作可选行动目录，且结算后指引沿用结算前定义，导致结局后旧方法与压力复现。contentResolver增加共用projectPlayableSituations，以输入runtime排除已定局阶段和结束战役的行动内容；完整归档仍供结算与跨阶段引用。Session的行动编译、Planner、准备态Narrator packet、提交即存指引、冷启动/本地动作指引全部消费同一投影；准备态使用prepared.nextState，当前指引使用当前提交态。contextHash随投影变化，旧同版本缓存本地失效。世界普通方法保留，暂停不强制改变可探索路径。
+
+读写职责如下：
+
+| 边界 | 唯一权威/输入 | 消费方 | 禁止的替代行为 |
+|---|---|---|---|
+| 规划归档 | 采用事务验证后的不可变plan/artifact/hash | 结算、恢复、旧承诺与后果引用 | 为修UI修改归档或复活旧节点 |
+| 进度写入 | 同事务准备态事件与CampaignProgressReducer | snapshot/runtime、事件、奖励、publicObjective | 模型文字或UI按钮直接判阶段成功 |
+| 可用行动读取 | 归档目录＋当前/准备态runtime的共用生命周期投影 | 编译、Planner、Narrator packet、公开指引 | 仅靠Situation.active判断旧阶段还可行动 |
+| 缓存/UI | 内容/知识/上下文/版本绑定的当前指引 | Android按钮与恢复界面 | 结算后复用结算前定义或只在UI屏蔽 |
+
+四项生命周期生产回归通过，包含普通事件完成但局面active、结束状态、准备态叙事与立即保存指引、同版本旧缓存更新、过期选择0HTTP、普通探索不附旧效果、旧承诺跨新阶段兑现、暂停/四种终态、归档字节/hash不变。完整verify:core1017/1017，0失败0跳过，移动typecheck与35s debug APK通过。final21模拟器v33实际截图、runtime、campaign_ending、最终叙事与归档一致，新增0决定/0HTTP。旧失败证据保留；A34PASS不外推完整80或成功救援。

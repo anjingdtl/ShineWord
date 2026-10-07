@@ -96,7 +96,7 @@ import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { applySituationRuntime } from '../situations/causalProjection';
-import { resolveCampaignContent } from '../campaignPlan/contentResolver';
+import { resolveCampaignContent, projectPlayableSituations } from '../campaignPlan/contentResolver';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
 import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
@@ -2187,7 +2187,8 @@ export class CampaignSession {
       const anchorOrder = anchorRow ? Number((JSON.parse(anchorRow.anchor_json) as { worldTimeOrder?: number }).worldTimeOrder ?? 0) : 0;
       const facts = await this.deps.worldStore.listFacts(summary.worldId);
       const publicEntries = projectPlayerEntriesAtAnchor(allEntries, facts, Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0), knownEntryIds);
-      const currentDefinitions = situationDefinitions.filter(situation => {
+      const campaignContent = await this.loadCampaignPlanForState(options.campaignId, summary.state);
+      const currentDefinitions = projectPlayableSituations(situationDefinitions, campaignContent?.artifacts ?? [], summary.state.campaignRuntime).filter(situation => {
         const entry = allEntries.find(item => item.entryId === situation.situationId)!;
         return isEntryVisibleAtAnchor(entry, facts, Math.max(anchorOrder, summary.state.causalWorldTimeOrder ?? 0));
       });
@@ -2233,7 +2234,7 @@ export class CampaignSession {
         allowedCandidates: combatCandidates,
         preferredCandidateRef: options.preferredCandidateRef,
         preferredSituationId: summary.state.campaignRuntime?.campaignStatus === 'active'
-          ? (await this.loadCampaignPlanForState(options.campaignId, summary.state))?.plan.nodes
+          ? campaignContent?.plan.nodes
             .find(node => node.nodeId === summary.state.campaignRuntime?.primaryNodeId)?.situationRef
           : undefined,
         entries: publicEntries,
@@ -2684,11 +2685,15 @@ export class CampaignSession {
         situationId: entry.entryId,
         definition: entry.definition as SituationDefinitionV1,
       }));
+    const campaignContent = await this.loadCampaignPlanForState(options.campaignId, summary.state);
+    const playableSituationsFor = (state: GameStateSnapshot) => projectPlayableSituations(
+      situationDefinitions, campaignContent?.artifacts ?? [], state.campaignRuntime);
+    const playableSituations = playableSituationsFor(summary.state);
     const situationStatusById = new Map((summary.state.situations ?? [])
       .map(entry => [entry.situationId, entry] as const));
     const activeMethods: MethodTemplateV1[] = [];
     const activeMethodSituations: string[] = [];
-    for (const situation of situationDefinitions) {
+    for (const situation of playableSituations) {
       if (situation.definition.locationId && situation.definition.locationId !== playerState.locationId) continue;
       if (situationStatusById.get(situation.situationId)?.status === 'active') {
         for (const method of situation.definition.methods) {
@@ -2746,7 +2751,7 @@ export class CampaignSession {
       .filter(card => card.actorId !== playerCard.actorId)
       .map(card => [card.actorId, card.name] as const));
     const keyItemIds = new Set<string>();
-    for (const situation of situationDefinitions) {
+    for (const situation of playableSituations) {
       for (const method of situation.definition.methods) {
         if (method.requires.itemId) keyItemIds.add(method.requires.itemId);
         if (method.firstStep.itemId) keyItemIds.add(method.firstStep.itemId);
@@ -2764,7 +2769,7 @@ export class CampaignSession {
     // P7: active situations and their method first steps (player-safe only —
     // gmBrief and hidden conditions never enter any model context). Situation
     // entries are gm-visibility, so this reads the authoritative projection.
-    for (const situation of situationDefinitions) {
+    for (const situation of playableSituations) {
       if (situationStatusById.get(situation.situationId)?.status !== 'active'
         || (situation.definition.locationId && situation.definition.locationId !== playerState.locationId)) continue;
       const methodLines = activeMethods.filter((_, index) => activeMethodSituations[index] === situation.situationId)
@@ -2940,7 +2945,7 @@ export class CampaignSession {
       if (relationship) plan.relationships = [relationship];
       return plan;
     };
-    const guidancePlan = (await this.loadCampaignPlanForState(options.campaignId, summary.state))?.plan;
+    const guidancePlan = campaignContent?.plan;
     const preferredSituationFor = (state: GameStateSnapshot): string | undefined => state.campaignRuntime?.campaignStatus === 'active'
       ? guidancePlan?.nodes.find(node => node.nodeId === state.campaignRuntime?.primaryNodeId)?.situationRef : undefined;
     let result;
@@ -3002,7 +3007,7 @@ export class CampaignSession {
         scenes,
         constraints,
         selectedBaseAction: baseActionCandidates(summary.state, playerCard, new Set(plannerCards.map(card => card.actorId)), entries,
-          situationDefinitions.filter(s => situationStatusById.get(s.situationId)?.status === 'active')
+          playableSituations.filter(s => situationStatusById.get(s.situationId)?.status === 'active')
             .map(s => s.definition.locationId).filter((id): id is string => typeof id === 'string'))
           .find(candidate => candidate.firstStepIntent === options.intent),
         ...(activeMethods.length > 0 ? { methods: activeMethods, methodSituations: activeMethodSituations } : {}),
@@ -3061,7 +3066,7 @@ export class CampaignSession {
           buildSituationPacket: (prepared: PreparedTurnResolution) => buildSituationPacket({
             prepared,
             preferredSituationId: preferredSituationFor(prepared.nextState),
-            situationDefinitions,
+            situationDefinitions: playableSituationsFor(prepared.nextState),
             playerCard,
             visibleActorNames,
             keyItemIds,
@@ -3071,7 +3076,7 @@ export class CampaignSession {
             prepared, contract, grade, llmSteps, llmSummary,
           }) => {
             const packet = buildSituationPacket({
-              prepared, situationDefinitions, playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
+              prepared, situationDefinitions: playableSituationsFor(prepared.nextState), playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
               preferredSituationId: preferredSituationFor(prepared.nextState),
             });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
@@ -3089,7 +3094,7 @@ export class CampaignSession {
               campaignId: options.campaignId,
               playerActorId: playerCard.actorId,
               blockedNames,
-              situationDefinitions,
+              situationDefinitions: playableSituationsFor(prepared.nextState),
               playerCard,
               visibleActorNames,
               keyItemIds,

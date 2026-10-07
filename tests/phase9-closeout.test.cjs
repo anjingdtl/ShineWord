@@ -9,6 +9,7 @@ const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPl
 const { forkBranch } = require('../dist/application/branch/fork');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
 const { exportSave, restoreSave } = require('../dist/application/export/saveFile');
+const { validateOrdinarySuccessCompletion } = require('../dist/domain/campaignPlan/planValidation');
 
 const profile = { id: 'test', name: 'Test', endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
   capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } };
@@ -24,6 +25,123 @@ async function opening(h, id) {
     physicalRequestBudget: 2, freezeRootId: null, lastError: null, createdAt: NOW, updatedAt: NOW });
 }
 const deps = (h, provider) => ({ db: h.adapter, planStore: h.planStore, worldStore: h.worlds, provider, profile });
+
+test('closeout: full-success-only completion is bounded invalid; repair can supply an ordinary fulfillment route', async () => {
+  const h = await fixture();
+  try {
+    const bad = candidateModel();
+    for (const m of bad.firstSituation.methods) m.outcomes.success.effects = m.outcomes.success.effects.filter(e => e.template !== 'situation_status');
+    await opening(h, 'full-only'); let calls = 0;
+    const invalid = { async complete() { calls++; return { text: JSON.stringify(bad) }; } };
+    const result = await runOpeningPlanJob(deps(h, invalid), 'full-only', args);
+    assert.equal(result.status, 'invalid'); assert.equal(calls, 2);
+    assert.match(result.errors.join(' '), /ordinary success producer/);
+    assert.equal((await h.planStore.latestCandidateForJob('full-only')).rawResponseText, JSON.stringify(bad));
+    await runOpeningPlanJob(deps(h, invalid), 'full-only', args); assert.equal(calls, 2);
+    await opening(h, 'ordinary-repair'); let repairedCalls = 0;
+    const repaired = await runOpeningPlanJob(deps(h, { async complete(request) {
+      repairedCalls++;
+      if (repairedCalls === 2) assert.match(request.user, /ordinary success producer/);
+      return { text: JSON.stringify(repairedCalls === 1 ? bad : candidateModel()) };
+    } }), 'ordinary-repair', args);
+    assert.equal(repaired.status, 'candidate_ready', JSON.stringify(repaired)); assert.equal(repairedCalls, 2);
+    // Existing adopted content is immutable and playable across this new-authoring gate.
+    assert.equal((await h.turns.getState(h.branchId)).stateVersion, 0);
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' });
+    assert.equal((await h.turns.getState(h.branchId)).campaignRuntime.nodeStates[0].status, 'succeeded');
+  } finally { h.db.close(); }
+});
+
+test('closeout: ordinary completion accepts alternatives and reachable delayed markers, rejects circular or full-only scheduling', async () => {
+  const h = await fixture();
+  try {
+    const candidate = await h.planStore.getCandidate('cand-t');
+    const plan = structuredClone(candidate.plan), artifact = structuredClone(candidate.artifact);
+    const sid = artifact.situations[0].entryId, start = plan.nodes[0];
+    for (const m of artifact.situations[0].definition.methods) m.outcomeTemplates.success.effects = m.outcomeTemplates.success.effects.filter(e => e.template !== 'situation_status');
+    assert.equal(validateOrdinarySuccessCompletion(plan, artifact).length, 1);
+    const counter = { kind: 'situation_counter_at_least', situationId: sid, counterId: 'evidence', minimum: 2 };
+    start.completion = { kind: 'any', of: [start.completion, counter] };
+    assert.deepEqual(validateOrdinarySuccessCompletion(plan, artifact), []);
+    start.completion = { kind: 'all', of: [{ kind: 'situation_status', situationId: sid, status: 'resolved' }, counter] };
+    artifact.consequenceTemplates[0].triggerCondition = counter;
+    artifact.consequenceTemplates[0].effectSpecs = [{ template: 'situation_status', situationId: sid, status: 'resolved' }];
+    assert.deepEqual(validateOrdinarySuccessCompletion(plan, artifact), []);
+    artifact.consequenceTemplates[0].triggerCondition = { kind: 'situation_status', situationId: sid, status: 'resolved' };
+    assert.equal(validateOrdinarySuccessCompletion(plan, artifact).length, 1);
+    artifact.consequenceTemplates[0].triggerCondition = counter;
+    for (const m of artifact.situations[0].definition.methods) m.outcomeTemplates.success.effects = m.outcomeTemplates.success.effects.filter(e => e.template !== 'schedule_consequence');
+    assert.equal(validateOrdinarySuccessCompletion(plan, artifact).length, 1);
+  } finally { h.db.close(); }
+});
+
+test('closeout: two ordinary successful decisions complete a counter route without waiting for full_success', async () => {
+  const model = candidateModel();
+  model.stages[0].completion = { kind: 'counter_at_least', situationId: 'self', counterId: 'evidence', minimum: 2 };
+  for (const m of model.firstSituation.methods) m.outcomes.success.effects = [{ template: 'situation_counter', situationId: 'self', counterId: 'evidence', delta: 1 }];
+  const h = await fixture({ model });
+  try {
+    const action = { campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' };
+    await h.session.playTurn(action);
+    assert.equal((await h.turns.getState(h.branchId)).campaignRuntime.nodeStates[0].status, 'active');
+    await h.session.playTurn(action);
+    const after = await h.turns.getState(h.branchId);
+    assert.equal(after.campaignRuntime.nodeStates[0].status, 'succeeded');
+    assert.equal(after.campaignRuntime.grantedRewardKeys.length, 1);
+    assert.deepEqual(h.db.prepare('SELECT outcome_grade FROM turns WHERE branch_id=? ORDER BY committed_state_version').all(h.branchId).map(r => r.outcome_grade), ['success','success']);
+  } finally { h.db.close(); }
+});
+
+test('closeout: a retained coarse primary yields to the prepared replan stage in the adoption commit', async () => {
+  const h = await fixture();
+  try {
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' });
+    const before = await h.turns.getState(h.branchId);
+    assert.equal(before.campaignRuntime.primaryNodeId, 'stage-2');
+    const model = candidateModel(); model.rewards = [];
+    model.stages[0].nodeId = 'prepare-report'; model.stages[0].publicObjective = '整理证据并向知情人确认';
+    model.stages[0].dependsOn = ['stage-1'];
+    model.stages[1].dependsOn = ['prepare-report']; model.stages[1].activation.nodeId = 'prepare-report';
+    // The existing coarse node is first in the model and retains its available
+    // runtime status; iteration order must not eclipse the ready firstSituation.
+    model.stages.reverse();
+    h.session.provider = { async complete() { return { text: JSON.stringify(model) }; } };
+    await h.session.runCampaignReplan(h.campaignId, h.branchId);
+    const after = await h.turns.getState(h.branchId);
+    assert.equal(after.stateVersion, before.stateVersion + 1);
+    assert.equal(after.campaignRuntime.primaryNodeId, 'prepare-report');
+    assert.equal(after.campaignRuntime.nodeStates.find(n => n.nodeId === 'prepare-report').status, 'active');
+    assert.equal(after.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-2').status, 'available');
+    assert.equal(after.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-1').status, 'succeeded');
+    assert.equal(after.campaignRuntime.publicObjectiveProjection, '整理证据并向知情人确认');
+    assert.deepEqual(after.campaignRuntime.grantedRewardKeys, before.campaignRuntime.grantedRewardKeys);
+    const progress = await h.session.getCampaignProgress(h.campaignId, h.branchId);
+    assert.equal(progress.currentObjective, after.campaignRuntime.publicObjectiveProjection);
+  } finally { h.db.close(); }
+});
+
+test('closeout: prepared content cannot steal an active stage, bypass dependencies, or resume a paused campaign', async () => {
+  const h = await fixture();
+  try {
+    const { evaluateCampaignProgress } = require('../dist/domain/campaignPlan/progressReducer');
+    const candidate = await h.planStore.getCandidate('cand-t');
+    const state = await h.turns.getState(h.branchId), plan = structuredClone(candidate.plan);
+    plan.nodes.push({ ...structuredClone(plan.nodes[0]), nodeId: 'new-ready' });
+    const runtime = structuredClone(state.campaignRuntime);
+    runtime.nodeStates.push({ nodeId: 'new-ready', status: 'available', completedEvidence: [] });
+    const evaluate = r => evaluateCampaignProgress({ plan, runtime: r, state, transactionEvents: [], historyEvents: [],
+      turnId: 'local-check', nextStateVersion: 1 });
+    assert.equal(evaluate(runtime).runtime.primaryNodeId, 'stage-1');
+    runtime.primaryNodeId = 'stage-2';
+    runtime.nodeStates[0].status = 'succeeded'; runtime.nodeStates[1].status = 'available';
+    plan.nodes.at(-1).statusDependencies = ['stage-2'];
+    assert.equal(evaluate(runtime).runtime.primaryNodeId, 'stage-2');
+    plan.nodes.at(-1).statusDependencies = [];
+    runtime.campaignStatus = 'paused';
+    assert.equal(evaluate(runtime).runtime.primaryNodeId, 'stage-2');
+    assert.equal(evaluate(runtime).runtime.campaignStatus, 'paused');
+  } finally { h.db.close(); }
+});
 
 test('closeout: malformed reward and collection entries are rejected before compile, without throwing', () => {
   const mutations = [
@@ -100,6 +218,23 @@ test('closeout: malformed required skill never reaches compiler or a retryable j
     assert.equal(candidate.stage, 'rejected');
     await runOpeningPlanJob(deps(h, provider), 'method-requires-invalid', args);
     assert.equal(calls, 2);
+  } finally { h.db.close(); }
+});
+
+test('closeout: unsupported preparation fields get exact repair feedback while a legal knowledge gate is preserved', async () => {
+  const h = await fixture();
+  try {
+    await opening(h, 'requires-repair'); let calls = 0;
+    const bad = candidateModel(); bad.firstSituation.methods[0].requires = { knowledge: 'lore-crates' };
+    const good = candidateModel(); good.firstSituation.methods[0].requires = { knowledgeEntryId: 'lore-crates' };
+    const result = await runOpeningPlanJob(deps(h, { async complete(request) {
+      calls++; assert.match(request.system, /requires 仅支持这些字段/);
+      if (calls === 2) assert.match(request.user, /unsupported requirement field knowledge; allowed fields:.*knowledgeEntryId/);
+      return { text: JSON.stringify(calls === 1 ? bad : good) };
+    } }), 'requires-repair', args);
+    assert.equal(result.status, 'candidate_ready', JSON.stringify(result)); assert.equal(calls, 2);
+    const candidate = await h.planStore.getCandidate(result.candidateId);
+    assert.deepEqual(candidate.artifact.situations[0].definition.methods[0].requires, { knowledgeEntryId: 'lore-crates' });
   } finally { h.db.close(); }
 });
 
@@ -249,13 +384,17 @@ test('closeout: publishing a provisional current stage promotes it to active and
 test('closeout: a new replan method can fulfill a branch-owned promise from the previous situation', async () => {
   const { SITUATION_ID } = require('./helpers/phase9CampaignFixture.cjs');
   const original = candidateModel();
+  original.stages[0].completion = { kind: 'committed_event', eventType: 'favor_accepted' };
   for (const grade of ['success','full_success']) original.firstSituation.methods[1].outcomes[grade].effects = [
     { template: 'promise_create', situationId: 'self', promiseId: 'old-favor', promisorActorId: 'tpl-lin', promiseeActorId: 'player', description: '答应帮助林凡' },
-    { template: 'situation_status', situationId: 'self', status: 'resolved' }];
+    { template: 'record_event', eventType: 'favor_accepted', summary: '已答应林凡的请求' }];
   const h = await fixture({ model: original });
   try {
     const turnProvider = h.session.provider;
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' });
+    const prior = await h.turns.getState(h.branchId);
+    assert.equal(prior.situations.find(s => s.situationId === SITUATION_ID).status, 'active');
+    assert.equal(prior.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-1').status, 'succeeded');
     await h.session.changeCampaignGoal({ campaignId: h.campaignId, branchId: h.branchId, newGoal: '兑现对林凡的承诺' });
     const model = candidateModel(); model.rewards = [];
     model.stages[0].nodeId = 'honor'; model.stages[0].next = ['after-honor'];
@@ -275,6 +414,91 @@ test('closeout: a new replan method can fulfill a branch-owned promise from the 
     const state = await h.turns.getState(h.branchId);
     assert.equal(state.situations.find(s => s.situationId === SITUATION_ID).promises.find(p => p.promiseId === 'old-favor').status, 'fulfilled');
     assert.equal(state.campaignRuntime.nodeStates.find(n => n.nodeId === 'honor').status, 'succeeded');
+  } finally { h.db.close(); }
+});
+
+for (const ended of [false, true]) test(`closeout: ${ended ? 'campaign ending' : 'node completion'} retires actions in compiler, prepared narration and same-version guidance cache`, async () => {
+  const { SITUATION_ID } = require('./helpers/phase9CampaignFixture.cjs');
+  const model = candidateModel(), requests = [];
+  model.stages[0].completion = { kind: 'committed_event', eventType: 'report_received' };
+  for (const grade of ['success', 'full_success']) model.firstSituation.methods[1].outcomes[grade].effects = [
+    { template: 'record_event', eventType: 'report_received', summary: '供述已回报' },
+    { template: 'promise_create', situationId: 'self', promiseId: 'still-owed', promisorActorId: 'tpl-lin', promiseeActorId: 'player', description: '稍后兑现约定' },
+  ];
+  if (ended) model.endings[0].condition = { kind: 'node_succeeded', nodeId: 'stage-1' };
+  const h = await fixture({ model, onRequest: request => requests.push(request) });
+  try {
+    h.session.deps.guidance = new (require('../dist/infra/sqlite/sqliteGuidanceStore').SqliteGuidanceStore)(h.adapter);
+    const archiveBefore = h.db.prepare('SELECT artifact_json, content_hash FROM campaign_content_artifacts').all();
+    const oldGuide = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId, branchId: h.branchId, sourceTurnId: 'opening', localOnly: true });
+    const oldStep = oldGuide.steps.find(s => s.candidateRef.endsWith(':ask-lin'));
+    assert.ok(oldStep);
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: oldStep.firstStepIntent,
+      guidanceChoice: { decisionPoint: oldGuide.decisionPoint, candidateRef: oldStep.candidateRef } });
+    const state = await h.turns.getState(h.branchId);
+    assert.equal(state.situations.find(s => s.situationId === SITUATION_ID).status, 'active');
+    assert.equal(state.situations.find(s => s.situationId === SITUATION_ID).promises.find(p => p.promiseId === 'still-owed').status, 'open');
+    assert.equal(state.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-1').status, 'succeeded');
+    assert.equal(state.campaignRuntime.campaignStatus, ended ? 'completed' : 'active');
+    // Check the prepared packet actually sent to Narrator and the guide saved
+    // immediately by playTurn, before any UI refresh can repair it.
+    const packet = JSON.parse(requests.find(r => r.role === 'Narrator').user).situationPacket;
+    assert.ok(packet);
+    assert.ok(packet.allowedCandidates.every(c => c.situationId !== SITUATION_ID));
+    assert.ok(packet.opportunities.every(o => o.situationId !== SITUATION_ID));
+    const committedGuide = await h.session.getGuidanceAtVersion(h.branchId, state.stateVersion);
+    assert.ok(committedGuide.steps.every(s => s.situationId !== SITUATION_ID));
+    assert.ok(committedGuide.steps.some(s => s.actionId === 'observe'));
+    // Emulate a legacy app cache at this exact state version. The new current
+    // projection must replace it locally, even though the archive hash is equal.
+    await h.session.deps.guidance.save({ ...committedGuide, steps: oldGuide.steps,
+      decisionPoint: { ...committedGuide.decisionPoint, contextHash: 'legacy-unfiltered' } });
+    const calls = requests.length;
+    const fresh = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId, branchId: h.branchId, sourceTurnId: 'cold-load', localOnly: true });
+    assert.ok(fresh.steps.every(s => s.situationId !== SITUATION_ID));
+    assert.equal(requests.length, calls);
+    await assert.rejects(() => h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: oldStep.firstStepIntent,
+      guidanceChoice: { decisionPoint: fresh.decisionPoint, candidateRef: oldStep.candidateRef } }), /失效|可用办法/);
+    assert.equal(requests.length, calls, 'retired selection is rejected before HTTP');
+    assert.equal((await h.turns.getState(h.branchId)).stateVersion, state.stateVersion);
+    if (!ended) {
+      await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '在巷口稍作停留' });
+      const turns = await h.turns.listCommittedTurns(h.branchId);
+      const stored = await h.turns.getStagedTurn(h.branchId, turns.at(-1).turnId);
+      const contract = JSON.parse(stored.actionContractJson);
+      assert.equal(contract.methodRef, undefined);
+      assert.equal(contract.campaignEffects, undefined);
+    }
+    assert.deepEqual(h.db.prepare('SELECT artifact_json, content_hash FROM campaign_content_artifacts').all(), archiveBefore);
+  } finally { h.db.close(); }
+});
+
+test('closeout: lifecycle content projection preserves world content, paused paths and immutable authority archives', async () => {
+  const h = await fixture();
+  try {
+    const { resolveCampaignContent, projectPlayableSituations, campaignMethodsForTurn } = require('../dist/application/campaignPlan/contentResolver');
+    const candidate = await h.planStore.getCandidate('cand-t'), artifact = candidate.artifact;
+    const raw = JSON.stringify(artifact), state = await h.turns.getState(h.branchId);
+    const entries = resolveCampaignContent(require('./helpers/phase9CampaignFixture.cjs').baseEntries(), [artifact]);
+    const campaignSituation = entries.find(e => e.kind === 'situation');
+    const worldSituation = { situationId: 'world-situation', definition: campaignSituation.definition };
+    const definitions = [worldSituation, { situationId: campaignSituation.entryId, definition: campaignSituation.definition }];
+    const runtime = structuredClone(state.campaignRuntime);
+    runtime.campaignStatus = 'paused';
+    assert.equal(projectPlayableSituations(definitions, [artifact], runtime).length, 2);
+    assert.equal(campaignMethodsForTurn([artifact], new Set([campaignSituation.entryId]), runtime).length, 2);
+    for (const status of ['succeeded', 'failed', 'superseded', 'cancelled']) {
+      runtime.campaignStatus = 'active'; runtime.nodeStates[0].status = status;
+      assert.deepEqual(projectPlayableSituations(definitions, [artifact], runtime), [worldSituation]);
+      assert.equal(campaignMethodsForTurn([artifact], new Set([campaignSituation.entryId]), runtime).length, 0);
+    }
+    runtime.nodeStates[0].status = 'active';
+    for (const status of ['completed', 'failed', 'ended']) {
+      runtime.campaignStatus = status;
+      assert.deepEqual(projectPlayableSituations(definitions, [artifact], runtime), [worldSituation]);
+    }
+    assert.equal(campaignSituation.definition.methods.length, 2);
+    assert.equal(JSON.stringify(artifact), raw);
   } finally { h.db.close(); }
 });
 

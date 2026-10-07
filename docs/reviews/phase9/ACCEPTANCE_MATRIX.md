@@ -2,7 +2,7 @@
 
 2026-10-07收尾复验。整体尚未通过。PASS=完整项有直接证据；FAIL=实际不符合合同；NOT RUN=完整场景或必需证据未齐；BLOCKED=外部阻断。本轮无BLOCKED。不使用PART。
 
-工程证据：tests/phase9-closeout.test.cjs、phase9-flow/turns/planning/replan/sqlite.test.cjs、phase6-mobile-runtime.test.cjs；日志 .tmp/phase9/reaccept-core-final17.log（1004/1004）。私有实际样本/身份见REAL_JOURNEYS。工程安全拒绝不等于内容质量通过。
+工程证据：tests/phase9-closeout.test.cjs、phase9-flow/turns/planning/replan/sqlite.test.cjs、phase6-mobile-runtime.test.cjs；日志 .tmp/phase9/reaccept-core-final21.log（1017/1017）。私有实际样本/身份见REAL_JOURNEYS。工程安全拒绝不等于内容质量通过。
 
 | ID | 场景 | 状态 | 证据/缺口 |
 |---|---|---|---|
@@ -24,7 +24,7 @@
 | A16 | changed/no_change | PASS | 无关动作不改进度；完成证据推进；更晚期限不覆盖先前完成理由 |
 | A17 | 提前解决/绕过/奖励 | PASS | 早完成/跳过/终态保护与分叉奖励去重生产回归 |
 | A18 | 偏离/暂停/换目标 | PASS | 生产pause/explore/resume与goal_changed回归；设备暂停/恢复入口实测 |
-| A19 | 隔两决定后人情/承诺用途 | NOT RUN | 本地延迟一次触发与旧承诺兑现通过；旧camp-muxn9k9t有1个后果v4创建v6触发（final17诊断），final18最终J1战役模型未生成持续后果，两个持续后果的真实旅程仍未齐 |
+| A19 | 隔两决定后人情/承诺用途 | NOT RUN | 本地延迟一次触发与旧承诺兑现通过；final20旧promise-report-anna在v31兑现，新增后果在同v31即时触发，不计隔两决定证据；旧camp-muxn9k9t有1个后果v4创建v6触发（final17诊断），final18最终J1战役模型未生成持续后果，两个持续后果的真实旅程仍未齐 |
 | A20 | 重规划在途/事实变化 | PASS | 稳定边界双CAS、pending拒绝、源绑定同版本stale；真实有效采用已有 |
 | A21 | 触发合并/后台竞争/失败 | PASS | durable单飞/租约fence/两HTTP共享；invalid不自动重发，显式新任务恢复 |
 | A22 | 目标/顺序/规则/风格身份 | PASS | 完整意图/选项/材料/角色/规则冻结，live不替代旧池；ready主体hash |
@@ -39,12 +39,12 @@
 | A31 | 回退/双分支隔离 | PASS | 完整runtime/知识/后果/归档重绑回归；UI实际v12回退分支，主机相同基点 |
 | A32 | 导出导入继续/坏引用旧版 | PASS | 生产重规划→save-10重复同库导入→继续；碰撞重绑、hash篡改和旧版拒绝 |
 | A33 | 隐藏身份/别名/日志 | PASS | 公开投影/Narrator最小材料门；旧报告凭据元数据删除，不输出认证请求 |
-| A34 | 阶段/自然结束UI一致 | NOT RUN | 设备首阶段已完成；主机9决定自然completed停止；设备结束一致性未齐 |
-| A35 | 前后台/键盘/小屏/主题/字体 | PASS | final14实际截图：360/411dp×1.3/2四组冷启动/键盘/主线底部/目标键盘/前后台；动态字号三次；草稿及个人页路由保留；四主题主线/展开面板各一组。关闭后无Modal/IME，v24未变；旧到期成果显示待复核；final17显示源码与final14逐文件相同 |
+| A34 | 阶段/自然结束UI一致 | PASS | final20真实普通成功提交到v33：ending-pardon/改判之约；final21保留数据冷启动，主线卡、已完成阶段、最终叙事、campaign_ending事件与runtime一致，已完成阶段的方法退出。旧档/承诺/分叉未变，结束后新增0决定、界面复验0HTTP。此项不证明安娜已获救，也不补足A38完整旅程 |
+| A35 | 前后台/键盘/小屏/主题/字体 | PASS | final14实际截图：360/411dp×1.3/2四组冷启动/键盘/主线底部/目标键盘/前后台；动态字号三次；草稿及个人页路由保留；四主题主线/展开面板各一组。关闭后无Modal/IME，v24未变；旧到期成果显示待复核；final21显示源码与final14逐文件相同（打包版本元数据另记scope v3） |
 | A36 | 三意图六维质量 | FAIL | final18 J1：机械重复/节奏停滞复现（full_success门控重规划阶段，success档仅推计数不入completion）；本战役无持续后果；每维至少3未满足 |
 | A37 | 回合/规划调用耗时 | NOT RUN | 通常Planner+Narrator两次、无固定导演；匹配10基线+10新回合对照未齐 |
-| A38 | 最终源码/APK/真实证据 | NOT RUN | **必需设备UI20+10已在final18同身份完成**（J1 23决定、J4分支10决定，见REAL_JOURNEYS）；最终80（host J1/J2/J3各20+J4各10）仍未齐 |
+| A38 | 最终源码/APK/真实证据 | NOT RUN | final21身份和安装APK一致；final19接手审计撤销final18 UI20+10完成声明：J1的v24–28五次空效果重复不计，23次提交最多18次可评估；J4新增v28–37十次均无有效进展，全部不计。最终同身份80及必需UI20+10未齐 |
 | A39 | 同世界三战役隔离 | PASS | 同world独立campaign/branch/intent/content/事件；分叉与存档继续回归 |
 | A40 | 100/300/1000本地累积 | PASS | 实际生产Session/SQLite全量回归，snapshot5128/5129/5133、runtime1414/1414/1415 bytes、结构1412恒定、jobs1；范围为已准备局面，不外推无限归档 |
 
-汇总：PASS 28 / FAIL 2 / NOT RUN 10 / BLOCKED 0，合计40。状态必须随完整受影响复验更新，不删除失败或放宽合同。接手轮（2026-10-07下午）新增final18同身份设备UI20+10证据，A15/A19/A36/A38证据行已更新，A15/A36保持FAIL、A19保持NOT RUN。
+汇总：PASS 29 / FAIL 2 / NOT RUN 9 / BLOCKED 0，合计40。状态必须随完整受影响复验更新，不删除失败或放宽合同。final19接手复核更正final18的有效决定计数；A34在final21端上结束一致性复验后改PASS；A15/A36保持FAIL、A19/A38保持NOT RUN。新规划的普通成功效果来源门、明确前置字段反馈和QA代理未知结果分类已有生产回归，不能直接将旧真实内容质量改成PASS。

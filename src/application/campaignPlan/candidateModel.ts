@@ -73,6 +73,11 @@ export interface MethodSpec {
   outcomes: Readonly<Record<'full_success' | 'success' | 'failure' | 'severe_failure', OutcomeTemplateSpec>>;
 }
 
+/** Shared authoring contract for prompt and actionable repair diagnostics. */
+export const METHOD_REQUIREMENT_FIELDS = [
+  'skillId', 'minRank', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'minCloseness', 'actorAlive',
+] as const;
+
 export interface StageSpec {
   nodeId: string;
   role: 'main' | 'optional';
@@ -187,9 +192,9 @@ function parseRequirements(value: unknown, errors: string[], prefix: string): Me
   // Keep that wire compatibility without coercing non-string IDs or ranks.
   const gates = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null));
   const idFields = ['skillId', 'itemId', 'knowledgeEntryId', 'relationshipTo', 'actorAlive'];
-  const allowed = [...idFields, 'minRank', 'minCloseness'];
-  if (Object.keys(value).some(field => !allowed.includes(field))) {
-    errors.push(`${prefix}: unsupported requirement field.`); return null;
+  const unsupported = Object.keys(value).filter(field => !(METHOD_REQUIREMENT_FIELDS as readonly string[]).includes(field));
+  if (unsupported.length) {
+    errors.push(`${prefix}: unsupported requirement field ${unsupported.join(', ')}; allowed fields: ${METHOD_REQUIREMENT_FIELDS.join(', ')}. Use a supported field or provide another executable method; do not discard the preparation requirement.`); return null;
   }
   for (const field of idFields) {
     if (gates[field] !== undefined && !isReference(gates[field])) {

@@ -4,7 +4,7 @@ import { buildPlanRequestMaterials, generateCampaignPlanCandidate, llmModelProfi
 import { frozenPlanJob, readPlanFreeze, writePlanFreeze, thawPlanContext } from './jobFreeze';
 import { canonicalJsonOf, sha256HexOf } from './hashing';
 import { compileCampaignPlan } from './localCompile';
-import { validateCampaignIntent, validateCampaignPlan } from '../../domain/campaignPlan/planValidation';
+import { validateCampaignIntent, validateCampaignPlan, validateOrdinarySuccessCompletion } from '../../domain/campaignPlan/planValidation';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { isIntactReadyCandidate } from './candidateIntegrity';
@@ -167,7 +167,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       presentActorRefs: ctx.presentActorRefs, protagonistSkillRanks: ctx.protagonistSkillRanks,
       executableMethodIds,
       knownPromiseRefs: (frozen!.baseState?.situations ?? []).flatMap(s => (s.promises ?? []).map(p => ({ situationId: s.situationId, promiseId: p.promiseId }))),
-      knownLocationIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'scene').map(e => (e.definition as { locationId: string }).locationId)) }, compiled.artifact)];
+      knownLocationIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'scene').map(e => (e.definition as { locationId: string }).locationId)) }, compiled.artifact),
+      ...validateOrdinarySuccessCompletion(compiled.plan, compiled.artifact)];
       return { compiled, errors };
     };
     const generation = await generateCampaignPlanCandidate({ provider: deps.provider, profile: frozen.profile,

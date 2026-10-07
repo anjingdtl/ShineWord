@@ -73,6 +73,57 @@ function currentCompletionHasProducer(condition: SituationCondition, artifact: C
   return possible(condition);
 }
 
+/** A necessary authoring gate, not a simulation or a promise of winning rolls.
+ * Reject a current stage whose own completion markers can ONLY be authored by
+ * full_success. Counting ordinary successes cannot create a missing resolved
+ * status/event. Existing adopted archives are deliberately not reinterpreted.
+ */
+export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1): string[] {
+  const start = plan.nodes.find(n => plan.startNodeIds.includes(n.nodeId) && n.coverage === 'concrete');
+  if (!start) return [];
+  const own = new Set(artifact.situations.map(s => s.entryId));
+  const allEffects = artifactEffects(artifact);
+  const effects = artifact.situations.flatMap(s => s.definition.methods.flatMap(m => m.outcomeTemplates?.success.effects ?? []));
+  const possible = (c: SituationCondition): boolean => {
+    if (c.kind === 'all') return c.of.every(possible);
+    if (c.kind === 'any') return c.of.some(possible);
+    // External/current facts and negative conditions cannot be disproved by
+    // producer analysis alone. Leave them to the normal qualification gates.
+    if (c.kind === 'not') return true;
+    if (c.kind === 'committed_event') {
+      return !allEffects.some(e => e.template === 'record_event' && e.eventType === c.eventType)
+        || effects.some(e => e.template === 'record_event' && e.eventType === c.eventType);
+    }
+    if (!('situationId' in c) || !own.has(c.situationId)) return true;
+    if (c.kind === 'situation_status') return c.status === 'active'
+      || effects.some(e => e.template === 'situation_status' && e.situationId === c.situationId && e.status === c.status);
+    if (c.kind === 'situation_counter_at_least') return c.minimum <= 0
+      || effects.some(e => e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId && e.delta > 0);
+    if (c.kind === 'promise_status') return effects.some(e => 'situationId' in e && e.situationId === c.situationId
+      && 'promiseId' in e && e.promiseId === c.promiseId
+      && (c.status === 'open' ? e.template === 'promise_create' : c.status === 'fulfilled' ? e.template === 'promise_fulfill' : e.template === 'promise_break'));
+    return true;
+  };
+  // A delayed completion remains legal when ordinary successes can schedule
+  // it AND produce its trigger. Unscheduled/circular/full-success-only
+  // consequences must not smuggle a missing marker through the gate.
+  const consumed = new Set<string>();
+  for (let pass = 0; pass < artifact.consequenceTemplates.length; pass++) {
+    let added = false;
+    for (const consequence of artifact.consequenceTemplates) {
+      if (!consumed.has(consequence.consequenceId)
+        && effects.some(e => e.template === 'schedule_consequence' && e.consequenceId === consequence.consequenceId)
+        && possible(consequence.triggerCondition)) {
+        consumed.add(consequence.consequenceId); effects.push(...consequence.effectSpecs); added = true;
+      }
+    }
+    if (!added) break;
+  }
+  return possible(start.completion) ? [] : [
+    `artifact: current stage ${start.nodeId} has no ordinary success producer for a completion route; provide success effects that satisfy completion, or a subsequent ordinary-success fulfillment method. Repeated counters/promises cannot replace a missing resolved status or event; full_success may remain a shortcut.`,
+  ];
+}
+
 /** Expiration resolves a timed situation too. Resolution alone is not
  * evidence of success; every alternative using it needs a separate marker. */
 function completionCanUseDeadlineAlone(condition: SituationCondition, artifact: CampaignContentArtifactV1): boolean {
