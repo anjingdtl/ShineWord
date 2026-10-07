@@ -1,42 +1,52 @@
-# Phase 9 实施进度（P9-0–P9-7）
+# Phase 9 收尾建设与复验进度
 
-| 更新 | 2026-10-06（Asia/Shanghai） |
-|---|---|
-| 基线 | `main@5f49a7d` + 本轮工作树（P9 各包提交前以 HEAD+工作树内容为身份） |
-| 方案 | `docs/Shine-TRPG_PHASE9_CONSTRUCTION_PLAN.md` v1.0 |
+更新2026-10-07，基线fab6f171fba075c69fbe0bb1ecec4058fd9e0cae。修复通过工程门禁不等于整个阶段已验收。
 
-## 状态总览
-
-| 施工包 | 状态 | 交付 |
+| 包 | 状态 | 收尾结果 |
 |---|---|---|
-| P9-0 基线 | ✅ 完成 | BASELINE.md / PROTOCOL_BASELINE.md / `.tmp/phase9/test-manifest.json`（400 请求预算）；基线 922 测试全绿 |
-| P9-1 域层 | ✅ 完成 | `src/domain/campaignPlan/`（types/planValidation/progressReducer/campaignEffects）；条件 4 新叶子；`MethodTemplateV1.outcomeTemplates` 四档模板；核心 0.4.0 / 合同 3.0 升级；`tests/phase9-domain.test.cjs` 13 用例 |
-| P9-2 SQLite | ✅ 完成 | 基线 101（5 张战役表）；`SqliteCampaignPlanStore`（setup/job lease+fence+单飞/candidate/revision/artifact）；快照携带 campaignRuntime/campaignContentBinding；save-10 往返；`tests/phase9-sqlite.test.cjs` 6 用例 |
-| P9-3 规划 | ✅ 完成 | requestKind `campaign_plan` 四处注册；`candidateModel`（严格解析）/`localCompile`/`generationService`（2 物理上限+一次修复）/`planningService`（冻结+恢复点）/`adoption`（幂等原子采用）/`contentResolver`（统一合成）；`tests/phase9-planning.test.cjs` 3 用例 |
-| P9-4 回合消费 | ✅ 完成 | candidateRef/methodId 稳定绑定（点选+同义自由输入）；`contract.campaignEffects` 四档冻结；`methodOpsForContract` 模板化；`applyCampaignSettlement`（知识/关系/延迟后果+进度+奖励同一提交）；开局采用即激活首阶段局面；`tests/phase9-turns.test.cjs` 3 用例 |
-| P9-5 重规划 | ✅ 完成 | `replanService`（本地触发矩阵、单飞合并、稳定边界 CAS 采用、管理提交）；fork 重绑 runtime.branchId；`changeCampaignGoal`/`getCampaignProgress` 会话 API；`tests/phase9-replan.test.cjs` 4 用例 |
-| P9-6 UI | ✅ 完成 | `mobile/src/campaignPlanning.ts`（同一生产服务）；OpeningScreen 两段式开始（真实阶段→提案卡→开始冒险）；`CampaignProgressCard`；移动端 typecheck 通过 |
-| P9-7 真实测试 | 🔄 进行中 | 见下 |
+| P9-0 | 报告/治理已纠正 | 撤销旧完成结论，四态矩阵、共享预算与源码身份 |
+| P9-1 | 已修复并回归 | 严格条件/引用/效果，自依赖完成拒绝，真实近期覆盖，四档资源上限与耗尽零操作剔除 |
+| P9-2 | 已修复并回归 | 管理修改和快照同事务，不可变归档，技能/关系/奖励投影，存档碰撞重绑 |
+| P9-3 | 已修复并回归 | 完整冻结池、原始响应先落盘、ready完整性、取消fence、两次物理共享额度；真实语义仍可能invalid |
+| P9-4 | 已修复并回归 | 稳定方法绑定，可选技能元数据不吞后果，当前已发布选择不被推测相邻原文建设阻塞 |
+| P9-5 | 已修复并回归 | 自动有界恢复、稳定边界CAS、旧终态保留、有效原文材料、旧局面承诺；真实采用已有 |
+| P9-6 | 实现修复，完整验收未完成 | 冷启动提案恢复、主线指引优先、独立当前决定点、后台采用后刷新、滚动展开面板 |
+| P9-7 | 未通过 | 真实决策矩阵、两个持续后果、六维质量和匹配性能基线仍未满足合同 |
 
-测试计数：922（基线）→ 951（P9-1..P9-5 后全绿）。
+核心全量1004/1004，0失败0跳过，包含生产Session的100/300/1000本地累积；最终16项flow集成，解析/规划/flow组55项。移动类型检查与debug APK构建通过，日志为 .tmp/phase9/reaccept-core-final17.log、reaccept-mobile-final17.log、reaccept-apk-final17.log。R19–R21涉及核心解析、校验与生成/修复提示，重新完整运行门禁并构建对应APK；移动/原生显示源码逐文件与final14相同，显示证据身份保留。此前构建并行时短租约测试超时，独立完整回归通过；没有删测试或放宽断言。
 
-## 关键实现决策（与方案的差异都已在 PROTOCOL_BASELINE.md ADR 登记）
+修复要点：
 
-1. **ActionContract 3.0**：`candidateRef` + `methodRef.outcomeSetHash` + `campaignEffects`（每档 transitions/knowledgeGrants/relationshipShifts/scheduledConsequences，投骰前冻结）。
-2. **四档结果执行链**：模板效果经 `compileCampaignEffects` 拆为 EffectOperation（进 outcome.effects）+ 局面迁移（`methodOpsForContract`）+ 引擎授予（`applyCampaignSettlement` 同步归约内应用），全部落在 prepare→commit 单次归约。
-3. **进度求值位置**：`prepareResolution` 的 `applyAuthoritativeState` 内同步执行（预载计划/工件/事件史），保证不变量 4（同一提交包含状态、局面、主线进度、后果、奖励、事件）。
-4. **开局即激活**：`createCampaign` 采用路径先 tick 战役局面再跑采用期进度求值，首个回合即可看到并选择主线办法。
-5. **重规划采用**是管理提交（`{branch}:manage-replan:{n}` 管理回合 + `campaign_plan_adopted` 事件 + branches.state_version CAS）。
+1. 管理行与快照在同一事务归档。采用同时检查在途回合、意图、分支/计划版本及原文绑定，事务内重复CAS。
+2. 损坏或旧冻结零HTTP，不能读取live重构。原始响应在解析前持久化，ready验证完整主体及哈希；成功阶段恢复不重发。
+3. 无局面的未来节点为provisional，自身成功不能成为自己的完成条件。不同方法需真实机制差异，不由编译器发明路线或结局。
+4. 方法按实际actionKind/目标匹配，可选技能字段不改变合法动作的后果；四档投骰前冻结。惩罚耗尽当前资源，治疗遵守卡上限，零余额无操作剔除而严格正数门保留。
+5. 指引从当前决定点推导，主线办法在候选上限内可达；开局、管理、冷启动和新采用后不依赖旧叙事卡。
+6. 重规划读取分支已采用原文，并按锚点过滤；相同版本下材料绑定变化也stale。新方法可兑现分支拥有的旧局面承诺，未知/跨分支引用拒绝。
+7. Android异步完成刷新只在实际卸载/分支变化时取消，普通rerender不再吞掉采用后的UI更新。
+8. 按FLOW_REVIEW先梳理十模块交接，再统一修复业务事件当回合求值、休息/训练/里程碑/招募/战斗漏主线结算、整卡覆盖奖励与社交增量重复；16项跨模块生产集成通过。
+9. 承诺以局面+承诺ID闭包，当前局面的完成必须有本地效果来源；不把旧承诺配给新self。首局面不能绑定已定局/退休节点；已有原局面承诺仍可兑现。
+10. 主线卡、开局提案、规划状态及项目建设提示显式使用主题onRaised颜色，修复三个深色主题默认黑字；四主题/字体/小屏以最终设备证据为准。
+11. 主节点失败后清空primary的同次提交仍排一个重规划任务，写公开失败反馈，休息不重复发送。定时局面完成要求独立成功证据，实际到期不能供给正向resolved证据，即使此前已有部分成功也不误授奖。
+12. ScreenShell与独立PlayPanel分别处理页面/弹层键盘，导航预留安全区；大字体/矮窗口快捷行动跟正文滚动，保留阅读空间。打开/关闭主线面板清除原输入焦点，关闭目标草稿清除草稿与键盘。独立Modal补齐上下安全边距，保证键盘打开后关闭按钮仍可点击；QA检查面板与IME确实消失。详见FLOW_REVIEW R12–R16与最终设备证据。
+13. 生成提示的后果示例原先使用带连字符的eventType，与严格解析器的snake_case合同冲突。修正示例及事件名说明，新增实际提示示例进入生产解析器的回归；保留非法事件名拒绝。真实候选缺少完成条件的效果来源仍按合同拒绝，不能用修正示例的成功冒充完整旅程通过。详见R17。
+14. 前台字号变化需先完成原生root测量，再刷新DeviceInfo并重建字体显示子树，避免Fabric文字缓存导致第一次放大裁字。仅重建子树、仅请求根布局的失败证据保留。final14三次1.3→2→1.3→2实际截图可读，正文视口426/412/426px，路由与v24保持一致；目标草稿/个人页路由、360/411dp×1.3/2四组布局、四主题主线/面板实际复测通过。详见R18及final17显示源码等价证据。
+15. 实际新J1响应暴露奖励子项未经解析校验，缺targetId引发TypeError而误标可重试。已补严格奖励解析、集合null/缺失ID拒绝和运行时scope类型保护；提示明确关系奖励targetId与效果fromActorId的区别。55项解析/规划/跨模块回归通过，包含两响应后invalid、完整响应留存、重入0HTTP；后续全量与APK证据见最终记录。详见R19。
 
-## P9-7 真实测试结论（2026-10-06 收口）
+16. 技能等级只接受规则定义中的字符串untrained/novice/trained/expert/master，提示与解析错误共用SKILL_RANKS；数字1和字符串数组不能被强转为合法等级。新增实际生成/修复材料回归：数字响应→一次修复novice→ready，共2请求。详见R20。
+17. 方法前置条件数组技能ID的编译TypeError已离线复现并修复；枚举与引用字段集中校验，合法条件完整保留，可选null仍表示无目标/门槛。错误响应最多一次修复后invalid，原响应留存，恢复零HTTP。final16真实ready原文在final17重新解析、编译及校验通过，计划hash一致。详见R21。
 
-- 真实旅程 **90 个有效玩家决策**（smoke 10 + J1 20 + J2 20 + J3 20 + J4 10+10），预算 313/400；两次条件驱动自然结局（J3 pyrrhic turn-0017 / J1 failure turn-0002）。详见 REAL_JOURNEYS.md。
-- 设备走查（emulator-5556, API 37, V1.0.0）：导入→审查→构建→开局两段式→提案卡→采用→主线卡→真实回合→冷启动恢复，全链路截图 `.tmp/phase9/device-01…26`。设备决策 2 个（时长止损，完整 20+10 重放列入复跑条件）。
-- 门禁终值：verify:core **951/951**、mobile typecheck 0 错、verify:version `1.0.0/1000000`、apk:debug EXIT=0（V1.0.0 APK SHA-256 `2FF199…12DC9`）、git diff --check 干净。
-- 验收：**PASS 30 / PART 7 / NOT RUN 1 / FAIL 0**（ACCEPTANCE_MATRIX.md）。真实 GLM replan 候选往返为最大遗留（严格门禁 fail-closed 正确）。
+真实零体力故障原回合已复用Planner恢复成功，新增1次Narrator。自动计划后果定义缺失仍按两次请求invalid；完整内容门另验。管理、轮询、未提交重试、无关重复和结束后动作不计最低80。
 
-## 已知限制（如实）
+## 交接续跑轮（2026-10-07下午，本地开发机，接手codex因额度中断的收尾）
 
-- P9-5 的 replan LLM 候选生成（`runReplanJob`）已实现并有本地治理，但真实 GLM replan 往返在 P9-7 旅程中验证。
-- rest/train 等本地生命周期提交暂不跑战役进度求值（诚实 no_change；playTurn 全链路已覆盖）。
-- UI 的跨重启提案恢复（`findReadyProposalForWorld`）已提供但未接入向导（本轮以重新生成为主路径）。
+接手现场：final17门禁后codex又修改candidateModel/generationService（R21严格引用类型门+回归，测试1004→1005），重跑final18全门禁（core 1005/1005、mobile typecheck、APK构建均0，日志reaccept-*-final18.log、身份reaccept-core-identity-final18.json，源码哈希c12623bd95252b9f…）后额度耗尽。设备J1 UI旅程（camp-muxn9k9t，final17身份）停在5/20。
+
+本轮处理：
+
+1. **旅程停止原因定谳（产品无缺陷）**：round2日志+现场复现证明，决定5在v6触发cons-guard-grudge后果后指引异步刷新，驱动器9秒后按旧方法卡提交，被过期选择门（session.ts"所选路径已不在当前可用办法中，请刷新后重新选择。"）安全拒绝并显示"操作未完成"；同界面重新点选同动作即提交成功（v7入账）。这是可恢复的竞态拒绝，非产品缺陷；device-journey.cjs已把该横幅改为有界重试（2次，记录横幅原文），保留真失败即停的安全语义。
+2. **环境恢复**：emulator-5556（ShineWord_P8_Reacceptance）重启；codex的QA代理进程（18691端口）存活复用；final18 APK重建（gradle输入校验复用13:20产物，APK SHA 7b7ebd34…）install -r保留数据；reaccept-device/identity.json更新为final18。
+3. **final18同身份新J1**：经正式开局入口新建camp-muxpraio（序7罗兰决定探视女巫、边陲镇、原创J1Final、长篇、推荐保护探视目标——模型opening_goal原文，因ADBKeyBoard与Maestro中文输入在API37均不可用而采用推荐芯片原文，未手写裁剪意图）；生成1HTTP一次通过ready（无修复请求），采用后首局面直接active（R04修复生效）。
+4. J1 UI 20旅程（PHASE9_UI_JOURNEY=j1-final18）进行中；J4分支UI10待J1完成后同身份执行。预算manifest记账：959（接手时）+复现回合2+opening_goal 1+生成1（+后续每决定约2与阶段重规划）。
+
+**接手轮结果（同日晚些时候）**：J1 UI旅程完成——camp-muxpraio-main共23个已提交玩家决定（≥20），阶段轨迹meet-anna成功→roland-trust失败→mine-collapse失败→自动重规划second-chance失败→anna-bond成功→walls-and-gates成功→verdict-day开放；3节点奖励入账；rev1→rev6共5轮重规划采用、1次invalid正确拒绝零重发；UI分叉camp-muxpraio-bmuxs9rng（v27基点）后完成J4 UI 10决定（v37），分支隔离经DB验证。旅程中无产品缺陷：4次停滞守卫自停均为重规划内容full_success门控（success档只推未接入completion的计数），属A36内容质量缺陷，按J3-final先例不新增硬门禁、如实记录；1次"No meaningful UI route"为重规划候选candidate_ready待稳定边界采用（回前台触发采用成功）。最终预算1045/1100（余55）。QA驱动器最终形态：过期提交有界重试(2次)+方法推导空缺时按可见按钮兜底+停滞守卫保持不变。清理：ADBKeyBoard卸载、IME恢复Gboard；QA代理进程与设备LLM配置保持原状待整体收尾决定。

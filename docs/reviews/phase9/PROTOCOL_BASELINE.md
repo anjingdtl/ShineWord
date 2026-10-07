@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 |---|---|
-| 冻结日期 | 2026-10-06（Asia/Shanghai） |
-| 施工基线 | `main@5f49a7d`（P8 收尾 922 测试全绿） |
+| 冻结日期 | 历史施工2026-10-06；2026-10-07收尾复验 |
+| 施工基线 | 历史 `main@5f49a7d`（922项）；本轮 `fab6f171fba075c69fbe0bb1ecec4058fd9e0cae` |
 | 方案依据 | `docs/Shine-TRPG_PHASE9_CONSTRUCTION_PLAN.md` §12.4 |
 | 单协议政策 | 沿用第八阶段：运行时只注册本表"目标值"一列；旧输入明确拒绝；不维护双执行链 |
 
@@ -76,7 +76,19 @@
 - 规划一次生成 + 最多一次结构修复 = 共享 2 次物理 HTTP 上限（含 fallback/formatter/reasoning recovery，派发前统一扣额）。
 - 普通回合**不**新增 campaign_plan 请求（A37）；主线推进由本地 CampaignProgressReducer 求值。
 - 原文依赖建设走既有 segmentBuild 任务预算与账本，独立归属。
-- 真实测试总预算：400 次物理请求（`.tmp/phase9/test-manifest.json`），所有驱动共用，冷启动不清零。
+- 真实测试总预算初始400、最后1100；每次扩额在新派发前说明并写manifest；所有新驱动传输前持久原子扣额，冷启动不清零。历史起始313含估计，不能声称历史全部精确对账。
+
+### 收尾恢复合同
+
+当前完整freeze-2信封包含原始意图/约束、模型能力/keyRef、世界和实际角色资格、规则、分支已采用原文及计划身份。旧或损坏信封零HTTP，不读live替代。原始响应在解析前持久化；任务两次物理额度跨恢复有效；ready验证计划、工件和候选全量主体hash。
+
+稳定边界检查stateVersion/basePlan/intent/内容绑定以及在途回合、交互和未知请求；事务内重复CAS并归档。管理修改、奖励/技能/关系、内容绑定与快照同一次提交。新方法可兑现当前分支旧局面承诺，未知后果和跨分支引用仍拒绝。资源耗尽时剔除零消耗操作，引擎amount>0硬门保留。
+
+全流程复核：普通合同recordEvent按业务事件名在当次和历史求值；本地休息/训练/里程碑/生命周期与战斗复用同提交战役权威。训练先投影，SQL整卡与技能/上限奖励合并，关系保存最终值避免重复。关系沿用既有0..100，不另设-5..5。承诺资格是situationId+promiseId，须已有提交或显式创建；当前新局面完成条件须有局面/计数/承诺效果来源，组合保留合法替代路线。
+
+期限与成功：定时局面到期会resolved，但pressure_deadline_passed不能作为主线completion的正向resolved证据。编译期要求独立成功证据；归约期再区分到期原因，覆盖已获得部分计数再到期的情形。独立counter-only成功路径、真实否定条件与已有终态保留；失败后primary清空仍本地排队，不因此固定增加每回合规划调用。
+
+奖励边界：模型奖励子项必须在解析时验证kind、targetId、可选toActorId/rank/delta；关系奖励的targetId为起点人物，toActorId为终点人物，不能把relationship_shift效果的fromActorId当成缺失targetId的替代默认值。null集合项、非字符串/缺失必需ID安全拒绝；方法前置条件校验ID、等级、关系标度与成对字段，可选null保留无门槛语义；不得因TypeError误归类为可重试传输失败。skill_rank.rank仅接受SKILL_RANKS中的字符串untrained/novice/trained/expert/master，提示与修复反馈共用该白名单；数字及数组不强转。原响应仍先持久化，生成加修复最多两物理请求，重入解析不重发成功响应。
 
 ## 6. P9-0 最小回归（RED 起点）
 
