@@ -41,6 +41,19 @@ function memoryStorage(initial = {}) {
   };
 }
 
+test('GLM streaming preset respects an explicit endpoint output ceiling and preserves the existing credential reference', async () => {
+  const storage = memoryStorage(); const api = loadProfileStore(storage);
+  const original = await api.saveApiProfile({ endpoint: 'https://example.invalid/v1', model: 'custom-model', reasoningTier: 'high',
+    contextWindowTokens: 1048576, maxOutputTokens: 32768 });
+  const updated = await api.saveApiProfile({ id: original.id, endpoint: original.endpoint, model: 'glm-5.3-flash',
+    presetId: 'glm-5.3-flash', reasoningTier: 'high', contextWindowTokens: 1048576, maxOutputTokens: 32768 });
+  assert.equal(updated.capabilities.supportsStreaming, true);
+  assert.equal(updated.capabilities.maxOutputTokens, 32768);
+  assert.equal(updated.capabilities.contextWindow, 1048576);
+  assert.equal(updated.keyRef, original.keyRef);
+  assert.equal((await api.loadApiProfile()).capabilities.maxOutputTokens, 32768);
+});
+
 test('DeepSeek preset maps the official display name to the documented wire ID and capabilities', () => {
   const { presetById } = loadProfileStore(memoryStorage());
   const preset = presetById('deepseek-v4.1-flash');

@@ -8,6 +8,8 @@ import type {
   SecretStore,
 } from './types';
 import { normalizeReasoningTier } from './types';
+import { physicalRequestTimeoutMs } from './requestDeadline';
+import { IncompleteCompletionStreamError, readCompletionStream } from './completionStream';
 import {
   providerReasoningParamsForTier,
   reasoningDialectForModel,
@@ -40,7 +42,7 @@ export interface HttpTransport {
   post(request: HttpRequest): Promise<HttpResponse>;
 }
 
-interface OpenAIResponseShape {
+export interface OpenAIResponseShape {
   id?: string;
   choices?: Array<{
     finish_reason?: string | null;
@@ -247,6 +249,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
         ?? request.reasoningEffort
         ?? this.profile.reasoningEffort,
     );
+    const timeoutMs = physicalRequestTimeoutMs(this.timeoutMs, request.requestKind, reasoningTier);
+    const streamedPlanning = request.requestKind === 'campaign_plan' && reasoningTier !== 'low'
+      && this.profile.capabilities.supportsStreaming === true;
 
     while (true) {
       // Resident-mode request structure: [system, user, ...followUps]. The
@@ -263,7 +268,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
         model: this.profile.model,
         messages,
         max_tokens: maxTokens,
-        stream: false,
+        stream: streamedPlanning,
       };
       if (request.jsonMode && this.profile.capabilities.supportsJson) {
         body.response_format = { type: 'json_object' };
@@ -284,7 +289,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify(body),
-          timeoutMs: this.timeoutMs,
+          timeoutMs,
         });
       } catch (error) {
         const category = transportErrorCategory(error);
@@ -301,7 +306,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
         });
         if (error instanceof Error && /aborted?/i.test(error.name + error.message)) {
           throw new LlmRequestFailure(
-            `LLM 请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`,
+            `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`,
             requestMetrics,
           );
         }
@@ -312,17 +317,22 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
       let parsed: OpenAIResponseShape;
       try {
-        parsed = JSON.parse(response.body) as OpenAIResponseShape;
-      } catch {
+        const eventStream = response.headers?.['content-type']?.includes('text/event-stream')
+          || /^(?:\uFEFF)?(?:data:|:)/.test(response.body.trimStart());
+        parsed = eventStream ? readCompletionStream(response.body) : JSON.parse(response.body) as OpenAIResponseShape;
+      } catch (error) {
+        const incomplete = error instanceof IncompleteCompletionStreamError;
         observe({
           attempt: physicalAttempt,
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
           httpStatus: response.status,
           outcome: 'invalid_response',
-          errorCategory: 'invalid_response',
+          errorCategory: incomplete ? 'network' : 'invalid_response',
+          ...(incomplete ? { dispatchState: 'unknown' as const } : {}),
           timings: response.timings,
         });
-        throw new LlmRequestFailure(`LLM provider returned non-JSON HTTP body (status ${response.status}).`, requestMetrics);
+        throw new LlmRequestFailure(incomplete ? error.message
+          : `LLM provider returned invalid completion body (status ${response.status}).`, requestMetrics);
       }
       if (response.status < 200 || response.status >= 300) {
         const retryAfterMs = parseRetryAfterMs(response.headers);

@@ -47,3 +47,14 @@ final28新增高思考强度对照，Android经正式模型配置UI保存，Keyc
 R36后生产源码SHA-256 53629ccff12efc738bf7e6f85c8f72bc0562241a19a3ba34aacfbd2837d9b254（scope v3）。APK1b8eb52f182fe02bb6ec7fd2218cb9260b8984cc32410060041868e2109c801f，109462083 bytes；emulator-5556实际安装hash一致。核心1042/1042，0失败0跳过，36.604s；移动类型、35s Debug构建、版本与diff通过。身份文件reaccept-identity-final29.json；源码指纹在本地提交后保持相同，不与Git HEAD SHA混淆。
 
 共享预算1161/1500（余339）；final28高强度三意图各一次规划后未知，无重发。final29冷入口独立目标建议1次，规划恢复0次。已恢复真实端点/low、逐值核对Keychain引用不变，停止验证过的本轮代理，fontScale1.0/密度420/Gboard与原数据库保留，App已force-stop。历史样本均保持各自身份，不计最终80。
+
+
+## 2026-10-08 final33：长规划的传输、租约和物理预算
+
+生产scope v3源码1d0e6778c600e7c788c0d5fbcd4ba8c0cc09eb4c2a2e9b930a2fd7318c9ec3a7；Debug APK 3f51242ac7a6f89580d378c85b829444c2d74afe0d524773726d42cc7f1eb31b，109474379 bytes，V1.0.0 / 1000000，emulator-5556实际安装hash一致。完整核心1065/1065、0失败0跳过（reaccept-core-final33b.log，34.325s），移动typecheck、41s Debug构建、版本与diff通过。新增23项回归，所有前置RED日志保留。
+
+接续本地提交d94d548a13c89f2381759d5c8ac503c424817974；历史来源、旧身份、未知请求和共享预算不重置。本批R37–R40将纳入本地提交，未推送/发布。
+
+final33正式Android救援任务job-setup-world-src-7f45fe0b11ea30ec-muwccd51-muyb1p8u在约523秒、返回前台时转为outcome_unknown（Network request failed）；此前后台约58秒，进程26168存活、崩溃缓冲无异常。代理上游随后在565.527秒收到HTTP200/5026703 bytes，晚于客户端失败，不能据此认定上游超时或固定原生读取时限；RN默认读取/调用时限为0。具体原生断连原因尚未证明，规划缺少Android执行生命周期保护，作为下一修复点。原意图、冻结high/stream/32768/物理额度2及1次账本保留，0候选/0决定，禁止未知重放。此前未知任务也未重发；独立opening_goal 1次单列，共享预算1168/1500，无重置/增额。证据final33-background-failure-proof.json、final33-background-events.log和final33-j1-after-background.json；当前代理18691、原库与AVD保留，尚未最终清理配置。
+
+完整目标继续执行，阶段整体仍未通过；A01–A40维持29 PASS / 2 FAIL / 9 NOT RUN。新身份未完成J1/J2/J3各20及同基点双分支各10，没有把请求、管理、采用或旧身份诊断计入80；两项隔两次决定的持续后果、三计划及对应旅程六维全部≥3仍待实测。

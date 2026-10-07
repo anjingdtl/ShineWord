@@ -247,6 +247,15 @@ export class SqliteCampaignPlanStore {
     return this.getJob(jobId);
   }
 
+  /** Renewal and takeover race on the same fence; a displaced or cancelled worker cannot renew. */
+  async renewJobLease(jobId: string, leaseOwner: string, fencingToken: number, leaseExpiresAt: string, now: string): Promise<boolean> {
+    return (await this.db.execute(
+      `UPDATE campaign_plan_jobs SET lease_expires_at=?, updated_at=?
+       WHERE job_id=? AND status='running' AND lease_owner=? AND fencing_token=?`,
+      [leaseExpiresAt, now, jobId, leaseOwner, fencingToken],
+    )) === 1;
+  }
+
   /** All job status transitions are fenced: only the current token owner wins. */
   async transitionJob(jobId: string, expectedFencingToken: number, next: CampaignJobStatus,
     patch: { lastError?: string | null; nextRetryAt?: string | null; freezeRootId?: string | null; attemptCount?: number } = {},

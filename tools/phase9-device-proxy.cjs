@@ -1,11 +1,13 @@
 /** Dedicated emulator QA proxy: reserve the shared cap before each HTTP. */
 const http = require('node:http');
-function createQaProxy({ endpoint, reserve, log = () => {}, timeoutMs = 300000 }) {
+const { postQaHttp } = require('./phase9-http.cjs');
+function createQaProxy({ endpoint, reserve, log = () => {}, timeoutMs = 1200000 }) {
   endpoint = endpoint.replace(/\/+$/, '');
   const report = metric => { try { log({ at: new Date().toISOString(), ...metric }); } catch { /* telemetry is not transport */ } };
   return http.createServer(async (req, res) => {
   if (req.method !== 'POST' || req.url !== '/chat/completions') { res.writeHead(404); res.end(); return; }
   let reserved = false;
+  const started = Date.now();
   try {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     try { reserve('android-ui'); reserved = true; }
@@ -15,17 +17,25 @@ function createQaProxy({ endpoint, reserve, log = () => {}, timeoutMs = 300000 }
       res.end(JSON.stringify({ error: 'QA request reservation denied before upstream dispatch' }));
       return;
     }
-    const response = await fetch(`${endpoint}/chat/completions`, { method: 'POST',
+    // The app owns its operation deadline; this ceiling must not impose an
+    // earlier hidden five-minute fetch limit on high-effort planning.
+    const response = await postQaHttp({ url: `${endpoint}/chat/completions`,
       headers: { 'Content-Type': 'application/json', Authorization: req.headers.authorization || '' },
-      body: Buffer.concat(chunks), signal: AbortSignal.timeout(timeoutMs) });
-    const body = await response.text();
-    res.writeHead(response.status, { 'Content-Type': 'application/json',
-      ...(response.headers.get('retry-after') ? { 'Retry-After': response.headers.get('retry-after') } : {}) }); res.end(body);
-    report({ status: response.status, bytes: Buffer.byteLength(body), dispatched: true });
+      body: Buffer.concat(chunks), timeoutMs,
+      onHeaders: ({ status, headers, responseHeadersMs }) => {
+        res.writeHead(status, { 'Content-Type': headers['content-type'] || 'application/json',
+          ...(headers['retry-after'] ? { 'Retry-After': headers['retry-after'] } : {}) });
+        report({ phase: 'response_headers', status, responseHeadersMs, dispatched: true });
+      },
+      onChunk: chunk => { if (!res.destroyed) res.write(chunk); },
+    });
+    const body = response.body;
+    res.end();
+    report({ status: response.status, bytes: Buffer.byteLength(body), dispatched: true, ms: Date.now() - started });
   } catch {
     // Once dispatch is possible, a lost response is unknown, not a known 503.
     // Preserve the network failure so the production ledger forbids replay.
-    report({ status: null, failure: reserved ? 'qa_transport_unknown' : 'qa_input_failed', dispatched: reserved });
+    report({ status: null, failure: reserved ? 'qa_transport_unknown' : 'qa_input_failed', dispatched: reserved, ms: Date.now() - started });
     res.destroy();
   }
   });

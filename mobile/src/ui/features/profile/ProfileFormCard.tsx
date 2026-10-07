@@ -38,12 +38,8 @@ export function ProfileFormCard(props: {
   const [advancedSettingsVisible, setAdvancedSettingsVisible] = useState(false);
   const preset = presetById(form.presetId ?? undefined);
   const preview = previewLlmRequestBudget({
-    contextWindowTokens: preset
-      ? preset.profile.capabilities.contextWindow
-      : parsePreviewInteger(form.contextWindowTokens),
-    maxOutputTokens: preset
-      ? preset.profile.capabilities.maxOutputTokens
-      : parsePreviewInteger(form.maxOutputTokens),
+    contextWindowTokens: parsePreviewInteger(form.contextWindowTokens) ?? preset?.profile.capabilities.contextWindow,
+    maxOutputTokens: parsePreviewInteger(form.maxOutputTokens) ?? preset?.profile.capabilities.maxOutputTokens,
     model: form.model,
     providerDialect: form.reasoningParameterSupport === 'unsupported'
       ? 'unsupported'
@@ -160,7 +156,7 @@ export function ProfileFormCard(props: {
               <Text style={[typeStyle(theme, theme.type.body), { color: theme.onRaised.secondary }]}>
                 {`预设能力：上下文 ${formatTokens(preset.profile.capabilities.contextWindow ?? 0)}，最大输出 ${formatTokens(preset.profile.capabilities.maxOutputTokens ?? 0)}。`}
               </Text>
-            ) : (
+            ) : null}
               <>
                 <TextField
                   label="上下文窗口（Token）"
@@ -168,7 +164,7 @@ export function ProfileFormCard(props: {
                   onChangeText={form.setContextWindowTokens}
                   placeholder="留空表示未知"
                   keyboardType="number-pad"
-                  hint="自定义模型请填写服务商公布的上下文上限；未知时保持空白。"
+                  hint="填写当前端点支持的上下文上限；预设数值可以调整，未知时保持空白。"
                   testID="profile-context-window"
                 />
                 <TextField
@@ -181,7 +177,6 @@ export function ProfileFormCard(props: {
                   testID="profile-max-output"
                 />
               </>
-            )}
             <View style={{ gap: theme.space.sm }}>
               <Text style={[typeStyle(theme, theme.type.label), { color: theme.onRaised.secondary }]}>
                 思考参数协议

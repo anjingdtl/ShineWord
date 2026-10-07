@@ -1,11 +1,11 @@
 import type { ApiProfile, LlmProvider, LlmRequest } from '../llm/types';
-import { normalizeReasoningTier } from '../llm/types';
+import { LlmRequestFailure, normalizeReasoningTier } from '../llm/types';
 import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestDemands';
 import { resolveModelCapabilities } from '../llm/capabilityResolver';
 import { planLlmRequest } from '../llm/requestBudgetKernel';
 import { stableFingerprint } from '../llm/requestPlan';
 import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
-import { reasoningDialectForModel } from '../llm/reasoningPolicy';
+import { reasoningDialectForModel, REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
 import { estimateTokens } from '../context/tokenEstimate';
 import { endpointBucketId } from '../worldBuild/rateScheduler';
 import type { ContentEntry } from '../../domain/content/types';
@@ -160,6 +160,8 @@ export async function generateCampaignPlanCandidate(input: {
   /** Durable response recovery; never redispatch a completed generation. */
   resume?: { text: string; repairUsed: boolean };
   physicalRequestBudget?: number;
+  /** Resume after a known reasoning-only attempt under the original aggregate cap. */
+  reasoningReserveMultiplier?: number;
   onResponse?: (text: string, repairUsed: boolean) => Promise<void>;
   beforeDispatch?: () => Promise<void>;
   /** Local reference and executable-contract gates share the same repair. */
@@ -167,7 +169,8 @@ export async function generateCampaignPlanCandidate(input: {
 }): Promise<PlanGenerationResult> {
   const demands = DEFAULT_OUTPUT_DEMANDS.campaign_plan;
   const maximum = Math.min(demands.maximum, input.profile.contentOutputTokens ?? 16_384);
-  const plan = planLlmRequest({
+  let reserveMultiplier = input.reasoningReserveMultiplier ?? 1;
+  let plan = planLlmRequest({
     capabilities: resolveModelCapabilities({
       declared: {
         contextWindowTokens: input.profile.capabilities.contextWindow,
@@ -185,22 +188,25 @@ export async function generateCampaignPlanCandidate(input: {
       tier: normalizeReasoningTier(input.profile.reasoningTier ?? input.profile.reasoningEffort),
       providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model),
       model: input.profile.model,
+      reserveMultiplier,
     },
   });
-  const reasoningPolicy = plan.reasoningPolicy;
-  if (!reasoningPolicy) throw new Error('campaign_plan_policy_missing');
+  const initialPolicy = plan.reasoningPolicy;
+  if (!initialPolicy) throw new Error('campaign_plan_policy_missing');
+  let reasoningPolicy = initialPolicy;
   const buildRequest = (repairErrors: string[] | null): LlmRequest => ({
     role: 'WorldMapper',
     system: input.materials.system,
     user: repairErrors === null ? input.materials.user
       : `${input.materials.user}\n\n上一次输出未通过校验，错误如下：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON（保持相同结构与玩家意图，不要删除必需字段）。`,
     maxOutputTokens: plan.wireOutputTokens,
+    maxPhysicalRequests: 1,
     jsonMode: input.profile.capabilities.supportsJson,
     requestKind: 'campaign_plan',
     reasoningTier: reasoningPolicy.tier,
     reasoningReserveTokens: reasoningPolicy.reserveTokens,
     reasoningPolicyVersion: reasoningPolicy.policyVersion,
-    ledger: { logicalRequestId: input.logicalRequestId, requestKind: 'campaign_plan', worldId: input.worldId, ...(input.branchId ? { branchId: input.branchId } : {}) },
+    ledger: { logicalRequestId: input.logicalRequestId, physicalAttemptLimit: 2, requestKind: 'campaign_plan', worldId: input.worldId, ...(input.branchId ? { branchId: input.branchId } : {}) },
     scheduling: {
       logicalTaskId: input.logicalRequestId,
       role: 'mapper', priority: 'P2',
@@ -216,9 +222,10 @@ export async function generateCampaignPlanCandidate(input: {
   const dispatch = async (request: LlmRequest): Promise<{ text: string; unknown: boolean }> => {
     await input.beforeDispatch?.();
     // Repair instructions are mandatory too; validate their actual input size.
-    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum),
+    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier),
       estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
     try {
+      physicalRequests += 1;
       const response = await input.provider.complete(request);
       return { text: response.text, unknown: false };
     } catch (error) {
@@ -226,16 +233,26 @@ export async function generateCampaignPlanCandidate(input: {
         && ((error as { name?: string }).name === 'OutcomeUnknownReplayError')) {
         return { text: '', unknown: true };
       }
+      const metric = error instanceof LlmRequestFailure ? error.requestMetrics.at(-1) : undefined;
+      if (metric?.completionState === 'reasoning_only' && physicalRequests < budget && reserveMultiplier === 1) {
+        reserveMultiplier = REASONING_ONLY_RESERVE_MULTIPLIER;
+        plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier),
+          estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
+        reasoningPolicy = plan.reasoningPolicy!;
+        return dispatch({ ...request, maxOutputTokens: plan.wireOutputTokens,
+          reasoningReserveTokens: reasoningPolicy.reserveTokens,
+          scheduling: { ...request.scheduling!, requestPlanHash: stableFingerprint(plan),
+            estimatedInputTokens: plan.mandatoryInputTokens, reservedOutputTokens: plan.wireOutputTokens } });
+      }
       throw error;
     }
   };
 
   let physicalRequests = 0;
-  const budget = input.physicalRequestBudget ?? 2;
+  const budget = Math.min(2, input.physicalRequestBudget ?? 2);
   if (!input.resume && budget < 1) return { status: 'invalid', model: null, parseErrors: ['physical_request_budget_exhausted'], rawText: '', physicalRequests };
   const first = input.resume ? { text: input.resume.text, unknown: false } : await dispatch(buildRequest(null));
   if (!input.resume) {
-    physicalRequests += 1;
     if (!first.unknown) await input.onResponse?.(first.text, false);
   }
   if (first.unknown) {
@@ -256,7 +273,6 @@ export async function generateCampaignPlanCandidate(input: {
   const repairRequest = buildRequest(firstErrors.slice(0, 12));
   repairRequest.user += `\n待修复候选（保留完整意图和合法合同）：\n${first.text}`;
   const repair = await dispatch(repairRequest);
-  physicalRequests += 1;
   if (repair.unknown) {
     return { status: 'outcome_unknown', model: null, parseErrors: firstErrors, rawText: first.text, physicalRequests };
   }
@@ -271,7 +287,7 @@ export async function generateCampaignPlanCandidate(input: {
   return { status: 'invalid', model: null, parseErrors: repairErrors.length > 0 ? repairErrors : firstErrors, rawText: repair.text, physicalRequests };
 }
 
-function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number) {
+function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number, reserveMultiplier = 1) {
   return {
     capabilities: resolveModelCapabilities({ declared: {
       contextWindowTokens: input.profile.capabilities.contextWindow, maxOutputTokens: input.profile.capabilities.maxOutputTokens,
@@ -280,7 +296,7 @@ function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEF
     requestKind: 'campaign_plan' as const, estimatedMandatoryInputTokens: 0,
     businessOutputDemand: { ...demands, target: Math.min(demands.target, maximum), maximum },
     reasoningPolicy: { tier: normalizeReasoningTier(input.profile.reasoningTier ?? input.profile.reasoningEffort),
-      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model), model: input.profile.model },
+      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model), model: input.profile.model, reserveMultiplier },
   };
 }
 

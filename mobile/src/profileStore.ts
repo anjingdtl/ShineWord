@@ -84,7 +84,7 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
     profile: {
       capabilities: {
         supportsJson: true,
-        supportsStreaming: false,
+        supportsStreaming: true,
         reportsUsage: true,
         contextWindow: 1_048_576,
         maxOutputTokens: 131_072,
@@ -164,6 +164,8 @@ function buildApiProfile(input: SaveApiProfileInput, existing?: ApiProfile, isFi
     reasoningTier: input.reasoningTier,
     ...(input.reasoningDialect ? { reasoningDialect: input.reasoningDialect } : {}),
   };
+  if (input.contextWindowTokens !== undefined) profile.capabilities = { ...profile.capabilities, contextWindow: input.contextWindowTokens };
+  if (input.maxOutputTokens !== undefined) profile.capabilities = { ...profile.capabilities, maxOutputTokens: input.maxOutputTokens };
   profile.keyRef ||= profile.id === 'default' ? 'llm.default' : `llm.${profile.id}`;
   return profile;
 }

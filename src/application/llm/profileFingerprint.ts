@@ -14,6 +14,9 @@ export function llmModelProfileFingerprint(profile: Pick<
     model: profile.model,
     contextWindow: profile.capabilities?.contextWindow ?? null,
     maxOutputTokens: profile.capabilities?.maxOutputTokens ?? null,
+    // Preserve historical buffered fingerprints, but bind the newly supported
+    // streamed protocol so recovery cannot silently change transport mode.
+    ...(profile.capabilities?.supportsStreaming === true ? { supportsStreaming: true } : {}),
     reasoningDialect: profile.reasoningDialect ?? reasoningDialectForModel(profile.model),
   });
 }

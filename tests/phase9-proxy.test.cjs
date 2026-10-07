@@ -3,6 +3,18 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { DatabaseSync } = require('node:sqlite');
 const { createQaProxy } = require('../tools/phase9-device-proxy.cjs');
+test('Phase9 QA forwards SSE headers and frames once, preserving the real upstream protocol', async t => {
+  let reserved = 0;
+  const stream = 'data: {"choices":[]}\n\ndata: [DONE]\n\n';
+  const upstream = await listen(t, http.createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write(stream.slice(0, 15)); res.end(stream.slice(15));
+  }));
+  const endpoint = await listen(t, createQaProxy({ endpoint: upstream, reserve() { reserved++; } }));
+  const response = await fetch(endpoint + '/chat/completions', { method: 'POST', body: '{}' });
+  assert.equal(response.headers.get('content-type'), 'text/event-stream');
+  assert.equal(await response.text(), stream); assert.equal(reserved, 1);
+});
 const { NodeSqliteAdapter } = require('./helpers/mobileHarness.cjs');
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 const { applySqliteMigrations } = require('../dist/infra/sqlite/migrations');

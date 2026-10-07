@@ -11,6 +11,7 @@ import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { isIntactReadyCandidate } from './candidateIntegrity';
 import { assessMethod } from '../guidance/candidates';
 import { openingRelationshipFor } from '../campaign/recruitment';
+import { REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
 
 /** Both planning modes share durable generation, bounded repair and fencing. */
 export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, input: {
@@ -28,14 +29,39 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
   }
   if (!['queued','running','retryable_failed'].includes(job.status)) return result(
     job.status === 'outcome_unknown' ? 'outcome_unknown' : 'stale', null, [`job ${job.status}`]);
-  const expiry = new Date(new Date(now()).getTime() + 600_000).toISOString();
-  const claim = await deps.planStore.claimJob(jobId, `plan:${jobId}`, expiry, now())
-    ?? await deps.planStore.reclaimExpiredJob(jobId, `plan:${jobId}`, expiry, now());
+  const leaseTtlMs = 600_000;
+  const owner = `plan:${jobId}`;
+  const expiresAt = () => new Date(new Date(now()).getTime() + leaseTtlMs).toISOString();
+  const claim = await deps.planStore.claimJob(jobId, owner, expiresAt(), now())
+    ?? await deps.planStore.reclaimExpiredJob(jobId, owner, expiresAt(), now());
   if (!claim) return result('stale', null, ['lease held']);
   const existing = await deps.planStore.latestCandidateForJob(jobId);
   const candidateId = existing?.candidateId ?? `${jobId}:a1:1`;
+  const attemptsBefore = (await deps.db.queryOne<{ n: number }>(
+    'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]))?.n ?? 0;
   let physicalRequests = 0;
+  const countDispatchedRequests = async (): Promise<void> => {
+    const count = (await deps.db.queryOne<{ n: number }>(
+      'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]))?.n ?? 0;
+    // Ledger-backed runs count actual admitted attempts, including thrown
+    // transports; boundary-only fixtures have no physical ledger rows.
+    if (count || attemptsBefore) physicalRequests = Math.max(0, count - attemptsBefore);
+  };
+  let lostLease = false;
+  let renewalInFlight: Promise<void> | null = null;
+  const renew = async (): Promise<void> => {
+    if (lostLease) return;
+    if (!await deps.planStore.renewJobLease(jobId, owner, claim.fencingToken, expiresAt(), now())) lostLease = true;
+  };
+  // Cover provider queueing, generation and bounded repair, not only local stage boundaries.
+  const leaseTimer = setInterval(() => {
+    if (renewalInFlight || lostLease) return;
+    renewalInFlight = renew().catch(() => { lostLease = true; }).finally(() => { renewalInFlight = null; });
+  }, Math.floor(leaseTtlMs / 3));
   const assertCurrent = async (): Promise<void> => {
+    if (renewalInFlight) await renewalInFlight;
+    await renew();
+    if (lostLease) throw new Error('campaign_job_fence_expired');
     const current = await deps.planStore.getJob(jobId);
     if (!current || current.status !== 'running' || current.fencingToken !== claim.fencingToken) throw new Error('campaign_job_fence_expired');
     if (job.jobKind === 'opening_plan') {
@@ -120,6 +146,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     const ledger = await deps.db.queryOne<{ n: number }>(
       'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]);
     const used = Math.max(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? (existing.repairUsed ? 2 : 1) : 0, ledger?.n ?? 0);
+    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null }>(
+      'SELECT failure_class FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
     const persistResponse = async (text: string, repairUsed: boolean): Promise<void> => {
       deps.onStage?.('validating');
       await deps.db.transaction(async tx => {
@@ -188,8 +216,10 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       materials: frozen.materials, logicalRequestId: `campaign-plan:${jobId}`, worldId: frozen.intent.sourceCoverageBinding.worldId,
       ...(job.branchId ? { branchId: job.branchId } : {}),
       ...(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? { resume: { text: existing.rawResponseText, repairUsed: existing.repairUsed } } : {}),
+      ...(lastAttempt?.failure_class === 'reasoning_only' ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER } : {}),
       validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(); deps.onStage?.('planning'); } });
     physicalRequests = generation.physicalRequests;
+    await countDispatchedRequests();
     await assertCurrent();
     if (generation.status === 'outcome_unknown') {
       await deps.planStore.transitionJob(jobId, claim.fencingToken, 'outcome_unknown', { lastError: 'explicit replay approval required' }, now());
@@ -216,6 +246,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     });
     return result('candidate_ready', candidateId, [], physicalRequests);
   } catch (error) {
+    await countDispatchedRequests();
     const message = error instanceof Error ? error.message : String(error);
     const unknown = await deps.db.queryOne<{ n: number }>("SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=? AND status='outcome_unknown' AND replay_approved_at IS NULL", [`campaign-plan:${jobId}`]);
     const status = /fence_expired|cancelled|base_plan_stale|intent_stale/.test(message) ? 'stale'
@@ -229,5 +260,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         "UPDATE campaign_setups SET status='failed',updated_at=? WHERE setup_id=? AND status NOT IN ('cancelled','adopted')", [now(), job.setupId]);
     }
     return result(status, candidateId, [message], physicalRequests);
+  } finally {
+    clearInterval(leaseTimer);
+    if (renewalInFlight) await renewalInFlight;
   }
 }
