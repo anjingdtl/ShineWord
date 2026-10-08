@@ -1,6 +1,6 @@
 # Phase 9 接手收尾复验报告
 
-2026-10-08，Asia/Shanghai。final42映射拒绝和M5事实审查交接已通过1120项核心与Android正式入口复验；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；资料段地点交接、完整旅程及质量/性能继续收尾。
+2026-10-08，Asia/Shanghai。final43地点交接修复通过1128项核心测试与Android真实新段发布；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；旧已发布缺项的正式修复、完整旅程及质量/性能继续推进。
 
 | final29已提交检查点 | 历史结果（最新见final33） |
 |---|---|
@@ -180,3 +180,17 @@ final42复验中M5正式产生审查入口。通过真实UI与引用原文逐条
 final40隔离主机J2/J3均终止为outcome_unknown，各1次请求，reasoning/output均缺少可信用量，不属于已证明的预算耗尽。账本耗时分别731.609/92.693秒，而错误显示900秒，连接/超时分类待定位；旧请求及冻结材料保留，未重发。它们没有候选或玩家决定，不能代替final39已采用规划或计入最终80决定。A01–A40仍29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED；同最终身份旅程、持续后果、三意图质量、A02/A03/A06/A12、10+10性能及独立试玩尚未闭合，第九阶段整体未验收通过。
 
 证据：.tmp/phase9/r49-red-a.log、r49-target-a/b/c.log、r49-publication-red.log、r49-publication-target-b.log、r49-core-a/b/c.log、r49-mobile-a/b/c.log、final41/final42-apk.log、reaccept-identity-final41/final42.json、reaccept-device/final41/final42-install-preservation.json、final41-constraint-review/rejected.png、final42-canon-review/resolved.png、final41/final42-world-proof.jsonl、final40-host-J2/J3/status.jsonl；原文/数据库/模型原响应仍仅在忽略目录。本地提交，未推送或发布。
+
+## 2026-10-08 R50：地点实体、场景与运行坐标交接（final43）
+
+原映射局面可能使用规范地点实体ID，而已证明场景和角色快照使用中文地点名；依赖检查只认地点名，因此拒绝合法局面。actor_at条件还要求地点满足英文ID格式，与实际运行坐标冲突。新增共享地点解析：以实际目录中的scene为唯一证明，将地点实体ID、场景条目ID和运行地点名归到同一坐标及真实scene依赖；并遍历激活/知识/可见条件的all/any/not、actorAt要求、移动目的地和参考事件条件。未知实体、非scene条目、无实际场景支持和同名异坐标均保持拒绝；同坐标多个场景版本保留完整依赖集合。只处理类型化地点字段，不替换人物ID或叙述、不修改原提案/旧档案。actor_at接受实际非空中文坐标，仍校验人物稳定ID和条件AST。
+
+新增8项回归，首次4项目标RED为0/4；统一运行坐标合同后44/44通过，核心1128/1128、0失败0跳过、39.232秒。移动类型检查、Debug构建44秒、版本一致性和diff检查通过。final43生产源码905a2d844363746350474bddd8dbb10cb133dd5adc1834dcd6065ef30c76773f，APK afd3108e02f00c6530b203acbb7dbdf277b5cd3ed1430bae5e502fa810cc955e，保留安装与实际APK hash相符；原文、canon事实/事件/实体、旧世界包、旧segment工件、已采用计划/战役工件/快照和旧付费映射均逐值保留。2个旧未知任务及其冻结材料/attempt未被重发。
+
+端上“继续构建”生成第三个资料段：实际局面situation-sit-witch-trial从规范城堡实体ID解析到“城堡”，绑定真实scene依赖并经M5正式发布。真实world_mapping仅1次、可信succeeded，wire10096、推理56、总输出5656、输入40725、73.540秒，没有预算截断。既有冻结配置仍low/直连，新增attempt以持久幂等登记计入共享预算1202/1500，上限未变化。项目显示已就绪3段、正在准备0段。
+
+补充上一轮时点：6400–9600段在final42最后取证之后已完成发布，但因当时地点编译缺陷未包含situation-sit-witch-verdict；其major审查仍开放。该工件属于final42，不能算作final43同案修复。final43的新局面证明正确编译/发布链路，不能证明已发布旧缺项被补回。已发布工件不可改写，原paid proposal保留；下一步需正式补充发布/重编译入口及内容质量复核。旧局面GM备注还引用被拒绝规则，不能仅消除地点告警便断言内容质量合格。
+
+整体验收仍29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED；最终同身份80个有意义决定、持续后果、三意图质量、A02/A03/A06/A12、10+10性能及独立试玩继续推进。final40 J2/J3未知结局保留，连接提前中断误报900秒超时正在修复，不能归类为已证明预算耗尽。
+
+证据：.tmp/phase9/r50-location-red.log、r50-location-target-a/b.log、r50-core-a.log、r50-mobile-a.log、final43-apk.log、reaccept-identity-final43.json、reaccept-device/final43-install-preservation.json、final43-world-proof.jsonl、final43-location-publication-proof.json。原文、数据库、响应与密钥只保留在忽略目录；本地提交，不推送或发布。

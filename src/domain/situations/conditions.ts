@@ -131,7 +131,11 @@ function validateLeaf(record: Record<string, unknown>, errors: string[], prefix:
       break;
     case 'actor_at':
       requireId(record.actorId, errors, `${prefix}.actor_at.actorId`);
-      requireId(record.locationId, errors, `${prefix}.actor_at.locationId`);
+      // Branch coordinates use the scene's locationId, which can be a novel's
+      // Unicode place name. It is a literal equality operand, not an entry ID.
+      if (typeof record.locationId !== 'string' || !record.locationId.trim()) {
+        errors.push(`${prefix}.actor_at.locationId: must be a non-empty location string.`);
+      }
       break;
     case 'actor_condition':
       requireId(record.actorId, errors, `${prefix}.actor_condition.actorId`);

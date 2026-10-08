@@ -537,6 +537,59 @@ test('world closure: a canonical location name resolves to its scene dependency 
   } finally { h.db.close(); }
 });
 
+for (const ref of ['旧桥', 'place', 'scene-place']) test(`world location references: ${ref} compiles to the same runtime coordinate and certified scene`, async () => {
+  const h=await setup();try {
+    await saveCanon(h,canon(20));
+    const raw=closureSituation('location-identity',ref,[]);
+    raw.activation={kind:'all',of:[{kind:'world_time_at_least',order:1},{kind:'actor_at',actorId:'player',locationId:ref}]};
+    raw.knowledgeCondition={kind:'actor_at',actorId:'player',locationId:ref};
+    raw.methods[0].firstStep={intent:'前往桥头查看现场',actionKind:'move',destinationId:ref};
+    const input={worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'location-identity',createdAt:now(),incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({situations:[raw]})}}}};
+    const draft=await buildPackageDraftFromCanon(input),s=draft.entries.find(e=>e.entryId==='situation-location-identity');
+    assert.ok(s,'all location spellings must resolve through an evidenced scene');
+    assert.equal(s.definition.locationId,'旧桥');
+    assert.equal(s.definition.activation.of[1].locationId,'旧桥');
+    assert.equal(s.definition.knowledgeCondition.locationId,'旧桥');
+    assert.equal(s.definition.methods[0].firstStep.destinationId,'旧桥');
+    assert.deepEqual(s.dependencyIds,['scene-place']);
+    const {evaluateCondition}=load('domain/situations/conditions');
+    assert.deepEqual(evaluateCondition(s.definition.activation,{actorLocation:()=> '旧桥',causalWorldTimeOrder:1}),{value:true,unknown:false});
+    assert.equal((await h.worldStore.listReviewIssues('w')).length,0);
+    const cache=h.db.prepare("SELECT result_json FROM world_jobs WHERE kind='rule_mapping'").all();
+    const again=await buildPackageDraftFromCanon({...input,provider:{async complete(){throw Error('paid mapping must be reused');}}});
+    assert.deepEqual(again.entries,draft.entries);
+    assert.deepEqual(h.db.prepare("SELECT result_json FROM world_jobs WHERE kind='rule_mapping'").all(),cache);
+  } finally {h.db.close();}
+});
+
+test('world location references: unknown movement destinations and condition locations keep the situation out of publication',async()=>{
+  for(const field of ['movement','condition']){
+    const h=await setup();try{
+      await saveCanon(h,canon(20));const raw=closureSituation('bad-location','旧桥',[]);
+      if(field==='movement')raw.methods[0].firstStep={intent:'前往不存在的地点',actionKind:'move',destinationId:'unproved-place'};
+      else raw.activation={kind:'actor_at',actorId:'player',locationId:'unproved-place'};
+      const draft=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'bad-location',createdAt:now(),incrementalMapping:options(),
+        provider:{async complete(){return {text:JSON.stringify({situations:[raw]})}}}});
+      assert.equal(draft.entries.some(e=>e.entryId==='situation-bad-location'),false);
+      const issue=(await h.worldStore.listReviewIssues('w')).find(i=>i.kind==='situation_dangling_reference');
+      assert.ok(issue);assert.ok(JSON.parse(issue.detailJson).dangling.includes('unproved-place'));
+    } finally {h.db.close();}
+  }
+});
+
+test('location condition coordinates accept Unicode names while malformed locations and actor identifiers remain invalid',()=>{
+  const {validateConditionShape}=load('domain/situations/conditions');
+  for(const locationId of ['旧桥','中央广场 一层','ent-bridge']){
+    const errors=[];validateConditionShape({kind:'actor_at',actorId:'player',locationId},errors);assert.deepEqual(errors,[]);
+  }
+  for(const locationId of ['', '  ', null, 4, {}, []]){
+    const errors=[];validateConditionShape({kind:'actor_at',actorId:'player',locationId},errors);assert.ok(errors.length);
+  }
+  const errors=[];validateConditionShape({kind:'actor_at',actorId:'not an actor id',locationId:'旧桥'},errors);
+  assert.ok(errors.some(e=>e.includes('actorId')));
+});
+
 test('world closure: incremental situations retain certified predecessor actors, skills and knowledge; only the proved stale issue is resolved', async () => {
   const h = await setup();
   try {

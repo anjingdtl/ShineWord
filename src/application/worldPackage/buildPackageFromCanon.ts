@@ -28,6 +28,8 @@ import { validatePackage } from './validate';
 import type { SqliteTransaction } from '../ports/sqlite';
 import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
 import { createUnsupportedConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND, type MappingConstraintReview } from './mappingConstraintReview';
+import { createPublishedLocationIndex, normalizeSituationLocations } from '../content/locationReferences';
+import type { SituationDefinitionV1 } from '../../domain/situations/types';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -1935,10 +1937,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       [...selection.affectedEntryIds, 'lore-review-summary']) : entries;
   const publishedIds = new Set(dependencyEntries.map(entry => entry.entryId));
   const verifiedSituationIssues: string[] = [];
-  const sceneIdsByLocation = new Map(dependencyEntries.filter(entry => entry.kind === 'scene')
-    .map(entry => [String((entry.definition as { locationId?: string }).locationId ?? ''), entry.entryId]));
-  const sceneEntryIds = new Set(dependencyEntries.filter(entry => entry.kind === 'scene').map(entry => entry.entryId));
-  const locationDependency = (id: string): string => sceneEntryIds.has(id) ? id : sceneIdsByLocation.get(id) ?? id;
+  const locations = createPublishedLocationIndex(dependencyEntries, entities);
   // Models may reference canon actors as actor-canon-{entityId}; resolve to
   // the published template by entity name BEFORE closure (definition rewrite).
   const templateIdByEntity = new Map<string, string>();
@@ -1956,6 +1955,8 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     return resolved ?? value;
   };
   for (const situation of proposals.situations) {
+    const normalized = normalizeSituationLocations(situation.definition as SituationDefinitionV1, locations);
+    situation.definition = normalized.definition;
     const definition = situation.definition as {
       participantEntryIds?: string[];
       locationId?: string;
@@ -1969,8 +1970,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
         method.firstStep.targetEntryId = resolveCanonRef(method.firstStep.targetEntryId);
       }
     }
-    const references = new Set<string>(definition.participantEntryIds ?? []);
-    if (definition.locationId) references.add(locationDependency(definition.locationId));
+    const references = new Set<string>([...(definition.participantEntryIds ?? []), ...normalized.sceneEntryIds]);
     for (const method of definition.methods ?? []) {
       if (method.firstStep?.targetEntryId) references.add(method.firstStep.targetEntryId);
       if (method.firstStep?.skillId) references.add(method.firstStep.skillId);
@@ -1979,7 +1979,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       if (method.requires?.itemId) references.add(method.requires.itemId);
       if (method.requires?.knowledgeEntryId) references.add(method.requires.knowledgeEntryId);
     }
-    const dangling = [...references].filter(ref => !publishedIds.has(ref));
+    const dangling = [...new Set([...references].filter(ref => !publishedIds.has(ref)).concat(normalized.unresolvedLocations))];
     if (dangling.length > 0) {
       await worldStore.saveReviewIssue({
         worldId,
