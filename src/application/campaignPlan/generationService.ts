@@ -8,7 +8,7 @@ import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
 import { reasoningDialectForModel, REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
 import type { ReasoningPolicySelection } from '../llm/reasoningPolicy';
 import { recoverReasoningPolicy, observedReasoningTokensFromFailure } from '../llm/reasoningFeedback';
-import { estimateTokens } from '../context/tokenEstimate';
+import { estimateFinalWireInput, verifyFinalWireRequest } from '../llm/finalWireVerifier';
 import { endpointBucketId } from '../worldBuild/rateScheduler';
 import type { ContentEntry } from '../../domain/content/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
@@ -184,9 +184,13 @@ export async function generateCampaignPlanCandidate(input: {
   const demands = DEFAULT_OUTPUT_DEMANDS.campaign_plan;
   const maximum = Math.min(demands.maximum, input.profile.contentOutputTokens ?? 16_384);
   let reserveMultiplier = input.reasoningReserveMultiplier ?? 1;
+  const wireMessages = (materials: PlanRequestMaterials) => [
+    { role: 'system' as const, content: materials.system },
+    { role: 'user' as const, content: materials.user },
+  ];
   let plan = planLlmRequest({
     ...planLlmRequestInput(input, demands, maximum),
-    estimatedMandatoryInputTokens: estimateTokens(`${input.materials.system}\n${input.materials.user}`),
+    estimatedMandatoryInputTokens: estimateFinalWireInput(wireMessages(input.materials)),
   });
   if (!plan.reasoningPolicy) throw new Error('campaign_plan_policy_missing');
   const observed = input.observedReasoningTokens;
@@ -195,7 +199,7 @@ export async function generateCampaignPlanCandidate(input: {
       plan.reasoningPolicy.reserveTokens, observed) : undefined;
   if (recoverySelection !== undefined) {
     plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, recoverySelection),
-      estimatedMandatoryInputTokens: estimateTokens(`${input.materials.system}\n${input.materials.user}`) });
+      estimatedMandatoryInputTokens: estimateFinalWireInput(wireMessages(input.materials)) });
   }
   // The original mandatory material and profile are frozen. A larger local
   // reasoning reservation alone does not improve an unchanged wire ceiling.
@@ -232,9 +236,17 @@ export async function generateCampaignPlanCandidate(input: {
 
   const dispatch = async (request: LlmRequest): Promise<{ text: string; unknown: boolean }> => {
     await input.beforeDispatch?.();
-    // Repair instructions are mandatory too; validate their actual input size.
-    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, recoverySelection),
-      estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
+    // Check the allocation actually sent, after adding the complete candidate
+    // and repair instructions. Replanning here could accept a smaller wire
+    // ceiling while the request still sends the original frozen allocation.
+    const check = verifyFinalWireRequest({ messages: wireMessages(request), budget: {
+      contextWindowTokens: plan.envelope.contextWindowTokens,
+      hardInputLimit: plan.envelope.hardInputLimit,
+      wireOutputTokens: request.maxOutputTokens,
+      safetyMarginTokens: plan.envelope.safetyMarginTokens,
+    } });
+    if (request.scheduling) request = { ...request, scheduling: { ...request.scheduling,
+      estimatedInputTokens: check.estimatedInputTokens } };
     try {
       physicalRequests += 1;
       const response = await input.provider.complete(request);
@@ -251,7 +263,7 @@ export async function generateCampaignPlanCandidate(input: {
         recoverySelection = recoverReasoningPolicy(planLlmRequestInput(input, demands, maximum).reasoningPolicy,
           initialPolicy.reserveTokens, observedReasoningTokensFromFailure(error));
         plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, recoverySelection),
-          estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
+          estimatedMandatoryInputTokens: estimateFinalWireInput(wireMessages(request)) });
         reasoningPolicy = plan.reasoningPolicy!;
         assertRecoveryBudgetIncreased(request.maxOutputTokens, plan.wireOutputTokens);
         return dispatch({ ...request, maxOutputTokens: plan.wireOutputTokens,

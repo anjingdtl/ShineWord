@@ -132,6 +132,9 @@ export class LedgeredProvider implements LlmProvider {
 
     const now = this.options.clock ?? Date.now;
     const requestFingerprint = stableFingerprint({ system: request.system, user: request.user, role: request.role,
+      // These messages are part of the actual wire payload. Keep the historical
+      // identity for an absent/empty list, but never reuse another append scope.
+      ...(request.followUpUserMessages?.length ? { followUpUserMessages: request.followUpUserMessages } : {}),
       maxOutputTokens: request.maxOutputTokens, jsonMode: request.jsonMode, reasoningTier: request.reasoningTier,
       reasoningReserveTokens: request.reasoningReserveTokens, model: this.options.modelProfileFingerprint });
     if (['planner', 'narrator'].includes(meta.requestKind)) {
@@ -172,11 +175,12 @@ export class LedgeredProvider implements LlmProvider {
         responseJson: JSON.stringify(response),
         responseHash: stableFingerprint(response),
         providerRequestId: response.requestId ?? null,
+        httpStatus: response.requestMetrics?.at(-1)?.httpStatus ?? null,
         inputTokens: response.usage?.inputTokens ?? null,
         outputTokens: response.usage?.outputTokens ?? null,
         reasoningTokens: response.usage?.reasoningTokens ?? null,
         cachedInputTokens: response.usage?.cachedInputTokens ?? null,
-        estimatedUsage: response.usage?.estimated ? 1 : 0,
+        estimatedUsage: response.usage?.estimated === false ? 0 : 1,
         finishedAt: now(),
       };
       await this.store.updateAttempt(attempt.attemptId, patch);

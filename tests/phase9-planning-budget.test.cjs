@@ -8,6 +8,9 @@ const { LedgeredProvider } = require('../dist/application/llm/requestLedger');
 const { RateScheduledProvider } = require('../dist/application/llm/scheduledProvider');
 const { GlobalRateScheduler, endpointBucketId } = require('../dist/application/worldBuild/rateScheduler');
 const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
+const { generateCampaignPlanCandidate } = require('../dist/application/campaignPlan/generationService');
+const { estimateFinalWireInput } = require('../dist/application/llm/finalWireVerifier');
+const { deriveSafetyMargin } = require('../dist/application/context/modelEnvelope');
 const profile = { id: 'budget', name: 'Budget', endpoint: 'https://example.invalid/v1', model: 'glm-5.3-flash', keyRef: 'test', reasoningTier: 'high',
   capabilities: { contextWindow: 1048576, maxOutputTokens: 32768, supportsJson: true, supportsStreaming: false }, contentOutputTokens: 16384 };
 const largeProfile = { ...profile, capabilities: { ...profile.capabilities, maxOutputTokens: 65536 } };
@@ -263,4 +266,41 @@ test('planning budget: a known exhausted legacy attempt without a durable wire c
     assert.match(restored.errors.join(' '),/缺少有效的输出预算记录/);assert.equal(q.wires.length,1);
     assert.deepEqual(await q.store.listAttempts('campaign-plan:missing-wire-restore'),before);
   }finally{h.db.close();}
+});
+
+test('planning budget: full structural repair that exceeds the frozen wire envelope stops before a second paid request', async () => {
+  const h = await fixture();
+  try {
+    const narrow = { ...profile, capabilities: { ...profile.capabilities, contextWindow: 32768 } };
+    const raw = JSON.stringify({ invalid: '证'.repeat(10000) });
+    const q = await setup(h, 'repair-wire-overflow', [raw, JSON.stringify(candidateModel())], undefined, narrow);
+    const first = await q.run();
+    assert.equal(first.status, 'retryable_failed');
+    assert.equal(first.physicalRequests, 1, 'oversized assembled repair must not spend its remaining request');
+    assert.match(first.errors.join(' '), /Final wire check failed/);
+    const candidate = await h.planStore.latestCandidateForJob('repair-wire-overflow');
+    assert.equal(candidate.rawResponseText, raw, 'retain the entire paid response, without clipping');
+    const root = h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:repair-wire-overflow').payload_json;
+    const attempts = await q.store.listAttempts('campaign-plan:repair-wire-overflow');
+    assert.equal((await q.run()).physicalRequests, 0, 'restoration cannot pay for the same infeasible repair');
+    assert.equal(q.wires.length, 1);
+    assert.deepEqual(await q.store.listAttempts('campaign-plan:repair-wire-overflow'), attempts);
+    assert.equal(h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:repair-wire-overflow').payload_json, root);
+  } finally { h.db.close(); }
+});
+
+test('planning budget: complete repair input is reflected in scheduler admission and remains within the exact frozen wire ceiling', async () => {
+  const requests = [];
+  const result = await generateCampaignPlanCandidate({ profile, materials: { system: 'protocol', user: '完整玩家意图' },
+    logicalRequestId: 'wire-fit', worldId: 'world-fixture', provider: { async complete(input) {
+      requests.push(input); return { text: requests.length === 1 ? '{}' : JSON.stringify(candidateModel()) };
+    } } });
+  assert.equal(result.status, 'ready');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].maxOutputTokens, requests[1].maxOutputTokens, 'structural repair retains the frozen wire allocation');
+  for (const input of requests) {
+    const tokens = estimateFinalWireInput([{ role: 'system', content: input.system }, { role: 'user', content: input.user }]);
+    assert.equal(input.scheduling.estimatedInputTokens, tokens);
+    assert.ok(tokens + input.maxOutputTokens + deriveSafetyMargin(profile.capabilities.contextWindow) <= profile.capabilities.contextWindow);
+  }
 });
