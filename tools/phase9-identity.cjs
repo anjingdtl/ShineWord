@@ -17,7 +17,7 @@ function codeIdentity() {
   // v3 also includes the version metadata actually bundled into the UI.
   // Native sources/resources and build inputs are included. Generated bundles,
   // local SDK/signing properties and credentials are deliberately excluded.
-  const nativeFiles = cp.execFileSync('git', ['ls-files', 'mobile/android'], { cwd: root, encoding: 'utf8' })
+  const nativeFiles = cp.execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', 'mobile/android'], { cwd: root, encoding: 'utf8' })
     .trim().split(/\r?\n/).filter(Boolean);
   files.push(...nativeFiles, ...[
     'mobile/scripts/build-apk.js', 'mobile/App.tsx', 'mobile/index.js', 'mobile/src/version.json',

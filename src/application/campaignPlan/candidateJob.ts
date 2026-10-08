@@ -48,6 +48,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     if (count || attemptsBefore) physicalRequests = Math.max(0, count - attemptsBefore);
   };
   let lostLease = false;
+  let releaseExecution: (() => void) | undefined;
   let renewalInFlight: Promise<void> | null = null;
   const renew = async (): Promise<void> => {
     if (lostLease) return;
@@ -146,8 +147,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     const ledger = await deps.db.queryOne<{ n: number }>(
       'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]);
     const used = Math.max(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? (existing.repairUsed ? 2 : 1) : 0, ledger?.n ?? 0);
-    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null }>(
-      'SELECT failure_class FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
+    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null; reasoning_tokens: number | null }>(
+      'SELECT failure_class,reasoning_tokens FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
     const persistResponse = async (text: string, repairUsed: boolean): Promise<void> => {
       deps.onStage?.('validating');
       await deps.db.transaction(async tx => {
@@ -212,11 +213,16 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       }), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact)];
       return { compiled, errors };
     };
+    // One scope spans scheduler waiting, all bounded dispatches, validation and
+    // publication; physical transport protection alone leaves gaps at repair.
+    releaseExecution = await deps.acquireExecution?.();
+    await assertCurrent();
     const generation = await generateCampaignPlanCandidate({ provider: deps.provider, profile: frozen.profile,
       materials: frozen.materials, logicalRequestId: `campaign-plan:${jobId}`, worldId: frozen.intent.sourceCoverageBinding.worldId,
       ...(job.branchId ? { branchId: job.branchId } : {}),
       ...(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? { resume: { text: existing.rawResponseText, repairUsed: existing.repairUsed } } : {}),
-      ...(lastAttempt?.failure_class === 'reasoning_only' ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER } : {}),
+      ...(lastAttempt && ['reasoning_only', 'length'].includes(lastAttempt.failure_class ?? '')
+        ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER, observedReasoningTokens: lastAttempt.reasoning_tokens } : {}),
       validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(); deps.onStage?.('planning'); } });
     physicalRequests = generation.physicalRequests;
     await countDispatchedRequests();
@@ -262,6 +268,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     return result(status, candidateId, [message], physicalRequests);
   } finally {
     clearInterval(leaseTimer);
+    releaseExecution?.();
     if (renewalInFlight) await renewalInFlight;
   }
 }

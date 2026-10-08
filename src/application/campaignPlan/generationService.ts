@@ -160,8 +160,10 @@ export async function generateCampaignPlanCandidate(input: {
   /** Durable response recovery; never redispatch a completed generation. */
   resume?: { text: string; repairUsed: boolean };
   physicalRequestBudget?: number;
-  /** Resume after a known reasoning-only attempt under the original aggregate cap. */
+  /** Resume a known output-exhausted attempt under the original aggregate cap. */
   reasoningReserveMultiplier?: number;
+  /** A completed failed response is a lower bound, not a calibrated p95. */
+  observedReasoningTokens?: number | null;
   onResponse?: (text: string, repairUsed: boolean) => Promise<void>;
   beforeDispatch?: () => Promise<void>;
   /** Local reference and executable-contract gates share the same repair. */
@@ -171,26 +173,17 @@ export async function generateCampaignPlanCandidate(input: {
   const maximum = Math.min(demands.maximum, input.profile.contentOutputTokens ?? 16_384);
   let reserveMultiplier = input.reasoningReserveMultiplier ?? 1;
   let plan = planLlmRequest({
-    capabilities: resolveModelCapabilities({
-      declared: {
-        contextWindowTokens: input.profile.capabilities.contextWindow,
-        maxOutputTokens: input.profile.capabilities.maxOutputTokens,
-        supportsJsonMode: input.profile.capabilities.supportsJson,
-        reportsUsage: input.profile.capabilities.reportsUsage,
-        reasoningUsageReported: input.profile.capabilities.reportsUsage,
-      },
-      reasoningMode: 'always_on',
-    }),
-    requestKind: 'campaign_plan',
+    ...planLlmRequestInput(input, demands, maximum, reserveMultiplier),
     estimatedMandatoryInputTokens: estimateTokens(`${input.materials.system}\n${input.materials.user}`),
-    businessOutputDemand: { ...demands, target: Math.min(demands.target, maximum), maximum },
-    reasoningPolicy: {
-      tier: normalizeReasoningTier(input.profile.reasoningTier ?? input.profile.reasoningEffort),
-      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model),
-      model: input.profile.model,
-      reserveMultiplier,
-    },
   });
+  if (!plan.reasoningPolicy) throw new Error('campaign_plan_policy_missing');
+  const observed = input.observedReasoningTokens;
+  let retryReserveOverride = reserveMultiplier > 1 && typeof observed === 'number' && Number.isFinite(observed) && observed >= 0
+    ? Math.max(plan.reasoningPolicy.reserveTokens, Math.ceil(observed * 1.05)) : undefined;
+  if (retryReserveOverride !== undefined) {
+    plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, retryReserveOverride),
+      estimatedMandatoryInputTokens: estimateTokens(`${input.materials.system}\n${input.materials.user}`) });
+  }
   const initialPolicy = plan.reasoningPolicy;
   if (!initialPolicy) throw new Error('campaign_plan_policy_missing');
   let reasoningPolicy = initialPolicy;
@@ -222,7 +215,7 @@ export async function generateCampaignPlanCandidate(input: {
   const dispatch = async (request: LlmRequest): Promise<{ text: string; unknown: boolean }> => {
     await input.beforeDispatch?.();
     // Repair instructions are mandatory too; validate their actual input size.
-    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier),
+    planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, retryReserveOverride),
       estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
     try {
       physicalRequests += 1;
@@ -234,9 +227,13 @@ export async function generateCampaignPlanCandidate(input: {
         return { text: '', unknown: true };
       }
       const metric = error instanceof LlmRequestFailure ? error.requestMetrics.at(-1) : undefined;
-      if (metric?.completionState === 'reasoning_only' && physicalRequests < budget && reserveMultiplier === 1) {
+      if ((metric?.completionState === 'reasoning_only' || metric?.completionState === 'length')
+        && physicalRequests < budget && reserveMultiplier === 1) {
         reserveMultiplier = REASONING_ONLY_RESERVE_MULTIPLIER;
-        plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier),
+        const observedTokens = metric.usage?.reasoningTokens;
+        retryReserveOverride = Math.max(Math.ceil(initialPolicy.reserveTokens * reserveMultiplier),
+          typeof observedTokens === 'number' && Number.isFinite(observedTokens) && observedTokens >= 0 ? Math.ceil(observedTokens * 1.05) : 0);
+        plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, retryReserveOverride),
           estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
         reasoningPolicy = plan.reasoningPolicy!;
         return dispatch({ ...request, maxOutputTokens: plan.wireOutputTokens,
@@ -287,16 +284,20 @@ export async function generateCampaignPlanCandidate(input: {
   return { status: 'invalid', model: null, parseErrors: repairErrors.length > 0 ? repairErrors : firstErrors, rawText: repair.text, physicalRequests };
 }
 
-function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number, reserveMultiplier = 1) {
+function planLlmRequestInput(input: { profile: ApiProfile }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number, reserveMultiplier = 1, reserveTokensOverride?: number) {
   return {
     capabilities: resolveModelCapabilities({ declared: {
       contextWindowTokens: input.profile.capabilities.contextWindow, maxOutputTokens: input.profile.capabilities.maxOutputTokens,
       supportsJsonMode: input.profile.capabilities.supportsJson, reportsUsage: input.profile.capabilities.reportsUsage,
       reasoningUsageReported: input.profile.capabilities.reportsUsage }, reasoningMode: 'always_on' as const }),
     requestKind: 'campaign_plan' as const, estimatedMandatoryInputTokens: 0,
-    businessOutputDemand: { ...demands, target: Math.min(demands.target, maximum), maximum },
+    // A known exhausted completion needs a whole JSON again. Use the remaining
+    // headroom for business output instead of dropping to the cold-start target.
+    // The kernel still enforces the frozen model ceiling and business minimum.
+    businessOutputDemand: { ...demands, target: Math.min(reserveMultiplier > 1 ? maximum : demands.target, maximum), maximum },
     reasoningPolicy: { tier: normalizeReasoningTier(input.profile.reasoningTier ?? input.profile.reasoningEffort),
-      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model), model: input.profile.model, reserveMultiplier },
+      providerDialect: input.profile.reasoningDialect ?? reasoningDialectForModel(input.profile.model), model: input.profile.model,
+      ...(reserveTokensOverride === undefined ? { reserveMultiplier } : { reserveTokensOverride, reserveMultiplier: 1 }) },
   };
 }
 

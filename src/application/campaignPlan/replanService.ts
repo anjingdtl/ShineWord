@@ -109,6 +109,7 @@ export function applyGoalChange(
 
 export interface ReplanJobDeps {
   segmentContent?: import('./planningService').PlanningRunDeps['segmentContent'];
+  acquireExecution?: import('./planningService').PlanningRunDeps['acquireExecution'];
   db: SqliteDatabase;
   planStore: SqliteCampaignPlanStore;
   worldStore: SqliteWorldStore;

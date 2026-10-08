@@ -7,3 +7,7 @@ AppRegistry.registerComponent(appName, () => App);
 // Closeout C5: headless world-build runner, woken by the dataSync foreground
 // service. Only the runId crosses the boundary; state lives in SQLite.
 AppRegistry.registerHeadlessTask('WorldBuildRunner', () => require('./src/buildRunner').worldBuildRunner);
+
+// This task only protects an already-owned HTTP request and its JS timers.
+// It receives an opaque token; no credentials, request text or job dispatch.
+AppRegistry.registerHeadlessTask('LlmRequestKeepAlive', () => require('./src/llmExecutionBridge').llmRequestKeepAlive);

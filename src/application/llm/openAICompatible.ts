@@ -5,6 +5,7 @@ import type {
   LlmRequest,
   LlmResponse,
   LlmPhysicalRequestMetric,
+  LlmRequestKind,
   SecretStore,
 } from './types';
 import { normalizeReasoningTier } from './types';
@@ -23,7 +24,12 @@ export interface HttpRequest {
   headers: Record<string, string>;
   body: string;
   timeoutMs: number;
+  /** Local execution policy only; never serialised into the provider body. */
+  requestKind?: LlmRequestKind;
 }
+
+/** A transport prerequisite failed before any HTTP call was created. */
+export class HttpRequestNotSentError extends Error {}
 
 export interface HttpResponse {
   status: number;
@@ -159,6 +165,7 @@ function transportErrorCategory(error: unknown): 'timeout' | 'network' {
  * server. Generic mobile fetch failures, disconnects and timeout messages do
  * not prove that billing never occurred. */
 function definitelyNotSent(error: unknown): boolean {
+  if (error instanceof HttpRequestNotSentError) return true;
   let value: unknown = error;
   for (let depth = 0; depth < 4; depth += 1) {
     if (!value || typeof value !== 'object') return false;
@@ -290,6 +297,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           },
           body: JSON.stringify(body),
           timeoutMs,
+          requestKind: request.requestKind,
         });
       } catch (error) {
         const category = transportErrorCategory(error);
@@ -384,7 +392,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
           httpStatus: response.status,
           outcome: finishReason === 'length' ? 'invalid_response' : 'completed',
-          ...(finishReason === 'length' ? { completionState: 'length' as const } : {}),
+          ...(finishReason === 'length' ? { completionState: 'length' as const, errorCategory: 'invalid_response' as const } : {}),
           timings: response.timings,
           usage: normalizedUsage,
         });
@@ -438,8 +446,8 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
       if (lastEmptyReason === 'reasoning_only') {
         throw new LlmRequestFailure(
-          '模型只输出了思维链，未产生正文（已自动重试并提高输出预算）。' +
-            `请提高该模型的最大输出 token 配置后重试（finish_reason=${lastFinishReason ?? 'unknown'}）。`,
+          '模型只输出了思考内容，未产生正文。' +
+            `请检查该模型的输出预算后重试（finish_reason=${lastFinishReason ?? 'unknown'}）。`,
           requestMetrics,
         );
       }

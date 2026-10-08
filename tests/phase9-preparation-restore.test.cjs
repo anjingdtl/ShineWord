@@ -5,11 +5,13 @@ const { loadMobileModule } = require('./helpers/mobileHarness.cjs');
 
 async function bridge(h) {
   let calls = 0;
+  let acquisitions = 0;
   const api = loadMobileModule('mobile/src/campaignPlanning.ts', {
     './database': { getDatabaseRuntime: async () => ({ db: h.adapter, worldStore: h.worlds }) },
     './runtime': { buildProvider: async () => ({ async complete() { calls++; throw Error('Unexpected paid replay'); } }) },
+    './llmExecutionBridge': { acquirePlanningExecution: async () => { acquisitions++; throw Error('A terminal preparation must not acquire execution'); } },
   });
-  return { api, calls: () => calls };
+  return { api, calls: () => calls, acquisitions: () => acquisitions };
 }
 
 async function savedJob(h, status, lastError = null) {
@@ -41,6 +43,7 @@ test('preparation restore: cold and explicit resume preserve outcome_unknown, ex
       assert.equal(phases.at(-1), 'outcome_unknown');
     }
     assert.equal(b.calls(), 0);
+    assert.equal(b.acquisitions(), 0);
     assert.deepEqual(await h.planStore.getJob('job-' + id), original);
     assert.deepEqual(await h.turns.getState(h.branchId), state);
   } finally { h.db.close(); }
@@ -63,5 +66,6 @@ test('preparation restore: a rejected candidate stays failed and an intact ready
     const repeated = await b.api.resumeCampaignPreparation('setup-t', ready.input, () => {});
     assert.equal(repeated.phase, 'ready'); assert.deepEqual(repeated.proposal, ready.proposal);
     assert.equal(b.calls(), 0);
+    assert.equal(b.acquisitions(), 0);
   } finally { h.db.close(); }
 });

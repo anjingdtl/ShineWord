@@ -14,6 +14,7 @@ import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/doma
 import type { BookName, BookSection, BranchContentManifest, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
 import { createBaseContentManifest, loadBranchDeltaEntries } from '../../src/application/worldPackage/contentManifest';
 import { FetchHttpTransport } from './fetchTransport';
+import { acquirePlanningExecution } from './llmExecutionBridge';
 import { getDatabaseRuntime } from './database';
 import { createNativeRandomBytes, nativeSha256 } from './nativeCrypto';
 import { KeychainSecretStore } from './secureKeyStore';
@@ -73,6 +74,7 @@ export async function createSession(
       projectStyle: runtime.projectStyle,
       segmentContent: runtime.segmentPublication,
       onForegroundActivity: playing => setSchedulerActivity({ playing }),
+      acquirePlanningExecution,
       llmLedger: runtime.llmLedger,
       storyMemory: { store: runtime.storyMemory },
       episodic: { store: runtime.episodic },

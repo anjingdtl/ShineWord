@@ -13,6 +13,7 @@ import { getDatabaseRuntime } from './database';
 import { buildProvider } from './runtime';
 import { resolveSkillKey } from '../../src/domain/characters/card';
 import { canonicalJsonOf, sha256HexOf } from '../../src/application/campaignPlan/hashing';
+import { acquirePlanningExecution } from './llmExecutionBridge';
 
 export type PlanningPhase =
   | 'preparing'      // 准备相关资料
@@ -139,7 +140,7 @@ export async function prepareCampaignPlan(
   const provider: LlmProvider = await buildProvider(input.profile);
   const run = await runOpeningPlanJob({
     db: runtime.db, planStore, worldStore: runtime.worldStore, provider, profile: input.profile,
-    onStage: onPhase,
+    onStage: onPhase, acquireExecution: acquirePlanningExecution,
   }, jobId, {
     anchorTitle: input.anchorTitle,
     playerName: input.protagonist.name,
@@ -189,7 +190,7 @@ export async function resumeCampaignPreparation(setupId: string, input: PrepareP
   if (!job) throw new Error('保存的规划任务缺失。');
   onPhase('planning');
   const run = await runOpeningPlanJob({ db: runtime.db, planStore, worldStore: runtime.worldStore,
-    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase }, jobId,
+    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase, acquireExecution: acquirePlanningExecution }, jobId,
     { anchorTitle: input.anchorTitle, playerName: input.protagonist.name, protagonistSkills: input.protagonistSkills, openingGoalSuggestions: [] });
   const proposal = await readReadyProposal(setupId);
   const result = projectPreparation(await planStore.getJob(jobId), proposal, run.errors);

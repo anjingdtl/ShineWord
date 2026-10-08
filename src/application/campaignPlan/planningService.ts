@@ -20,6 +20,8 @@ export interface PlanningRunDeps {
   profile: ApiProfile;
   now?: () => string;
   onStage?: (phase: 'planning' | 'validating') => void;
+  /** Composition-root lifetime protection; SQL leases/ledger own execution. */
+  acquireExecution?: () => Promise<() => void>;
   segmentContent?: { loadEffectiveCatalog(input: { campaignId: string; branchId: string;
     binding?: import('../../domain/content/segmentArtifact').SegmentContentBindingV1 }): Promise<{ entries: ContentEntry[] }> };
 }

@@ -8,6 +8,9 @@ function createQaProxy({ endpoint, reserve, log = () => {}, timeoutMs = 1200000 
   if (req.method !== 'POST' || req.url !== '/chat/completions') { res.writeHead(404); res.end(); return; }
   let reserved = false;
   const started = Date.now();
+  res.on('close', () => {
+    if (!res.writableFinished) report({ phase: 'downstream_closed', dispatched: reserved, ms: Date.now() - started });
+  });
   try {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     try { reserve('android-ui'); reserved = true; }

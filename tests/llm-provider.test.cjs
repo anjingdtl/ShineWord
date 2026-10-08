@@ -167,7 +167,11 @@ test('provider emits one physical attempt when configured with a one-request cap
   }, 1000, { maxPhysicalRequests: 1, onPhysicalRequest: metric => observed.push(metric) });
   await assert.rejects(
     provider.complete({ role: 'Extractor', system: 's', user: 'u', maxOutputTokens: 100 }),
-    /只输出了思维链/,
+    error => {
+      assert.match(error.message, /只输出了思考内容/);
+      assert.doesNotMatch(error.message, /已自动重试|已.*提高输出预算/);
+      return true;
+    },
   );
   assert.equal(requests, 1);
   assert.equal(observed.length, 1);
@@ -190,7 +194,7 @@ test('provider honors per-request physical cap and keeps the selected tier', asy
   await assert.rejects(provider.complete({
     role: 'Planner', system: 's', user: 'u', maxOutputTokens: 100,
     maxPhysicalRequests: 1, reasoningTier: 'max', reasoningReserveTokens: 50,
-  }), /只输出了思维链/);
+  }), /只输出了思考内容/);
   assert.equal(requests.length, 1, 'the application owns the one permitted follow-up attempt');
   const body = JSON.parse(requests[0].body);
   assert.equal(body.max_tokens, 100);

@@ -3,9 +3,11 @@ import type {
   HttpResponse,
   HttpTransport,
 } from '../../src/application/llm/openAICompatible';
+import { acquireLlmExecution } from './llmExecutionBridge';
 
 export class FetchHttpTransport implements HttpTransport {
   async post(request: HttpRequest): Promise<HttpResponse> {
+    const releaseExecution = await acquireLlmExecution(request);
     const startedAt = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), request.timeoutMs);
@@ -48,6 +50,7 @@ export class FetchHttpTransport implements HttpTransport {
       throw error;
     } finally {
       clearTimeout(timer);
+      releaseExecution();
     }
   }
 }

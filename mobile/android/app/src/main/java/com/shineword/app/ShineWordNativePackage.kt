@@ -13,6 +13,7 @@ class ShineWordNativePackage : ReactPackage {
     ShineWordFilesModule(reactContext),
     ShineWordTextSourceModule(reactContext),
     WorldBuildServiceModule(reactContext),
+    LlmRequestExecutionModule(reactContext),
   )
 
   override fun createViewManagers(

@@ -138,6 +138,8 @@ export interface SessionDeps {
   projectStyle?: import('../ports/phase6').ProjectStylePortV1;
   /** Composition-root resource signal; does not alter rule authority. */
   onForegroundActivity?(busy: boolean): void;
+  /** Keeps an already claimed planning job alive through its final commit. */
+  acquirePlanningExecution?: () => Promise<() => void>;
   segmentContent?: {
     loadEffectiveCatalog(input: { campaignId: string; branchId: string; binding?: import('../../domain/content/segmentArtifact').SegmentContentBindingV1 }): Promise<{ entries: ContentEntry[]; sections: BookSection[] }>;
   };
@@ -481,7 +483,7 @@ export class CampaignSession {
     if (!state || !intent) throw new Error('战役意图缺失。');
     const { runReplanJob, adoptReplanCandidate } = await import('../campaignPlan/replanService');
     const run = await runReplanJob({ db: this.deps.db, planStore, worldStore: this.deps.worldStore, provider: this.provider, profile: this.profile,
-      segmentContent: this.deps.segmentContent }, job.jobId,
+      segmentContent: this.deps.segmentContent, acquireExecution: this.deps.acquirePlanningExecution }, job.jobId,
       { intent, protagonistSkills: (state.skills ?? []).filter(s => s.actorId === intent.protagonistBinding.actorId).map(s => s.skillId),
         anchorTitle: '当前已提交局势', playerName: intent.protagonistBinding.name });
     if (!['candidate_ready','already_ready'].includes(run.status) || !run.candidateId) {

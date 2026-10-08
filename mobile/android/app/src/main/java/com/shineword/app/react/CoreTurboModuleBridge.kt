@@ -18,6 +18,7 @@ class CoreTurboModuleBridge : BaseReactPackage() {
       Triple(SourceCodeModule.NAME, SourceCodeModule::class.java, true),
       Triple(DeviceEventManagerModule.NAME, DeviceEventManagerModule::class.java, true),
       Triple(ExceptionsManagerModule.NAME, ExceptionsManagerModule::class.java, true),
+      Triple(ShineWordHeadlessJsTaskSupportModule.NAME, ShineWordHeadlessJsTaskSupportModule::class.java, true),
     )
   }
 
