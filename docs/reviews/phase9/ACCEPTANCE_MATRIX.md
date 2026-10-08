@@ -135,3 +135,17 @@ Android实案：审查页实际展示“推迟的绞刑裁决”的GM说明、3�
 证据：.tmp/phase9/r52-core.log、r52-apk47.log、reaccept-identity-final47.json；reaccept-device/final47-install-preservation.json、final47-situation-preflight.json、final47-situation-proof.jsonl、final47-situation-proposal.png、final47-situation-evidence.png、final47-situation-rejected.png、final47-situation-cold-review.png；final47-device-audit.jsonl、final47-world-proof.jsonl。小说正文、数据库与原始模型结果仅保留在忽略目录，不提交。
 
 整体验收仍未通过，A01–A40维持29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED。本轮新增有效玩家决定0；同最终身份完整旅程、持续后果、三计划及对应旅程质量评分、真实救援、模板外组合、按需补建、同设备10+10性能对照和独立试玩继续推进。审查队列清空不等于可玩性已完整验收。
+
+## 2026-10-08 R53：冻结上限下的跨恢复预算防重复（final48）
+
+final48生产源码SHA-256：2ebb79fa93b21f6d07edc1d9993dbdd1043881dc60d1846e37095b3b31a0f8d7；APK SHA-256：848e56de98c2010ed0cf3b1367f98cee374e97e67b6209987023410c66d02715，V1.0.0 / 1000000，emulator-5556实际安装hash一致。核心1144/1144、0失败0跳过（32.307s），移动类型检查、35s Debug构建、版本检查通过。
+
+预算架构复核发现：同一次生成已拒绝不增大的截断重试，但手动/冷启动恢复没有比较上一条durable ledger的实际wire_output_tokens，可能在原冻结材料和模型上限内再发完全相同的预算。RED SQLite实案复现：首条length在32768上限终止，恢复又付费发送32768并得到模拟candidate_ready；该候选不是真实验收内容。修复将上一条已知length/reasoning_only的wire预算传入opening/replan共用generationService，在调度/派发前统一检查恢复预算必须严格增加。不能增加时返回typed BudgetInfeasibleError及明确中文原因；缺少可信旧wire记录也零派发，不猜测旧上限。原冻结材料、思考档位、能力声明及已付费记录不改写；已经完整收到正文的结构修复保留同预算权限，未知结果仍禁止重放。
+
+2项新增回归验证32768→32768恢复零新增HTTP/账本、连续恢复仍零请求、缺失wire记录失败关闭；既有24576→32768、24576→49152恢复、完整正文的同预算修复、未知不重发及两次总额度回归仍通过。此比较针对原材料不变的战役规划/重规划，不能外推到允许缩小可选上下文的所有业务。
+
+Android final48安装与冷启动后，R52证据绑定拒绝仍保持、审查0项，3份资料、canon、全部原付费检查点、已采用战役/历史快照及2个旧outcome_unknown原样保留；新增模型请求0，预算仍1206/1500。原生数据库没有可用的retryable_failed上限截断任务，因此本轮没有Android同案的32768截断恢复实测；该修复的零派发结论来自生产SQLite服务回归，不用模拟器冷启动冒充同案通过。接续真实新任务将绑定final48，旧身份有效决定不拼接。
+
+在核对原代理PID21380、命令行及18691无活跃连接后，停止空闲旧进程，使用最新phase9-http重启同端口QA代理；没有中断或重发请求，设备保存的high/1M/65536/streaming配置和Keychain引用保留。证据：.tmp/phase9/r53-red.log、r53-core.log、r53-apk48.log、reaccept-identity-final48.json；reaccept-device/final48-install-preservation.json、final48-profile-proof.json、final48-review-still-resolved.png、proxy-final48.log；final48-device-audit.jsonl、final48-world-proof.jsonl。
+
+阶段整体仍未验收通过，A01–A40仍29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；本轮新增有效玩家决定0。弹性分配与可信使用反馈在模型声明上限以内生效，不能绕过硬上限；无增益恢复不再反复耗费请求。完整旅程、持久后果、质量评分及性能对照继续推进。

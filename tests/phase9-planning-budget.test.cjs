@@ -229,3 +229,38 @@ test('planning feedback: a known infeasible history dispatches no paid request a
     assert.equal(await h.planStore.latestCandidateForJob('history-infeasible'), null);
   } finally { h.db.close(); }
 });
+
+test('planning budget: manual restoration cannot pay again when a known truncated request already reached the frozen wire ceiling', async () => {
+  const h=await fixture();
+  try {
+    const atCeiling={choices:[{finish_reason:'length',message:{content:'{"unfinished":',reasoning_content:''}}],
+      usage:{prompt_tokens:20,completion_tokens:32768,completion_tokens_details:{reasoning_tokens:0}}};
+    const q=await setup(h,'ceiling-restore',[atCeiling,JSON.stringify(candidateModel())]);
+    await seedUsage(q.store,'prior-body-sizing',16384);
+    const first=await q.run();assert.equal(first.status,'retryable_failed');assert.equal(first.physicalRequests,1);
+    assert.deepEqual(q.wires.map(w=>w.max_tokens),[32768]);
+    const root=h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:ceiling-restore').payload_json;
+    const before=await q.store.listAttempts('campaign-plan:ceiling-restore');
+    const restored=await q.run();assert.equal(restored.status,'retryable_failed');assert.equal(restored.physicalRequests,0);
+    assert.match(restored.errors.join(' '),/输出预算无法增加/);
+    assert.equal(q.wires.length,1);assert.deepEqual(await q.store.listAttempts('campaign-plan:ceiling-restore'),before);
+    assert.equal(h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:ceiling-restore').payload_json,root);
+    assert.equal(await h.planStore.latestCandidateForJob('ceiling-restore'),null);
+    assert.equal((await q.run()).physicalRequests,0);assert.equal(q.wires.length,1);
+  }finally{h.db.close();}
+});
+
+test('planning budget: a known exhausted legacy attempt without a durable wire ceiling fails closed on restore', async () => {
+  const h=await fixture();
+  try {
+    const q=await setup(h,'missing-wire-restore',[{choices:[{finish_reason:'length',message:{content:'{"unfinished":'}}],
+      usage:{prompt_tokens:20,completion_tokens:32768,completion_tokens_details:{reasoning_tokens:0}}},JSON.stringify(candidateModel())]);
+    await seedUsage(q.store,'prior-wire-sizing',16384);
+    assert.equal((await q.run()).physicalRequests,1);
+    await h.adapter.execute('UPDATE llm_request_attempts SET wire_output_tokens=NULL WHERE logical_request_id=?',['campaign-plan:missing-wire-restore']);
+    const before=await q.store.listAttempts('campaign-plan:missing-wire-restore');
+    const restored=await q.run();assert.equal(restored.status,'retryable_failed');assert.equal(restored.physicalRequests,0);
+    assert.match(restored.errors.join(' '),/缺少有效的输出预算记录/);assert.equal(q.wires.length,1);
+    assert.deepEqual(await q.store.listAttempts('campaign-plan:missing-wire-restore'),before);
+  }finally{h.db.close();}
+});

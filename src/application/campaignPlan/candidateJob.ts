@@ -162,8 +162,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     const ledger = await deps.db.queryOne<{ n: number }>(
       'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]);
     const used = Math.max(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? (existing.repairUsed ? 2 : 1) : 0, ledger?.n ?? 0);
-    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null; reasoning_tokens: number | null; estimated_usage: number }>(
-      'SELECT failure_class,reasoning_tokens,estimated_usage FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
+    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null; reasoning_tokens: number | null; estimated_usage: number; wire_output_tokens: number | null }>(
+      'SELECT failure_class,reasoning_tokens,estimated_usage,wire_output_tokens FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
     const persistResponse = async (text: string, repairUsed: boolean): Promise<void> => {
       deps.onStage?.('validating');
       await deps.db.transaction(async tx => {
@@ -241,6 +241,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       ...(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? { resume: { text: existing.rawResponseText, repairUsed: existing.repairUsed } } : {}),
       ...(lastAttempt && ['reasoning_only', 'length'].includes(lastAttempt.failure_class ?? '')
         ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
+          previousWireOutputTokens: lastAttempt.wire_output_tokens,
           observedReasoningTokens: lastAttempt.estimated_usage === 0 ? lastAttempt.reasoning_tokens : null } : {}),
       validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(); deps.onStage?.('planning'); } });
     physicalRequests = generation.physicalRequests;

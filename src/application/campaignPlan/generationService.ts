@@ -3,7 +3,7 @@ import { LlmRequestFailure, normalizeReasoningTier } from '../llm/types';
 import { DEFAULT_OUTPUT_DEMANDS } from '../llm/requestDemands';
 import { resolveModelCapabilities } from '../llm/capabilityResolver';
 import { planLlmRequest } from '../llm/requestBudgetKernel';
-import { stableFingerprint } from '../llm/requestPlan';
+import { BudgetInfeasibleError, stableFingerprint } from '../llm/requestPlan';
 import { llmModelProfileFingerprint } from '../llm/profileFingerprint';
 import { reasoningDialectForModel, REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
 import type { ReasoningPolicySelection } from '../llm/reasoningPolicy';
@@ -174,6 +174,8 @@ export async function generateCampaignPlanCandidate(input: {
   reasoningReserveMultiplier?: number;
   /** A completed failed response is a lower bound, not a calibrated p95. */
   observedReasoningTokens?: number | null;
+  /** Actual durable wire ceiling of the known exhausted attempt being resumed. */
+  previousWireOutputTokens?: number | null;
   onResponse?: (text: string, repairUsed: boolean) => Promise<void>;
   beforeDispatch?: () => Promise<void>;
   /** Local reference and executable-contract gates share the same repair. */
@@ -194,6 +196,11 @@ export async function generateCampaignPlanCandidate(input: {
   if (recoverySelection !== undefined) {
     plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, recoverySelection),
       estimatedMandatoryInputTokens: estimateTokens(`${input.materials.system}\n${input.materials.user}`) });
+  }
+  // The original mandatory material and profile are frozen. A larger local
+  // reasoning reservation alone does not improve an unchanged wire ceiling.
+  if (!input.resume && reserveMultiplier > 1 && (input.physicalRequestBudget ?? 2) > 0) {
+    assertRecoveryBudgetIncreased(input.previousWireOutputTokens, plan.wireOutputTokens);
   }
   const initialPolicy = plan.reasoningPolicy;
   if (!initialPolicy) throw new Error('campaign_plan_policy_missing');
@@ -246,7 +253,7 @@ export async function generateCampaignPlanCandidate(input: {
         plan = planLlmRequest({ ...planLlmRequestInput(input, demands, maximum, reserveMultiplier, recoverySelection),
           estimatedMandatoryInputTokens: estimateTokens(`${request.system}\n${request.user}`) });
         reasoningPolicy = plan.reasoningPolicy!;
-        if (plan.wireOutputTokens <= request.maxOutputTokens) throw error;
+        assertRecoveryBudgetIncreased(request.maxOutputTokens, plan.wireOutputTokens);
         return dispatch({ ...request, maxOutputTokens: plan.wireOutputTokens,
           reasoningReserveTokens: reasoningPolicy.reserveTokens,
           scheduling: { ...request.scheduling!, requestPlanHash: stableFingerprint(plan),
@@ -293,6 +300,15 @@ export async function generateCampaignPlanCandidate(input: {
     return { status: 'ready', model: repairModel, parseErrors: [], rawText: repair.text, physicalRequests };
   }
   return { status: 'invalid', model: null, parseErrors: repairErrors.length > 0 ? repairErrors : firstErrors, rawText: repair.text, physicalRequests };
+}
+
+function assertRecoveryBudgetIncreased(previous: number | null | undefined, next: number): void {
+  if (!Number.isSafeInteger(previous) || Number(previous) <= 0) {
+    throw new BudgetInfeasibleError('上次已知截断请求缺少有效的输出预算记录，已停止重复派发。请调整配置后重新准备。', 'output_demand_infeasible');
+  }
+  if (next <= Number(previous)) {
+    throw new BudgetInfeasibleError(`输出预算无法增加（此前 ${previous}、恢复后 ${next} token），已停止重复派发。请调整配置后重新准备。`, 'output_demand_infeasible');
+  }
 }
 
 function planLlmRequestInput(input: { profile: ApiProfile; reasoningPolicy?: ReasoningPolicySelection }, demands: typeof DEFAULT_OUTPUT_DEMANDS.campaign_plan, maximum: number, reserveMultiplier = 1, recoverySelection?: ReasoningPolicySelection) {
