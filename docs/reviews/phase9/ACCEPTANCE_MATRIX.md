@@ -119,3 +119,19 @@ R50统一地点实体/scene/实际坐标与嵌套条件、移动目的地，保�
 ## 2026-10-08 R51：真实到期、提前断连与响应完整性（final44–46）
 
 R51区分真实deadline与提前abort，200空白/未闭合JSON和缺终止SSE保持network_unknown，不抢救正文/usage、不自动重发。核心1135/1135、移动类型/APK通过；final46同案受控端上明确网络失败，旧数据/未知请求保留、0上游模型发送；另1次正常真实连接测试成功。预算1206/1500，未重置/提高。故障回归不计玩家决定；旧资料审查、最终80与质量/性能仍未验收通过。详情见[最新复验报告](FINAL_REPORT.md)。
+
+## 2026-10-08 R52：缺失局面的正式审查、补充发布与拒绝（final47）
+
+final47生产源码SHA-256：70a29a63e4c17c1320f2bb8c759aa6b19c0278bafc754643ca5825cad11fbfdd；Debug APK SHA-256：7466b354b91ce4acfb3338a1f352bf1bc49daf56c37f8f8168e8b1ea4ea5333b，V1.0.0 / 1000000，emulator-5556安装包hash一致。核心1142/1142、0失败0跳过（32.549s），移动类型检查、36s Debug构建通过。
+
+架构收尾：初次映射与缓存局面恢复共用resolveSituationReferences，使用实际已发布场景、人物及内容目录验证依赖；SituationReviewService只读取done映射检查点，不请求模型。正式补充发布复用M5 SegmentPublicationService的来源引用、canon、不可变内容和事务门禁，在同一事务内生成新档案、关闭对应问题并保存审查决定。拒绝决定绑定完整原始提案、递归事实引用、原文证据及世界来源身份；M4重编译仅排除完全相同的已拒绝提案。证据或内容变化重新审查，重复/过期操作失败关闭；普通关闭或豁免不能代替局面决定。旧世界包、已采用战役和历史快照不重写。
+
+7项新增SQLite/生产服务回归：正式M5补充发布及安全边界采用、实际场景依赖闭合、已显示证据/提案/来源/目录变更、写入审查决定失败后的整笔回滚、最终事务的并发证据/检查点变更、拒绝内容精确绑定、已付费检查点重编译零新增模型请求。复用既有publication fixture；模拟模型/RNG夹具不计真实旅程配额。
+
+Android实案：审查页实际展示“推迟的绞刑裁决”的GM说明、3个方法及8条引用证据，可滚动触达补充发布/拒绝/刷新。当前依赖及结构发布验证已通过，但原提案整体标注explicit，GM说明和方法取舍仍包含“神罚之锁压制能力”的约束推断，8条引用均没有支持该压制主张。因此通过正式UI拒绝整份提案，保存完整证据绑定决定；没有盲目恢复或只豁免提示。原situation_dangling_reference已resolved，审计decision明确为rejected；没有新增/恢复该局面档案。冷启动再次进入审查为0项。
+
+只读前后核对：全部canon事实/来源/实体/事件、paid world_jobs、3份原segment artifacts、world packages、已采用campaign plans/artifacts、所有历史snapshots、冻结根及239条请求账本逐项保持原样。新增模型请求0，共享预算仍1206/1500；没有重置、增额或重发旧outcome_unknown。正式干净局面的补充发布及采用已由SQLite生产服务验证，Android本轮实案只验证拒绝，不能称Android已完成旧局面恢复。
+
+证据：.tmp/phase9/r52-core.log、r52-apk47.log、reaccept-identity-final47.json；reaccept-device/final47-install-preservation.json、final47-situation-preflight.json、final47-situation-proof.jsonl、final47-situation-proposal.png、final47-situation-evidence.png、final47-situation-rejected.png、final47-situation-cold-review.png；final47-device-audit.jsonl、final47-world-proof.jsonl。小说正文、数据库与原始模型结果仅保留在忽略目录，不提交。
+
+整体验收仍未通过，A01–A40维持29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED。本轮新增有效玩家决定0；同最终身份完整旅程、持续后果、三计划及对应旅程质量评分、真实救援、模板外组合、按需补建、同设备10+10性能对照和独立试玩继续推进。审查队列清空不等于可玩性已完整验收。

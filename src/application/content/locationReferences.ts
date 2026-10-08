@@ -65,3 +65,30 @@ export function normalizeSituationLocations(
     ...(event.condition ? { condition: condition(event.condition) } : {}) }));
   return { definition, sceneEntryIds: [...dependencies], unresolvedLocations: [...unresolved] };
 }
+
+/** Both initial mapping and cached-proposal recovery certify the same catalog. */
+export function resolveSituationReferences(input: ContentEntry, catalog: readonly ContentEntry[], entities: readonly StoredEntity[]): {
+  entry: ContentEntry; dangling: string[];
+} {
+  const entry = JSON.parse(JSON.stringify(input)) as ContentEntry;
+  const normalized = normalizeSituationLocations(entry.definition as SituationDefinitionV1, createPublishedLocationIndex(catalog, entities));
+  const definition = normalized.definition;
+  const known = new Set(catalog.map(e => e.entryId));
+  const templateByName = new Map(catalog.filter(e => e.kind === 'actor_template')
+    .map(e => [String((e.definition as { name?: string }).name ?? ''), e.entryId]));
+  const resolveActor = (id: string): string => {
+    if (known.has(id)) return id;
+    const entity = entities.find(e => e.entityId === (id.startsWith('actor-canon-') ? id.slice(12) : id));
+    return entity ? templateByName.get(entity.name) ?? id : id;
+  };
+  definition.participantEntryIds = definition.participantEntryIds.map(resolveActor);
+  const references = new Set([...definition.participantEntryIds, ...normalized.sceneEntryIds]);
+  for (const method of definition.methods) {
+    if (method.firstStep.targetEntryId) method.firstStep.targetEntryId = resolveActor(method.firstStep.targetEntryId);
+    for (const id of [method.firstStep.targetEntryId, method.firstStep.skillId, method.firstStep.itemId,
+      method.requires.skillId, method.requires.itemId, method.requires.knowledgeEntryId]) if (id) references.add(id);
+  }
+  entry.definition = definition;
+  entry.dependencyIds = [...references];
+  return { entry, dangling: [...new Set([...references].filter(id => !known.has(id)).concat(normalized.unresolvedLocations))] };
+}

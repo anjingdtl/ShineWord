@@ -23,6 +23,8 @@ export interface PublishSegmentArtifactInput {
   /** M0/M4 checks the actual run lease, fence and intent generation using
    * this transaction. Runtime authority is never serialized into an artifact. */
   assertCurrent?:(tx:SqliteTransaction)=>Promise<void>;
+  /** Local owner handoff, committed atomically with the immutable artifact. */
+  onPublished?:(tx:SqliteTransaction,artifact:SegmentArtifactV1)=>Promise<void>;
 }
 export interface LegacyOverlayRebaseInput {
   previousManifest:BranchContentManifest;
@@ -145,6 +147,7 @@ export class SegmentPublicationService implements BranchContentPortV1 {
         if(currentResult.errors.length)throw new SegmentPublicationError(currentResult.errors);
         await input.assertCurrent?.(tx);
         await store.insertArtifact(tx,artifact);
+        await input.onPublished?.(tx,artifact);
       });
       return artifact;
     }catch(error){

@@ -12,10 +12,12 @@ import { EmptyState } from '../../components/EmptyState';
 import { SectionHeader } from '../../components/SectionHeader';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useTheme } from '../../theme/ThemeContext';
-import { listReviewIssues, resolveReviewIssue, resolveCanonFactConflict, rejectMappingConstraint, type ReviewIssueView } from '../../../runtime';
+import { listReviewIssues, resolveReviewIssue, resolveCanonFactConflict, rejectMappingConstraint, decideSituationReview,
+  type SituationReviewPreview, type ReviewIssueView } from '../../../runtime';
 import { ReviewIssueCard } from './ReviewIssueCard';
 import { CanonConflictCard } from './CanonConflictCard';
 import { MappingConstraintCard } from './MappingConstraintCard';
+import { MissingSituationCard } from './MissingSituationCard';
 
 export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
   const { theme } = useTheme();
@@ -79,6 +81,18 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
     finally { setBusy(false); }
   }
 
+  async function decideSituation(preview: SituationReviewPreview, decision: 'publish' | 'reject') {
+    if (busy) return;
+    setError(null); setNotice(null); setBusy(true);
+    try {
+      await decideSituationReview(props.worldId, preview.issueId, preview.proofHash, decision);
+      setNotice(decision === 'publish' ? '已验证并发布新的局面补充档案，可在战役安全边界采用。'
+        : '已拒绝这份局面提案并保存证据绑定的决定，原著事实和已发布档案保留。');
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+
   return (
     <View style={{ gap: theme.space.md }}>
       <SectionHeader
@@ -103,6 +117,9 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
           </View>
         ) : issue.kind === 'mapping_constraint' ? (
           <MappingConstraintCard key={issue.issueId} issue={issue} busy={busy} onReject={() => void rejectConstraint(issue)} />
+        ) : issue.kind === 'situation_dangling_reference' ? (
+          <MissingSituationCard key={issue.issueId} worldId={props.worldId} issue={issue} busy={busy}
+            onDecide={(preview, decision) => void decideSituation(preview, decision)} />
         ) : (
           <ReviewIssueCard
             key={issue.issueId}

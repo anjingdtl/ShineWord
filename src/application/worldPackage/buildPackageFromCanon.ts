@@ -28,8 +28,8 @@ import { validatePackage } from './validate';
 import type { SqliteTransaction } from '../ports/sqlite';
 import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
 import { createUnsupportedConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND, type MappingConstraintReview } from './mappingConstraintReview';
-import { createPublishedLocationIndex, normalizeSituationLocations } from '../content/locationReferences';
-import type { SituationDefinitionV1 } from '../../domain/situations/types';
+import { resolveSituationReferences } from '../content/locationReferences';
+import { createMappingSituationReview, mappedSituationId } from './mappingSituationReview';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -1488,6 +1488,10 @@ async function requestMappingProposals(
         knowledgeEntryIds,
       };
       for (const candidate of raw.situations) {
+        if (mappedSituationId(candidate)) {
+          const decision = createMappingSituationReview(candidate, input.worldId, input.sourceSha256, evidenceFacts);
+          if (await input.worldStore.isMappingSituationRejected(input.worldId, JSON.stringify(decision))) continue;
+        }
         const cleaned = cleanSituation(candidate, situationContext);
         if (!cleaned) continue;
         const existing = situations.find(entry => entry.entryId === cleaned.entryId);
@@ -1935,51 +1939,9 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   const dependencyEntries = input.incrementalMapping?.kind === 'incremental'
     ? mergeIncrementalEntries(input.incrementalMapping.previousEntries ?? [], entries,
       [...selection.affectedEntryIds, 'lore-review-summary']) : entries;
-  const publishedIds = new Set(dependencyEntries.map(entry => entry.entryId));
   const verifiedSituationIssues: string[] = [];
-  const locations = createPublishedLocationIndex(dependencyEntries, entities);
-  // Models may reference canon actors as actor-canon-{entityId}; resolve to
-  // the published template by entity name BEFORE closure (definition rewrite).
-  const templateIdByEntity = new Map<string, string>();
-  const templateIdsByName = new Map(dependencyEntries
-    .filter(entry => entry.kind === 'actor_template')
-    .map(entry => [String((entry.definition as { name?: unknown }).name ?? ''), entry.entryId] as const));
-  for (const entity of entities) {
-    const byName = templateIdsByName.get(entity.name);
-    if (byName) templateIdByEntity.set(entity.entityId, byName);
-  }
-  const resolveCanonRef = (value: string): string => {
-    if (publishedIds.has(value)) return value;
-    const entityId = value.startsWith('actor-canon-') ? value.slice('actor-canon-'.length) : value;
-    const resolved = templateIdByEntity.get(entityId);
-    return resolved ?? value;
-  };
-  for (const situation of proposals.situations) {
-    const normalized = normalizeSituationLocations(situation.definition as SituationDefinitionV1, locations);
-    situation.definition = normalized.definition;
-    const definition = situation.definition as {
-      participantEntryIds?: string[];
-      locationId?: string;
-      methods?: Array<{ firstStep?: { skillId?: string; itemId?: string; targetEntryId?: string }; requires?: { skillId?: string; itemId?: string; knowledgeEntryId?: string } }>;
-    };
-    if (Array.isArray(definition.participantEntryIds)) {
-      definition.participantEntryIds = definition.participantEntryIds.map(resolveCanonRef);
-    }
-    for (const method of definition.methods ?? []) {
-      if (method.firstStep?.targetEntryId) {
-        method.firstStep.targetEntryId = resolveCanonRef(method.firstStep.targetEntryId);
-      }
-    }
-    const references = new Set<string>([...(definition.participantEntryIds ?? []), ...normalized.sceneEntryIds]);
-    for (const method of definition.methods ?? []) {
-      if (method.firstStep?.targetEntryId) references.add(method.firstStep.targetEntryId);
-      if (method.firstStep?.skillId) references.add(method.firstStep.skillId);
-      if (method.firstStep?.itemId) references.add(method.firstStep.itemId);
-      if (method.requires?.skillId) references.add(method.requires.skillId);
-      if (method.requires?.itemId) references.add(method.requires.itemId);
-      if (method.requires?.knowledgeEntryId) references.add(method.requires.knowledgeEntryId);
-    }
-    const dangling = [...new Set([...references].filter(ref => !publishedIds.has(ref)).concat(normalized.unresolvedLocations))];
+  for (const proposal of proposals.situations) {
+    const { entry: situation, dangling } = resolveSituationReferences(proposal, dependencyEntries, entities);
     if (dangling.length > 0) {
       await worldStore.saveReviewIssue({
         worldId,
@@ -1995,7 +1957,6 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       });
       continue;
     }
-    situation.dependencyIds = [...references];
     entries.push(situation);
     // Retire only this revalidated proposal's stale missing-dependency notice.
     // Unrelated or still-dangling situations remain open for review.

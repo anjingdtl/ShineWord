@@ -24,6 +24,7 @@ import type {
 } from '../../application/ports/worldStore';
 import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
 import { sanitizeTokenFragment } from '../../application/world/extraction';
+import { canonicalStringify } from '../../domain/turns/canonical';
 import { requireCompiledRules, validateRuleEntryCapabilities } from '../../application/content/runtimeRules';
 import { createUnsupportedConstraintReview, readMappingConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND } from '../../application/worldPackage/mappingConstraintReview';
 
@@ -1703,6 +1704,9 @@ export class SqliteWorldStore implements WorldStore {
         'SELECT kind, severity, detail_json FROM review_issues WHERE world_id = ? AND issue_id = ?', [worldId, issueId],
       );
       if (issue?.kind === MAPPING_CONSTRAINT_REVIEW_KIND) throw new Error('请核对提案与证据，并使用“拒绝这条规则”；不能只关闭或豁免提示。');
+      if (issue?.kind === 'situation_dangling_reference' && (remember || resolution === 'waived')) {
+        throw new Error('请核对局面提案与证据，补充发布或拒绝这份提案；不能只关闭或豁免提示。');
+      }
       const resolvedAt = new Date().toISOString();
       if (remember && issue && issue.kind !== 'canon_conflict') {
         await tx.execute(
@@ -1723,6 +1727,14 @@ export class SqliteWorldStore implements WorldStore {
     const row = await this.db.queryOne<SqliteRow>(
       `SELECT resolution FROM review_resolution_policies WHERE world_id=? AND kind=? AND severity='blocking' AND detail_json=?`,
       [worldId, MAPPING_CONSTRAINT_REVIEW_KIND, reviewDetailKey(detailJson)],
+    );
+    return row?.resolution === 'resolved';
+  }
+
+  async isMappingSituationRejected(worldId: string, detailJson: string): Promise<boolean> {
+    const row = await this.db.queryOne<SqliteRow>(
+      "SELECT resolution FROM review_resolution_policies WHERE world_id=? AND kind='mapping_situation' AND severity='major' AND detail_json=?",
+      [worldId, canonicalStringify(JSON.parse(detailJson))],
     );
     return row?.resolution === 'resolved';
   }

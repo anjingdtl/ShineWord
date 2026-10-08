@@ -23,6 +23,8 @@ import { publishUserRequestedSourceLookupDelta } from '../../src/application/wor
 import { SqliteInteractionOperationJournal } from '../../src/application/campaign/interactionOrchestrator';
 import type { StoryEntry } from '../../src/application/campaign/storyEntry';
 import * as playRecovery from '../../src/application/campaign/playRecovery';
+import { SituationReviewService } from '../../src/application/worldPackage/situationReviewService';
+export type { SituationReviewPreview } from '../../src/application/worldPackage/situationReviewService';
 
 export type { PlayRecovery } from '../../src/application/campaign/playRecovery';
 export async function loadPlayRecovery(campaignId: string, branchId: string) {
@@ -399,6 +401,15 @@ export async function resolveReviewIssue(worldId: string, issueId: string, resol
 export async function rejectMappingConstraint(worldId: string, issueId: string, expectedDetailJson: string): Promise<void> {
   const runtime = await getDatabaseRuntime();
   await runtime.worldStore.rejectMappingConstraint(worldId, issueId, expectedDetailJson);
+}
+
+export async function prepareSituationReview(worldId: string, issueId: string) {
+  return new SituationReviewService((await getDatabaseRuntime()).segmentPublication).prepare(worldId, issueId);
+}
+export async function decideSituationReview(worldId: string, issueId: string, proofHash: string, decision: 'publish' | 'reject'): Promise<void> {
+  const service = new SituationReviewService((await getDatabaseRuntime()).segmentPublication);
+  if (decision === 'publish') await service.publish(worldId, issueId, proofHash);
+  else await service.reject(worldId, issueId, proofHash);
 }
 
 export async function resolveCanonFactConflict(
