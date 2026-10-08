@@ -1,5 +1,6 @@
 import type { RollGrade } from '../../domain/rules/types';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
+import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { outcomeSetHashFor } from '../campaignPlan/localCompile';
 import type { ActionContract, EffectOperation } from '../../domain/turns/types';
 import type { PlannerProposal } from '../../domain/turns/proposal';
@@ -289,14 +290,14 @@ function bindSituationMethod(
       // P9 §8.2: four-grade templates override summaries/effects BEFORE the
       // roll; every grade comes from locally validated specs only.
       const actingActorId = contract.actorId;
+      const resolveActorReference = createActorReferenceResolver({ actors: state.actors, cards });
       const actorResolver = (actorId: string): string => {
         // Model-drift alias: campaign templates may name the protagonist
         // generically; resolve to the acting card before template lookup.
         const actingCard = cards.find(item => item.actorId === actingActorId);
         if (actorId === 'player' || actorId === '玩家' || actorId === 'pc' || actorId === 'self'
           || (actingCard && actorId === actingCard.name)) return actingActorId;
-        const card = cards.find(item => item.templateId === actorId);
-        return card?.actorId ?? actorId;
+        return resolveActorReference(actorId);
       };
       const perGrade: Record<RollGrade, NonNullable<NonNullable<ActionContract['campaignEffects']>[RollGrade]>> = {} as never;
       outcomes = { ...contract.outcomes };

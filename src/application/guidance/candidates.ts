@@ -1,6 +1,7 @@
 import type { ContentEntry } from '../../domain/content/types';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { ActorCard } from '../../domain/characters/card';
+import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import type {
   MethodTemplateV1,
   SituationDefinitionV1,
@@ -31,12 +32,8 @@ export interface MethodCandidateContext {
 const RANK_ORDER = ['untrained', 'novice', 'trained', 'expert', 'master'] as const;
 
 export function resolveMethodActor(ref: string, state: GameStateSnapshot, cards: readonly ActorCard[]): string | null {
-  if (state.actors[ref]) return ref;
-  const matches = cards.filter(card => card.templateId === ref && state.actors[card.actorId]);
-  if (matches.length === 1) return matches[0]!.actorId;
-  if (matches.length > 1) return null;
-  const conventionalId = `actor-${ref.replace(/^npc-/, '')}`;
-  return state.actors[conventionalId] ? conventionalId : null;
+  const resolved = createActorReferenceResolver({ actors: state.actors, cards })(ref);
+  return state.actors[resolved] ? resolved : null;
 }
 
 function meetsRank(actual: string | undefined, required: string | undefined): boolean {

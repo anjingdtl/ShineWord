@@ -359,6 +359,10 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     if (!templateEntry) continue; // Non-template scene actor IDs can be canon references.
     if (!isEntryVisibleAtAnchor(templateEntry, projectionFacts, input.anchor.worldTimeOrder)
       || !isTemplateValidAtAnchor(templateEntry, input.anchor.worldTimeOrder)) continue;
+    // A selected companion already owns this template. Materializing the
+    // scene NPC as well duplicates one person and makes method/condition
+    // references ambiguous before the first player decision.
+    if (cards.some(card => card.templateId === templateId)) continue;
     // A canon protagonist and their public template represent the same person.
     const templateName = (templateEntry.definition as ActorTemplateDefinition).name;
     const supportedSubjects = new Set(templateEntry.provenance.sourceFactIds.flatMap(id => {

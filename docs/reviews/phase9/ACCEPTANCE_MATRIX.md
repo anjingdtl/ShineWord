@@ -1,5 +1,7 @@
 # Phase 9 验收矩阵 A01–A40
 
+最新（2026-10-08 云端 R54–R56）：**29 PASS / 2 FAIL / 9 NOT RUN** 保持；本批1159/1159工程回归不把A15/A36转绿，不补A19/A38配额。真实规划/旅程/UI/性能当前另有原资产、模型凭据和设备的外部执行阻断，以下历史FAIL/NOT RUN不改成BLOCKED来隐藏未验收项。原任务未知结果未重发，预算1210/1500。当前身份和具体依赖见[续作报告](CLOUD_REVIEW_2026-10-08.md)。
+
 2026-10-07 final29收尾复验。整体尚未通过。PASS=对应合同有直接证据；FAIL=已有实际不符且未经完整复验转绿；NOT RUN=完整场景或必需证据未齐；BLOCKED=外部阻断。本轮无BLOCKED。不使用PART。
 
 工程证据：tests/phase9-closeout.test.cjs、phase9-flow/turns/planning/replan/sqlite.test.cjs、phase6-mobile-runtime.test.cjs；日志 .tmp/phase9/reaccept-core-final29.log（1042/1042，0失败0跳过），新增preparation/actor-references/proposal-fields/inherited-completion/ending-order/preparation-restore生产回归。私有实际样本/身份见REAL_JOURNEYS。工程安全拒绝不等于内容质量通过。

@@ -4,6 +4,7 @@ import type {
   SituationStatus,
 } from './types';
 import { CONDITION_DEPTH_LIMIT, CONDITION_NODE_LIMIT } from './types';
+import { createActorReferenceResolver } from '../characters/actorIdentity';
 
 /**
  * Three-valued whitelist condition evaluation (plan §4.3): missing referenced
@@ -362,12 +363,7 @@ export function snapshotConditionFacts(input: {
   causalWorldTimeOrder: number;
   cards?: ReadonlyArray<{ actorId: string; templateId?: string }>;
 }): ConditionFacts {
-  const aliases = new Map<string, string | null>();
-  for (const card of input.cards ?? []) {
-    if (!card.templateId || !input.actors[card.actorId]) continue;
-    aliases.set(card.templateId, aliases.has(card.templateId) ? null : card.actorId);
-  }
-  const resolveActorId = (id: string): string => input.actors[id] ? id : aliases.get(id) ?? id;
+  const resolveActorId = createActorReferenceResolver(input);
   const situationById = new Map((input.situations ?? []).map(entry => [entry.situationId, entry]));
   const nodeStatus = new Map((input.campaignNodeStates ?? []).map(node => [node.nodeId, node.status]));
   const knownEntries = new Map<string, Set<string>>();

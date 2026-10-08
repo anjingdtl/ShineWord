@@ -104,6 +104,7 @@ import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanSt
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
 import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
+import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { applyEffects } from '../../domain/state/effects';
 import type {
   MethodTemplateV1,
@@ -1374,8 +1375,13 @@ export class CampaignSession {
     if (!runtime) return [];
     const events: Array<{ eventType: string; payload: unknown }> = [];
     const playerActorId = nextState.party?.find(member => member.controller === 'player')?.actorId ?? '';
-    const campaignActor = (id: string): string => ['pc','player','self','__player__','玩家'].includes(id) ? playerActorId
-      : nextState.actors[id] ? id : `npc-${id}`;
+    const resolveActorReference = createActorReferenceResolver({ actors: nextState.actors,
+      cards: (nextState.cards ?? []).map(row => row.card as ActorCard) });
+    const campaignActor = (id: string): string => {
+      const resolved = ['pc','player','self','__player__','玩家'].includes(id) ? playerActorId : resolveActorReference(id);
+      if (!nextState.actors[resolved]) throw new Error(`战役后果引用人物 ${id} 未实例化或有歧义，拒绝提交。`);
+      return resolved;
+    };
     const shiftRelationship = (from: string, to: string, delta: number): void => {
       const fromActorId = campaignActor(from), toActorId = campaignActor(to);
       if (!nextState.actors[fromActorId] || !nextState.actors[toActorId]) return;
@@ -1390,7 +1396,7 @@ export class CampaignSession {
     const extension = input.contract.campaignEffects?.[input.grade];
     if (extension) {
       for (const grant of extension.knowledgeGrants) {
-        const actorId = ['__player__', 'player', '玩家', 'pc', 'self'].includes(grant.actorId) ? playerActorId || grant.actorId : grant.actorId;
+        const actorId = campaignActor(grant.actorId);
         nextState.discoveries = [...(nextState.discoveries ?? [])];
         if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === actorId)) {
           nextState.discoveries.push({
@@ -1448,10 +1454,7 @@ export class CampaignSession {
       for (const consequence of triggered) {
         appliedConsequences.add(consequence.idempotencyKey);
         consequenceCount += 1;
-        const compiled = compileCampaignEffects(consequence.effectSpecs, { actorResolver: id => {
-          if (['__player__','player','玩家','pc','self'].includes(id)) return playerActorId;
-          return nextState.actors[id] ? id : nextState.actors[`npc-${id}`] ? `npc-${id}` : undefined;
-        } });
+        const compiled = compileCampaignEffects(consequence.effectSpecs, { actorResolver: campaignActor });
         compiled.effects = bindCampaignResources(compiled.effects, nextState, (nextState.cards ?? []).map(c => ({ actorId: c.actorId, resourceMax: (c.card as { resourceMax: Record<string, number> }).resourceMax })));
         Object.assign(nextState, applyEffects(nextState, compiled.effects));
         for (const effect of compiled.effects) events.push({ eventType: effect.op === 'recordEvent' ? effect.eventType : 'campaign_consequence_effect', payload: { consequenceId: consequence.consequenceId, ...effect } });
@@ -1483,7 +1486,7 @@ export class CampaignSession {
       for (const reward of rewards) {
         for (const spec of reward.policy.rewards) {
           if (spec.kind === 'knowledge') {
-            const actorId = spec.toActorId ?? playerActorId;
+            const actorId = campaignActor(spec.toActorId ?? playerActorId);
             nextState.discoveries = [...(nextState.discoveries ?? [])];
             if (!nextState.discoveries.some(d => d.entryId === spec.targetId && d.actorId === actorId)) {
               nextState.discoveries.push({ entryId: spec.targetId, actorId,
@@ -1495,13 +1498,13 @@ export class CampaignSession {
           } else if (spec.kind === 'item') {
             nextState.itemOwners = { ...nextState.itemOwners };
             if (nextState.itemOwners[spec.targetId] === undefined) {
-              nextState.itemOwners[spec.targetId] = spec.toActorId ?? playerActorId;
+              nextState.itemOwners[spec.targetId] = campaignActor(spec.toActorId ?? playerActorId);
               nextState.itemSources = { ...(nextState.itemSources ?? {}) };
               nextState.itemSources[spec.targetId] = { kind: 'quest_reward', sourceId: reward.policyId, obtainedAtStateVersion: nextVersion };
               events.push({ eventType: 'item_transferred', payload: { itemId: spec.targetId, toActorId: nextState.itemOwners[spec.targetId] } });
             }
           } else if (spec.kind === 'resource_cap') {
-            const actorId = spec.toActorId ?? playerActorId;
+            const actorId = campaignActor(spec.toActorId ?? playerActorId);
             const stored = nextState.cards?.find(card => card.actorId === actorId);
             const card = stored?.card as { resourceMax?: Record<string, number> } | undefined;
             if (card?.resourceMax?.[spec.targetId] !== undefined) {
@@ -1509,7 +1512,7 @@ export class CampaignSession {
               events.push({ eventType: 'resource_cap_changed', payload: { actorId, resourceId: spec.targetId, cap: card.resourceMax[spec.targetId] } });
             }
           } else if (spec.kind === 'skill_rank') {
-            const actorId = spec.toActorId ?? playerActorId;
+            const actorId = campaignActor(spec.toActorId ?? playerActorId);
             nextState.skills = [...(nextState.skills ?? [])];
             const entry = nextState.skills.find(skill => skill.actorId === actorId && (skill.skillId === spec.targetId || skill.skillId === spec.targetId.replace(/^skill-/, '')));
             if (entry) {
@@ -2641,7 +2644,7 @@ export class CampaignSession {
       if (method.outcomeTemplates) {
         const specs = method.outcomeTemplates[grade]?.effects ?? [];
         return compileCampaignEffects(specs, {
-          actorResolver: actorId => plannerCards.find(card => card.templateId === actorId)?.actorId ?? actorId,
+          actorResolver: createActorReferenceResolver({ actors: summary.state.actors, cards: plannerCards }),
         }).transitions;
       }
       return grade === 'success' || grade === 'full_success'

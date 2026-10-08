@@ -862,6 +862,55 @@ test('closeout: skill, resource cap and a newly directed relationship reward sur
   } finally { h.db.close(); }
 });
 
+for (const companion of [false, true]) test(`closeout: template-addressed rewards commit to the actual ${companion ? 'companion' : 'scene NPC'} and survive cold reads`, async () => {
+  const model = candidateModel();
+  model.rewards[0].rewards.push({ kind: 'knowledge', targetId: 'lore-crates', toActorId: 'tpl-lin' },
+    { kind: 'resource_cap', targetId: 'stamina', toActorId: 'tpl-lin', delta: 2 },
+    { kind: 'relationship', targetId: 'tpl-lin', toActorId: 'pc', delta: 2 });
+  const actorId = companion ? 'companion-lin' : 'npc-tpl-lin';
+  const entries = require('./helpers/phase9CampaignFixture.cjs').baseEntries();
+  if (companion) entries.find(e => e.entryId === 'tpl-lin').definition.recruitment = {
+    recruitable: true, openingEligible: true, minimumCloseness: 0,
+    openingRelationship: { stance: 'friendly', closeness: 2 },
+  };
+  const h = await fixture({ model, entries, companions: companion ? [{ actorId, templateId: 'tpl-lin' }] : [] });
+  try {
+    const before = await h.turns.getState(h.branchId);
+    assert.equal(before.cards.filter(c => c.card.templateId === 'tpl-lin').length, 1,
+      'a selected companion and scene template represent one actual person');
+    const card = before.cards.find(c => c.actorId === actorId).card;
+    const cap = card.resourceMax.stamina;
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' });
+    const after = await h.turns.getState(h.branchId);
+    assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates' && d.actorId === actorId));
+    assert.equal(after.discoveries.some(d => d.actorId === 'tpl-lin'), false, 'a template is not a runtime knowledge owner');
+    assert.equal(after.cards.find(c => c.actorId === actorId).card.resourceMax.stamina, cap + 2);
+    assert.equal(after.relationships.find(r => r.fromActorId === actorId && r.toActorId === 'pc').closeness,
+      (before.relationships.find(r => r.fromActorId === actorId && r.toActorId === 'pc')?.closeness ?? 0) + 2);
+    assert.equal(after.actors['tpl-lin'], undefined);
+    const persisted = await h.adapter.queryOne('SELECT card_json FROM actor_cards WHERE branch_id=? AND actor_id=?', [h.branchId, actorId]);
+    assert.equal(JSON.parse(persisted.card_json).resourceMax.stamina, cap + 2);
+    await h.session.rest({ campaignId: h.campaignId, branchId: h.branchId, kind: 'short' });
+    assert.equal((await h.turns.getState(h.branchId)).cards.find(c => c.actorId === actorId).card.resourceMax.stamina, cap + 2);
+  } finally { h.db.close(); }
+});
+
+test('closeout: a reward cannot commit knowledge to a scoped template with no instantiated owner', async () => {
+  const model = candidateModel();
+  model.stages[0].completion = { kind: 'counter_at_least', situationId: 'self', counterId: 'evidence', minimum: 1 };
+  model.rewards[0].rewards.push({ kind: 'knowledge', targetId: 'lore-crates', toActorId: 'tpl-lin' });
+  const entries = require('./helpers/phase9CampaignFixture.cjs').baseEntries();
+  entries.find(e => e.kind === 'scene').definition.actors = [];
+  const h = await fixture({ model, entries });
+  try {
+    const before = await h.turns.getState(h.branchId);
+    await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看现场' }),
+      /人物.*未实例化或有歧义/);
+    assert.deepEqual(await h.turns.getState(h.branchId), before, 'atomic failure retains the snapshot and reward grant keys');
+    assert.equal((await h.turns.getState(h.branchId)).discoveries.some(d => d.actorId === 'tpl-lin'), false);
+  } finally { h.db.close(); }
+});
+
 test('closeout: resource penalties and healing are bounded in the frozen four-grade contract', async () => {
   const model = candidateModel();
   for (const grade of ['success','full_success','failure','severe_failure']) model.firstSituation.methods[1].outcomes[grade].effects.push(
