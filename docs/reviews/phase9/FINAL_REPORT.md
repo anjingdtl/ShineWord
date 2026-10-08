@@ -1,6 +1,6 @@
 # Phase 9 接手收尾复验报告
 
-2026-10-08，Asia/Shanghai。final40共用目录与真实线索回看已通过核心1114项和Android同路径复验；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；完整长旅程、持续后果、三意图质量及世界构建审查继续收尾。
+2026-10-08，Asia/Shanghai。final42映射拒绝和M5事实审查交接已通过1120项核心与Android正式入口复验；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；资料段地点交接、完整旅程及质量/性能继续收尾。
 
 | final29已提交检查点 | 历史结果（最新见final33） |
 |---|---|
@@ -162,3 +162,21 @@ final39隔离主机新规划也确认预算历史反馈：J2首次wire49055=rese
 截至07:14:54 UTC预算1200/1500，未重置/增额；final40同完整目标的J2/J3新规划已在隔离副本启动、尚未终态，没有覆盖final39历史。后续同身份长旅程、两项隔至少两次决定的持续后果、三计划/对应旅程六维质量、A02/A03/A06/A12、10+10性能及神罚之锁审查仍未闭合，独立试玩未验。A01–A40维持29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED，第九阶段整体尚未验收通过。
 
 证据：.tmp/phase9/r47-red-c.log、r47-target-b/c.log、r47-core-a/b.log、r47-mobile-b/c.log、final39/final40-apk.log、reaccept-identity-final39/final40.json、reaccept-device/final39/final40-install-preservation.json、final39-knowledge-before/known.png、final39-book-scroll-blocked.png、final40-book-known.png/xml/proof.json、final39/final40-device-audit.jsonl、final39-host-J2/J3/status.jsonl与proposal.json，final40-host-J2/J3。私有原文/数据库/模型内容仅在忽略目录。只做本地提交，未推送/发布。
+
+## 2026-10-08 R49：映射拒绝与发布事实审查交接（final41/42）
+
+世界映射过去把 block_action/block_effect 提案降成 audit，但审查只能关闭提示，不能排除提案，且记忆策略仅绑定诊断字符串。现在未能执行的限制不进入编译目录；正式“拒绝这条规则”决定绑定世界、来源hash、完整原提案与引用事实/原文快照，复用现有处理策略表，不增加/重置数据库。普通解决/豁免不能代替拒绝；提交时校验界面所见完整内容及当前证据，过期/跨世界/改变正文或事实状态均重新审查。相同提案续建只复用付费checkpoint；原提案、原文、旧发布版本及战役归档不被改写。Mapper原提示/付费缓存身份保持兼容。
+
+真实端上另发现M5来源范围包含M4选取之外的冲突：发布器只抛 canon_conflict_in_scope，界面却没有冲突卡片。M5现通过同一事实审查owner保存实际阻滞的factIds，检查当前冲突状态和执行fence；最终发布事务中新出现的冲突也同样送审。协调器据明确Canon blocking conflict进入needs_review，而不是空队列的package_finalize_failed。旧来源/正文与冲突记录保留，审查仍逐条查看证据；没有增加自动豁免。
+
+新增4项映射拒绝回归及2项M5事实审查回归，并扩展发布事务竞态用例。映射RED为0/4；M5目标RED为7/10，三处缺失审查/错误状态得到复现。目标19/19及发布18/18通过。完整第一段1118/1118；追加M5后首次1119/1120，唯一失败是旧纯模拟worldStore未实现新增saveReviewIssue合同，补齐且断言被送审事实后完整1120/1120、0失败0跳过、32.850秒。移动类型检查、Debug构建、版本一致性和diff均通过。
+
+final41正式UI重编译原缓存并拒绝“神罚之锁的压制”，请求账本保持237条、预算1200/1500，事实/原文/旧包/战役档案与快照逐值一致；发布仍被独立事实范围冲突阻止，保留该失败。final42生产源码 8c8a77962ee1451c600b9f9017460f5c541df9eaa37e89d0321038fd0f8190cc，APK d12414460a3658e50b3922b1ed21de820ed2951be2522588b86f7b6d184b214f，构建41秒，同一emulator-5556保留安装hash一致；2个旧未知任务/冻结/attempt、全部旧采用档案及快照一致、安装0隐式请求。
+
+final42复验中M5正式产生审查入口。通过真实UI与引用原文逐条确认罗兰“四王子”身份称谓、巴罗夫任职经历补充、罗兰工坊计划与其它计划可同时成立；三条状态由conflict改为explicit并分别产生complementary审计。事实其它字段、原文引文及既有explicit行完整保留，不是整体豁免。变化后的选取输入正确发起一次新的world_mapping，可信succeeded：wire10096、推理28、总输出8057、输入27772，107.242秒，0截断。既有冻结构建配置仍是low/直连端点；该新增attempt单独以持久幂等登记纳入共享QA预算，1201/1500，未改档或提高预算上限。
+
+新完整映射产生两个新的未能执行限制（首席骑士护主、神罚之锁），它们没有借用旧诊断/旧拒绝决定，均经新卡片逐条拒绝。旧付费结果、原文、已发布基础r1、战役归档/快照保持；三条事实状态变更由独立审计解释。尚有situation-sit-witch-verdict地点依赖：模型引用规范地点实体ID，场景定义使用地点名，当前编译器未把两种规范标识连到同一已证明场景，局面未进入新段工件。新段仍未发布；下一步修复地点交接后重编译，不能以队列清空或规则拒绝宣称出版成功。
+
+final40隔离主机J2/J3均终止为outcome_unknown，各1次请求，reasoning/output均缺少可信用量，不属于已证明的预算耗尽。账本耗时分别731.609/92.693秒，而错误显示900秒，连接/超时分类待定位；旧请求及冻结材料保留，未重发。它们没有候选或玩家决定，不能代替final39已采用规划或计入最终80决定。A01–A40仍29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED；同最终身份旅程、持续后果、三意图质量、A02/A03/A06/A12、10+10性能及独立试玩尚未闭合，第九阶段整体未验收通过。
+
+证据：.tmp/phase9/r49-red-a.log、r49-target-a/b/c.log、r49-publication-red.log、r49-publication-target-b.log、r49-core-a/b/c.log、r49-mobile-a/b/c.log、final41/final42-apk.log、reaccept-identity-final41/final42.json、reaccept-device/final41/final42-install-preservation.json、final41-constraint-review/rejected.png、final42-canon-review/resolved.png、final41/final42-world-proof.jsonl、final40-host-J2/J3/status.jsonl；原文/数据库/模型原响应仍仅在忽略目录。本地提交，未推送或发布。

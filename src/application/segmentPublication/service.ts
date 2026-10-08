@@ -32,9 +32,12 @@ export interface LegacyOverlayRebaseInput {
 export class SegmentPublicationError extends Error {
   constructor(readonly errorCodes:readonly string[]){super(`Segment publication blocked: ${errorCodes.join(', ')}`);this.name='SegmentPublicationError';}
 }
+class CanonPublicationConflictError extends Error {
+  constructor(readonly factIds:readonly string[]){super('Canon blocking conflict: canon_conflict_in_scope');this.name='CanonPublicationConflictError';}
+}
 export interface SegmentPublicationDeps {
   store:SqliteSegmentArtifactStore;
-  worldStore:Pick<SqliteWorldStore,'getWorldPackage'|'getProgressiveDeltaPackage'|'listFacts'|'listEntities'|'listEvents'|'listReviewIssues'>;
+  worldStore:Pick<SqliteWorldStore,'getWorldPackage'|'getProgressiveDeltaPackage'|'listFacts'|'listEntities'|'listEvents'|'listReviewIssues'|'saveReviewIssue'>;
   sourceCatalog:SourceCatalogPortV1;
   sha256Hex:Sha256HexProvider['sha256Hex'];
   now?:()=>string;
@@ -57,15 +60,17 @@ export class SegmentPublicationService implements BranchContentPortV1 {
       // Conflicts outside a proven source closure may remain pending. An
       // unclassified/malformed conflict fails closed, including old data.
       const catalogSnapshot=await sourceCatalog.snapshot(input.worldId);
+      const conflictIds=new Set<string>();
       for(const conflict of facts.filter(f=>f.status==='conflict')) {
         if(!conflict.sources.length)throw new Error('unclassified_canon_conflict');
         for(const span of conflict.sources) {
           const r=await resolveLegacyEvidenceRange(sourceCatalog,catalogSnapshot.members,{chapterId:span.chapterId,
             startCodePoint:span.startOffset,endCodePoint:span.endOffset,contentSha256:span.quoteSha256});
           if(input.coverage.some(c=>c.sourceId===r.sourceId&&c.normalizedTreeHash===r.normalizedTreeHash
-            &&c.startCp<r.endCp&&c.endCp>r.startCp))throw new Error('canon_conflict_in_scope');
+            &&c.startCp<r.endCp&&c.endCp>r.startCp))conflictIds.add(conflict.factId);
         }
       }
+      if(conflictIds.size)throw new CanonPublicationConflictError([...conflictIds].sort());
       const dependencies=input.dependencies??[];const dependencyArtifacts:SegmentArtifactV1[]=[];
       const pending=[...dependencies];const seen=new Map<string,string>();
       while(pending.length){const ref=pending.shift()!;const previousHash=seen.get(ref.artifactId);
@@ -112,6 +117,7 @@ export class SegmentPublicationService implements BranchContentPortV1 {
         // A parallel extractor may mark an existing fact conflicted or open a
         // blocker after the earlier validation. This second pass uses only tx
         // readers; source membership/coordinates remain frozen above.
+        const currentConflictIds=new Set<string>();
         for(const conflict of currentFacts.filter(f=>f.status==='conflict')) {
           if(!conflict.sources.length)throw new Error('unclassified_canon_conflict');
           for(const span of conflict.sources){const members=catalogSnapshot.members.filter(member=>member.chapters.some(chapter=>chapter.chapterId===span.chapterId
@@ -120,8 +126,9 @@ export class SegmentPublicationService implements BranchContentPortV1 {
               ||span.startOffset<0||span.endOffset<=span.startOffset)throw new Error('unclassified_canon_conflict');
             const member=members[0]!;
             if(input.coverage.some(range=>range.sourceId===member.sourceId&&range.normalizedTreeHash===member.normalizedTreeHash
-              &&range.startCp<span.endOffset&&range.endCp>span.startOffset))throw new Error('canon_conflict_in_scope');}
+              &&range.startCp<span.endOffset&&range.endCp>span.startOffset))currentConflictIds.add(conflict.factId);}
         }
+        if(currentConflictIds.size)throw new CanonPublicationConflictError([...currentConflictIds].sort());
         const factById=new Map(facts.map(f=>[f.factId,f])),currentFactById=new Map(currentFacts.map(f=>[f.factId,f]));
         for(const id of new Set(artifact.citations.flatMap(c=>c.sourceFactIds))) {
           const previous=factById.get(id),current=currentFactById.get(id);
@@ -140,7 +147,16 @@ export class SegmentPublicationService implements BranchContentPortV1 {
         await store.insertArtifact(tx,artifact);
       });
       return artifact;
-    }catch(error){const errors=error instanceof SegmentPublicationError?error.errorCodes:[error instanceof Error?error.message:'publication_failed'];
+    }catch(error){
+      if(error instanceof CanonPublicationConflictError) {
+        // The publication closure may include evidence outside M4's selected
+        // facts. Persist those exact conflicts through the same human review
+        // owner; a failed publish must not leave an empty, unusable queue.
+        await worldStore.saveReviewIssue({worldId:input.worldId,issueId:'canon-conflict',kind:'canon_conflict',severity:'blocking',
+          detailJson:JSON.stringify({factIds:error.factIds,count:error.factIds.length}),createdAt:input.createdAt,
+          canonConflictFactIds:error.factIds},input.assertCurrent);
+      }
+      const errors=error instanceof SegmentPublicationError?error.errorCodes:[error instanceof Error?error.message:'publication_failed'];
       await store.recordDiagnostic({...input,errors});throw error;
     }
   }

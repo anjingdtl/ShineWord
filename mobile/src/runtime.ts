@@ -396,6 +396,11 @@ export async function resolveReviewIssue(worldId: string, issueId: string, resol
   await worldStore.resolveReviewIssue(worldId, issueId, resolution, remember);
 }
 
+export async function rejectMappingConstraint(worldId: string, issueId: string, expectedDetailJson: string): Promise<void> {
+  const runtime = await getDatabaseRuntime();
+  await runtime.worldStore.rejectMappingConstraint(worldId, issueId, expectedDetailJson);
+}
+
 export async function resolveCanonFactConflict(
   worldId: string, factId: string, resolution: 'complementary' | 'unverified',
 ): Promise<void> {

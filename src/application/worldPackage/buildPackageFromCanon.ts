@@ -27,6 +27,7 @@ import { selectCanonSubset, mergeIncrementalEntries, CANON_SELECTION_VERSION, fa
 import { validatePackage } from './validate';
 import type { SqliteTransaction } from '../ports/sqlite';
 import { canonicalStringify, type CanonicalJson } from '../../domain/turns/canonical';
+import { createUnsupportedConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND, type MappingConstraintReview } from './mappingConstraintReview';
 
 /**
  * P2-4: builds a publishable three-book world package from the canon facts,
@@ -336,8 +337,6 @@ function makeEntry(params: {
 interface CleanContext {
   knownFactIds: Set<string>;
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
-  /** Non-blocking mapper adjustments surfaced to the review queue. */
-  diagnostics: string[];
 }
 
 interface CleanedProposals {
@@ -509,20 +508,16 @@ function cleanConstraint(raw: unknown, ctx: CleanContext): ContentEntry | null {
     rejectEntry(ctx, 'constraint', id, [`unknown enforcement ${enforcement}.`]);
     return null;
   }
-  // Runtime gate (validateRuleEntryCapabilities): entry-level constraints can
-  // only be 'audit' — blocking semantics need typed ruleConfiguration
-  // targets the mapper cannot author. A model-proposed blocking constraint
-  // downgrades to audit with a review note instead of failing the publish
-  // (same philosophy as dangling template loot: never block the package).
-  let effectiveEnforcement = enforcement;
+  // Blocking proposals are reviewed before cleaning, never silently demoted
+  // into a book entry that still claims the unsupported mechanism works.
   if (enforcement !== 'audit') {
-    effectiveEnforcement = 'audit';
-    ctx.diagnostics.push(`constraint-${id}: enforcement ${enforcement} downgraded to audit (blocking constraints need typed ruleConfiguration targets)`);
+    rejectEntry(ctx, 'constraint', id, ['blocking constraint requires executable typed conditions']);
+    return null;
   }
   const definition: Record<string, unknown> = {
     name,
     description: asString(record.description) ?? name,
-    enforcement: effectiveEnforcement,
+    enforcement,
   };
   const pattern = asString(record.pattern);
   if (pattern) definition.pattern = pattern;
@@ -1119,13 +1114,14 @@ async function requestMappingProposals(
   entities: readonly StoredEntity[],
   events: readonly StoredEvent[],
   knownFactIds: Set<string>,
+  evidenceFacts: readonly StoredFact[],
 ): Promise<{
   proposals: CleanedProposals;
   usage: unknown | null;
   actorTemplates: RawActorTemplate[];
   items: Array<{ entry: ContentEntry; weaponSkillId: string | null }>;
   rejected: Array<{ kind: string; id: string; reasons: string[] }>;
-  diagnostics: string[];
+  constraintReviews: MappingConstraintReview[];
   mappedFactCount: number;
   batches: number;
   /** Closeout C3: per-batch usage plus cache-hit accounting. */
@@ -1165,7 +1161,7 @@ async function requestMappingProposals(
   const actorTemplates: RawActorTemplate[] = [];
   const items: Array<{ entry: ContentEntry; weaponSkillId: string | null }> = [];
   const allRejected: Array<{ kind: string; id: string; reasons: string[] }> = [];
-  const allDiagnostics: string[] = [];
+  const constraintReviews: MappingConstraintReview[] = [];
   const usagePerBatch: Array<unknown | null> = [];
   let mappedFactCount = 0;
   let skippedBatches = 0;
@@ -1370,7 +1366,7 @@ async function requestMappingProposals(
     // before a pause or lease change can stop the loop (extraction units
     // follow the same contract). The checks below stop the NEXT batch.
     const ctx: CleanContext = { knownFactIds: input.incrementalMapping
-      ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [], diagnostics: [] };
+      ? new Set(batch.map(fact => fact.factId)) : knownFactIds, rejected: [] };
     // WorldMapper V2 (plan P4): evidence-verified rule mappings land through
     // the store's idempotent path; rejects surface in the review queue.
     // These writes are deliberately unfenced against pause: ruleMappingId is
@@ -1389,7 +1385,14 @@ async function requestMappingProposals(
       }
     }
     for (const candidate of Array.isArray(raw.skills) ? raw.skills : []) mergeEntry(cleanSkill(candidate, ctx), 'skill');
-    for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) mergeEntry(cleanConstraint(candidate, ctx), 'constraint');
+    for (const candidate of Array.isArray(raw.constraints) ? raw.constraints : []) {
+      const review = createUnsupportedConstraintReview(candidate, input.worldId, input.sourceSha256, evidenceFacts);
+      if (review) {
+        if (!await input.worldStore.isMappingConstraintRejected(input.worldId, JSON.stringify(review))) constraintReviews.push(review);
+        continue;
+      }
+      mergeEntry(cleanConstraint(candidate, ctx), 'constraint');
+    }
     for (const candidate of Array.isArray(raw.lore) ? raw.lore : []) mergeEntry(cleanLore(candidate, ctx), 'lore');
     for (const candidate of Array.isArray(raw.actorTemplates) ? raw.actorTemplates : []) {
       const cleaned = cleanActorTemplate(candidate, ctx);
@@ -1496,7 +1499,6 @@ async function requestMappingProposals(
     }
     mappedFactCount += batch.length;
     allRejected.push(...ctx.rejected);
-    allDiagnostics.push(...ctx.diagnostics);
 
     // Persist the batch checkpoint AFTER its results are merged in memory;
     // a crash before this write re-runs exactly this batch, nothing else.
@@ -1534,7 +1536,7 @@ async function requestMappingProposals(
     actorTemplates,
     items,
     rejected: allRejected,
-    diagnostics: allDiagnostics,
+    constraintReviews,
     mappedFactCount,
     batches: completedBatches,
     usagePerBatch,
@@ -1775,7 +1777,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     // model batches distinguish it from an LLM mapping result.
     mappingSucceeded = true;
   } else try {
-    const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds);
+    const mapped = await requestMappingProposals(input, mappableFacts, entities, events, knownFactIds, allFacts);
     proposals = mapped.proposals;
     // Closeout C3: aggregate usage across batches (sum token counters,
     // OR the estimated flags) instead of keeping only the last response.
@@ -1812,18 +1814,19 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     // succeeded, and the only way out was a manual waive of a stale message.
     // Previous rejection rows are retired here too and re-derived from THIS
     // attempt below, so the queue always shows the current mapping's verdict.
-    await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed', 'invalid-proposal']);
+    await worldStore.resolveReviewIssuesByPrefix(worldId, ['mapping-failed', 'invalid-proposal', 'mapping-constraint']);
     // Rejected proposals (invalid enums, missing ids, unknown attributes) go
     // to the review queue as major issues instead of entering the package.
-    for (const diagnostic of mapped.diagnostics) {
+    for (const review of mapped.constraintReviews) {
+      const detailJson = canonicalStringify(review as unknown as CanonicalJson);
       await worldStore.saveReviewIssue({
         worldId,
-        issueId: `invalid-proposal-${diagnostic.split(':')[0]}-${diagnostic.length}`,
-        kind: 'invalid_proposal',
-        severity: 'major',
-        detailJson: JSON.stringify({ kind: 'mapper_adjustment', id: diagnostic, reasons: [diagnostic] }),
+        issueId: `mapping-constraint-${await input.sha256Hex(detailJson)}`,
+        kind: MAPPING_CONSTRAINT_REVIEW_KIND,
+        severity: 'blocking',
+        detailJson,
         createdAt: input.createdAt,
-      });
+      }, input.assertCurrentTx);
       reviewIssueCount += 1;
     }
     for (const rejection of mapped.rejected) {

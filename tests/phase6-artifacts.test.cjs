@@ -60,7 +60,13 @@ async function harness(){
     validFrom:null,validTo:null,revealAt:null,scope:'world',sources:[{chapterId:'chapter-1',startOffset:0,endOffset:10,quote:text.slice(0,10),quoteSha256:await hash(text.slice(0,10))}]};
   let facts=[fact];let reviews=[];
   const worldStore={async getWorldPackage(w,r){return w==='w'&&r===1?base:null;},async getProgressiveDeltaPackage(){return null;},
-    async listFacts(){return facts;},async listEntities(){return [];},async listEvents(){return [];},async listReviewIssues(){return reviews;}};
+    async listFacts(){return facts;},async listEntities(){return [];},async listEvents(){return [];},async listReviewIssues(){return reviews;},
+    async saveReviewIssue(input,guard){
+      await db.transaction(async tx=>{await guard?.(tx);
+        assert.ok(input.canonConflictFactIds.every(id=>facts.some(f=>f.factId===id&&f.status==='conflict')));
+        reviews=reviews.filter(r=>r.issueId!==input.issueId).concat({...input,status:'open'});
+      });
+    }};
   const store=new SqliteSegmentArtifactStore(db,hash);const service=new SegmentPublicationService({store,worldStore,sourceCatalog:catalog,sha256Hex:hash,now:()=>now});
   const draft=async(patch={})=>({worldId:'w',segmentId:'seg-1',generation:1,sourceBinding:binding(),coverage:[await catalog.createRange('source-1',0,100)],
     canonSnapshotHash:await hash('canon'),basePackage:{revision:1,contentHash:baseHash},ruleset:{id:'r',version:'1'},mappingVersion:'mapping-1',
@@ -132,6 +138,7 @@ test('explicit multi-source mirror coordinates, append compatibility and ambiguo
 test('source conflicts, unknown blockers, missing closure and forged provenance remain rejected',async()=>{
   const h=await harness();try{h.setFacts([{...h.fact,status:'inference'}]);await assert.rejects(h.service.publishArtifact(await h.draft()),/inference_disguised_as_explicit/);
     h.setFacts([h.fact,{...h.fact,factId:'conflict',status:'conflict'}]);await assert.rejects(h.service.publishArtifact(await h.draft()),/canon_conflict_in_scope/);
+    assert.deepEqual(JSON.parse((await h.service.deps.worldStore.listReviewIssues())[0].detailJson).factIds,['conflict']);
     h.setFacts([h.fact]);h.setReviews([{issueId:'legacy-global',severity:'blocking',detailJson:'{}'}]);await assert.rejects(h.service.publishArtifact(await h.draft()),/blocking_review/);
     h.setReviews([]);const entry=lore('broken',['f1']);entry.dependencyIds=['missing'];await assert.rejects(h.service.publishArtifact(await h.draft({entries:[entry]})),/dangling dependency/);
     const unsafe=lore('unsafe');unsafe.provenance.kind='user_override';await assert.rejects(h.service.publishArtifact(await h.draft({entries:[unsafe]})),/invalid_artifact_structure/);

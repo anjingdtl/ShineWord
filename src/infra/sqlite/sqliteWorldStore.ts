@@ -25,6 +25,7 @@ import type {
 import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
 import { sanitizeTokenFragment } from '../../application/world/extraction';
 import { requireCompiledRules, validateRuleEntryCapabilities } from '../../application/content/runtimeRules';
+import { createUnsupportedConstraintReview, readMappingConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND } from '../../application/worldPackage/mappingConstraintReview';
 
 function assertCurrentRuleManifest(manifest: WorldPackageManifest): void {
   if (manifest.schemaVersion !== 'shineword-world-package-5') throw new Error('Unsupported world package schema; create a current development project.');
@@ -1701,6 +1702,7 @@ export class SqliteWorldStore implements WorldStore {
       const issue = await tx.queryOne<SqliteRow>(
         'SELECT kind, severity, detail_json FROM review_issues WHERE world_id = ? AND issue_id = ?', [worldId, issueId],
       );
+      if (issue?.kind === MAPPING_CONSTRAINT_REVIEW_KIND) throw new Error('请核对提案与证据，并使用“拒绝这条规则”；不能只关闭或豁免提示。');
       const resolvedAt = new Date().toISOString();
       if (remember && issue && issue.kind !== 'canon_conflict') {
         await tx.execute(
@@ -1714,6 +1716,39 @@ export class SqliteWorldStore implements WorldStore {
         'UPDATE review_issues SET status = ?, resolved_at = ? WHERE world_id = ? AND issue_id = ?',
         [resolution, resolvedAt, worldId, issueId],
       );
+    });
+  }
+
+  async isMappingConstraintRejected(worldId: string, detailJson: string): Promise<boolean> {
+    const row = await this.db.queryOne<SqliteRow>(
+      `SELECT resolution FROM review_resolution_policies WHERE world_id=? AND kind=? AND severity='blocking' AND detail_json=?`,
+      [worldId, MAPPING_CONSTRAINT_REVIEW_KIND, reviewDetailKey(detailJson)],
+    );
+    return row?.resolution === 'resolved';
+  }
+
+  /** CAS the shown proposal and recheck its canon evidence inside the decision transaction. */
+  async rejectMappingConstraint(worldId: string, issueId: string, expectedDetailJson: string): Promise<void> {
+    await this.db.transaction(async tx => {
+      const issue = await tx.queryOne<SqliteRow>(
+        'SELECT kind, severity, detail_json, status FROM review_issues WHERE world_id=? AND issue_id=?', [worldId, issueId],
+      );
+      const detail = issue ? readMappingConstraintReview(String(issue.detail_json)) : null;
+      if (!issue || issue.kind !== MAPPING_CONSTRAINT_REVIEW_KIND || issue.severity !== 'blocking' || issue.status !== 'open'
+        || !detail || detail.worldId !== worldId || reviewDetailKey(String(issue.detail_json)) !== reviewDetailKey(expectedDetailJson)) {
+        throw new Error('提案已变化或已处理，请刷新审查后重试。');
+      }
+      const world = await tx.queryOne<SqliteRow>('SELECT source_sha256 FROM worlds WHERE world_id=?', [worldId]);
+      const current = createUnsupportedConstraintReview(detail.proposal, worldId, String(world?.source_sha256 ?? ''), await this.listFacts(worldId, tx));
+      if (!current || reviewDetailKey(JSON.stringify(current)) !== reviewDetailKey(String(issue.detail_json))) {
+        throw new Error('原著证据已变化，请继续构建并刷新审查后重试。');
+      }
+      const resolvedAt = new Date().toISOString();
+      await tx.execute(`INSERT INTO review_resolution_policies (world_id,kind,severity,detail_json,resolution,resolved_at)
+        VALUES (?,?,'blocking',?,'resolved',?) ON CONFLICT(world_id,kind,severity,detail_json)
+        DO UPDATE SET resolution=excluded.resolution,resolved_at=excluded.resolved_at`,
+        [worldId, MAPPING_CONSTRAINT_REVIEW_KIND, reviewDetailKey(String(issue.detail_json)), resolvedAt]);
+      await tx.execute("UPDATE review_issues SET status='resolved',resolved_at=? WHERE world_id=? AND issue_id=?", [resolvedAt, worldId, issueId]);
     });
   }
 

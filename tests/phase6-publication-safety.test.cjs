@@ -105,8 +105,41 @@ test('publication rechecks canon evidence and blocking reviews inside its transa
         VALUES (?,'late-blocker','late_review','blocking','{}','open',?)`,[h.worldId,now]);
     };
     await assert.rejects(h.service.publishArtifact(draft),change==='conflict'?/canon_conflict_in_scope/:change==='value'?/canon_evidence_changed/:/blocking_review:late-blocker/);
+    if(change==='conflict') {
+      const issue=(await h.worldStore.listReviewIssues(h.worldId)).find(i=>i.kind==='canon_conflict');
+      assert.ok(issue, 'a conflict detected at the final fence must be reachable from review');
+      assert.deepEqual(JSON.parse(issue.detailJson).factIds,[fact.factId]);
+    }
     assert.equal((await h.store.listArtifacts(h.worldId)).length,0);
   }finally{h.db.raw.close();}}
+});
+
+test('publication coverage conflicts enter evidence review and can resume through formal fact resolution',async()=>{
+  const h=await fixture();try{
+    const fact=(await h.worldStore.listFacts(h.worldId)).find(f=>f.status==='explicit'&&f.sources.length);
+    await h.db.execute("UPDATE canon_facts SET status='conflict' WHERE world_id=? AND fact_id=?",[h.worldId,fact.factId]);
+    const draft=await h.draft();
+    await assert.rejects(h.service.publishArtifact(draft),/Canon blocking conflict.*canon_conflict_in_scope/);
+    const issue=(await h.worldStore.listReviewIssues(h.worldId)).find(i=>i.kind==='canon_conflict');
+    assert.ok(issue);
+    assert.deepEqual(JSON.parse(issue.detailJson).factIds,[fact.factId]);
+    assert.equal((await h.store.listArtifacts(h.worldId)).length,0);
+    await h.worldStore.resolveCanonFactConflict(h.worldId,fact.factId,'complementary');
+    const artifact=await h.service.publishArtifact(draft);
+    assert.ok(artifact.artifactId);
+    assert.deepEqual((await h.worldStore.listFacts(h.worldId)).find(f=>f.factId===fact.factId).sources,fact.sources);
+  }finally{h.db.raw.close();}
+});
+
+test('a stale publication owner cannot create a new canon review',async()=>{
+  const h=await fixture();try{
+    const fact=(await h.worldStore.listFacts(h.worldId)).find(f=>f.status==='explicit'&&f.sources.length);
+    await h.db.execute("UPDATE canon_facts SET status='conflict' WHERE world_id=? AND fact_id=?",[h.worldId,fact.factId]);
+    await h.db.execute('UPDATE publication_authority SET fence=8');
+    await assert.rejects(h.service.publishArtifact(await h.draft({assertCurrent:h.leaseGuard})),/stale_publication_authority/);
+    assert.equal((await h.worldStore.listReviewIssues(h.worldId)).length,0);
+    assert.equal((await h.store.listArtifacts(h.worldId)).length,0);
+  }finally{h.db.raw.close();}
 });
 test('legacy lookup rebases the adopted artifact overlay atomically without editing actor state or admitting future facts',async()=>{
   const h=await fixture();try{const adopted=await h.adopt();assert.equal(adopted.status,'adopted');

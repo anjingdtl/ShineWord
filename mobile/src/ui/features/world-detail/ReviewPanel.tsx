@@ -12,9 +12,10 @@ import { EmptyState } from '../../components/EmptyState';
 import { SectionHeader } from '../../components/SectionHeader';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useTheme } from '../../theme/ThemeContext';
-import { listReviewIssues, resolveReviewIssue, resolveCanonFactConflict, type ReviewIssueView } from '../../../runtime';
+import { listReviewIssues, resolveReviewIssue, resolveCanonFactConflict, rejectMappingConstraint, type ReviewIssueView } from '../../../runtime';
 import { ReviewIssueCard } from './ReviewIssueCard';
 import { CanonConflictCard } from './CanonConflictCard';
+import { MappingConstraintCard } from './MappingConstraintCard';
 
 export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
   const { theme } = useTheme();
@@ -67,6 +68,17 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
     } finally { setBusy(false); }
   }
 
+  async function rejectConstraint(issue: ReviewIssueView) {
+    if (busy) return;
+    setError(null); setNotice(null); setBusy(true);
+    try {
+      await rejectMappingConstraint(props.worldId, issue.issueId, issue.detailJson);
+      setNotice('已拒绝这条规则，原著事实已保留。返回项目继续构建后，新版本会排除该提案。');
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+
   return (
     <View style={{ gap: theme.space.md }}>
       <SectionHeader
@@ -89,6 +101,8 @@ export function ReviewPanel(props: { worldId: string }): React.JSX.Element {
                 onResolve={resolution => void resolveFact(conflict.factId, resolution)} />
             ))}
           </View>
+        ) : issue.kind === 'mapping_constraint' ? (
+          <MappingConstraintCard key={issue.issueId} issue={issue} busy={busy} onReject={() => void rejectConstraint(issue)} />
         ) : (
           <ReviewIssueCard
             key={issue.issueId}
