@@ -15,16 +15,10 @@ import {
   type PlayUiProjection,
 } from '../../src/application/campaign/playProjection';
 import type { ActorCard } from '../../src/domain/characters/card';
-import type { ContentEntry } from '../../src/domain/content/types';
+import { loadCampaignContentCatalog } from '../../src/application/campaign/contentCatalog';
 import { createReadOnlySession } from './runtime';
 import { getDatabaseRuntime } from './database';
-
-/** Entries of the locked revision, used for display names and visibility. */
-async function loadEntries(worldId: string, revision: number): Promise<ContentEntry[]> {
-  const runtime = await getDatabaseRuntime();
-  const pkg = await runtime.worldStore.getWorldPackage(worldId, revision);
-  return pkg ? pkg.entries : [];
-}
+import { nativeSha256 } from './nativeCrypto';
 
 /** The aggregate, single-stateVersion play projection (plan §14.2). */
 export async function getPlayUiProjection(
@@ -33,9 +27,12 @@ export async function getPlayUiProjection(
 ): Promise<PlayUiProjection> {
   const session = await createReadOnlySession();
   const summary = await session.getSummary(campaignId, branchId);
-  const entries = summary.state.segmentContentBinding
-    ? (await (await getDatabaseRuntime()).segmentPublication.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
-    : await loadEntries(summary.worldId, summary.packageRevision);
+  const runtime = await getDatabaseRuntime();
+  const { entries } = await loadCampaignContentCatalog({
+    db: runtime.db, worldStore: runtime.worldStore, segmentContent: runtime.segmentPublication,
+    sha256Hex: nativeSha256.sha256Hex, worldId: summary.worldId, packageRevision: summary.packageRevision,
+    branch: { campaignId, state: summary.state },
+  });
   return buildPlayUiProjection({
     campaignId,
     branchId,
@@ -70,9 +67,11 @@ export async function getNpcPublicProjection(
   );
   if (!row) return null;
   const actor = JSON.parse(row.card_json) as ActorCard;
-  const entries = summary.state.segmentContentBinding
-    ? (await (await getDatabaseRuntime()).segmentPublication.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
-    : await loadEntries(summary.worldId, summary.packageRevision);
+  const { entries } = await loadCampaignContentCatalog({
+    db: runtime.db, worldStore: runtime.worldStore, segmentContent: runtime.segmentPublication,
+    sha256Hex: nativeSha256.sha256Hex, worldId: summary.worldId, packageRevision: summary.packageRevision,
+    branch: { campaignId, state: summary.state },
+  });
   const playerCard = summary.cards.find(card => card.controller === 'player') ?? null;
   return buildNpcPublicProjection({
     actor,

@@ -1,6 +1,6 @@
 # Phase 9 接手收尾复验报告
 
-2026-10-08，Asia/Shanghai。final38 共用预算反馈通过1108项核心回归与Android首次派发额度复验；真实J1候选仍在等待，**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；完整长旅程、持续后果和三意图质量继续验收。
+2026-10-08，Asia/Shanghai。final40共用目录与真实线索回看已通过核心1114项和Android同路径复验；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；完整长旅程、持续后果、三意图质量及世界构建审查继续收尾。
 
 | final29已提交检查点 | 历史结果（最新见final33） |
 |---|---|
@@ -131,7 +131,7 @@ Android自00:49:54 UTC观察到HOME，01:08:13.691 UTC第二次响应结束，�
 
 原弹性输入分配与 wire 上限扩容已经参与生产请求，但历史用量统计没有接入材料冻结。final37 的 J1 第一次 wire=24576、思考24521，恢复只给观测下界5%余量，第二次 wire=38036、思考32422，完整正文再次截断。65536 是配置允许上限，并不等于每次实际请求额度；本地思考预留也不等于服务端对思考的独立硬上限。
 
-R48 在共用账本端口增加受信终态观测读取，按原 modelProfileFingerprint、档位和 requestKind 精确匹配。unknown、未完成、估算、非法用量、外来配置/角色及其它失败类型在窗口选择之前排除。完整响应用于最多32个样本的统计，满8个才做 P95×1.25 校准；不足8个的真实完整用量仍形成保守上界预留。length/reasoning_only 是下界，单独使用×1.5余量，不冒充完整 P95。
+R48 在共用账本端口增加受信终态观测读取，按原 modelProfileFingerprint、档位和 requestKind 精确匹配。unknown、未完成、估算、非法用量、外来配置/角色及其它失败类型在窗口选择之前排除。完整响应用于最多32个样本的统计，满8个才做 P95×1.25 校准；不足8个的真实完整用量仍形成额外保守预留。length/reasoning_only 是下界，单独使用×1.5余量，不冒充完整 P95。
 
 LedgeredProvider 与 RateScheduledProvider 共用本地反馈读取，读取本身不派发 HTTP。战役候选、实际游玩的 Planner/Narrator、记忆 checkpoint/repair 在新材料根冻结时选定各自反馈；恢复使用已有根，不查询新历史、不回写旧根。记忆冻结只在原根缺失时执行准备回调。战役与记忆恢复共用观测下界扩容计算，原两次战役物理请求总额及 outcome_unknown 禁止重发仍生效；战役恢复若不能增加 wire，则停止无效重试。已证明的思考下界连最小正文都无法容纳时在 HTTP 前明确拒绝。策略版本为 reasoning-policy-2。其它已有冻结构建配置保留原协议；世界构建等未接入新反馈的调用者不宣称已经完成同等历史校准。
 
@@ -142,3 +142,23 @@ final38 identity scope v3 源码 dd3af146d49f6f687d2318c66c8a9768b2e25278cbabd49
 Android 使用相同完整救援意图、序7/边陲镇、原创体魄3/交涉3、运动/交涉/坚韧、无同伴、long、glm-5.3-flash/high/65536，新建任务 job-setup-world-src-7f45fe0b11ea30ec-muwccd51-muz39git。新冻结反馈 exhausted=[32422,24521]；首次实际派发账本 wire=60921、reserve=48633，完整正文预留12288，原请求总额2保持。预算1188→1190（独立 opening_goal 1次＋新 J1 1次），未重置/增额。此处只确认历史反馈与实际派发预算生效；模型响应及候选质量尚在等待，0决定，不能将其写为三意图/长旅程或阶段整体验收通过。
 
 证据：.tmp/phase9/r48-target.log、r48-core.log、r48-core-b.log、r48-mobile.log、final38-apk.log、reaccept-identity-final38.json、reaccept-device/final38-install-preservation.json、final38-old-known-preserved.json、final38-j1-start.json、final38-first-dispatch.json、final38-before-plan.png、final38-planning.png。私有原文/数据库/模型内容保持在忽略目录。R47线索正文重读、神罚之锁审查、完整长旅程、延迟后果和三意图质量等仍待验收。
+
+final38 真实终态补录：2026-10-08 06:50:15 UTC只读复验，J1已 candidate_ready，仅1次 succeeded。实际 wire60921、思考34973、总输出43763（正文8790）、输入8661，可信原始用量，账本耗时777.290秒；无恢复请求。成功账本 http_status 仍为null，上游200另由代理日志确认。两项后台服务均已退出、crash buffer为空，准确释放时刻未采样。全部采用计划/归档/快照及2个旧未知任务、冻结根、attempt保持一致，预算1190/1500。仍未采用该候选、0新玩家决定；这一结果仅确认预算修复与完整候选通过，不能代替内容评分、长旅程或阶段验收。证据：.tmp/phase9/final38-status.jsonl、reaccept-device/final38-status.sqlite、final38-ready-job.json、proxy-final34.log。
+
+## 2026-10-08 final39–final40：共用目录与线索正文回看（R47）
+
+规则、回合引导、场景冲突选项、移动知识/NPC与世界书现在共用 loadCampaignContentCatalog：锁定基础包→当前快照的世界增量/段工件→经过所有者、正文hash、组合hash和依赖闭包验证的战役归档。可选旧世界manifest缺省时仍合成已采用的战役内容；绑定段工件却缺少owner时明确拒绝。共用层只读目录，世界构建审查可继续读取它原有的包；发布资格及玩家可见性保留在相应入口。不会授予知识、覆盖世界包、改变已采用归档或取最新战役版本。
+
+玩家知识页只向当前玩家已经发现的public/discoverable lore提供可选正文，保留来源及获得版本；GM正文、非lore文本与其它角色发现记录不公开。已知战役线索获得独立玩家手册分节，未知线索和无关联战役的库视图保持隐藏，编辑模式仍只编辑世界资料。端上进一步发现完整规则说明在滚动区外把正文挤出屏幕：说明、提示、书籍选择与正文现处同一滚动区，模式切换保留在固定区域；不用设备高度常数裁剪文字。
+
+新增6项回归覆盖真实采用/提交后两种移动读取、未发现兄弟分支和世界库隔离、旧manifest缺省、归档破坏时拒绝而非回退、GM/非lore/角色归属，以及实际段owner与战役归档共同合成。原三项RED-C明确复现正文/目录缺失；目标29/29通过，完整核心1114/1114、0失败0跳过、38.783秒。首轮全量1107/1111的4项失败来自读取层提前访问只读夹具未提供的hashProvider，以及段目录夹具缺sections；hash操作保持按需调用、夹具补齐正式目录协议后完整重跑。目标B的正文权限用例另纠正夹具玩家ID后通过，原日志保留。移动类型、Debug构建、verify:version与diff通过。
+
+final39生产源码 56a096036113c958db4815d2226cac8c3baeff5fbc016956cc8beebea2de109c，APK 2c62f3e40f1cbd5c33297397e3fb8b29dd577cf8849033314dac165621d59a5b，构建41秒，实际保留安装hash一致。正式UI采纳final38完整救援候选（5阶段/5线索）：第1决定自然掷出3、2、1，保留大失败、关系损失与250分钟时间推进；第2决定接触安娜成功，v2真实获得证词。知识页从v0空白到v2显示精确归档正文、他人告知和获得版本。两回合Planner/Narrator均可信succeeded，共4物理请求；账本模型耗时分别32.564+56.613秒、34.622+67.130秒。初次路径在异步建议更新后提示重选，未提交或重复计费。该计划生成于final38，两个决定执行于final39，作为边界诊断，不拼入final40整套80决定。
+
+final40生产源码 5975f3a300edb32166c18e03482d29c8aaf56b36d5099dfa832c119c7183ac01，APK 4f20ff8c8bf6bc8675fa531543aca4e122fc1241e3f99b88586b34149adee3bb，构建35秒，实际安装hash一致；对照final39只有WorldBooksPanel滚动布局和生成版本元数据改变，核心源文件hash逐项相同，1114项核心证据沿用，移动类型检查再次通过。同库同战役v2正式“书库→进入项目→三宝书”重放：存在可滚动区域，玩家手册“战役线索”仅1项，已获得正文与归档逐字相同且整段位于可见滚动边界内。07:14:54 UTC只读复验，全部原已采用规划/归档/快照及2个旧未知任务/冻结/attempt逐值保持，crash buffer为空；新追加记录单独登记。两次安装均0隐式HTTP，没有清库或重放未知。
+
+final39隔离主机新规划也确认预算历史反馈：J2首次wire49055=reserve36767+12288、完整响应思考27000/总输出33943，合同修复第二次同wire、思考10289/总输出17565，最终正式采用；J3首次wire49530=37242+12288、思考25383/总输出33413，一次正式采用。它们分别2/1次HTTP，无预算截断或第三次请求，0玩家决定；J2第二次是本地合同错误反馈修复，不能称作同预算无效重试。主机端点/引用不同，不用于Android匹配性能对照。
+
+截至07:14:54 UTC预算1200/1500，未重置/增额；final40同完整目标的J2/J3新规划已在隔离副本启动、尚未终态，没有覆盖final39历史。后续同身份长旅程、两项隔至少两次决定的持续后果、三计划/对应旅程六维质量、A02/A03/A06/A12、10+10性能及神罚之锁审查仍未闭合，独立试玩未验。A01–A40维持29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED，第九阶段整体尚未验收通过。
+
+证据：.tmp/phase9/r47-red-c.log、r47-target-b/c.log、r47-core-a/b.log、r47-mobile-b/c.log、final39/final40-apk.log、reaccept-identity-final39/final40.json、reaccept-device/final39/final40-install-preservation.json、final39-knowledge-before/known.png、final39-book-scroll-blocked.png、final40-book-known.png/xml/proof.json、final39/final40-device-audit.jsonl、final39-host-J2/J3/status.jsonl与proposal.json，final40-host-J2/J3。私有原文/数据库/模型内容仅在忽略目录。只做本地提交，未推送/发布。

@@ -315,7 +315,7 @@ test('closeout: selected guidance survives legal foreground NPC materialization'
     entries.find(e => e.kind === 'situation').definition.methods.push({ methodId: 'talk-late', title: '询问新守卫',
       goal: '获取消息', firstStep: { intent: '向新守卫询问情况', actionKind: 'talk', targetEntryId: npc.entryId },
       requires: {}, tradeoffs: '花费时间', preparation: '无' });
-    h.session.deps.segmentContent = { async loadEffectiveCatalog() { return { entries }; } };
+    h.session.deps.segmentContent = { async loadEffectiveCatalog() { return { entries, sections: [] }; } };
     const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: 'c', branchId: h.campaign.branchId, sourceTurnId: 'adopt-fixture', localOnly: true });
     const step = guidance.steps.find(s => s.actionId === 'observe');
     const turn = await h.session.playTurn({ campaignId: 'c', branchId: h.campaign.branchId, intent: step.firstStepIntent,

@@ -87,6 +87,8 @@ export interface DiscoveryView {
   entryId: string;
   /** Display title resolved from the world package. */
   title: string;
+  /** Known public/discoverable lore from the snapshot-bound catalog. */
+  body?: string;
   knownVia: 'witnessed' | 'told' | 'inferred';
   knownAtStateVersion: number;
   sourceTurnId: string;
@@ -159,6 +161,7 @@ interface EntryIndex {
   nameOf(entryId: string): string;
   visibilityOf(entryId: string): ContentEntry['visibility'] | null;
   has(entryId: string): boolean;
+  loreBodyOf(entryId: string): string | undefined;
 }
 
 function buildEntryIndex(entries: readonly ContentEntry[]): EntryIndex {
@@ -167,6 +170,12 @@ function buildEntryIndex(entries: readonly ContentEntry[]): EntryIndex {
   return {
     has: entryId => byId.has(entryId),
     visibilityOf: entryId => byId.get(entryId)?.visibility ?? null,
+    loreBodyOf(entryId) {
+      const entry = byId.get(entryId);
+      if (!entry || entry.kind !== 'lore' || !['public', 'discoverable'].includes(entry.visibility)) return undefined;
+      const text = (entry.definition as { text?: unknown } | null)?.text;
+      return typeof text === 'string' && text.trim() ? text : undefined;
+    },
     nameOf(entryId) {
       const entry = byId.get(entryId);
       if (!entry) return entryId;
@@ -310,6 +319,7 @@ export function buildPlayUiProjection(input: PlayProjectionInput): PlayUiProject
     .map(entry => ({
       entryId: entry.entryId,
       title: index.nameOf(entry.entryId),
+      ...(index.loreBodyOf(entry.entryId) !== undefined ? { body: index.loreBodyOf(entry.entryId) } : {}),
       knownVia: entry.knownVia,
       knownAtStateVersion: entry.knownAtStateVersion,
       sourceTurnId: entry.sourceTurnId,

@@ -97,7 +97,8 @@ import { isFactVisibleAtAnchor } from '../world/opening';
 import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { applySituationRuntime } from '../situations/causalProjection';
-import { resolveCampaignContent, projectPlayableSituations } from '../campaignPlan/contentResolver';
+import { projectPlayableSituations } from '../campaignPlan/contentResolver';
+import { loadCampaignContentCatalog } from './contentCatalog';
 import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
@@ -1253,31 +1254,10 @@ export class CampaignSession {
     packageRevision: number,
     branch?: { campaignId: string; state: GameStateSnapshot },
   ): Promise<ContentEntry[]> {
-    const pkg = await this.deps.worldStore.getWorldPackage(worldId, packageRevision);
-    if (!pkg) {
-      throw new Error(
-        `Locked world package is missing: ${worldId} r${packageRevision}. ` +
-          'The campaign cannot continue without its dependency.',
-      );
-    }
-    if (!branch) return pkg.entries;
-    if (branch.state.segmentContentBinding) {
-      if (!this.deps.segmentContent) throw new Error('Segment content owner is unavailable for the adopted branch.');
-      const catalog = await this.deps.segmentContent.loadEffectiveCatalog({
-        campaignId: branch.campaignId, branchId: branch.state.branchId, binding: branch.state.segmentContentBinding,
-      });
-      return this.withCampaignEntries(catalog.entries, branch.campaignId, branch.state);
-    }
-    if (!branch.state.contentManifest) return pkg.entries;
-    const deltas = await loadBranchDeltaEntries({
-      manifest: branch.state.contentManifest, worldId, branchId: branch.state.branchId,
-      stateVersion: branch.state.stateVersion, baseRevision: packageRevision,
-      baseContentHash: pkg.manifest.contentHash,
-      getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
-      sha256Hex: this.deps.hashProvider.sha256Hex,
-    });
-    return this.withCampaignEntries(
-      [...pkg.entries, ...deltas.flatMap(delta => delta.entries)], branch.campaignId, branch.state);
+    return (await loadCampaignContentCatalog({
+      db: this.deps.db, worldStore: this.deps.worldStore, segmentContent: this.deps.segmentContent,
+      sha256Hex: text => this.deps.hashProvider.sha256Hex(text), worldId, packageRevision, branch,
+    })).entries;
   }
 
   private async localSituationReducer(campaignId: string, branchId: string, state: GameStateSnapshot, turnId: string, actingActorId: string): Promise<(next: GameStateSnapshot) => Array<{ eventType: string; payload: unknown }>> {
@@ -1297,16 +1277,6 @@ export class CampaignSession {
       for (const fate of runtime.actorFates) { if (next.actors[fate.actorId]) next.actors[fate.actorId]!.lifeStatus = fate.lifeStatus; }
       return runtime.events;
     };
-  }
-
-  /** P9: campaign artifacts compose into every entry read (unified resolver). */
-  private async withCampaignEntries(
-    entries: readonly ContentEntry[], campaignId: string, state: GameStateSnapshot,
-  ): Promise<ContentEntry[]> {
-    const binding = state.campaignContentBinding;
-    if (!binding || binding.artifactIds.length === 0) return [...entries];
-    const artifacts = await readBoundCampaignArtifacts(this.deps.db, campaignId, binding);
-    return resolveCampaignContent(entries, artifacts);
   }
 
   /** Loads the plan + artifacts the branch runtime is bound to (or null). */
@@ -2135,23 +2105,8 @@ export class CampaignSession {
       if (!playerCard || summary.packageRevision < 1) return null;
       const basePackage = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
       if (!basePackage) return null;
-      const manifest = summary.state.contentManifest;
-      const deltas = manifest
-        ? await loadBranchDeltaEntries({
-          manifest, worldId: summary.worldId, branchId: options.branchId,
-          stateVersion: summary.state.stateVersion, baseRevision: summary.packageRevision,
-          baseContentHash: basePackage.manifest.contentHash,
-          getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
-          sha256Hex: this.deps.hashProvider.sha256Hex,
-        })
-        : [];
-      const allEntries = await this.withCampaignEntries(
-        this.deps.segmentContent && summary.state.segmentContentBinding
-          ? (await this.deps.segmentContent.loadEffectiveCatalog({
-            campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding,
-          })).entries
-          : [...basePackage.entries, ...deltas.flatMap(delta => delta.entries)],
-        options.campaignId, summary.state);
+      const allEntries = await this.loadPackageEntries(summary.worldId, summary.packageRevision,
+        { campaignId: options.campaignId, state: summary.state });
       const situationDefinitions = allEntries
         .filter(entry => entry.kind === 'situation')
         .map(entry => ({ situationId: entry.entryId, definition: entry.definition as SituationDefinitionV1 }));
@@ -2590,26 +2545,8 @@ export class CampaignSession {
       });
       summary.state.contentManifest = contentManifest;
     }
-    const activeDeltas = contentManifest
-      ? await loadBranchDeltaEntries({
-          manifest: contentManifest,
-          worldId: summary.worldId,
-          branchId: options.branchId,
-          stateVersion: summary.state.stateVersion,
-          baseRevision: summary.packageRevision,
-          baseContentHash: basePackage.manifest.contentHash,
-          getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
-          sha256Hex: this.deps.hashProvider.sha256Hex,
-        })
-      : [];
-    const allEntries = await this.withCampaignEntries(
-      this.deps.segmentContent && summary.state.segmentContentBinding
-        ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding })).entries
-        : [...basePackage.entries, ...activeDeltas.flatMap(delta => delta.entries)],
-      options.campaignId, summary.state);
-    if (new Set(allEntries.map(entry => entry.entryId)).size !== allEntries.length) {
-      throw new Error('The active branch content manifest contains conflicting immutable entry ids.');
-    }
+    const allEntries = await this.loadPackageEntries(summary.worldId, summary.packageRevision,
+      { campaignId: options.campaignId, state: summary.state });
     const playerCard = summary.cards.find(card => card.controller === 'player');
     if (!playerCard) throw new Error('Campaign has no player character card.');
     const playerState = summary.state.actors[playerCard.actorId];
@@ -3688,25 +3625,7 @@ export class CampaignSession {
 
     const pkg = await this.deps.worldStore.getWorldPackage(summary.worldId, summary.packageRevision);
     if (!pkg || pkg.manifest.status !== 'published') return [];
-    const manifest = summary.state.contentManifest ?? createBaseContentManifest({
-      worldId: summary.worldId,
-      branchId,
-      stateVersion: summary.state.stateVersion,
-      basePackage: { revision: summary.packageRevision, contentHash: pkg.manifest.contentHash },
-    });
-    const deltas = await loadBranchDeltaEntries({
-      manifest,
-      worldId: summary.worldId,
-      branchId,
-      stateVersion: summary.state.stateVersion,
-      baseRevision: summary.packageRevision,
-      baseContentHash: pkg.manifest.contentHash,
-      getDelta: deltaId => this.deps.worldStore.getProgressiveDeltaPackage(deltaId),
-      sha256Hex: this.deps.hashProvider.sha256Hex,
-    });
-    const entries = this.deps.segmentContent && summary.state.segmentContentBinding
-      ? (await this.deps.segmentContent.loadEffectiveCatalog({ campaignId, branchId, binding: summary.state.segmentContentBinding })).entries
-      : [...pkg.entries, ...deltas.flatMap(delta => delta.entries)];
+    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision, { campaignId, state: summary.state });
     const anchorRow = await this.deps.db.queryOne<{ anchor_json: string }>(
       'SELECT anchor_json FROM campaigns WHERE campaign_id = ?', [campaignId],
     );

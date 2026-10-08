@@ -9,6 +9,7 @@ import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
 import type { TurnGuidanceV1 } from '../../src/application/guidance/types';
 import { schedulerForProfile, setSchedulerActivity } from './llmScheduler';
 import { CampaignSession, projectPlayerEntriesAtAnchor, type PlayTurnResult } from '../../src/application/campaign/session';
+import { loadCampaignContentCatalog } from '../../src/application/campaign/contentCatalog';
 import type { ActorCard } from '../../src/domain/characters/card';
 import type { ItemSourceSnapshotEntry, PartySnapshotEntry } from '../../src/domain/state/types';
 import type { BookName, BookSection, BranchContentManifest, ContentEntry, WorldPackageManifest } from '../../src/domain/content/types';
@@ -674,27 +675,13 @@ export async function getWorldBookProjection(input: {
       stateVersion,
       basePackage: { revision: input.packageRevision, contentHash: worldPackage.manifest.contentHash },
     });
-    const deltas = await loadBranchDeltaEntries({
-      manifest: contentManifest,
-      worldId: input.worldId,
-      branchId: input.branchId,
-      stateVersion,
-      baseRevision: input.packageRevision,
-      baseContentHash: worldPackage.manifest.contentHash,
-      getDelta: deltaId => runtime.worldStore.getProgressiveDeltaPackage(deltaId),
-      sha256Hex: nativeSha256.sha256Hex,
+    const catalog = await loadCampaignContentCatalog({
+      db: runtime.db, worldStore: runtime.worldStore, segmentContent: runtime.segmentPublication,
+      sha256Hex: nativeSha256.sha256Hex, worldId: input.worldId, packageRevision: input.packageRevision,
+      branch: { campaignId: input.campaignId, state: summary.state },
     });
-    if (summary.state.segmentContentBinding) {
-      const effective = await runtime.segmentPublication.loadEffectiveCatalog({ campaignId: input.campaignId, branchId: input.branchId, binding: summary.state.segmentContentBinding });
-      entries = effective.entries; sections = effective.sections.map(section => ({ ...section, entryIds: [...section.entryIds] }));
-    } else entries.push(...deltas.flatMap(delta => delta.entries));
-    for (const delta of summary.state.segmentContentBinding ? [] : deltas) {
-      for (const section of delta.sections) {
-        const current = sections.find(item => item.book === section.book && item.sectionKey === section.sectionKey);
-        if (!current) sections.push({ ...section, entryIds: [...section.entryIds] });
-        else current.entryIds = [...current.entryIds, ...section.entryIds];
-      }
-    }
+    entries = catalog.entries;
+    sections = catalog.sections.map(section => ({ ...section, entryIds: [...section.entryIds] }));
   }
   const facts = await runtime.worldStore.listFacts(input.worldId);
   if (new Set(entries.map(entry => entry.entryId)).size !== entries.length) {

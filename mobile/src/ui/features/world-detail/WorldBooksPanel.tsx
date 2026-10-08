@@ -302,6 +302,7 @@ export function WorldBooksPanel(props: {
         onChange={setMode}
         testID="books-mode"
       />
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: theme.space.xxl, gap: theme.space.md }}>
       {rulePreview ? <Card><SectionHeader title="当前世界规则" /><Text selectable style={{ color: theme.onRaised.primary }}>{rulePreview}</Text></Card> : null}
       {mode === 'player' ? (
         <StatusBanner
@@ -336,7 +337,6 @@ export function WorldBooksPanel(props: {
       {draftNotice ? <StatusBanner tone="warning" message={draftNotice} /> : null}
       {error ? <StatusBanner tone="error" title="三宝书未就绪" message={error} /> : null}
 
-      <ScrollView contentContainerStyle={{ paddingBottom: theme.space.xxl, gap: theme.space.md }}>
         {!editMode ? (
           <Card>
             <SectionHeader

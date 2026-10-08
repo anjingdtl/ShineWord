@@ -41,6 +41,11 @@ export function KnowledgePanel(props: { discoveries: DiscoveryView[] }): React.J
               <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.primary }]}>
                 {discovery.title}
               </Text>
+              {discovery.body ? (
+                <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.primary }]}>
+                  {discovery.body}
+                </Text>
+              ) : null}
               <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
                 {via.glyph} {via.label} · v{discovery.knownAtStateVersion}
               </Text>
