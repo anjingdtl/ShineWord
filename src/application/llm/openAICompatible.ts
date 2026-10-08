@@ -11,6 +11,9 @@ import type {
 import { normalizeReasoningTier } from './types';
 import { physicalRequestTimeoutMs } from './requestDeadline';
 import { IncompleteCompletionStreamError, readCompletionStream } from './completionStream';
+import { elapsedHttpDeadline } from './httpErrors';
+import { looksTruncated } from './responseNormalizer';
+export { HttpRequestTimeoutError } from './httpErrors';
 import {
   providerReasoningParamsForTier,
   reasoningDialectForModel,
@@ -158,7 +161,7 @@ export interface OpenAICompatibleProviderOptions {
 function transportErrorCategory(error: unknown): 'timeout' | 'network' {
   const value = error as { name?: unknown; code?: unknown; message?: unknown };
   const descriptor = `${String(value?.name ?? '')} ${String(value?.code ?? '')} ${String(value?.message ?? '')}`;
-  return /abort|timeout|timed out/i.test(descriptor) ? 'timeout' : 'network';
+  return elapsedHttpDeadline(error) !== null || /timeout|timed[ _]?out/i.test(descriptor) ? 'timeout' : 'network';
 }
 
 /** Only structured socket/DNS errors prove that no HTTP request reached a
@@ -312,9 +315,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
           ...(notSent ? { usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0, estimated: false } } : {}),
           timings: { completeResponseMs: Math.max(0, Date.now() - physicalStartedAt) },
         });
-        if (error instanceof Error && /aborted?/i.test(error.name + error.message)) {
+        const elapsedDeadline = elapsedHttpDeadline(error);
+        if (elapsedDeadline !== null) {
           throw new LlmRequestFailure(
-            `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。推理模型的思维链可能需要更长时间。`,
+            `LLM 请求已达到传输时限（${Math.round(elapsedDeadline / 1000)} 秒），结果未知，请核对请求账本。`,
             requestMetrics,
           );
         }
@@ -329,7 +333,12 @@ export class OpenAICompatibleProvider implements LlmProvider {
           || /^(?:\uFEFF)?(?:data:|:)/.test(response.body.trimStart());
         parsed = eventStream ? readCompletionStream(response.body) : JSON.parse(response.body) as OpenAIResponseShape;
       } catch (error) {
-        const incomplete = error instanceof IncompleteCompletionStreamError;
+        // Native fetch may expose bytes received before a disconnect as a
+        // successful body. An unclosed transport envelope cannot prove a
+        // completed/billed outcome; never salvage its nested content/usage.
+        const incomplete = error instanceof IncompleteCompletionStreamError
+          || response.status >= 200 && response.status < 300
+            && (!response.body.trim() || /^[\s\uFEFF]*[\[{]/.test(response.body) && looksTruncated(response.body));
         observe({
           attempt: physicalAttempt,
           durationMs: Math.max(0, Date.now() - physicalStartedAt),
@@ -339,7 +348,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
           ...(incomplete ? { dispatchState: 'unknown' as const } : {}),
           timings: response.timings,
         });
-        throw new LlmRequestFailure(incomplete ? error.message
+        throw new LlmRequestFailure(incomplete ? 'LLM 完整响应未接收，连接可能中断；请求结果未知，请核对请求账本。'
           : `LLM provider returned invalid completion body (status ${response.status}).`, requestMetrics);
       }
       if (response.status < 200 || response.status >= 300) {

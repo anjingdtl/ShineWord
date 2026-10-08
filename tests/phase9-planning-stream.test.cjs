@@ -42,8 +42,11 @@ test('planning stream: a missing terminal event is unknown even when partial bus
     const inner = provider(good().replace(event('[DONE]'), ''), () => { calls++; });
     const store = new SqliteLlmLedgerStore(h.adapter), ledger = new LedgeredProvider(inner, store, { modelProfileFingerprint: 'stream' });
     const input = { ...request, ledger: { logicalRequestId: 'incomplete-stream', requestKind: 'campaign_plan' } };
-    await assert.rejects(ledger.complete(input), /incomplete/i);
-    assert.equal((await store.listAttempts('incomplete-stream'))[0].status, 'outcome_unknown');
+    await assert.rejects(ledger.complete(input), /完整响应未接收/);
+    const attempt = (await store.listAttempts('incomplete-stream'))[0];
+    assert.equal(attempt.status, 'outcome_unknown');
+    assert.equal(attempt.failureClass, 'network_unknown');
+    assert.equal(attempt.outputTokens, null);
     await assert.rejects(ledger.complete(input), OutcomeUnknownReplayError); assert.equal(calls, 1);
   } finally { h.db.close(); }
 });

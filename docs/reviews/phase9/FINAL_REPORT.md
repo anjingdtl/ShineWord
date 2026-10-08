@@ -1,6 +1,6 @@
 # Phase 9 接手收尾复验报告
 
-2026-10-08，Asia/Shanghai。final43地点交接修复通过1128项核心测试与Android真实新段发布；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；旧已发布缺项的正式修复、完整旅程及质量/性能继续推进。
+2026-10-08，Asia/Shanghai。final46连接到期/早断/响应完整性修复通过1135项核心测试与Android同案受控复验；**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；旧资料内容恢复、完整旅程及质量/性能继续推进。
 
 | final29已提交检查点 | 历史结果（最新见final33） |
 |---|---|
@@ -194,3 +194,17 @@ final40隔离主机J2/J3均终止为outcome_unknown，各1次请求，reasoning/
 整体验收仍29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED；最终同身份80个有意义决定、持续后果、三意图质量、A02/A03/A06/A12、10+10性能及独立试玩继续推进。final40 J2/J3未知结局保留，连接提前中断误报900秒超时正在修复，不能归类为已证明预算耗尽。
 
 证据：.tmp/phase9/r50-location-red.log、r50-location-target-a/b.log、r50-core-a.log、r50-mobile-a.log、final43-apk.log、reaccept-identity-final43.json、reaccept-device/final43-install-preservation.json、final43-world-proof.jsonl、final43-location-publication-proof.json。原文、数据库、响应与密钥只保留在忽略目录；本地提交，不推送或发布。
+
+## 2026-10-08 R51：真实到期、提前断连与响应完整性（final44–46）
+
+final40 J2/J3在731.609/92.693秒断连却显示900秒；根因是provider把AbortError/aborted一概解释为整个配置时限已到，并错误提示增加模型思考时间。引入传输层实际定时器到期标记HttpRequestTimeoutError，移动fetch和QA完整请求传输共用该合同。只有实际到期才显示对应时限；提前响应abort/reset为network_unknown，普通ETIMEDOUT仍识别为超时但不虚构配置秒数。移动定时器覆盖完整body，逾时后迟到的响应不升级为可信完成，finally释放原生执行保护。QA传输到期先保存明确标记，再销毁连接，避免后续aborted抢先改变原因；完成或失败均清理定时器。
+
+模拟器受控断连又暴露外层完整性缺口：final44/45会把不完整响应送到“非JSON”解析失败路径。provider现在将200空白/未闭合JSON外层以及缺终止帧SSE统一标记结果未知；不抢救嵌套正文/usage，不将其学习为reasoning-only/length，不自动重发。完整但非法JSON与正常业务length仍保持原有独立分类和可信usage。新增7项回归，覆盖真实deadline/提前abort、早断后的账本禁止重发、原生保护释放、迟到body、QA头部后deadline和早断、空/未闭合外层、完整非法外层。目标50/50；最终核心1135/1135、0失败0跳过、37.297秒。中间完整1134/1135唯一失败是既有SSE用例断言旧英文提示；更新为新中文提示并加断言network_unknown/无可信output后再次完整通过。移动类型、Debug APK、版本和diff检查通过。
+
+final46源码fa8deb4310641c2badce24bb20322a5dbb433aeb828c33f2a4cab81916df3315，APK 632dcf303c9d0f93fbe5206e48d112e0d9f78455d89df6864d8d322437b8de80，构建38秒。保留安装与实际APK hash相符，2个旧结果未知任务及其冻结/attempt、原文/canon、旧包与segment、旧采用计划/战役工件/快照均保留，安装0隐式请求。真实端上使用正式设置页的未保存表单端点做同一受控部分响应断连：final46明确显示“网络连接失败”，一次接收、0上游模型发送、没有自动再发；崩溃缓存为空。故障服务器已停止，表单恢复正常端点，已保存profile/高档/65536上限/Keychain keyRef未修改。此项是受控故障回归，不能计作真实自动规划、玩家决定或完整旅程。
+
+本轮严格共享预算1202→1206/1500：3次受控故障HTTP也保守预留，0付费上游；另有1次实际模型连接测试成功（端上约4.039秒，上游代理3.074秒）。这次真实测试来自第一次输入尚未聚焦时未及时停止后续操作，原样记录，不冒充受控故障；输入工具现要求正确字段focus、instrumentation textMatches和fresh UI精确文本全部通过后才允许测试。无预算上限提高、重置或历史unknown重发，旧final40错误记录保留且不改写。
+
+项目弹性预算与连接失败分开：R48的可信同档历史与censored下界仍供新冻结任务使用，旧冻结不改档；R51防止把无完整结果的网络失败误当成预算耗尽或记为可自动重试的普通失败。整体验收仍29 PASS/2 FAIL/9 NOT RUN/0 BLOCKED。旧已发布段缺项/GM备注审查、最终同身份80决定、持续后果、三意图质量、A02/A03/A06/A12、10+10性能和独立试玩继续收尾。
+
+证据：.tmp/phase9/r51-deadline-red.log、r51-envelope-red.log、r51-target-a/b/c.log、r51-core-a/b/c/d.log、r51-mobile-a/b/c.log、final44/45/46-apk.log、reaccept-identity-final46.json、reaccept-device/final46-install-preservation.json、final46-device-audit.jsonl、final46-world-proof.jsonl、final44/45/46-disconnect-server.jsonl、final46-disconnect-ui-proof.json、final44-controlled-disconnect.png、final46-real-connection.png、final46-controlled-disconnect.png。受控服务器不保存headers/请求正文/凭据。真实原文/数据库/响应保持在忽略目录；仅本地提交。

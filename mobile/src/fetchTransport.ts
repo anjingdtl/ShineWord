@@ -4,13 +4,15 @@ import type {
   HttpTransport,
 } from '../../src/application/llm/openAICompatible';
 import { acquireLlmExecution } from './llmExecutionBridge';
+import { HttpRequestTimeoutError } from '../../src/application/llm/httpErrors';
 
 export class FetchHttpTransport implements HttpTransport {
   async post(request: HttpRequest): Promise<HttpResponse> {
     const releaseExecution = await acquireLlmExecution(request);
     const startedAt = Date.now();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+    let deadlineElapsed = false;
+    const timer = setTimeout(() => { deadlineElapsed = true; controller.abort(); }, request.timeoutMs);
     try {
       const response = await fetch(request.url, {
         method: 'POST',
@@ -20,6 +22,9 @@ export class FetchHttpTransport implements HttpTransport {
       });
       const responseHeadersMs = Math.max(0, Date.now() - startedAt);
       const body = await response.text();
+      // Some fetch implementations finish despite an abort. Such a late body
+      // cannot turn an expired physical request into a trusted completion.
+      if (deadlineElapsed) throw new HttpRequestTimeoutError(request.timeoutMs);
       const headers: Record<string, string> = {};
       response.headers.forEach((value, key) => {
         headers[key] = value;
@@ -46,7 +51,7 @@ export class FetchHttpTransport implements HttpTransport {
         },
       };
     } catch (error) {
-      if (controller.signal.aborted) throw new Error('LLM request timed out.');
+      if (deadlineElapsed) throw new HttpRequestTimeoutError(request.timeoutMs);
       throw error;
     } finally {
       clearTimeout(timer);

@@ -6,6 +6,7 @@ const { OpenAICompatibleProvider, HttpRequestNotSentError } = require('../dist/a
 const { LedgeredProvider } = require('../dist/application/llm/requestLedger');
 const { LlmRequestFailure } = require('../dist/application/llm/types');
 const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
+const { HttpRequestTimeoutError } = require('../dist/application/llm/httpErrors');
 
 const request = { url: 'https://test.invalid/v1/chat/completions', headers: {}, body: '{}', timeoutMs: 900000, requestKind: 'campaign_plan' };
 function bridge(acquire, os = 'android') {
@@ -106,7 +107,35 @@ test('planning execution: the request deadline aborts an unfinished body and rel
     options.signal.addEventListener('abort', () => { aborted++; reject(Error('body interrupted')); }, { once: true });
   }) });
   try {
-    await assert.rejects(new transport.FetchHttpTransport().post({ ...request, timeoutMs: 15 }), /timed out/);
+    await assert.rejects(new transport.FetchHttpTransport().post({ ...request, timeoutMs: 15 }), error => {
+      assert.ok(error instanceof HttpRequestTimeoutError); assert.equal(error.timeoutMs, 15); return true;
+    });
     await b.llmRequestKeepAlive({ token }); assert.equal(aborted, 1);
+  } finally { global.fetch = original; }
+});
+
+test('planning execution: an early fetch AbortError keeps its network identity and releases protection', async () => {
+  let token, calls = 0;
+  const b = bridge(async value => { token = value; return true; });
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': b });
+  const original = global.fetch, error = Object.assign(Error('response aborted'), { name: 'AbortError' });
+  global.fetch = async () => { calls++; return { status: 200, text: async () => { throw error; } }; };
+  try {
+    await assert.rejects(new transport.FetchHttpTransport().post(request), failure => failure === error);
+    await b.llmRequestKeepAlive({ token }); assert.equal(calls, 1);
+  } finally { global.fetch = original; }
+});
+
+test('planning execution: a fetch body finishing after its elapsed deadline cannot return a trusted late completion', async () => {
+  let token;
+  const b = bridge(async value => { token = value; return true; });
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': b });
+  const original = global.fetch;
+  global.fetch = async () => ({ status: 200, text: async () => {
+    await new Promise(resolve => setTimeout(resolve, 35)); return '{}';
+  } });
+  try {
+    await assert.rejects(new transport.FetchHttpTransport().post({ ...request, timeoutMs: 10 }), HttpRequestTimeoutError);
+    await b.llmRequestKeepAlive({ token });
   } finally { global.fetch = original; }
 });

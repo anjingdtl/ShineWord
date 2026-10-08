@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { OpenAICompatibleProvider } = require('../dist/application/llm/openAICompatible');
+const { OpenAICompatibleProvider, HttpRequestTimeoutError } = require('../dist/application/llm/openAICompatible');
 const { LedgeredProvider, OutcomeUnknownReplayError } = require('../dist/application/llm/requestLedger');
 const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
 const { fixture } = require('./helpers/phase9CampaignFixture.cjs');
@@ -34,7 +34,7 @@ test('request deadline: a high-planning timeout stays unknown and never automati
     let sent = 0;
     const store = new SqliteLlmLedgerStore(h.adapter);
     const inner = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, {
-      async post(input) { sent++; assert.equal(input.timeoutMs, 900000); throw Object.assign(new Error('aborted'), { name: 'AbortError' }); }
+      async post(input) { sent++; assert.equal(input.timeoutMs, 900000); throw new HttpRequestTimeoutError(input.timeoutMs); }
     }, 300000);
     const provider = new LedgeredProvider(inner, store, { modelProfileFingerprint: 'deadline' });
     const input = { ...request, ledger: { logicalRequestId: 'high-timeout', requestKind: 'campaign_plan' } };
@@ -44,6 +44,80 @@ test('request deadline: a high-planning timeout stays unknown and never automati
     await assert.rejects(provider.complete(input), OutcomeUnknownReplayError);
     assert.equal(sent, 1);
   } finally { h.db.close(); }
+});
+
+test('early response aborts remain network unknown, never invent the configured deadline or retry', async () => {
+  for (const error of [Object.assign(new Error('aborted'), { name: 'AbortError' }),
+    Object.assign(new Error('QA HTTP response aborted'), { code: 'ECONNRESET' })]) {
+    const h = await fixture();
+    try {
+      let sent = 0;
+      const store = new SqliteLlmLedgerStore(h.adapter);
+      const inner = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, {
+        async post() { sent++; throw error; }
+      }, 300000);
+      const provider = new LedgeredProvider(inner, store, { modelProfileFingerprint: 'deadline' });
+      const input = { ...request, ledger: { logicalRequestId: 'early-abort', requestKind: 'campaign_plan' } };
+      await assert.rejects(provider.complete(input), failure => {
+        assert.doesNotMatch(failure.message, /900|超时|思维链/);
+        assert.equal(failure.requestMetrics[0].errorCategory, 'network');
+        assert.equal(failure.requestMetrics[0].dispatchState, 'unknown');
+        return true;
+      });
+      const [attempt] = await store.listAttempts('early-abort');
+      assert.equal(attempt.status, 'outcome_unknown'); assert.equal(attempt.failureClass, 'network_unknown');
+      assert.equal(attempt.estimatedUsage, 1); assert.equal(attempt.reasoningTokens, null);
+      await assert.rejects(provider.complete(input), OutcomeUnknownReplayError);
+      assert.equal(sent, 1);
+    } finally { h.db.close(); }
+  }
+});
+
+test('unmarked socket timeouts retain timeout classification without inventing the configured duration', async () => {
+  let sent = 0;
+  const provider = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, {
+    async post() { sent++; throw Object.assign(new Error('socket ended'), { code: 'ETIMEDOUT' }); }
+  }, 300000);
+  await assert.rejects(provider.complete(request), error => {
+    assert.equal(error.requestMetrics[0].errorCategory, 'timeout');
+    assert.doesNotMatch(error.message, /900|思维链/); return true;
+  });
+  assert.equal(sent, 1);
+});
+
+test('a truncated completion envelope returned by native fetch remains unknown and cannot be retried or learned as budget exhaustion', async () => {
+  for (const body of ['', ' \n\t', '{', '{"choices":[{"message":{"content":"escaped \\\" { text',
+    '{"choices":[{"message":{"content":"{}"}}],"usage":{"completion_tokens":42']) {
+    const h = await fixture();
+    try {
+      let sent = 0;
+      const store = new SqliteLlmLedgerStore(h.adapter);
+      const provider = new LedgeredProvider(new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, {
+        async post() { sent++; return { status: 200, body }; }
+      }), store, { modelProfileFingerprint: 'deadline' });
+      const input = { ...request, ledger: { logicalRequestId: 'partial-envelope', requestKind: 'campaign_plan' } };
+      await assert.rejects(provider.complete(input), error => {
+        assert.equal(error.requestMetrics[0].errorCategory, 'network');
+        assert.equal(error.requestMetrics[0].dispatchState, 'unknown');
+        assert.doesNotMatch(error.message, /900|超时|思维链/); return true;
+      });
+      const [attempt] = await store.listAttempts('partial-envelope');
+      assert.equal(attempt.status, 'outcome_unknown'); assert.equal(attempt.failureClass, 'network_unknown');
+      assert.equal(attempt.reasoningTokens, null); assert.equal(attempt.outputTokens, null);
+      await assert.rejects(provider.complete(input), OutcomeUnknownReplayError); assert.equal(sent, 1);
+    } finally { h.db.close(); }
+  }
+});
+
+test('complete malformed envelopes retain invalid-response classification without recovering embedded partial content', async () => {
+  for (const body of ['not JSON', '{"choices":invalid}', '<html>bad gateway</html>']) {
+    const provider = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, {
+      async post() { return { status: 200, body }; }
+    });
+    await assert.rejects(provider.complete(request), error => {
+      assert.equal(error.requestMetrics[0].errorCategory, 'invalid_response'); return true;
+    });
+  }
 });
 
 async function listen(t, server) {
@@ -67,6 +141,21 @@ test('QA HTTP deadline still expires after headers arrive when the response body
     for await (const _ of req) {} sent++;
     res.writeHead(200); res.write('{');
   }));
-  await assert.rejects(postQaHttp({ url: endpoint, body: '{}', headers: {}, timeoutMs: 40 }), /timed out|aborted/);
+  await assert.rejects(postQaHttp({ url: endpoint, body: '{}', headers: {}, timeoutMs: 40 }), error => {
+    assert.equal(error.code, 'LLM_HTTP_DEADLINE_EXCEEDED'); assert.equal(error.timeoutMs, 40); return true;
+  });
+  assert.equal(sent, 1);
+});
+
+test('QA HTTP early response disconnect is not confused with its full-body deadline', async t => {
+  let sent = 0;
+  const endpoint = await listen(t, http.createServer(async (req, res) => {
+    for await (const _ of req) {} sent++;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: {');
+    setTimeout(() => res.destroy(), 15);
+  }));
+  await assert.rejects(postQaHttp({ url: endpoint, body: '{}', headers: {}, timeoutMs: 1000 }), error => {
+    assert.notEqual(error.code, 'LLM_HTTP_DEADLINE_EXCEEDED'); assert.match(error.message, /abort|reset/i); return true;
+  });
   assert.equal(sent, 1);
 });

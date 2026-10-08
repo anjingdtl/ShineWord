@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { fixture, candidateModel, NOW } = require('./helpers/phase9CampaignFixture.cjs');
 const { runOpeningPlanJob } = require('../dist/application/campaignPlan/planningService');
 const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPlan/hashing');
-const { OpenAICompatibleProvider } = require('../dist/application/llm/openAICompatible');
+const { OpenAICompatibleProvider, HttpRequestTimeoutError } = require('../dist/application/llm/openAICompatible');
 const { LedgeredProvider } = require('../dist/application/llm/requestLedger');
 const { RateScheduledProvider } = require('../dist/application/llm/scheduledProvider');
 const { GlobalRateScheduler, endpointBucketId } = require('../dist/application/worldBuild/rateScheduler');
@@ -26,7 +26,7 @@ async function setup(h, id, responses, onResponse = () => {}, runProfile = profi
     wires.push(JSON.parse(request.body)); const next = responses[wires.length - 1];
     if (!next) throw Error('Unexpected extra physical dispatch');
     onResponse(wires.length);
-    if (next === 'timeout') throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    if (next === 'timeout') throw new HttpRequestTimeoutError(request.timeoutMs);
     return { status: 200, body: JSON.stringify(next === 'thinking' ? {
       choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'only thinking' } }],
       usage: { prompt_tokens: 10, completion_tokens: wires.at(-1).max_tokens, completion_tokens_details: { reasoning_tokens: wires.at(-1).max_tokens } }
