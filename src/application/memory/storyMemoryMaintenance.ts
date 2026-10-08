@@ -10,10 +10,10 @@
 
 import type { LlmProvider, LlmResponse } from '../llm/types';
 import {
-  REASONING_ONLY_RESERVE_MULTIPLIER,
   type ReasoningPolicySelection,
 } from '../llm/reasoningPolicy';
 import type { FrozenModelCapabilities } from '../llm/requestPlan';
+import { freezeReasoningUsageFeedback, recoverReasoningPolicy, observedReasoningTokensFromFailure } from '../llm/reasoningFeedback';
 import { BudgetInfeasibleError } from '../llm/requestPlan';
 import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
 import { classifyLlmFailure } from '../llm/requestLedger';
@@ -234,7 +234,15 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
   const frozen = await input.store.freezeBatchRequest({ batchId: patchId, branchId: input.branchId,
     from: input.fromStateVersion, to: input.toStateVersion, baseFingerprint: input.state.metadata.fingerprint,
     payload: { compiled: freshCompiled, evidenceHash: stableFingerprint(input.batch),
-      capabilities: input.capabilities, reasoningPolicy: input.reasoningPolicy } });
+      capabilities: input.capabilities, reasoningPolicy: input.reasoningPolicy,
+      repairReasoningPolicy: undefined as ReasoningPolicySelection | undefined },
+    preparePayload: async payload => {
+      const [reasoningPolicy, repairReasoningPolicy] = await Promise.all([
+        freezeReasoningUsageFeedback(input.provider, 'memory_checkpoint', input.reasoningPolicy),
+        freezeReasoningUsageFeedback(input.provider, 'memory_repair', input.reasoningPolicy),
+      ]);
+      return { ...payload, reasoningPolicy, repairReasoningPolicy };
+    } });
   if (frozen.evidenceHash !== stableFingerprint(input.batch)) {
     return { status: 'rejected', error: 'Frozen memory evidence changed; refusing live reassembly.' };
   }
@@ -261,8 +269,9 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
         reasoningPolicy,
       });
     let plan;
+    const selectedPolicy = repairErrors ? frozen.repairReasoningPolicy ?? frozen.reasoningPolicy : frozen.reasoningPolicy;
     try {
-      plan = planRequest(frozen.reasoningPolicy);
+      plan = planRequest(selectedPolicy);
     } catch (error) {
       if (round === 0 && error instanceof BudgetInfeasibleError) {
         return { status: 'too_large', error: error.message };
@@ -300,10 +309,8 @@ async function runSingleCheckpoint(input: SingleCheckpointInput): Promise<Single
       }
       let boostedPlan;
       try {
-        boostedPlan = planRequest({
-          ...frozen.reasoningPolicy,
-          reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
-        });
+        boostedPlan = planRequest(recoverReasoningPolicy(selectedPolicy,
+          plan.reasoningPolicy!.reserveTokens, observedReasoningTokensFromFailure(error)));
       } catch (retryError) {
         if (round === 0 && retryError instanceof BudgetInfeasibleError) {
           return { status: 'too_large', error: retryError.message };

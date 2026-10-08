@@ -9,6 +9,7 @@
 import type { LlmProvider, LlmRequest, LlmResponse } from './types';
 import { LlmRequestFailure } from './types';
 import { stableFingerprint } from './requestPlan';
+import { REASONING_USAGE_ROLLING_WINDOW } from './reasoningPolicy';
 import type {
   LlmAttemptPatch,
   LlmFailureClass,
@@ -111,6 +112,11 @@ export class LedgeredProvider implements LlmProvider {
     private readonly store: LlmRequestLedgerStore,
     private readonly options: LedgeredProviderOptions,
   ) {}
+
+  async readReasoningUsage(input: { requestKind: import('./types').LlmRequestKind; tier: import('./types').ReasoningTier }) {
+    return this.store.listRecentReasoningUsage?.({ modelProfileFingerprint: this.options.modelProfileFingerprint,
+      reasoningTier: input.tier, requestKind: input.requestKind, limit: REASONING_USAGE_ROLLING_WINDOW }) ?? [];
+  }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
     const meta = request.ledger;

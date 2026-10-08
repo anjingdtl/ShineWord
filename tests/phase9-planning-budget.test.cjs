@@ -10,13 +10,19 @@ const { GlobalRateScheduler, endpointBucketId } = require('../dist/application/w
 const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerStore');
 const profile = { id: 'budget', name: 'Budget', endpoint: 'https://example.invalid/v1', model: 'glm-5.3-flash', keyRef: 'test', reasoningTier: 'high',
   capabilities: { contextWindow: 1048576, maxOutputTokens: 32768, supportsJson: true, supportsStreaming: false }, contentOutputTokens: 16384 };
-async function setup(h, id, responses, onResponse = () => {}) {
+const largeProfile = { ...profile, capabilities: { ...profile.capabilities, maxOutputTokens: 65536 } };
+async function seedUsage(store, id, tokens, failureClass) {
+  const attempt = await store.beginAttempt({ logicalRequestId: id, requestKind: 'campaign_plan', modelProfileFingerprint: 'budget', reasoningTier: 'high' }, 1);
+  await store.updateAttempt(attempt.attemptId, { status: failureClass ? 'failed' : 'succeeded', failureClass: failureClass ?? null,
+    reasoningTokens: tokens, estimatedUsage: 0 });
+}
+async function setup(h, id, responses, onResponse = () => {}, runProfile = profile) {
   const base = await h.planStore.getSetup('setup-t'), intent = { ...base.intent, setupId: id };
   await h.planStore.upsertSetup({ ...base, setupId: id, intent, currentCandidateId: null, status: 'planning' });
   await h.planStore.insertJob({ ...await h.planStore.getJob('job-t'), jobId: id, setupId: id, status: 'queued',
     intentHash: sha256HexOf(canonicalJsonOf(intent)), leaseOwner: null, leaseExpiresAt: null, fencingToken: 0, freezeRootId: null });
   const wires = [], store = new SqliteLlmLedgerStore(h.adapter);
-  const inner = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, { async post(request) {
+  const inner = new OpenAICompatibleProvider(runProfile, { async get() { return 'test-only'; } }, { async post(request) {
     wires.push(JSON.parse(request.body)); const next = responses[wires.length - 1];
     if (!next) throw Error('Unexpected extra physical dispatch');
     onResponse(wires.length);
@@ -27,8 +33,8 @@ async function setup(h, id, responses, onResponse = () => {}) {
     } : typeof next === 'object' ? next : { choices: [{ finish_reason: 'stop', message: { content: next } }] }) };
   } }, 300000);
   const provider = new RateScheduledProvider(new LedgeredProvider(inner, store, { modelProfileFingerprint: 'budget' }),
-    new GlobalRateScheduler({ maxConcurrent: 1, endpointBucketId: endpointBucketId(profile.endpoint) }));
-  const deps = { db: h.adapter, planStore: h.planStore, worldStore: h.worlds, profile, provider, now: () => NOW };
+    new GlobalRateScheduler({ maxConcurrent: 1, endpointBucketId: endpointBucketId(runProfile.endpoint) }));
+  const deps = { db: h.adapter, planStore: h.planStore, worldStore: h.worlds, profile: runProfile, provider, now: () => NOW };
   const run = () => runOpeningPlanJob(deps, id, { anchorTitle: '开篇', playerName: '旅人', protagonistSkills: ['skill-observation'] });
   return { wires, store, run, deps };
 }
@@ -168,4 +174,58 @@ test('planning output: a second truncated response exhausts the same two-request
     const second=await q.run();assert.equal(second.status,'invalid');assert.equal(second.physicalRequests,0);assert.equal(q.wires.length,2);
     assert.equal(await h.planStore.latestCandidateForJob('clipped-twice'),null);
   }finally{h.db.close();}
+});
+
+test('planning feedback: a new task freezes previous censored usage and grants body output on top of sufficient reasoning', async () => {
+  const h = await fixture();
+  try {
+    const q = await setup(h, 'history-floor', [JSON.stringify(candidateModel())], undefined, largeProfile);
+    await seedUsage(q.store, 'prior-known-length', 32422, 'length');
+    const result = await q.run(); assert.equal(result.status, 'candidate_ready'); assert.equal(result.physicalRequests, 1);
+    assert.equal(q.wires[0].max_tokens, 60921);
+    const root = JSON.parse(h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:history-floor').payload_json);
+    assert.deepEqual(root.reasoningPolicy.usageFeedback, { completed: [], exhausted: [32422] });
+    const attempts = await q.store.listAttempts('campaign-plan:history-floor');
+    assert.equal(attempts[0].reasoningReserveTokens, 48633); assert.equal(attempts[0].wireOutputTokens - attempts[0].reasoningReserveTokens, 12288);
+  } finally { h.db.close(); }
+});
+
+test('planning feedback: known 24576 exhaustion receives a 49152 wire ceiling rather than the previous five-percent boost', async () => {
+  const h = await fixture();
+  try {
+    const q = await setup(h, 'large-recovery', ['thinking', JSON.stringify(candidateModel())], undefined, largeProfile);
+    const result = await q.run(); assert.equal(result.status, 'candidate_ready'); assert.equal(result.physicalRequests, 2);
+    assert.deepEqual(q.wires.map(w => w.max_tokens), [24576, 49152]);
+    assert.equal((await q.store.listAttempts('campaign-plan:large-recovery'))[1].reasoningReserveTokens, 36864);
+  } finally { h.db.close(); }
+});
+
+test('planning feedback: restoration ignores later history and keeps the original material root and selected budget', async () => {
+  const h = await fixture();
+  try {
+    const renew = h.planStore.renewJobLease.bind(h.planStore);
+    const q = await setup(h, 'frozen-history', ['{}', JSON.stringify(candidateModel())], n => {
+      if (n === 1) h.planStore.renewJobLease = async () => { throw Error('interrupted after known content'); };
+    }, largeProfile);
+    await seedUsage(q.store, 'prior-complete', 24000);
+    assert.equal((await q.run()).status, 'retryable_failed');
+    const root = h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:frozen-history').payload_json;
+    await seedUsage(q.store, 'later-length', 42000, 'length');
+    h.planStore.renewJobLease = renew;
+    const result = await q.run();
+    assert.equal(result.status, 'candidate_ready'); assert.equal(result.physicalRequests, 1);
+    assert.deepEqual(q.wires.map(w => w.max_tokens), [42288, 42288]);
+    assert.equal(h.db.prepare('SELECT payload_json FROM frozen_turn_material_roots WHERE root_id=?').get('campaign-job:frozen-history').payload_json, root);
+  } finally { h.db.close(); }
+});
+
+test('planning feedback: a known infeasible history dispatches no paid request and leaves no candidate', async () => {
+  const h = await fixture();
+  try {
+    const q = await setup(h, 'history-infeasible', [JSON.stringify(candidateModel())]);
+    await seedUsage(q.store, 'prior-large', 32422, 'length');
+    const result = await q.run(); assert.equal(result.status, 'retryable_failed'); assert.equal(result.physicalRequests, 0);
+    assert.equal(q.wires.length, 0); assert.match(result.errors.join(' '), /observed reasoning usage/);
+    assert.equal(await h.planStore.latestCandidateForJob('history-infeasible'), null);
+  } finally { h.db.close(); }
 });

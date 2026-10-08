@@ -12,6 +12,9 @@ import { isIntactReadyCandidate } from './candidateIntegrity';
 import { assessMethod } from '../guidance/candidates';
 import { openingRelationshipFor } from '../campaign/recruitment';
 import { REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
+import { reasoningDialectForModel } from '../llm/reasoningPolicy';
+import { normalizeReasoningTier } from '../llm/types';
+import { freezeReasoningUsageFeedback } from '../llm/reasoningFeedback';
 import { readBoundCampaignArtifacts } from './boundArtifacts';
 import { resolveCampaignContent, campaignContentEntries } from './contentResolver';
 
@@ -132,7 +135,10 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
           actors: state.actors, items: state.itemOwners, discoveries: state.discoveries, relationships: state.relationships,
           situations: state.situations, nodes: state.campaignRuntime?.nodeStates, currentGoal: state.campaignRuntime?.publicObjectiveProjection })}`;
       }
-      frozen = { ...frozenPlanJob(intent, deps.profile, materials, ctx), ...(state ? { baseState: state, basePlan } : {}) };
+      const reasoningPolicy = await freezeReasoningUsageFeedback(deps.provider, 'campaign_plan', {
+        tier: normalizeReasoningTier(deps.profile.reasoningTier ?? deps.profile.reasoningEffort),
+        providerDialect: deps.profile.reasoningDialect ?? reasoningDialectForModel(deps.profile.model), model: deps.profile.model });
+      frozen = { ...frozenPlanJob(intent, deps.profile, materials, ctx), reasoningPolicy, ...(state ? { baseState: state, basePlan } : {}) };
       await assertCurrent();
       await writePlanFreeze(deps.db, jobId, job.setupId, frozen, now());
       await deps.db.execute('UPDATE campaign_plan_jobs SET freeze_root_id=?, intent_hash=? WHERE job_id=? AND status=\'running\' AND fencing_token=?',
@@ -156,8 +162,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     const ledger = await deps.db.queryOne<{ n: number }>(
       'SELECT COUNT(*) n FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${jobId}`]);
     const used = Math.max(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? (existing.repairUsed ? 2 : 1) : 0, ledger?.n ?? 0);
-    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null; reasoning_tokens: number | null }>(
-      'SELECT failure_class,reasoning_tokens FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
+    const lastAttempt = await deps.db.queryOne<{ failure_class: string | null; reasoning_tokens: number | null; estimated_usage: number }>(
+      'SELECT failure_class,reasoning_tokens,estimated_usage FROM llm_request_attempts WHERE logical_request_id=? ORDER BY attempt_no DESC LIMIT 1', [`campaign-plan:${jobId}`]);
     const persistResponse = async (text: string, repairUsed: boolean): Promise<void> => {
       deps.onStage?.('validating');
       await deps.db.transaction(async tx => {
@@ -230,10 +236,12 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     await assertCurrent();
     const generation = await generateCampaignPlanCandidate({ provider: deps.provider, profile: frozen.profile,
       materials: frozen.materials, logicalRequestId: `campaign-plan:${jobId}`, worldId: frozen.intent.sourceCoverageBinding.worldId,
+      reasoningPolicy: frozen.reasoningPolicy,
       ...(job.branchId ? { branchId: job.branchId } : {}),
       ...(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? { resume: { text: existing.rawResponseText, repairUsed: existing.repairUsed } } : {}),
       ...(lastAttempt && ['reasoning_only', 'length'].includes(lastAttempt.failure_class ?? '')
-        ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER, observedReasoningTokens: lastAttempt.reasoning_tokens } : {}),
+        ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
+          observedReasoningTokens: lastAttempt.estimated_usage === 0 ? lastAttempt.reasoning_tokens : null } : {}),
       validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(); deps.onStage?.('planning'); } });
     physicalRequests = generation.physicalRequests;
     await countDispatchedRequests();

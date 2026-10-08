@@ -446,4 +446,26 @@ export class SqliteLlmLedgerStore implements LlmRequestLedgerStore, LlmBuildReco
     );
     return rows.map(row => row.attempt_id);
   }
+
+  async listRecentReasoningUsage(input: {
+    modelProfileFingerprint: string;
+    reasoningTier: 'low' | 'high' | 'max';
+    requestKind: string;
+    limit: number;
+  }): Promise<import('../../application/ports/llmLedger').ReasoningUsageObservation[]> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 256) {
+      throw new Error('Reasoning usage sample limit must be an integer from 1 to 256.');
+    }
+    const rows = await this.db.queryAll<{ reasoning_tokens: number; status: string }>(
+      `SELECT reasoning_tokens,status FROM llm_request_attempts
+        WHERE model_profile_fingerprint = ? AND reasoning_tier = ? AND request_kind = ?
+          AND estimated_usage = 0 AND reasoning_tokens IS NOT NULL
+          AND typeof(reasoning_tokens) = 'integer' AND reasoning_tokens >= 0
+          AND (status = 'succeeded' OR (status = 'failed' AND failure_class IN ('length','reasoning_only')))
+        ORDER BY started_at DESC, attempt_no DESC, attempt_id DESC LIMIT ?`,
+      [input.modelProfileFingerprint, input.reasoningTier, input.requestKind, input.limit],
+    );
+    return rows.map(row => ({ reasoningTokens: row.reasoning_tokens,
+      completion: row.status === 'succeeded' ? 'complete' as const : 'exhausted' as const }));
+  }
 }

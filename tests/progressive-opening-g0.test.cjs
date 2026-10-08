@@ -16,7 +16,7 @@ test('opening/full-build planner budget follows profile capabilities and extract
     reasoningEffort: 'low',
     reasoningTier: 'low',
     reasoningDialect: 'generic',
-    reasoningPolicyVersion: 'reasoning-policy-1',
+    reasoningPolicyVersion: 'reasoning-policy-2',
     supportsPromptCache: false,
     reserveTokens: 2_000,
   });
@@ -29,7 +29,7 @@ test('opening/full-build planner budget follows profile capabilities and extract
     reasoningEffort: 'low',
     reasoningTier: 'low',
     reasoningDialect: 'generic',
-    reasoningPolicyVersion: 'reasoning-policy-1',
+    reasoningPolicyVersion: 'reasoning-policy-2',
     supportsPromptCache: false,
     reserveTokens: 2_000,
   });

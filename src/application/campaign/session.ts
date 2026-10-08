@@ -23,6 +23,7 @@ import {
   REASONING_POLICY_VERSION,
 } from '../llm/reasoningPolicy';
 import type { FrozenModelCapabilities } from '../llm/requestPlan';
+import { freezeReasoningUsageFeedback } from '../llm/reasoningFeedback';
 import {
   buildCandidate,
 } from '../context/candidateCollector';
@@ -1669,6 +1670,10 @@ export class CampaignSession {
       providerDialect: this.profile.reasoningDialect ?? reasoningDialectForModel(this.profile.model),
       model: this.profile.model,
     };
+    const [plannerReasoningPolicy, narratorReasoningPolicy] = await Promise.all([
+      freezeReasoningUsageFeedback(this.provider, 'planner', reasoningPolicy),
+      freezeReasoningUsageFeedback(this.provider, 'narrator', reasoningPolicy),
+    ]);
 
     // P8-1 typed collection (plan §9): every part becomes a candidate or an
     // auditable diagnostic - unknown labels are never silently dropped (B02).
@@ -1799,7 +1804,7 @@ export class CampaignSession {
       capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
-      reasoningPolicy,
+      reasoningPolicy: plannerReasoningPolicy,
       collectionDiagnostics,
     });
 
@@ -1836,23 +1841,19 @@ export class CampaignSession {
       capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
-      reasoningPolicy,
+      reasoningPolicy: narratorReasoningPolicy,
       collectionDiagnostics,
     });
 
     // A reasoning_only response gets one application-level retry. Its frozen
     // policy keeps the same tier while reserving 50% more reasoning, which
     // lets the elastic planner shed optional context before dispatch.
-    const recoveryPolicy = {
-      ...reasoningPolicy,
-      reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
-    };
     const plannerRecoveryPlan = planTurnContext({
       requestKind: 'planner', branchId: input.branchId, stateVersion: input.stateVersion,
       candidates: plannerCandidates, capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.planner,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200,
-      reasoningPolicy: recoveryPolicy,
+      reasoningPolicy: { ...plannerReasoningPolicy, reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER },
       collectionDiagnostics,
     });
     const narratorRecoveryPlan = planTurnContext({
@@ -1860,7 +1861,7 @@ export class CampaignSession {
       candidates: narratorCandidates, capabilities,
       businessOutputDemand: DEFAULT_OUTPUT_DEMANDS.narrator,
       estimatedMandatoryInputTokens: mandatoryProtocolTokens + 200 + estimateTokens(JSON.stringify({ styleExpression: input.styleText ?? '' })),
-      reasoningPolicy: recoveryPolicy,
+      reasoningPolicy: { ...narratorReasoningPolicy, reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER },
       collectionDiagnostics,
     });
     // P8-2 final wire budgets (plan §10.4): derived from the same frozen

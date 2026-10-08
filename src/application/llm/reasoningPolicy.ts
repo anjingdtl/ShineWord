@@ -45,7 +45,22 @@ export interface ProviderReasoningParams {
   thinking?: { type?: 'enabled'; clear_thinking?: false };
 }
 
-export type ReasoningReserveSource = 'cold_start' | 'usage_calibrated';
+export type ReasoningReserveSource = 'cold_start' | 'usage_calibrated' | 'usage_floor';
+
+/** Frozen, trusted measurements; censored observations never enter P95. */
+export interface ReasoningUsageFeedback {
+  completed: number[];
+  exhausted: number[];
+}
+
+export function isReasoningUsageFeedback(value: unknown): value is ReasoningUsageFeedback {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as ReasoningUsageFeedback;
+  return Array.isArray(raw.completed) && Array.isArray(raw.exhausted)
+    && raw.completed.length + raw.exhausted.length <= REASONING_USAGE_ROLLING_WINDOW
+    && raw.completed.every(n => Number.isSafeInteger(n) && n >= 0)
+    && raw.exhausted.every(n => Number.isSafeInteger(n) && n > 0);
+}
 
 export interface ResolveReasoningPolicyInput {
   providerDialect: ReasoningDialect;
@@ -57,6 +72,7 @@ export interface ResolveReasoningPolicyInput {
   providerWireMaxOutputTokens?: number;
   minimumBusinessOutputTokens?: number;
   historicalStats?: ReasoningUsageStats | null;
+  usageFeedback?: ReasoningUsageFeedback;
   reserveMultiplier?: number;
   /** Frozen per-run reserve carried by FrozenRunConfig. */
   reserveTokensOverride?: number;
@@ -68,6 +84,7 @@ export interface ReasoningPolicySelection {
   providerDialect: ReasoningDialect;
   model: string;
   historicalStats?: ReasoningUsageStats | null;
+  usageFeedback?: ReasoningUsageFeedback;
   /** Bounded retry boost after a classified reasoning_only completion. */
   reserveMultiplier?: number;
   /** Frozen per-run request-kind reserve. */
@@ -88,7 +105,7 @@ export interface ResolvedReasoningPolicy {
   policyVersion: string;
 }
 
-export const REASONING_POLICY_VERSION = 'reasoning-policy-1';
+export const REASONING_POLICY_VERSION = 'reasoning-policy-2';
 export const REASONING_ONLY_RESERVE_MULTIPLIER = 1.5;
 export const REASONING_ONLY_RECOVERY_ATTEMPTS = 1;
 export const REASONING_CALIBRATION_MIN_SAMPLES = 8;
@@ -214,16 +231,23 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
   const schedule = REASONING_RESERVE_POLICY[input.requestKind];
   const coldStartReserve = schedule.target[input.tier];
   const minimumReserve = schedule.minimum[input.tier];
-  const stats = input.historicalStats;
+  if (input.usageFeedback !== undefined && !isReasoningUsageFeedback(input.usageFeedback)) {
+    throw new ReasoningCapabilityInsufficientError('Frozen reasoning usage feedback is invalid.');
+  }
+  const stats = input.usageFeedback ? reasoningUsageStatsFromSamples(input.usageFeedback.completed) : input.historicalStats;
+  const observedMaximum = input.usageFeedback?.completed.length ? Math.max(...input.usageFeedback.completed) : 0;
+  const exhaustedLowerBound = input.usageFeedback?.exhausted.length ? Math.max(...input.usageFeedback.exhausted) : 0;
+  const observedReserve = Math.max(Math.ceil(observedMaximum * 1.25), Math.ceil(exhaustedLowerBound * 1.5));
   const calibrated = Boolean(stats && Number.isInteger(stats.sampleCount)
     && stats.sampleCount >= REASONING_CALIBRATION_MIN_SAMPLES
     && typeof stats.p95 === 'number' && Number.isFinite(stats.p95) && stats.p95 >= 0);
   const p95ReasoningTokens = typeof stats?.p95 === 'number' && Number.isFinite(stats.p95) && stats.p95 >= 0
     ? Math.ceil(stats.p95)
     : undefined;
-  const calibratedReserve = calibrated
+  const percentileReserve = calibrated
     ? Math.max(coldStartReserve, Math.ceil((stats!.p95 as number) * 1.25))
     : coldStartReserve;
+  const calibratedReserve = Math.max(percentileReserve, observedReserve);
   const multiplier = input.reserveMultiplier ?? 1;
   if (!Number.isFinite(multiplier) || multiplier < 1 || multiplier > 2) {
     throw new ReasoningCapabilityInsufficientError('Reasoning reserve retry multiplier must be between 1 and 2.');
@@ -240,6 +264,18 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
   );
   const businessMinimum = input.minimumBusinessOutputTokens ?? DEFAULT_OUTPUT_DEMANDS[input.requestKind].minimum;
   const maximumReserve = wireCeiling - businessMinimum;
+  // A completed sample is known usage; a truncated sample is only a lower
+  // bound. Never dispatch a ceiling already proved unable to fit either.
+  const knownMinimum = Math.max(observedMaximum, exhaustedLowerBound > 0 ? exhaustedLowerBound + 1 : 0);
+  if (maximumReserve < knownMinimum) {
+    throw new ReasoningCapabilityInsufficientError(
+      `${input.model} cannot fit observed reasoning usage ${knownMinimum} and ${businessMinimum} business output tokens ` +
+        `within the wire ceiling ${wireCeiling}.`,
+    );
+  }
+  if (input.reserveTokensOverride !== undefined && input.reserveTokensOverride < knownMinimum) {
+    throw new ReasoningCapabilityInsufficientError('Frozen reasoning reserve is below observed usage.');
+  }
   if (maximumReserve < minimumReserve) {
     throw new ReasoningCapabilityInsufficientError(
       `${input.model} cannot reserve the minimum ${input.tier} reasoning budget for ${input.requestKind} ` +
@@ -260,7 +296,8 @@ export function resolveReasoningPolicy(input: ResolveReasoningPolicyInput): Reso
     reserveTokens,
     providerParams,
     reasoningBudget: 'inside_completion',
-    reserveSource: calibrated && input.reserveTokensOverride === undefined ? 'usage_calibrated' : 'cold_start',
+    reserveSource: input.reserveTokensOverride !== undefined ? 'cold_start'
+      : observedReserve > percentileReserve ? 'usage_floor' : calibrated ? 'usage_calibrated' : 'cold_start',
     reserveClamped: reserveTokens < targetReserve,
     p95ReasoningTokens,
     policyVersion: REASONING_POLICY_VERSION,

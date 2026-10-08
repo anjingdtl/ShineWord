@@ -1,8 +1,8 @@
 import type { LlmProvider, LlmRequest } from '../llm/types';
 import {
-  REASONING_ONLY_RESERVE_MULTIPLIER,
   type ReasoningPolicySelection,
 } from '../llm/reasoningPolicy';
+import { recoverReasoningPolicy, observedReasoningTokensFromFailure } from '../llm/reasoningFeedback';
 import type { FrozenModelCapabilities } from '../llm/requestPlan';
 import { DEFAULT_OUTPUT_DEMANDS, planLlmRequest } from '../llm/requestBudgetKernel';
 import { classifyLlmFailure } from '../llm/requestLedger';
@@ -93,10 +93,8 @@ export async function summarizeRange(input: {
     response = await input.provider.complete(makeRequest(plan));
   } catch (error) {
     if (classifyLlmFailure(error) !== 'reasoning_only') throw error;
-    const boostedPlan = planRequest({
-      ...input.reasoningPolicy,
-      reserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
-    });
+    const boostedPlan = planRequest(recoverReasoningPolicy(input.reasoningPolicy,
+      plan.reasoningPolicy!.reserveTokens, observedReasoningTokensFromFailure(error)));
     if ((boostedPlan.reasoningPolicy?.reserveTokens ?? 0) <= (plan.reasoningPolicy?.reserveTokens ?? 0)) {
       throw error;
     }

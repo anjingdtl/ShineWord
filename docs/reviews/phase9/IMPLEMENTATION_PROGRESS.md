@@ -143,3 +143,19 @@ R44 已落生产，增量合并目录闭包及Android旧问题自恢复复现通
 身份、回归、实际复现与运行中请求详情见 [FINAL_REPORT](FINAL_REPORT.md)。完整阶段仍未验收通过。
 
 final37 真实规划终态补录：J2/J3自动候选ready并采用，分别8/3条合法战役线索；Android J1第二次38036仍length。全部至多两HTTP，预算1188/1500，原未知任务和设备已采用归档保持。0新玩家决定，内容质量与完整长旅程仍未通过。移动世界书及已知面板的线索回看缺口待下一批修复。终态、用量、后台清理和保护证据见 [FINAL_REPORT](FINAL_REPORT.md)。
+
+## 2026-10-08 final38：共用思考用量反馈（R48）
+
+原弹性输入分配与 wire 上限扩容已经参与生产请求，但历史用量统计没有接入材料冻结。final37 的 J1 第一次 wire=24576、思考24521，恢复只给观测下界5%余量，第二次 wire=38036、思考32422，完整正文再次截断。65536 是配置允许上限，并不等于每次实际请求额度；本地思考预留也不等于服务端对思考的独立硬上限。
+
+R48 在共用账本端口增加受信终态观测读取，按原 modelProfileFingerprint、档位和 requestKind 精确匹配。unknown、未完成、估算、非法用量、外来配置/角色及其它失败类型在窗口选择之前排除。完整响应用于最多32个样本的统计，满8个才做 P95×1.25 校准；不足8个的真实完整用量仍形成保守上界预留。length/reasoning_only 是下界，单独使用×1.5余量，不冒充完整 P95。
+
+LedgeredProvider 与 RateScheduledProvider 共用本地反馈读取，读取本身不派发 HTTP。战役候选、实际游玩的 Planner/Narrator、记忆 checkpoint/repair 在新材料根冻结时选定各自反馈；恢复使用已有根，不查询新历史、不回写旧根。记忆冻结只在原根缺失时执行准备回调。战役与记忆恢复共用观测下界扩容计算，原两次战役物理请求总额及 outcome_unknown 禁止重发仍生效；战役恢复若不能增加 wire，则停止无效重试。已证明的思考下界连最小正文都无法容纳时在 HTTP 前明确拒绝。策略版本为 reasoning-policy-2。其它已有冻结构建配置保留原协议；世界构建等未接入新反馈的调用者不宣称已经完成同等历史校准。
+
+新增11项有意义回归：窗口/作用域/可信用量过滤、下界不污染 P95、小样本反馈、低能力请求派发前拒绝、恢复余量、记忆冻结恢复不读历史、实际玩家回合分别冻结 Planner/Narrator、战役新任务历史接入、65536能力下扩大恢复、恢复不追随后来历史，以及不可行历史0 HTTP。完整核心1108/1108、0失败0跳过，32.115秒；移动typecheck、verify:version和diff检查通过。首次完整回归1106/1107仅失败于 progressive-opening 的策略版本旧断言，更新为新版本后完整重跑通过，保留原日志。
+
+final38 identity scope v3 源码 dd3af146d49f6f687d2318c66c8a9768b2e25278cbabd4913796c3fbaeaae4d7；APK 325170fbca969a2741c372bd8a802520f50e7205aed89addb82329acb49fb591，V1.0.0/1000000，构建55秒，emulator-5556实际安装hash一致。保留数据库安装前后，全部采用规划、战役归档、快照和两个旧 outcome_unknown 任务/冻结根/账本内容精确相同，0隐式HTTP。随后通过正式界面取消已耗尽两次预算的 final37 已知失败任务，旧冻结根和两条尝试精确保留，没有重发旧请求。
+
+Android 使用相同完整救援意图、序7/边陲镇、原创体魄3/交涉3、运动/交涉/坚韧、无同伴、long、glm-5.3-flash/high/65536，新建任务 job-setup-world-src-7f45fe0b11ea30ec-muwccd51-muz39git。新冻结反馈 exhausted=[32422,24521]；首次实际派发账本 wire=60921、reserve=48633，完整正文预留12288，原请求总额2保持。预算1188→1190（独立 opening_goal 1次＋新 J1 1次），未重置/增额。此处只确认历史反馈与实际派发预算生效；模型响应及候选质量尚在等待，0决定，不能将其写为三意图/长旅程或阶段整体验收通过。
+
+证据：.tmp/phase9/r48-target.log、r48-core.log、r48-core-b.log、r48-mobile.log、final38-apk.log、reaccept-identity-final38.json、reaccept-device/final38-install-preservation.json、final38-old-known-preserved.json、final38-j1-start.json、final38-first-dispatch.json、final38-before-plan.png、final38-planning.png。私有原文/数据库/模型内容保持在忽略目录。R47线索正文重读、神罚之锁审查、完整长旅程、延迟后果和三意图质量等仍待验收。

@@ -132,13 +132,18 @@ export class SqliteStoryMemoryStore {
   }
 
   async freezeBatchRequest<T>(input: { batchId: string; branchId: string; from: number; to: number;
-    baseFingerprint: string; payload: T }): Promise<T> {
-    await this.db.execute(`INSERT OR IGNORE INTO story_memory_batch_requests
+    baseFingerprint: string; payload: T; preparePayload?: (payload: T) => Promise<T> }): Promise<T> {
+    const select = () => this.db.queryAll<{ payload_json: string; content_hash: string; base_fingerprint: string }>(
+      'SELECT payload_json,content_hash,base_fingerprint FROM story_memory_batch_requests WHERE batch_id = ?', [input.batchId]);
+    let rows = await select();
+    if (!rows[0]) {
+      const prepared = input.preparePayload ? await input.preparePayload(input.payload) : input.payload;
+      await this.db.execute(`INSERT OR IGNORE INTO story_memory_batch_requests
       (batch_id,branch_id,from_state_version,to_state_version,base_fingerprint,payload_json,content_hash,created_at)
       VALUES (?,?,?,?,?,?,?,?)`, [input.batchId, input.branchId, input.from, input.to,
-      input.baseFingerprint, JSON.stringify(input.payload), stableFingerprint(input.payload), new Date().toISOString()]);
-    const rows = await this.db.queryAll<{ payload_json: string; content_hash: string; base_fingerprint: string }>(
-      'SELECT payload_json,content_hash,base_fingerprint FROM story_memory_batch_requests WHERE batch_id = ?', [input.batchId]);
+        input.baseFingerprint, JSON.stringify(prepared), stableFingerprint(prepared), new Date().toISOString()]);
+      rows = await select();
+    }
     if (!rows[0]) throw new Error('Frozen memory batch is missing.');
     const payload = JSON.parse(rows[0].payload_json) as T;
     if (stableFingerprint(payload) !== rows[0].content_hash || rows[0].base_fingerprint !== input.baseFingerprint) {

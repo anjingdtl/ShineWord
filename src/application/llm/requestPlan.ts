@@ -69,7 +69,7 @@ export interface RequestBudgetTrace {
     effectiveTier: ReasoningTier;
     reserveTokens: number;
     policyVersion: string;
-    reserveSource: 'cold_start' | 'usage_calibrated';
+    reserveSource: import('./reasoningPolicy').ReasoningReserveSource;
     reserveClamped: boolean;
   };
   capabilitySources: {

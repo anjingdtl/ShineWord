@@ -46,6 +46,10 @@ function totalUsage(metrics: readonly LlmPhysicalRequestMetric[], final: LlmUsag
 export class RateScheduledProvider implements LlmProvider {
   constructor(private readonly inner: LlmProvider, private readonly scheduler: GlobalRateScheduler) {}
 
+  async readReasoningUsage(input: { requestKind: import('./types').LlmRequestKind; tier: import('./types').ReasoningTier }) {
+    return this.inner.readReasoningUsage?.(input) ?? [];
+  }
+
   /** CampaignSession uses this instead of placing the sent ledger outside the queue. */
   withLedger(store: LlmRequestLedgerStore, options: LedgeredProviderOptions): RateScheduledProvider {
     if (this.inner instanceof LedgeredProvider) return this;

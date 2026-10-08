@@ -169,3 +169,7 @@ Android自00:49:54 UTC观察到HOME，01:08:13.691 UTC第二次响应结束，�
 整体状态仍未通过，0新有效玩家决定。通览还发现移动世界书投影未合成战役目录、已知面板只有标题；属于后续共用内容读取和回看缺口，尚未修复或作端上通过声明。下一批在新身份修复该边界和长规划预算，再验真实消费与长旅程。
 
 新增证据：reaccept-device/final37-completed-in-background.json、final37-planning-failed-after-home.png、final37-preservation-proof.json，final37-status.jsonl与final37-host-J2/J3/proposal.json及http.jsonl。原失败、自动模型内容和冻结配置不修改。R44–R46本地提交ID见Git历史，未推送/发布。
+
+## 2026-10-08 final38：共用思考用量反馈（R48）
+
+R48 接入按配置/档位/任务分类的真实账本反馈；完整响应与截断下界分别处理，在新战役、实际回合和记忆材料根冻结，恢复不读新历史。1108/1108核心、移动类型检查与Debug构建通过，Android同意图首次派发60921=48633+12288；候选仍在等待，不能记为旅程或阶段通过。旧归档及2个未知结果任务精确保留；预算1190/1500未重置。作用域、能力边界和证据详见[最新复验报告](FINAL_REPORT.md)。

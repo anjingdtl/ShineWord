@@ -119,6 +119,13 @@ export interface LlmRequestLedgerStore {
     requestKind: string;
     limit: number;
   }): Promise<number[]>;
+  /** Trusted terminal measurements. Exhausted output is a lower bound, never a percentile sample. */
+  listRecentReasoningUsage?(input: {
+    modelProfileFingerprint: string;
+    reasoningTier: ReasoningTier;
+    requestKind: string;
+    limit: number;
+  }): Promise<ReasoningUsageObservation[]>;
   /** Attempt ids still in prepared/sent (interrupted dispatch candidates). */
   listInterruptedAttemptIds(): Promise<string[]>;
 }
@@ -149,4 +156,9 @@ export interface LlmReplayApprovalPort {
     attemptIds: readonly string[] }): Promise<void>;
   acknowledgeMemoryReplay(input: { campaignId: string; branchId: string;
     attemptIds: readonly string[] }): Promise<void>;
+}
+
+export interface ReasoningUsageObservation {
+  reasoningTokens: number;
+  completion: 'complete' | 'exhausted';
 }

@@ -1,9 +1,10 @@
 import type { SqliteDatabase } from '../ports/sqlite';
-import type { ApiProfile } from '../llm/types';
+import { normalizeReasoningTier, type ApiProfile } from '../llm/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import type { LocalCompileContext } from './localCompile';
 import type { PlanRequestMaterials } from './generationService';
 import { sha256HexOf } from './hashing';
+import { isReasoningUsageFeedback, reasoningDialectForModel, type ReasoningPolicySelection } from '../llm/reasoningPolicy';
 
 export const CAMPAIGN_PLAN_FREEZE_SCHEMA = 'campaign-plan-freeze-2';
 export interface FrozenPlanJob {
@@ -11,6 +12,7 @@ export interface FrozenPlanJob {
   intent: CampaignIntentV1;
   profile: ApiProfile;
   materials: PlanRequestMaterials;
+  reasoningPolicy?: ReasoningPolicySelection;
   basePlan?: import('../../domain/campaignPlan/types').CampaignPlanV1;
   baseState?: import('../../domain/state/types').GameStateSnapshot;
   context: Omit<LocalCompileContext, 'openingActorIds' | 'openingTemplateIds' | 'protagonistSkills' | 'availableFactIds' | 'campaignEntryIds'> & {
@@ -51,6 +53,12 @@ export async function readPlanFreeze(db: SqliteDatabase, jobId: string): Promise
     if (frozen.context.campaignEntryIds !== undefined && (!Array.isArray(frozen.context.campaignEntryIds)
       || frozen.context.campaignEntryIds.some(id => typeof id !== 'string' || !frozen.context.visibleEntries.some(e => e.entryId === id)))) {
       throw new Error('invalid campaign content scope');
+    }
+    if (frozen.reasoningPolicy !== undefined && (!frozen.reasoningPolicy || frozen.reasoningPolicy.model !== frozen.profile.model
+      || frozen.reasoningPolicy.tier !== normalizeReasoningTier(frozen.profile.reasoningTier ?? frozen.profile.reasoningEffort)
+      || frozen.reasoningPolicy.providerDialect !== (frozen.profile.reasoningDialect ?? reasoningDialectForModel(frozen.profile.model))
+      || (frozen.reasoningPolicy.usageFeedback !== undefined && !isReasoningUsageFeedback(frozen.reasoningPolicy.usageFeedback)))) {
+      throw new Error('invalid frozen reasoning policy');
     }
     return frozen;
   } catch {

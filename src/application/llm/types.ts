@@ -158,6 +158,9 @@ export interface LlmRequest {
 
 export interface LlmProvider {
   complete(request: LlmRequest): Promise<LlmResponse>;
+  /** Local ledger feedback only; callers freeze it before constructing a new request. */
+  readReasoningUsage?(input: { requestKind: LlmRequestKind; tier: ReasoningTier }):
+    Promise<readonly import('../ports/llmLedger').ReasoningUsageObservation[]>;
 }
 
 export interface LlmProviderCapabilities {
