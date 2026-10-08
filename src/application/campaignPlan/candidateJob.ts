@@ -12,6 +12,8 @@ import { isIntactReadyCandidate } from './candidateIntegrity';
 import { assessMethod } from '../guidance/candidates';
 import { openingRelationshipFor } from '../campaign/recruitment';
 import { REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
+import { readBoundCampaignArtifacts } from './boundArtifacts';
+import { resolveCampaignContent, campaignContentEntries } from './contentResolver';
 
 /** Both planning modes share durable generation, bounded repair and fencing. */
 export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, input: {
@@ -102,6 +104,12 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       const { ctx, visibleEntries, worldTitle } = await buildPlanningContext({ worldStore: deps.worldStore, intent, protagonistSkills: input.protagonistSkills,
         effectiveEntries, ...(state ? { projectionOrder: Math.max(intent.openingAnchor.worldTimeOrder, state.causalWorldTimeOrder ?? 0) } : {}) });
       if (state) {
+        const artifacts = await readBoundCampaignArtifacts(deps.db, job.campaignId!,
+          state.campaignContentBinding ?? { artifactIds: basePlan!.contentArtifactRefs });
+        const campaignEntries = campaignContentEntries(artifacts);
+        ctx.campaignEntryIds = new Set(campaignEntries.map(entry => entry.entryId));
+        ctx.visibleEntries = resolveCampaignContent(visibleEntries, artifacts);
+        visibleEntries.splice(0, visibleEntries.length, ...ctx.visibleEntries);
         ctx.openingActorIds = new Set(Object.keys(state.actors));
         ctx.openingLocationId = state.actors[intent.protagonistBinding.actorId]?.locationId ?? ctx.openingLocationId;
         ctx.protagonistSkills = new Set((state.skills ?? []).filter(s => s.actorId === intent.protagonistBinding.actorId).map(s => s.skillId));
@@ -116,6 +124,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         });
       }
       const materials = buildPlanRequestMaterials({ intent, ctx, visibleEntries, worldTitle,
+        knownKnowledgeEntryIds: new Set((state?.discoveries ?? []).filter(d => d.actorId === intent.protagonistBinding.actorId).map(d => d.entryId)),
         anchorTitle: input.anchorTitle, playerName: input.playerName, openingGoalSuggestions: input.openingGoalSuggestions ?? [] });
       if (state && basePlan) {
         materials.system += '\n这是修订任务：严格沿用上述完整 JSON 合同与 ID 白名单。必须提供 firstSituation（所有必需字段和四档后果），用于当前尚未完成的问题。已定局节点由本地保留，不得改写或复活；新阶段的 nodeId 不得复用已定局节点。玩家合法结果优先于原计划。';
@@ -199,7 +208,9 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         entries: ctx.visibleEntries, situationStatuses: new Map((state.situations ?? []).map(s => [s.situationId, s])),
         causalWorldTimeOrder: ctx.coverageWorldTimeOrder }).eligible).map(method => method.methodId))) : undefined;
     const errors = [...compiled.errors, ...validateCampaignPlan(compiled.plan, {
-      visibleWorldEntryIds: new Set(ctx.visibleEntries.map(e => e.entryId)), openingActorIds: ctx.openingActorIds,
+      visibleWorldEntryIds: new Set(ctx.visibleEntries.filter(e => !ctx.campaignEntryIds?.has(e.entryId)).map(e => e.entryId)),
+      campaignKnowledgeEntryIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'lore' && ctx.campaignEntryIds?.has(e.entryId)).map(e => e.entryId)),
+      adoptedCampaignEntryIds: ctx.campaignEntryIds, availableFactIds: ctx.availableFactIds, openingActorIds: ctx.openingActorIds,
       openingTemplateIds: ctx.openingTemplateIds, artifactSituationIds: new Set([...compiled.artifact.situations.map(s => s.entryId), ...(frozen!.baseState?.situations ?? []).map(s => s.situationId)]), protagonistSkills: ctx.protagonistSkills,
       presentActorRefs: ctx.presentActorRefs, protagonistSkillRanks: ctx.protagonistSkillRanks,
       executableMethodIds,

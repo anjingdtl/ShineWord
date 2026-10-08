@@ -305,6 +305,14 @@ export interface CampaignSituationArtifactV1 {
   definition: import('../situations/types').SituationDefinitionV1;
 }
 
+/** A discoverable campaign clue. Publishing its definition grants no knowledge. */
+export interface CampaignClueArtifactV1 {
+  entryId: string;
+  definition: import('../content/types').LoreDefinition;
+  provenance: CampaignNodeProvenanceV1;
+  dependencyIds: readonly string[];
+}
+
 export interface CampaignContentArtifactV1 {
   schemaVersion: typeof CAMPAIGN_CONTENT_SCHEMA;
   artifactId: string;
@@ -315,6 +323,8 @@ export interface CampaignContentArtifactV1 {
   planRevision: number;
   namespace: 'campaign';
   situations: readonly CampaignSituationArtifactV1[];
+  /** Absent on historical artifacts; never retrofit or rehash their archives. */
+  clues?: readonly CampaignClueArtifactV1[];
   rewardPolicies: readonly CampaignRewardPolicyV1[];
   consequenceTemplates: ReadonlyArray<{
     consequenceId: string;
@@ -324,7 +334,7 @@ export interface CampaignContentArtifactV1 {
     visibility: 'public' | 'gm';
   }>;
   /** World entry ids this artifact depends on (resolution closure). */
-  dependencies: { worldEntryIds: readonly string[] };
+  dependencies: { worldEntryIds: readonly string[]; campaignEntryIds?: readonly string[] };
   provenance: CampaignNodeProvenanceV1;
   contentHash: string;
   createdAt: string;

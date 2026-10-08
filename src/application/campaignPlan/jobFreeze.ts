@@ -13,19 +13,24 @@ export interface FrozenPlanJob {
   materials: PlanRequestMaterials;
   basePlan?: import('../../domain/campaignPlan/types').CampaignPlanV1;
   baseState?: import('../../domain/state/types').GameStateSnapshot;
-  context: Omit<LocalCompileContext, 'openingActorIds' | 'openingTemplateIds' | 'protagonistSkills' | 'availableFactIds'> & {
+  context: Omit<LocalCompileContext, 'openingActorIds' | 'openingTemplateIds' | 'protagonistSkills' | 'availableFactIds' | 'campaignEntryIds'> & {
     openingActorIds: string[]; openingTemplateIds: string[]; protagonistSkills: string[]; availableFactIds: string[];
+    campaignEntryIds?: string[];
   };
 }
 export function frozenPlanJob(intent: CampaignIntentV1, profile: ApiProfile, materials: PlanRequestMaterials, ctx: LocalCompileContext): FrozenPlanJob {
+  const { campaignEntryIds, ...context } = ctx;
   return { schema: CAMPAIGN_PLAN_FREEZE_SCHEMA, intent, profile, materials,
-    context: { ...ctx, openingActorIds: [...ctx.openingActorIds], openingTemplateIds: [...ctx.openingTemplateIds],
-      protagonistSkills: [...ctx.protagonistSkills], availableFactIds: [...ctx.availableFactIds] } };
+    context: { ...context, openingActorIds: [...ctx.openingActorIds], openingTemplateIds: [...ctx.openingTemplateIds],
+      protagonistSkills: [...ctx.protagonistSkills], availableFactIds: [...ctx.availableFactIds],
+      ...(campaignEntryIds ? { campaignEntryIds: [...campaignEntryIds] } : {}) } };
 }
 export function thawPlanContext(frozen: FrozenPlanJob): LocalCompileContext {
-  return { ...frozen.context, openingActorIds: new Set(frozen.context.openingActorIds),
+  const { campaignEntryIds, ...context } = frozen.context;
+  return { ...context, openingActorIds: new Set(frozen.context.openingActorIds),
     openingTemplateIds: new Set(frozen.context.openingTemplateIds), protagonistSkills: new Set(frozen.context.protagonistSkills),
-    availableFactIds: new Set(frozen.context.availableFactIds) };
+    availableFactIds: new Set(frozen.context.availableFactIds),
+    ...(campaignEntryIds ? { campaignEntryIds: new Set(campaignEntryIds) } : {}) };
 }
 export async function readPlanFreeze(db: SqliteDatabase, jobId: string): Promise<FrozenPlanJob | null> {
   const row = await db.queryOne<{ payload_json: string; content_hash: string }>(
@@ -42,6 +47,10 @@ export async function readPlanFreeze(db: SqliteDatabase, jobId: string): Promise
       || typeof frozen.materials?.system !== 'string' || typeof frozen.materials?.user !== 'string') throw new Error('invalid envelope');
     for (const key of ['openingActorIds','openingTemplateIds','protagonistSkills','availableFactIds'] as const) {
       if (!Array.isArray(frozen.context[key])) throw new Error('invalid context');
+    }
+    if (frozen.context.campaignEntryIds !== undefined && (!Array.isArray(frozen.context.campaignEntryIds)
+      || frozen.context.campaignEntryIds.some(id => typeof id !== 'string' || !frozen.context.visibleEntries.some(e => e.entryId === id)))) {
+      throw new Error('invalid campaign content scope');
     }
     return frozen;
   } catch {

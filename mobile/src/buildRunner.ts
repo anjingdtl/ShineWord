@@ -95,12 +95,16 @@ export async function persistRunnerFailure(
   }
 }
 
-export async function worldBuildRunner(data: { runId?: string }): Promise<void> {
+export async function worldBuildRunner(data: { runId?: string; databaseName?: string }): Promise<void> {
   const runId = typeof data?.runId === 'string' ? data.runId : null;
   if (!runId) return;
   let runtime: Awaited<ReturnType<typeof getDatabaseRuntime>> | null = null;
   try {
-    runtime = await getDatabaseRuntime();
+    const opened = await getDatabaseRuntime();
+    // A redelivered task from a previously selected file cannot execute or
+    // persist failure into the new database, even when run ids coincide.
+    if (data.databaseName && opened.databaseName !== data.databaseName) return;
+    runtime = opened;
     const runStore = new SqliteBuildRunStore(runtime.db);
     const run = await runStore.getRun(runId);
     if (!run) return;

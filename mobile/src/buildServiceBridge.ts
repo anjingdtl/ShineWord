@@ -4,6 +4,7 @@
 import { NativeModules } from 'react-native';
 
 interface WorldBuildServiceNative {
+  configureDatabase(databaseName: string): Promise<boolean>;
   startService(runId: string): Promise<boolean>;
   stopService(): Promise<boolean>;
   notifyBuildProgress(runId: string, done: number, total: number): Promise<boolean>;
@@ -13,9 +14,19 @@ interface WorldBuildServiceNative {
 function native(): WorldBuildServiceNative | null {
   return (NativeModules.WorldBuildService as WorldBuildServiceNative | undefined) ?? null;
 }
+let databaseBound = false;
+
+/** Bind native controls to the same opened file as the JS stores. */
+export async function configureBuildDatabase(databaseName: string): Promise<boolean> {
+  databaseBound = false;
+  try { databaseBound = await native()?.configureDatabase(databaseName) ?? false; }
+  catch { /* SQL controls and inline execution remain available. */ }
+  return databaseBound;
+}
 
 /** Enters foreground + wakes the headless runner for this run. */
 export async function startBuildService(runId: string): Promise<boolean> {
+  if (!databaseBound) return false;
   const module = native();
   if (!module) return false;
   try {
@@ -35,6 +46,7 @@ export async function stopBuildService(): Promise<void> {
 
 /** Refreshes the persistent notification's real counters. */
 export async function notifyBuildProgress(runId: string, done: number, total: number): Promise<boolean> {
+  if (!databaseBound) return false;
   const module = native();
   if (!module) return false;
   try {
@@ -49,6 +61,7 @@ export async function notifyBuildProgress(runId: string, done: number, total: nu
  * one persisted pause/cancel flag that the coordinator polls between units.
  */
 export async function requestRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Promise<boolean> {
+  if (!databaseBound) return false;
   const module = native();
   if (!module?.requestRunControl) return false;
   try {

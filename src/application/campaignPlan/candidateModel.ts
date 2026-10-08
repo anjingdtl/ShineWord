@@ -148,6 +148,16 @@ export interface FirstSituationSpec {
   signs: ReadonlyArray<{ text: string }>;
 }
 
+export const MAX_CAMPAIGN_CLUES = 8;
+export interface ClueSpec {
+  /** Authoring alias only; the compiler mints the authoritative entry id. */
+  clueId: string;
+  title: string;
+  text: string;
+  sourceEntryIds: readonly string[];
+  provenance: StageSpec['provenance'];
+}
+
 export interface CampaignPlanCandidateModelV1 {
   modelVersion: typeof CAMPAIGN_PLAN_MODEL_VERSION;
   proposal: {
@@ -162,6 +172,7 @@ export interface CampaignPlanCandidateModelV1 {
   firstSituation: FirstSituationSpec;
   consequences: readonly ConsequenceSpec[];
   rewards: readonly RewardSpec[];
+  clues?: readonly ClueSpec[];
 }
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -681,6 +692,34 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
   };
   const consequenceArray = locatedArray('consequences');
   const rewardArray = locatedArray('rewards');
+  const clues: ClueSpec[] = [];
+  if (raw.clues !== undefined) {
+    if (!Array.isArray(raw.clues) || raw.clues.length > MAX_CAMPAIGN_CLUES) {
+      errors.push(`clues: must be an array of ≤${MAX_CAMPAIGN_CLUES} definitions.`); return null;
+    }
+    const ids = new Set<string>();
+    for (const [index, clue] of raw.clues.entries()) {
+      const prefix = `clues[${index}]`;
+      if (!isRecord(clue) || !isId(clue.clueId) || ids.has(clue.clueId)
+        || !isBoundedString(clue.title, 2, 80) || !isBoundedString(clue.text, 4, 800)
+        || !Array.isArray(clue.sourceEntryIds) || clue.sourceEntryIds.length > 8
+        || !clue.sourceEntryIds.every(isReference) || !isRecord(clue.provenance)
+        || !isOneOf(clue.provenance.kind, ['design_fill', 'canon_inspired'])
+        || !isBoundedString(clue.provenance.rationale, 4, 200)
+        || (clue.provenance.sourceFactIds !== undefined && (!Array.isArray(clue.provenance.sourceFactIds)
+          || clue.provenance.sourceFactIds.length > 8 || !clue.provenance.sourceFactIds.every(isReference)))) {
+        errors.push(`${prefix}: unique clueId, bounded title/text, sourceEntryIds and honest provenance required.`); return null;
+      }
+      if (Object.keys(clue).some(key => !['clueId','title','text','sourceEntryIds','provenance'].includes(key))) {
+        errors.push(`${prefix}: only clue definitions are supported; no actors, items, abilities or execution fields.`); return null;
+      }
+      ids.add(clue.clueId);
+      clues.push({ clueId: clue.clueId, title: String(clue.title).trim(), text: String(clue.text).trim(),
+        sourceEntryIds: [...new Set(clue.sourceEntryIds as string[])],
+        provenance: { kind: clue.provenance.kind as ClueSpec['provenance']['kind'],
+          sourceFactIds: (clue.provenance.sourceFactIds ?? []) as string[], rationale: String(clue.provenance.rationale).trim() } });
+    }
+  }
   const consequences: ConsequenceSpec[] = [];
   if (Array.isArray(consequenceArray)) {
     for (const [index, rawConsequence] of consequenceArray.entries()) {
@@ -742,7 +781,7 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
         ? ((situation as Record<string, unknown>).signs as unknown[]).filter(isRecord).filter(s => isBoundedString(s.text, 2, 120)).map(s => ({ text: String(s.text).trim() }))
         : [],
     },
-    consequences, rewards,
+    consequences, rewards, ...(clues.length ? { clues } : {}),
   };
 }
 

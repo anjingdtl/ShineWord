@@ -451,3 +451,119 @@ test('stale fence landing mid-flight mapping keeps the settled batch checkpoint;
   assert.equal(calls,1);assert.ok(resumed.entries.length>0);
  }finally{h.db.close()}
 });
+
+function closureSituation(id, locationId, participantIds) {
+  return {id,title:'旧桥上的新问题',summary:'桥头出现了新的动静。',gmBrief:'仅使用已核验的人物与资料。',locationId,participantIds,
+    activation:{kind:'world_time_at_least',order:1},provenanceKind:'design_fill',evidenceFactIds:['f-0'],methods:[
+      {id:'look',title:'检查现场',goal:'了解变化',firstStep:{intent:'查看桥头现场',actionKind:'observe'},requires:{}},
+      {id:'ask',title:'询问来往的人',goal:'了解消息',firstStep:{intent:'询问来往的人最近的情况',actionKind:'talk'},requires:{}}]};
+}
+
+test('world closure: invalid merged predecessor definitions cannot retire an otherwise resolved-looking situation issue', async () => {
+  const h=await setup();
+  try {
+    await saveCanon(h,canon(20)); const id='situation-dangling-situation-final-gate';
+    await h.worldStore.saveReviewIssue({worldId:'w',issueId:id,kind:'situation_dangling_reference',severity:'major',detailJson:'{}',createdAt:now()});
+    const invalid=entry('skill-invalid',[],[]); invalid.kind='skill'; invalid.definition={name:'无效技能',attribute:'unsupported',allowUntrained:'not-boolean'};
+    await assert.rejects(buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-final-gate',createdAt:now(),
+      incrementalMapping:options('incremental',{previousEntries:[invalid]}),provider:{async complete(){return {text:JSON.stringify({situations:[closureSituation('final-gate','旧桥',[])]})}}}}),/校验失败/);
+    assert.equal((await h.worldStore.listReviewIssues('w','all')).find(i=>i.issueId===id).status,'open');
+  }finally{h.db.close();}
+});
+
+test('world closure: an unknown location remains dangling and cannot fall back to the default scene',async()=>{
+  const h=await setup();
+  try{
+    await saveCanon(h,canon(20));
+    const draft=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-unknown-location',createdAt:now(),incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({situations:[closureSituation('absent','不存在的地点',[])]})}}}});
+    assert.equal(draft.entries.some(e=>e.entryId==='situation-absent'),false);
+    const issue=(await h.worldStore.listReviewIssues('w')).find(i=>i.issueId==='situation-dangling-situation-absent');
+    assert.ok(issue); assert.ok(JSON.parse(issue.detailJson).dangling.includes('不存在的地点'));
+  }finally{h.db.close();}
+});
+
+test('world closure: an incremental actor keeps a real immutable predecessor item in its loot references',async()=>{
+  const h=await setup();
+  try{
+    await saveCanon(h,canon(20));
+    const base=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-loot-old',createdAt:now(),incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({items:[{id:'old-token',name:'旧信物',provenanceKind:'rule_mapping',evidenceFactIds:['f-1']}]})}}}});
+    const draft=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-loot-new',createdAt:now(),incrementalMapping:options('incremental',{previousEntries:base.entries}),
+      provider:{async complete(){return {text:JSON.stringify({actorTemplates:[{id:'new-hero',name:'林辰',hp:8,defense:2,lootItemIds:['item-old-token'],provenanceKind:'rule_mapping',evidenceFactIds:['f-0']}]})}}}});
+    const actor=draft.entries.find(e=>e.entryId==='npc-new-hero'); assert.deepEqual(actor.definition.lootItemIds,['item-old-token']);
+    assert.ok(actor.dependencyIds.includes('item-old-token'));
+    assert.equal((await h.worldStore.listReviewIssues('w')).some(i=>i.issueId.includes('template_loot')),false);
+  }finally{h.db.close();}
+});
+
+test('world closure: an unknown required knowledge gate is rejected instead of silently removed', async () => {
+  const h = await setup();
+  try {
+    await saveCanon(h,canon(20));
+    const raw=closureSituation('unknown-gate','scene-place',[]); raw.methods[0].requires={knowledgeEntryId:'lore-not-published'};
+    const draft=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-required',createdAt:now(),incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({situations:[raw]})}}}});
+    assert.equal(draft.entries.some(e=>e.entryId==='situation-unknown-gate'),false);
+    assert.ok((await h.worldStore.listReviewIssues('w')).some(i=>i.detailJson.includes('requires unknown knowledge')));
+  } finally {h.db.close();}
+});
+
+test('world closure: a stale dependency issue remains open when the run loses authority before the validated draft is admitted', async () => {
+  const h=await setup();
+  try {
+    await saveCanon(h,canon(20));
+    const id='situation-dangling-situation-fenced';
+    await h.worldStore.saveReviewIssue({worldId:'w',issueId:id,kind:'situation_dangling_reference',severity:'major',detailJson:'{}',createdAt:now()});
+    let responseReceived=false;
+    await assert.rejects(buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-fenced',createdAt:now(),incrementalMapping:options(),
+      assertCurrent:async()=>{if(responseReceived)throw Error('fence expired');},provider:{async complete(){responseReceived=true;return {text:JSON.stringify({situations:[closureSituation('fenced','旧桥',[])]})}}}}),/fence expired/);
+    assert.equal((await h.worldStore.listReviewIssues('w','all')).find(i=>i.issueId===id).status,'open');
+  } finally {h.db.close();}
+});
+
+test('world closure: a canonical location name resolves to its scene dependency without rewriting runtime location', async () => {
+  const h = await setup();
+  try {
+    await saveCanon(h, canon(20));
+    const input = { worldStore:h.worldStore, sha256Hex:sha, worldId:'w', sourceSha256:sha('source'), mappingVersion:'closure-location', createdAt:now(), incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({situations:[closureSituation('old-bridge','旧桥',[])]})}}} };
+    const draft = await buildPackageDraftFromCanon(input);
+    const situation = draft.entries.find(e => e.entryId === 'situation-old-bridge');
+    assert.ok(situation, 'an evidenced scene exists for the runtime location name');
+    assert.equal(situation.definition.locationId, '旧桥');
+    assert.ok(situation.dependencyIds.includes('scene-place'));
+    assert.equal(situation.dependencyIds.includes('旧桥'), false);
+  } finally { h.db.close(); }
+});
+
+test('world closure: incremental situations retain certified predecessor actors, skills and knowledge; only the proved stale issue is resolved', async () => {
+  const h = await setup();
+  try {
+    await saveCanon(h, canon(20));
+    const first = await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-previous',createdAt:now(),incrementalMapping:options(),
+      provider:{async complete(){return {text:JSON.stringify({actorTemplates:[{id:'old-hero',name:'林辰',hp:8,defense:2,provenanceKind:'rule_mapping',evidenceFactIds:['f-1']}],
+        skills:[{id:'old-skill',name:'旧桥辨迹',attribute:'insight',provenanceKind:'rule_mapping',evidenceFactIds:['f-1']}],
+        lore:[{id:'old-clue',name:'桥头记号',text:'已经查证的记号',provenanceKind:'explicit',evidenceFactIds:['f-1']}]})}}} });
+    const previous = first.entries;
+    const previousJson = JSON.stringify(previous);
+    const raw = closureSituation('return-bridge','旧桥',['hero']);
+    raw.methods[0].firstStep = {intent:'辨认桥头的旧记号',actionKind:'skill_check',skillId:'skill-old-skill',targetId:'hero'};
+    raw.methods[0].requires = {skillId:'skill-old-skill',knowledgeEntryId:'lore-old-clue'};
+    await h.worldStore.saveReviewIssue({worldId:'w',issueId:'situation-dangling-situation-return-bridge',kind:'situation_dangling_reference',severity:'major',detailJson:'{}',createdAt:now()});
+    await h.worldStore.saveReviewIssue({worldId:'w',issueId:'situation-dangling-situation-unrelated',kind:'situation_dangling_reference',severity:'major',detailJson:'{}',createdAt:now()});
+    const delta = {worldId:'w',factIds:['f-0'],entityIds:[],eventIds:[],canonSnapshotHash:sha('delta'),executionConfigFingerprint:'frozen-model-low'};
+    const draft = await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'closure-incremental',createdAt:now(),
+      incrementalMapping:options('incremental',{previousEntries:previous,delta}),provider:{async complete(){return {text:JSON.stringify({situations:[raw]})}}} });
+    const situation = draft.entries.find(e=>e.entryId==='situation-return-bridge');
+    assert.ok(situation, 'references to immutable compatible previous entries remain in closure');
+    assert.deepEqual(situation.definition.participantEntryIds, ['npc-old-hero']);
+    assert.equal(situation.definition.methods[0].firstStep.targetEntryId,'npc-old-hero');
+    assert.equal(situation.definition.methods[0].requires.knowledgeEntryId,'lore-old-clue');
+    for (const dependency of ['npc-old-hero','skill-old-skill','lore-old-clue','scene-place']) assert.ok(situation.dependencyIds.includes(dependency),dependency);
+    const issues = await h.worldStore.listReviewIssues('w','all');
+    assert.equal(issues.find(i=>i.issueId==='situation-dangling-situation-return-bridge').status,'resolved');
+    assert.equal(issues.find(i=>i.issueId==='situation-dangling-situation-unrelated').status,'open');
+    assert.equal(JSON.stringify(previous),previousJson,'no predecessor entry is rewritten');
+  } finally { h.db.close(); }
+});

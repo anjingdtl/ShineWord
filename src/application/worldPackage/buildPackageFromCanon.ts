@@ -825,6 +825,8 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
         const resolved = asString(requiresRaw.knowledgeEntryId);
         if (resolved && situation.knowledgeEntryIds.has(resolved)) {
           requires.knowledgeEntryId = resolved;
+        } else {
+          reasons.push(`method ${methodId} requires unknown knowledge ${String(requiresRaw.knowledgeEntryId)}.`);
         }
       }
       const condition = requiresRaw.condition !== undefined ? cleanConditionNode(requiresRaw.condition) : null;
@@ -1436,7 +1438,8 @@ async function requestMappingProposals(
         ...items.map(item => item.entry.entryId),
         ...(input.incrementalMapping?.previousEntries ?? []).map((entry: ContentEntry) => entry.entryId),
       ]);
-      const knowledgeEntryIds = new Set<string>(lore.map(entry => entry.entryId));
+      const knowledgeEntryIds = new Set<string>([...lore.map(entry => entry.entryId),
+        ...(input.incrementalMapping?.previousEntries ?? []).filter(entry => entry.kind === 'lore').map(entry => entry.entryId)]);
       const knownEvents = new Map(events.map(event => [event.eventId, {
         worldTimeOrder: event.worldTimeOrder,
       } as { worldTimeOrder: number | null }]));
@@ -1875,7 +1878,9 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   // citing an item the mapper never published blocked the whole package at
   // the publish gate). Dangling loot drops to the review queue as a major
   // invalid_proposal issue; the template still publishes without it.
-  const mappedItemIds = new Set(items.map(item => item.entry.entryId));
+  const mappedItemIds = new Set([...items.map(item => item.entry.entryId),
+    ...(input.incrementalMapping?.kind === 'incremental' ? input.incrementalMapping.previousEntries ?? [] : [])
+      .filter(entry => entry.kind === 'item').map(entry => entry.entryId)]);
   for (const template of actorTemplates) {
     const definition = template.entry.definition as Record<string, unknown>;
     const attacks = (definition.attacks as Array<Record<string, unknown>>)
@@ -1920,11 +1925,21 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   // dangling reference (content adopted later, mapper drift) drops the
   // situation into the review queue instead of blocking the whole package —
   // the old play loop keeps working without it.
-  const publishedIds = new Set(entries.map(entry => entry.entryId));
+  // Check references against the catalog the publisher will actually use,
+  // including immutable predecessor entries and their merge precedence.
+  const dependencyEntries = input.incrementalMapping?.kind === 'incremental'
+    ? mergeIncrementalEntries(input.incrementalMapping.previousEntries ?? [], entries,
+      [...selection.affectedEntryIds, 'lore-review-summary']) : entries;
+  const publishedIds = new Set(dependencyEntries.map(entry => entry.entryId));
+  const verifiedSituationIssues: string[] = [];
+  const sceneIdsByLocation = new Map(dependencyEntries.filter(entry => entry.kind === 'scene')
+    .map(entry => [String((entry.definition as { locationId?: string }).locationId ?? ''), entry.entryId]));
+  const sceneEntryIds = new Set(dependencyEntries.filter(entry => entry.kind === 'scene').map(entry => entry.entryId));
+  const locationDependency = (id: string): string => sceneEntryIds.has(id) ? id : sceneIdsByLocation.get(id) ?? id;
   // Models may reference canon actors as actor-canon-{entityId}; resolve to
   // the published template by entity name BEFORE closure (definition rewrite).
   const templateIdByEntity = new Map<string, string>();
-  const templateIdsByName = new Map(entries
+  const templateIdsByName = new Map(dependencyEntries
     .filter(entry => entry.kind === 'actor_template')
     .map(entry => [String((entry.definition as { name?: unknown }).name ?? ''), entry.entryId] as const));
   for (const entity of entities) {
@@ -1952,8 +1967,9 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
       }
     }
     const references = new Set<string>(definition.participantEntryIds ?? []);
-    if (definition.locationId) references.add(definition.locationId);
+    if (definition.locationId) references.add(locationDependency(definition.locationId));
     for (const method of definition.methods ?? []) {
+      if (method.firstStep?.targetEntryId) references.add(method.firstStep.targetEntryId);
       if (method.firstStep?.skillId) references.add(method.firstStep.skillId);
       if (method.firstStep?.itemId) references.add(method.firstStep.itemId);
       if (method.requires?.skillId) references.add(method.requires.skillId);
@@ -1978,6 +1994,9 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     }
     situation.dependencyIds = [...references];
     entries.push(situation);
+    // Retire only this revalidated proposal's stale missing-dependency notice.
+    // Unrelated or still-dangling situations remain open for review.
+    verifiedSituationIssues.push(`situation-dangling-${situation.entryId}`);
   }
 
   if (input.incrementalMapping) {
@@ -2100,10 +2119,18 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   }));
   const draft: BuildPackageDraftResult = { entries, sections, reviewIssues: reviewIssueCount, mappingUsage,
     canonSnapshotHash, selection: { ...selection, facts: scopedFacts } };
+  // A locally resolvable candidate alone cannot retire a review issue: the
+  // final merged definitions/dependencies and current owner must also pass.
+  const report = validatePackage({ worldId, revision: 0 }, entries, sections);
+  if (!report.ok) throw new Error(publish
+    ? `World package failed validation and cannot publish:\n- ${report.errors.join('\n- ')}`
+    : `映射草稿引用/协议校验失败：${report.errors.join('；')}`);
+  await input.assertCurrent?.();
+  const openIssueIds = new Set((await worldStore.listReviewIssues(worldId)).map(issue => issue.issueId));
+  for (const issueId of verifiedSituationIssues) if (openIssueIds.has(issueId)) {
+    await worldStore.resolveReviewIssue(worldId, issueId, 'resolved', false);
+  }
   if (!publish) {
-    const report = validatePackage({ worldId, revision: 0 }, entries, sections);
-    if (!report.ok) throw new Error(`映射草稿引用/协议校验失败：${report.errors.join('；')}`);
-    await input.assertCurrent?.();
     if (input.incrementalMapping?.outputMode === 'change_set') {
       const prior = new Map((input.incrementalMapping.previousEntries ?? []).map(e => [e.entryId, e]));
       const changed = entries.filter(e => !prior.has(e.entryId)

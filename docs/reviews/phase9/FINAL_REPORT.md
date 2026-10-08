@@ -1,6 +1,6 @@
 # Phase 9 接手收尾复验报告
 
-2026-10-08，Asia/Shanghai。final35工程门禁与连续后台生命周期复验通过，三意图内容仍因截断或未定义线索未达标，**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；完整长旅程、持续后果和三意图质量继续验收。
+2026-10-08，Asia/Shanghai。final37 的增量依赖、战役线索和原生数据库绑定通过工程门禁；三意图真实规划及完整旅程继续验收，**第九阶段整体尚未验收通过**。A01–A40：29 PASS / 2 FAIL / 9 NOT RUN / 0 BLOCKED；完整长旅程、持续后果和三意图质量继续验收。
 
 | final29已提交检查点 | 历史结果（最新见final33） |
 |---|---|
@@ -85,3 +85,44 @@ Android 自23:59:03 UTC观察到 HOME，至00:16:35 UTC代理收完第二次 bod
 尚未完成：32K声明下两项真实高强度正文仍截断；方案§7允许设计战役线索，但当前 artifact/resolver 只提供局面，未知知识ID被拒后没有合法的战役线索作者通道，需补齐独立命名空间、不可变定义、分支合成及获得/知识投影。另发现世界增量闭包遗漏已有条目、地点名称误当entryId、旧知识门被删除；隔离副本27项模块回归通过，生产尚未应用。神罚之石的无类型 block_effect 仍需合法机制定义，不能自动豁免审查。完整长旅程、两项隔至少两次决定的后果、三意图六维≥3、A02/A03/A06/A12及匹配性能仍未齐，独立试玩未验。A01–A40维持29 PASS/2 FAIL/9 NOT RUN；第九阶段整体未通过。
 
 证据：.tmp/phase9/reaccept-identity-final34/35.json、reaccept-core-final34b/final35b.log、final35-budget-red/green-b.log、reaccept-device/final34-native-closeout-defect.json、final35-native-closeout-proof.json、final35-completed-in-background.json、final35-preservation-proof.json、final35-planning-failed-after-home.png，final35-host-J2/J3、final35-status.jsonl；原文/数据库均在忽略目录。当前 high 配置与QA代理18691保留供后续验收，尚未最终清理。已按用户授权本地提交R37–R40（a7d263b）；本批R41–R43提交ID见Git历史，未推送/发布。
+
+## 2026-10-08 final36–final37：依赖闭包、战役线索与数据库绑定
+
+R44：增量局面的依赖检验与最终发布共用合并目录，保留旧技能/物品/知识门；地点名称解析为实际场景 entryId，行动对象也进入依赖闭包。未知引用保持拒绝。在完整包校验及 fence 检查通过后，仅自动解决已经证明闭合的 situation-dangling 对应条目，不批量豁免其它审查。
+
+R45：补齐方案 §7 的战役线索作者通道。可选 clues 只含最多8份受限资料正文、诚实出处与已有目录依赖；本地按 plan/revision/alias 生成独立 camp-clue ID。四档效果、条件、知识门和奖励共用严格别名解析；未定义引用仍拒绝。定义进入不可变战役归档，不授予角色知识。Session、重规划、投影和存档使用共同的快照绑定归档读取器，验证所有者、单档和组合 hash 及分支依赖；真正成功提交后才能获得并公开线索。旧缺省字段、冻结根和已采用归档不回写。真实 Android 生成、获得及后续消费仍待本轮旅程验证。
+
+R46：final36 同路径复现发现，JS 打开 shineword-baseline-1791270204765.db，原生控制却固定写 shineword.db，UPDATE 影响0行仍回报成功。原生持久绑定经过路径校验的已打开数据库名，服务、通知、超时和 headless payload 携带该身份；控制以实际影响1行回报。JS 始终完成选定运行库的幂等控制写入，错误数据库的重投任务在查表或派发前停止。配置绑定失败仍有正式 SQL/前台执行回退。
+
+final36 源码 c5937c94c52d30e99aeecd59e5ee92b68ca14d9f1a6e23b26c72999125a091f8，APK 60b343d245dd72cd44e4d8cda851dae0b25973012066b621d6b2eb75cd1a8842；1094/1094 核心通过，但 Android 继续构建未执行，不能将它记为 R44 端上通过。
+
+final37 scope v3 生产源码 b808b6a10e21a456c7832b8cb33b83ba73b5c616aa7876ae61c9dc07d3fdcfc3；APK 111f2185c6c424379bd920c2ac568ebc4f66cc29dc058e20f3c98dcea469ab02，V1.0.0/1000000，emulator-5556 实际安装 hash 一致。完整核心1097/1097、0失败0跳过、32.954秒；移动 typecheck、36秒 Debug 构建、版本和 diff 通过。新增19项生产模块回归（增量7、线索9、数据库控制3）。控制目标首轮仅1项夹具误要求已消费的暂停标志保持1，改为检验 paused_user 状态后50/50通过；前置失败日志保留。
+
+同一 Android 路径“进入项目→继续构建”已重放：原 run 的 cancel_requested 从1清为0，updated_at 推进至00:43:01.864 UTC，真实执行校验，安娜局面悬空引用自动 resolved，待审查由2项减为1项；无新HTTP，服务自动退出，crash buffer为空。世界整体发布仍 failed_retryable/package_finalize_failed，神罚之锁的无类型 block_effect 审查仍 open，不能称全部世界构建通过。该提案依据器物构造及关押事实推断压制效果，缺少已验证的可执行条件及生产者，尚未豁免或补造规则。
+
+安装前后只读对照：原2个 outcome_unknown 任务、冻结根、attempt逐值一致，全部已采用计划/工件/快照hash一致，预算仍1181/1500，无隐式派发。final35 已知失败规划通过正式“取消这次规划”退出后，原意图、角色及锚点用于新的 final37 任务；旧未知任务不重放。
+
+新测试配置经正式模型UI保存：glm-5.3-flash/high/stream、1M上下文、65536声明输出上限、content16384，原 Keychain 引用保留。旧冻结任务仍使用原32768，不追改。官方模型资料声明128K最大输出，但兼容端点实际支持以本轮HTTP为准，不能仅凭文档判定。
+
+截至00:53:25 UTC，Android J1 救援、主机 J2 调查/J3 合作均 running；J2/J3 第一轮均已知 reasoning_only/HTTP200，第二轮分别实际 wire38025/38003，任务仍最多两次请求。Android自00:49:54 UTC观察到HOME，正在后台执行，尚未观察到终态。预算1181→1187/1500（独立opening_goal 1次、三规划当前5次）；这只是运行中检查点，0新玩家决定，无内容评分或完整旅程结论。主机与Android端点/配置引用不同，不作为匹配性能比较。
+
+工程通过不替代内容与旅程验收；A01–A40仍29 PASS/2 FAIL/9 NOT RUN。J1/J2/J3各20、J4同基点双线各10、Android必需30决定、两项隔至少两决定的持续后果、三计划及对应旅程六维≥3、A02/A03/A06/A12与10+10匹配性能仍未齐。独立试玩未验。
+
+证据：.tmp/phase9/reaccept-identity-final36/37.json、final36-core-with-clues-b.log、final37-core.log、final37-control-target-a/b.log、final37-mobile-b.log、reaccept-apk-final37.log、reaccept-device/final37-install-preservation.json、final36/final37-world-audit.json、final36-world-continue-still-stopped.png、final37-world-closure.png、final37-profile-saved.json、final37-j1-start.json、final37-begin-background.json、final37-mid-background.json、final37-status.jsonl、final37-host-J2/J3。原文/数据库/模型响应均在忽略目录；QA代理与当前配置保留用于继续验收。未推送或发布。
+
+
+final37 真实规划终态补录（04:53:58 UTC读取账本；模型响应实际于01:03–01:08 UTC结束）：
+
+| 样本 | 两次请求实际wire、思考及耗时 | 终态 |
+|---|---|---|
+| Android J1 救援 | 24576：思考24521、465.514秒；38036：思考32422、681.915秒 | retryable_failed，正文length，0候选/0决定 |
+| 主机 J2 调查 | 24576：思考24511、506.479秒；38025：思考25632/输出33907、631.101秒 | ready并正式adopted，8条合法战役线索，0决定 |
+| 主机 J3 合作 | 24576：思考24490、524.816秒；38003：思考29793/输出37471、685.172秒 | ready并正式adopted，3条合法战役线索，0决定 |
+
+三任务全部最多两HTTP，没有第三次或未知重放。65536是声明上限，救援第二次实际wire仍只有38036：上一轮思考用量是截尾下界，仍低估下一轮实际思考开销；该任务原失败保留，不把它记为通过。J2/J3的严格新线索作者/编译/采用通道实际通过，正文未进入角色知识；计划六维和对应旅程仍待评审，不能以ready替代A36。
+
+Android自00:49:54 UTC观察到HOME，01:08:13.691 UTC第二次响应结束，期间没有QA前台操作。04:54:52 UTC仍HOME、PID31004存活、两服务均退出、唤醒锁为空、crash buffer为空；返回前台显示真实截断失败。服务释放的准确时刻未采样，不将后读证据当作即时测量。预算最终1188/1500，余312：三规划6次加独立opening_goal1次；安装/缓存世界重校验零HTTP。原2个未知任务及冻结/attempt逐值保持，设备全部已采用计划/工件/快照hash一致；host新采用与设备历史分开对账。
+
+整体状态仍未通过，0新有效玩家决定。通览还发现移动世界书投影未合成战役目录、已知面板只有标题；属于后续共用内容读取和回看缺口，尚未修复或作端上通过声明。下一批在新身份修复该边界和长规划预算，再验真实消费与长旅程。
+
+新增证据：reaccept-device/final37-completed-in-background.json、final37-planning-failed-after-home.png、final37-preservation-proof.json，final37-status.jsonl与final37-host-J2/J3/proposal.json及http.jsonl。原失败、自动模型内容和冻结配置不修改。R44–R46本地提交ID见Git历史，未推送/发布。

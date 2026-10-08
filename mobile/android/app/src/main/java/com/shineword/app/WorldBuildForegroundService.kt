@@ -52,6 +52,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
       val intent = Intent(context, WorldBuildForegroundService::class.java).apply {
         action = ACTION_START
         putExtra(EXTRA_RUN_ID, runId)
+        putExtra(WorldBuildDatabaseBinding.EXTRA, WorldBuildDatabaseBinding.current(context))
       }
       androidx.core.content.ContextCompat.startForegroundService(context, intent)
     }
@@ -62,32 +63,26 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
 
     /**
      * Control-flag write shared by the notification actions and the module.
-     * Direct SQL on the app's default shineword.db - the same row the JS
+     * Direct SQL on the database bound by the JS runtime - the same row the JS
      * coordinator polls; no key material, no novel text, no JS dependency.
      */
-    fun requestRunControl(context: Context, runId: String, kind: String): Boolean {
-      val dbFile = context.getDatabasePath("shineword.db")
-      if (!dbFile.exists()) return false
+    fun requestRunControl(context: Context, runId: String, kind: String,
+      databaseName: String = WorldBuildDatabaseBinding.current(context)): Boolean {
+      val dbFile = WorldBuildDatabaseBinding.file(context, databaseName) ?: return false
       return try {
         SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-          when (kind) {
-            "pause" -> db.execSQL(
-              "UPDATE world_build_runs SET pause_requested = 1, updated_at = ? WHERE run_id = ?",
-              arrayOf(nowIso(), runId),
-            )
-            "cancel" -> db.execSQL(
-              "UPDATE world_build_runs SET cancel_requested = 1, updated_at = ? WHERE run_id = ?",
-              arrayOf(nowIso(), runId),
-            )
+          val sql = when (kind) {
+            "pause" -> "UPDATE world_build_runs SET pause_requested = 1, updated_at = ? WHERE run_id = ?"
+            "cancel" -> "UPDATE world_build_runs SET cancel_requested = 1, updated_at = ? WHERE run_id = ?"
             // Resume (继续构建/撤销暂停) clears BOTH flags: a stale stop or
             // pause request must never immediately re-interrupt the run.
-            "resume" -> db.execSQL(
-              "UPDATE world_build_runs SET pause_requested = 0, cancel_requested = 0, updated_at = ? WHERE run_id = ?",
-              arrayOf(nowIso(), runId),
-            )
+            "resume" -> "UPDATE world_build_runs SET pause_requested = 0, cancel_requested = 0, updated_at = ? WHERE run_id = ?"
             else -> return false
           }
-          true
+          db.compileStatement(sql).use { statement ->
+            statement.bindString(1, nowIso()); statement.bindString(2, runId)
+            statement.executeUpdateDelete() == 1
+          }
         }
       } catch (e: Exception) {
         false
@@ -119,6 +114,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
           context, 4201,
           Intent(context, WorldBuildForegroundService::class.java).apply {
             action = ACTION_PAUSE; putExtra(EXTRA_RUN_ID, runId)
+            putExtra(WorldBuildDatabaseBinding.EXTRA, WorldBuildDatabaseBinding.current(context))
           },
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -126,6 +122,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
           context, 4202,
           Intent(context, WorldBuildForegroundService::class.java).apply {
             action = ACTION_CANCEL; putExtra(EXTRA_RUN_ID, runId)
+            putExtra(WorldBuildDatabaseBinding.EXTRA, WorldBuildDatabaseBinding.current(context))
           },
           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -154,6 +151,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
   }
 
   private var activeRunId: String? = null
+  private var activeDatabaseName: String? = null
 
   override fun onBind(intent: Intent): IBinder? = null
 
@@ -168,19 +166,23 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
       // in-flight responses are fenced by the lease token, never committed).
       ACTION_PAUSE, ACTION_CANCEL, ACTION_RESUME -> {
         val runId = intent.getStringExtra(EXTRA_RUN_ID) ?: activeRunId
+        val databaseName = intent.getStringExtra(WorldBuildDatabaseBinding.EXTRA)
+          ?: activeDatabaseName ?: WorldBuildDatabaseBinding.current(this)
         if (runId != null) {
-          requestRunControl(
+          if (!requestRunControl(
             this, runId,
             when (intent.action) {
               ACTION_PAUSE -> "pause"
               ACTION_CANCEL -> "cancel"
               else -> "resume"
             },
-          )
+            databaseName,
+          )) { stopSelf(); return START_NOT_STICKY }
         }
         if (intent.action == ACTION_RESUME) {
           // 继续: clear the pause flag above, then re-wake the task.
           activeRunId = runId
+          activeDatabaseName = databaseName
           ensureChannel()
           val notification = buildNotification(runId ?: "", 0, 0)
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -197,6 +199,8 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
     }
     val runId = intent?.getStringExtra(EXTRA_RUN_ID)
     if (runId != null) activeRunId = runId
+    activeDatabaseName = intent?.getStringExtra(WorldBuildDatabaseBinding.EXTRA)
+      ?: activeDatabaseName ?: WorldBuildDatabaseBinding.current(this)
     ensureChannel()
     val notification = buildNotification(activeRunId ?: "", 0, 0)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -214,7 +218,10 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
     val runId = intent?.getStringExtra(EXTRA_RUN_ID) ?: activeRunId ?: ""
     return HeadlessJsTaskConfig(
       "WorldBuildRunner",
-      Arguments.createMap().apply { putString("runId", runId) },
+      Arguments.createMap().apply {
+        putString("runId", runId)
+        putString("databaseName", activeDatabaseName ?: WorldBuildDatabaseBinding.current(this@WorldBuildForegroundService))
+      },
       TimeUnit.HOURS.toMillis(6),
       true, // the task must not be killed in doze mid-request
     )
@@ -238,8 +245,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
 
   private fun markTimeoutReason() {
     val runId = activeRunId ?: return
-    val dbFile = getDatabasePath("shineword.db")
-    if (!dbFile.exists()) return
+    val dbFile = WorldBuildDatabaseBinding.file(this, activeDatabaseName ?: WorldBuildDatabaseBinding.current(this)) ?: return
     try {
       SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
         db.execSQL(
@@ -282,6 +288,7 @@ class WorldBuildForegroundService : HeadlessJsTaskService() {
     val intent = Intent(this, WorldBuildForegroundService::class.java).apply {
       this.action = action
       putExtra(EXTRA_RUN_ID, activeRunId ?: "")
+      putExtra(WorldBuildDatabaseBinding.EXTRA, activeDatabaseName ?: WorldBuildDatabaseBinding.current(this@WorldBuildForegroundService))
     }
     return PendingIntent.getService(
       this,

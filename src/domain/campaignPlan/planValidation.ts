@@ -9,6 +9,7 @@ import type { SituationCondition } from '../situations/types';
 import { validateConditionShape } from '../situations/conditions';
 import { committedSituationMarker, producesSituationMarker, ordinaryCompletionBeforeExit, type CompletionBaseline } from './ordinaryCompletion';
 import { actorReferenceInScope as actorInScope } from './actorReferences';
+import { validateCampaignClues } from './clues';
 
 /**
  * Local hard gates for a compiled campaign plan (plan §6.3). Structural
@@ -28,6 +29,10 @@ function canonicalStructure(value: unknown): string {
 export interface PlanValidationContext {
   /** World entry ids visible to the player at the opening anchor. */
   visibleWorldEntryIds: ReadonlySet<string>;
+  /** Verified branch-bound lore ids plus the candidate's own definitions. */
+  campaignKnowledgeEntryIds?: ReadonlySet<string>;
+  adoptedCampaignEntryIds?: ReadonlySet<string>;
+  availableFactIds?: ReadonlySet<string>;
   /** Actor ids present in the opening branch state. */
   openingActorIds: ReadonlySet<string>;
   /** Template ids usable as actor aliases (npc templates). */
@@ -268,7 +273,7 @@ function validateConditionReferences(
       if (condition.closeness < 0 || condition.closeness > 100) errors.push(`${prefix}: unreachable relationship threshold; closeness must be within 0..100.`);
       return;
     case 'knowledge_known':
-      if (!ctx.visibleWorldEntryIds.has(condition.entryId)) {
+      if (!ctx.visibleWorldEntryIds.has(condition.entryId) && !ctx.campaignKnowledgeEntryIds?.has(condition.entryId)) {
         errors.push(`${prefix}: knowledge ${condition.entryId} not a visible world entry.`);
       }
       return;
@@ -300,6 +305,7 @@ export function validateCampaignPlan(
 ): string[] {
   const errors: string[] = [];
   if (artifact) ctx = { ...ctx, knownPromiseRefs: promiseRefs(ctx, artifact),
+    campaignKnowledgeEntryIds: new Set([...(ctx.campaignKnowledgeEntryIds ?? []), ...(artifact.clues ?? []).map(c => c.entryId)]),
     artifactSituationIds: new Set([...(ctx.artifactSituationIds ?? []), ...artifact.situations.map(s => s.entryId)]) };
   if (plan.schemaVersion !== CAMPAIGN_PLAN_SCHEMA) errors.push('plan: unknown schemaVersion.');
   if (plan.compilerVersion !== CAMPAIGN_PLAN_COMPILER_VERSION) errors.push('plan: unknown compilerVersion.');
@@ -439,10 +445,17 @@ export function validateContentArtifact(
 ): string[] {
   const errors: string[] = [];
   ctx = { ...ctx, knownPromiseRefs: promiseRefs(ctx, artifact),
+    campaignKnowledgeEntryIds: new Set([...(ctx.campaignKnowledgeEntryIds ?? []), ...(artifact.clues ?? []).map(c => c.entryId)]),
     artifactSituationIds: new Set([...(ctx.artifactSituationIds ?? []), ...artifact.situations.map(s => s.entryId)]) };
   if (artifact.schemaVersion !== 'campaign-content-1') errors.push('artifact: unknown schemaVersion.');
   if (artifact.namespace !== 'campaign') errors.push('artifact: namespace must be campaign.');
   if (artifact.planId !== plan.planId) errors.push('artifact: planId mismatch.');
+  errors.push(...validateCampaignClues(artifact, { worldEntryIds: ctx.visibleWorldEntryIds,
+    campaignEntryIds: ctx.adoptedCampaignEntryIds, factIds: ctx.availableFactIds }));
+  for (const id of artifact.dependencies.campaignEntryIds ?? []) {
+    if (!ctx.adoptedCampaignEntryIds?.has(id)) errors.push(`artifact: dependency ${id} is not in this branch's adopted content.`);
+  }
+  const knownKnowledge = (id: string): boolean => ctx.visibleWorldEntryIds.has(id) || !!ctx.campaignKnowledgeEntryIds?.has(id);
   const situationIds = new Set([...artifact.situations.map(s => s.entryId), ...(ctx.artifactSituationIds ?? [])]);
   const promises = promiseRefs(ctx, artifact);
   const checkEffectActors = (spec: import('./types').CampaignEffectSpec): void => {
@@ -522,6 +535,9 @@ export function validateContentArtifact(
   // Situation transitions must reference artifact or world situations only.
   for (const situation of artifact.situations) {
     for (const method of situation.definition.methods ?? []) {
+      if (method.requires.knowledgeEntryId && !knownKnowledge(method.requires.knowledgeEntryId)) {
+        errors.push(`artifact: method ${method.methodId} requires unknown knowledge ${method.requires.knowledgeEntryId}.`);
+      }
       for (const [field, condition] of [['requires.condition', method.requires.condition], ['visibility', method.visibility]] as const) {
         if (!condition) continue;
         const prefix = `method.${method.methodId}.${field}`;
@@ -553,7 +569,7 @@ export function validateContentArtifact(
           if (spec.template === 'grant_item' && !ctx.visibleWorldEntryIds.has(spec.itemId)) {
             errors.push(`artifact: grant_item references unknown item ${spec.itemId}.`);
           }
-          if (spec.template === 'grant_knowledge' && !ctx.visibleWorldEntryIds.has(spec.entryId)) {
+          if (spec.template === 'grant_knowledge' && !knownKnowledge(spec.entryId)) {
             errors.push(`artifact: grant_knowledge references unknown entry ${spec.entryId}.`);
           }
         }
@@ -569,7 +585,8 @@ export function validateContentArtifact(
       if (reward.toActorId && !actorInScope(reward.toActorId, ctx)) errors.push(`artifact: reward actor ${reward.toActorId} is outside scope.`);
       if (reward.kind === 'relationship' && (!reward.toActorId || !actorInScope(reward.targetId, ctx))) errors.push('artifact: relationship reward requires two actors in scope.');
       if (reward.kind === 'resource_cap' && !['hp','stamina'].includes(reward.targetId)) errors.push('artifact: unknown resource cap reward.');
-      if (['item','knowledge','skill_rank'].includes(reward.kind) && !ctx.visibleWorldEntryIds.has(reward.targetId)
+      if (reward.kind === 'knowledge' && !knownKnowledge(reward.targetId)) errors.push(`artifact: reward knowledge ${reward.targetId} is outside scope.`);
+      if (['item','skill_rank'].includes(reward.kind) && !ctx.visibleWorldEntryIds.has(reward.targetId)
         && ![...ctx.visibleWorldEntryIds].some(id => id.replace(/^skill-/, '') === reward.targetId)) errors.push(`artifact: reward target ${reward.targetId} is outside scope.`);
       if (reward.rank && !['untrained','novice','trained','expert','master'].includes(reward.rank)) errors.push('artifact: unknown skill reward rank.');
       if (reward.delta !== undefined && (!Number.isInteger(reward.delta) || Math.abs(reward.delta) > (reward.kind === 'relationship' ? 3 : 10))) errors.push('artifact: reward delta outside bounds.');
@@ -583,7 +600,7 @@ export function validateContentArtifact(
       if (effect.template === 'schedule_consequence') errors.push('artifact: nested consequence scheduling is not supported.');
       if ('situationId' in effect && !situationIds.has(effect.situationId) && !ctx.visibleWorldEntryIds.has(effect.situationId)) errors.push('artifact: consequence situation is outside scope.');
       if (effect.template === 'grant_item' && !ctx.visibleWorldEntryIds.has(effect.itemId)) errors.push('artifact: consequence item is outside scope.');
-      if (effect.template === 'grant_knowledge' && !ctx.visibleWorldEntryIds.has(effect.entryId)) errors.push('artifact: consequence knowledge is outside scope.');
+      if (effect.template === 'grant_knowledge' && !knownKnowledge(effect.entryId)) errors.push('artifact: consequence knowledge is outside scope.');
     }
   }
   return errors;

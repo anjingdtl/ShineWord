@@ -146,3 +146,26 @@ Android 自23:59:03 UTC观察到 HOME，至00:16:35 UTC代理收完第二次 bod
 尚未完成：32K声明下两项真实高强度正文仍截断；方案§7允许设计战役线索，但当前 artifact/resolver 只提供局面，未知知识ID被拒后没有合法的战役线索作者通道，需补齐独立命名空间、不可变定义、分支合成及获得/知识投影。另发现世界增量闭包遗漏已有条目、地点名称误当entryId、旧知识门被删除；隔离副本27项模块回归通过，生产尚未应用。神罚之石的无类型 block_effect 仍需合法机制定义，不能自动豁免审查。完整长旅程、两项隔至少两次决定的后果、三意图六维≥3、A02/A03/A06/A12及匹配性能仍未齐，独立试玩未验。A01–A40维持29 PASS/2 FAIL/9 NOT RUN；第九阶段整体未通过。
 
 证据：.tmp/phase9/reaccept-identity-final34/35.json、reaccept-core-final34b/final35b.log、final35-budget-red/green-b.log、reaccept-device/final34-native-closeout-defect.json、final35-native-closeout-proof.json、final35-completed-in-background.json、final35-preservation-proof.json、final35-planning-failed-after-home.png，final35-host-J2/J3、final35-status.jsonl；原文/数据库均在忽略目录。当前 high 配置与QA代理18691保留供后续验收，尚未最终清理。已按用户授权本地提交R37–R40（a7d263b）；本批R41–R43提交ID见Git历史，未推送/发布。
+
+## 2026-10-08 final36–final37：依赖闭包、战役线索与数据库绑定
+
+新 final37 J1 为Android原救援意图/序7/边陲镇/long；J2调查塌方与安娜被捕关联；J3边陲镇修缮互助与长期合作。均为自动生产开局。截至00:53:25 UTC均running，J2/J3第一轮reasoning_only后使用同任务剩余请求，Android持续HOME。0新玩家决定，不能汇入80；新65536配置不修改旧冻结任务。
+
+身份、回归、实际复现与运行中请求详情见 [FINAL_REPORT](FINAL_REPORT.md)。完整阶段仍未验收通过。
+
+
+final37 真实规划终态补录（04:53:58 UTC读取账本；模型响应实际于01:03–01:08 UTC结束）：
+
+| 样本 | 两次请求实际wire、思考及耗时 | 终态 |
+|---|---|---|
+| Android J1 救援 | 24576：思考24521、465.514秒；38036：思考32422、681.915秒 | retryable_failed，正文length，0候选/0决定 |
+| 主机 J2 调查 | 24576：思考24511、506.479秒；38025：思考25632/输出33907、631.101秒 | ready并正式adopted，8条合法战役线索，0决定 |
+| 主机 J3 合作 | 24576：思考24490、524.816秒；38003：思考29793/输出37471、685.172秒 | ready并正式adopted，3条合法战役线索，0决定 |
+
+三任务全部最多两HTTP，没有第三次或未知重放。65536是声明上限，救援第二次实际wire仍只有38036：上一轮思考用量是截尾下界，仍低估下一轮实际思考开销；该任务原失败保留，不把它记为通过。J2/J3的严格新线索作者/编译/采用通道实际通过，正文未进入角色知识；计划六维和对应旅程仍待评审，不能以ready替代A36。
+
+Android自00:49:54 UTC观察到HOME，01:08:13.691 UTC第二次响应结束，期间没有QA前台操作。04:54:52 UTC仍HOME、PID31004存活、两服务均退出、唤醒锁为空、crash buffer为空；返回前台显示真实截断失败。服务释放的准确时刻未采样，不将后读证据当作即时测量。预算最终1188/1500，余312：三规划6次加独立opening_goal1次；安装/缓存世界重校验零HTTP。原2个未知任务及冻结/attempt逐值保持，设备全部已采用计划/工件/快照hash一致；host新采用与设备历史分开对账。
+
+整体状态仍未通过，0新有效玩家决定。通览还发现移动世界书投影未合成战役目录、已知面板只有标题；属于后续共用内容读取和回看缺口，尚未修复或作端上通过声明。下一批在新身份修复该边界和长规划预算，再验真实消费与长旅程。
+
+新增证据：reaccept-device/final37-completed-in-background.json、final37-planning-failed-after-home.png、final37-preservation-proof.json，final37-status.jsonl与final37-host-J2/J3/proposal.json及http.jsonl。原失败、自动模型内容和冻结配置不修改。R44–R46本地提交ID见Git历史，未推送/发布。

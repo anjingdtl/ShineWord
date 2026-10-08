@@ -139,6 +139,33 @@ const runnerMocks = {
   './database': { getDatabaseRuntime: async () => { throw new Error('no db in this test'); } },
 };
 
+test('worldBuildRunner refuses a task bound to another database before run lookup, dispatch or failure writes', async () => {
+  let accesses = 0;
+  const runner = loadMobileModule('mobile/src/buildRunner.ts', {
+    ...runnerMocks,
+    './database': { getDatabaseRuntime: async () => ({ databaseName: 'shineword-baseline-current.db',
+      db: { queryOne: async () => { accesses++; throw Error('Wrong database must not be read'); },
+        execute: async () => { accesses++; throw Error('Wrong database must not be written'); } } }) },
+  });
+  await runner.worldBuildRunner({ runId: 'same-run-id', databaseName: 'shineword-baseline-old.db' });
+  assert.equal(accesses, 0);
+});
+
+test('native build bridge refuses unbound execution and disables it again after a failed database switch', async () => {
+  let calls = 0;
+  const bridge = loadMobileModule('mobile/src/buildServiceBridge.ts', {
+    'react-native': { NativeModules: { WorldBuildService: {
+      configureDatabase: async name => name === 'selected.db',
+      startService: async () => { calls++; return true; }, requestRunControl: async () => { calls++; return true; },
+    } } },
+  });
+  assert.equal(await bridge.startBuildService('run'), false); assert.equal(calls, 0);
+  assert.equal(await bridge.configureBuildDatabase('selected.db'), true);
+  assert.equal(await bridge.startBuildService('run'), true); assert.equal(calls, 1);
+  assert.equal(await bridge.configureBuildDatabase('missing.db'), false);
+  assert.equal(await bridge.requestRunControl('run', 'resume'), false); assert.equal(calls, 1);
+});
+
 test('classifyRunnerError maps bootstrap failures to the persisted taxonomy and redacts keys', () => {
   const runner = loadMobileModule('mobile/src/buildRunner.ts', runnerMocks);
   assert.equal(

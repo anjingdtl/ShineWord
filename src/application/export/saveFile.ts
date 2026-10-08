@@ -4,6 +4,7 @@ import { mergeStoryMemoryPatch } from '../memory/storyMemoryMerger';
 import { requireCompiledRules } from '../content/runtimeRules';
 import { canonicalJsonOf, sha256HexOf } from '../campaignPlan/hashing';
 import { campaignContentBindingHash } from '../campaignPlan/contentBinding';
+import { validateCampaignClues } from '../../domain/campaignPlan/clues';
 import { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { SegmentArtifactV1 } from '../../domain/content/segmentArtifact';
 import { SqliteSegmentArtifactStore } from '../../infra/sqlite/sqliteSegmentArtifactStore';
@@ -821,6 +822,7 @@ export async function validateSaveJsonBytes(
       for (const [index, artifact] of artifacts.entries()) {
         if (!artifact || artifact.schemaVersion !== 'campaign-content-1' || !intactHash(artifact)
           || !plans.some(p => p.planId === artifact.planId && p.revision === artifact.planRevision)) errors.push(`Campaign artifact ${index} schema/hash/plan integrity mismatch.`);
+        if (artifact?.clues !== undefined) errors.push(...validateCampaignClues(artifact).map(error => `Campaign artifact ${index}: ${error}`));
       }
       const carriedPlans = new Set((campaign.planRevisions as Array<{ planId?: unknown; revision?: unknown; contentHash?: unknown }>)
         .filter(p => typeof p.planId === 'string' && Number.isInteger(p.revision))
@@ -840,6 +842,11 @@ export async function validateSaveJsonBytes(
           if (!carriedArtifacts.has(artifactId)) {
             errors.push(`Snapshot ${index} binds a content artifact the save does not carry: ${artifactId}.`);
           }
+        }
+        const bound = artifacts.filter(a => snapshot?.campaignContentBinding?.artifactIds?.includes(a.artifactId));
+        const boundIds = new Set(bound.flatMap(a => [...a.situations.map(s => s.entryId), ...(a.clues ?? []).map(c => c.entryId)]));
+        for (const artifact of bound) for (const id of artifact.dependencies.campaignEntryIds ?? []) {
+          if (!boundIds.has(id)) errors.push(`Snapshot ${index} campaign dependency is outside its adopted binding: ${id}.`);
         }
       }
     }

@@ -27,11 +27,17 @@ class WorldBuildServiceModule(
   override fun getName(): String = NAME
 
   @ReactMethod
+  fun configureDatabase(databaseName: String, promise: Promise) {
+    promise.resolve(WorldBuildDatabaseBinding.configure(reactApplicationContext, databaseName))
+  }
+
+  @ReactMethod
   fun startService(runId: String, promise: Promise) {
     try {
       val intent = Intent(reactApplicationContext, WorldBuildForegroundService::class.java).apply {
         action = ACTION_START
         putExtra(WorldBuildForegroundService.EXTRA_RUN_ID, runId)
+        putExtra(WorldBuildDatabaseBinding.EXTRA, WorldBuildDatabaseBinding.current(reactApplicationContext))
       }
       androidx.core.content.ContextCompat.startForegroundService(reactApplicationContext, intent)
       promise.resolve(true)

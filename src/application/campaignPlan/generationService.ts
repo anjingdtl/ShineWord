@@ -36,6 +36,7 @@ export function buildPlanRequestMaterials(input: {
   anchorTitle: string;
   playerName: string;
   openingGoalSuggestions: readonly string[];
+  knownKnowledgeEntryIds?: ReadonlySet<string>;
 }): PlanRequestMaterials {
   const { intent, ctx } = input;
   const skills = input.visibleEntries.filter(entry => entry.kind === 'skill').slice(0, 16)
@@ -50,8 +51,10 @@ export function buildPlanRequestMaterials(input: {
   const npcs = [...ctx.openingTemplateIds].slice(0, 10);
   const items = input.visibleEntries.filter(entry => entry.kind === 'item').slice(0, 10)
     .map(entry => entry.entryId);
-  const clues = input.visibleEntries.filter(entry => entry.kind === 'lore').slice(0, 10)
+  const clues = input.visibleEntries.filter(entry => entry.kind === 'lore' && !ctx.campaignEntryIds?.has(entry.entryId)).slice(0, 10)
     .map(entry => entry.entryId);
+  const adoptedClues = input.visibleEntries.filter(entry => entry.kind === 'lore' && ctx.campaignEntryIds?.has(entry.entryId))
+    .map(entry => ({ entryId: entry.entryId, definition: entry.definition, playerKnows: input.knownKnowledgeEntryIds?.has(entry.entryId) ?? false }));
   const quests = input.visibleEntries.filter(entry => entry.kind === 'quest').slice(0, 6)
     .map(entry => entry.entryId);
 
@@ -71,7 +74,8 @@ export function buildPlanRequestMaterials(input: {
     '  "endings": [{"endingId","title","publicDescription","outcomeKind":"success|pyrrhic|failure|open","condition"}],',
     '  "firstSituation": {"situationTitle","summary","gmBrief","pressureDescription","deadlineClockSeconds","signs":[{"text"}],"methods":[...]},',
     '  "consequences": [{"consequenceId":"stable-id","description":"后续反应","trigger":{"kind":"committed_event","eventType":"later_supported_event"},"effects":[{"template":"record_event","eventType":"reaction_recorded","summary":"实际回应"}],"visibility":"public"}],',
-    '  "rewards": []',
+    '  "rewards": [],',
+    '  "clues": [{"clueId":"local-clue-alias","title":"线索标题","text":"发现后才能公开的线索内容","sourceEntryIds":[],"provenance":{"kind":"design_fill|canon_inspired","sourceFactIds":[],"rationale":"来源说明"}}]',
     '}',
     '',
     '结构规则：',
@@ -90,7 +94,8 @@ export function buildPlanRequestMaterials(input: {
     '- 可选 "consequences": [{consequenceId,description,trigger, effects:[{template:"schedule_consequence" 之外的效果}],visibility}] 表示延迟后果；可选 "rewards": [{policyId,nodeId,description,rewards:[{kind:"skill_rank|item|knowledge|relationship|resource_cap",targetId,toActorId?,rank?,delta?}]}]；',
     '- 人物担保、合作或付出应留下可执行后果：在相应 outcomes 用 schedule_consequence 引用 consequences；trigger 应等待后续履约、事件或准备条件，不与调度条件同时成立。后续办法可用 promise_fulfilled、knowledge_known 或 relationship_at_least 消费这些真实结果。',
     '- 公开字段（title/publicObjective/publicPitch/longTermGoal/signs/summary）不得泄漏 gmPremise、gmPurpose、隐藏身份或原著后期走向；',
-    '- 只能引用下面给出的 ID（技能/人物/地点/物品/线索/任务）；不得发明新的 ID。',
+    '- 世界人物、地点、技能、能力、物品和任务只能引用下面的 ID。可在 clues 定义最多8条战役线索（标题2..80、正文4..800字），clueId 是新建的局部别名，不能占用已有条目ID；只在 knowledge_known、grant_knowledge、requires.knowledgeEntryId 或 knowledge 奖励中引用它。本地生成独立战役命名空间ID。没有 clues 定义的新线索引用无效。',
+    '- clues.sourceEntryIds 只能引用下方已有目录；canon_inspired 必须引用可核实的 sourceFactIds，设计补充用 design_fill 且 sourceFactIds=[]。线索不能伪称原著事实，不能定义新物品、人物或能力；采纳线索定义不授予知识，必须由成功行动或实际完成后的奖励获得。',
     '- actorId/fromActorId/toActorId 使用玩家 actorId 或在场人物模板 ID；禁止杜撰 pc、roland、anna 等英文昵称。计数条件必须明确 integer minimum，situation_status 必须明确 status。',
     '- situation_status 的 status 只允许 dormant / eligible / active / resolved / suppressed。failed、completed、cancelled 都不是局面状态。失败或取消条件可用 committed_event，且对应 outcomes 必须用 record_event 产生那个事件；不需要的 failure/cancellation 写 null。',
     '- 每个末端主阶段必须有 endings.condition 中的 node_succeeded 引用（包括失败/开放结局）。本地不会代你补造结局。',
@@ -130,7 +135,8 @@ export function buildPlanRequestMaterials(input: {
     '策划可用人物资料（公开文案仍需过滤隐藏动机）：', JSON.stringify(ctx.actorMaterials ?? []),
     '开局时已验证的原著事实（不得补入后期事件）：', JSON.stringify(ctx.openingFacts ?? []),
     '已知物品：', items.join('、') || '无',
-    '已知线索/资料：', clues.join('、') || '无',
+    '可引用的世界线索/资料（不代表角色已经知道）：', clues.join('、') || '无',
+    '当前分支已采纳的战役线索（供策划使用，playerKnows=false时不得公开正文或假设前提已满足）：', JSON.stringify(adoptedClues),
     '可关联任务：', quests.join('、') || '无',
   ].filter(line => line !== null).join('\n');
 

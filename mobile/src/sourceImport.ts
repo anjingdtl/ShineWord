@@ -968,11 +968,11 @@ function writeRunControl(runId: string, kind: 'pause' | 'cancel' | 'resume'): Pr
         approvedKnownOutcome = outcome === 'known';
       }
     }
-    const handled = await requestRunControl(runId, kind);
-    if (!handled) {
-      const runtime = await getDatabaseRuntime();
-      await new SqliteBuildRunStore(runtime.db).requestRunControl(runId, kind, new Date().toISOString());
-    }
+    await requestRunControl(runId, kind);
+    // The selected runtime is the authority. A native acknowledgement cannot
+    // replace this idempotent write (including old installed bridge versions).
+    const selectedRuntime = await getDatabaseRuntime();
+    await new SqliteBuildRunStore(selectedRuntime.db).requestRunControl(runId, kind, new Date().toISOString());
     if (kind === 'resume') {
       const runtime = await getDatabaseRuntime();
       const now = new Date().toISOString();

@@ -1,5 +1,6 @@
 import type {
   CampaignContentArtifactV1,
+  CampaignClueArtifactV1,
   CampaignEndingV1,
   CampaignIntentV1,
   CampaignNodeV1,
@@ -33,6 +34,8 @@ export interface LocalCompileContext {
   ruleBindingHash: string;
   /** Player-visible entries at the anchor (visibility/anchor filtered upstream). */
   visibleEntries: readonly ContentEntry[];
+  /** Exact ids loaded from this snapshot's verified artifact binding, never a prefix heuristic. */
+  campaignEntryIds?: ReadonlySet<string>;
   /** Opening actor ids (branch cards) and npc template ids in scope. */
   openingActorIds: ReadonlySet<string>;
   openingTemplateIds: ReadonlySet<string>;
@@ -75,6 +78,7 @@ function compileCondition(
   ctx: LocalCompileContext,
   situationAliases: ReadonlyMap<string, string>,
   errors: string[],
+  knowledgeAliases: ReadonlyMap<string, string>,
 ): SituationCondition | null {
   const resolveSituation = (id: string): string => situationAliases.get(id) ?? id;
   const actor = (id: string): string => ['pc','player','self','__player__','玩家'].includes(id)
@@ -82,13 +86,13 @@ function compileCondition(
   switch (node.kind) {
     case 'all':
     case 'any': {
-      const children = (node.of ?? []).map(child => compileCondition(child, ctx, situationAliases, errors));
+      const children = (node.of ?? []).map(child => compileCondition(child, ctx, situationAliases, errors, knowledgeAliases));
       if (children.some(child => child === null)) return null;
       return { kind: node.kind, of: children as SituationCondition[] };
     }
     case 'not': {
       const inner = (node.of ?? [])[0];
-      const child = inner ? compileCondition(inner, ctx, situationAliases, errors) : null;
+      const child = inner ? compileCondition(inner, ctx, situationAliases, errors, knowledgeAliases) : null;
       return child ? { kind: 'not', of: child } : null;
     }
     case 'situation_resolved':
@@ -104,7 +108,7 @@ function compileCondition(
     case 'promise_fulfilled':
       return { kind: 'promise_status', situationId: resolveSituation(node.situationId!), promiseId: node.promiseId!, status: 'fulfilled' };
     case 'knowledge_known':
-      return { kind: 'knowledge_known', entryId: node.entryId! };
+      return { kind: 'knowledge_known', entryId: knowledgeAliases.get(node.entryId!) ?? node.entryId! };
     case 'relationship_at_least':
       return { kind: 'relationship_at_least', fromActorId: actor(node.fromActorId!), toActorId: actor(node.toActorId!), closeness: node.closeness! };
     case 'item_owned':
@@ -121,21 +125,28 @@ function compileCondition(
   }
 }
 
+function compileEffect(effect: import('../../domain/campaignPlan/types').CampaignEffectSpec,
+  situationAliases: ReadonlyMap<string, string>, knowledgeAliases: ReadonlyMap<string, string>): typeof effect {
+  if (effect.template === 'grant_knowledge') return { ...effect, entryId: knowledgeAliases.get(effect.entryId) ?? effect.entryId };
+  if ('situationId' in effect) return { ...effect, situationId: situationAliases.get(effect.situationId) ?? effect.situationId } as typeof effect;
+  return effect;
+}
+
+export function campaignClueEntryId(planId: string, revision: number, clueId: string): string {
+  return `camp-clue-${sha256HexOf(canonicalJsonOf({ planId, revision, clueId })).slice(0, 24)}`;
+}
+
 function compileOutcomeTemplates(
   method: { outcomes: CampaignPlanCandidateModelV1['firstSituation']['methods'][number]['outcomes'] },
   situationAliases: ReadonlyMap<string, string>,
   errors: string[],
+  knowledgeAliases: ReadonlyMap<string, string>,
 ): Record<'full_success' | 'success' | 'failure' | 'severe_failure', MethodOutcomeTemplateV1> | null {
   const out: Partial<Record<'full_success' | 'success' | 'failure' | 'severe_failure', MethodOutcomeTemplateV1>> = {};
   for (const grade of ['full_success', 'success', 'failure', 'severe_failure'] as const) {
     const spec = method.outcomes[grade];
     if (!spec) { errors.push(`outcome ${grade}: missing.`); return null; }
-    const effects = spec.effects.map(effect => {
-      if ('situationId' in effect && typeof effect.situationId === 'string') {
-        return { ...effect, situationId: situationAliases.get(effect.situationId) ?? effect.situationId } as typeof effect;
-      }
-      return effect;
-    });
+    const effects = spec.effects.map(effect => compileEffect(effect, situationAliases, knowledgeAliases));
     out[grade] = {
       achieved: grade === 'full_success' || grade === 'success',
       resultFact: spec.resultFact,
@@ -150,6 +161,7 @@ function compileMethods(
   ctx: LocalCompileContext,
   situationAliases: ReadonlyMap<string, string>,
   errors: string[],
+  knowledgeAliases: ReadonlyMap<string, string>,
 ): MethodTemplateV1[] {
   const skillIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'skill').flatMap(entry => [entry.entryId, entry.entryId.replace(/^skill-/, '')]));
   const abilityIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'ability').flatMap(entry => [entry.entryId, entry.entryId.replace(/^ability-/, '')]));
@@ -177,10 +189,10 @@ function compileMethods(
         continue;
       }
     }
-    const outcomeTemplates = compileOutcomeTemplates(method, situationAliases, errors);
+    const outcomeTemplates = compileOutcomeTemplates(method, situationAliases, errors, knowledgeAliases);
     if (!outcomeTemplates) continue;
     const { condition: requirement, ...requires } = method.requires;
-    const condition = requirement ? compileCondition(requirement, ctx, situationAliases, errors) : null;
+    const condition = requirement ? compileCondition(requirement, ctx, situationAliases, errors, knowledgeAliases) : null;
     if (requirement && !condition) continue;
     methods.push({
       methodId: method.methodId,
@@ -189,6 +201,7 @@ function compileMethods(
       firstStep: { ...method.firstStep },
       requires: {
         ...requires,
+        ...(requires.knowledgeEntryId ? { knowledgeEntryId: knowledgeAliases.get(requires.knowledgeEntryId) ?? requires.knowledgeEntryId } : {}),
         ...(condition ? { condition } : {}),
         ...(method.requires.skillId && !skillIds.has(method.requires.skillId) && !skillIds.has(method.requires.skillId.replace(/^skill-/, ''))
           ? (errors.push(`method ${method.methodId}: requires skill ${method.requires.skillId} not visible.`), { skillId: undefined as never })
@@ -208,16 +221,17 @@ function compileNodes(
   ctx: LocalCompileContext,
   situationAliases: ReadonlyMap<string, string>,
   errors: string[],
+  knowledgeAliases: ReadonlyMap<string, string>,
 ): CampaignNodeV1[] {
   const nodes: CampaignNodeV1[] = [];
   for (const stage of model.stages) {
-    const activation = stage.activation ? compileCondition(stage.activation, ctx, situationAliases, errors) : null;
+    const activation = stage.activation ? compileCondition(stage.activation, ctx, situationAliases, errors, knowledgeAliases) : null;
     if (stage.activation && activation === null) continue;
-    const completion = compileCondition(stage.completion, ctx, situationAliases, errors);
+    const completion = compileCondition(stage.completion, ctx, situationAliases, errors, knowledgeAliases);
     if (completion === null) continue;
-    const failure = stage.failure ? compileCondition(stage.failure, ctx, situationAliases, errors) : null;
+    const failure = stage.failure ? compileCondition(stage.failure, ctx, situationAliases, errors, knowledgeAliases) : null;
     if (stage.failure && failure === null) continue;
-    const cancellation = stage.cancellation ? compileCondition(stage.cancellation, ctx, situationAliases, errors) : null;
+    const cancellation = stage.cancellation ? compileCondition(stage.cancellation, ctx, situationAliases, errors, knowledgeAliases) : null;
     if (stage.cancellation && cancellation === null) continue;
     const sourceFactIds = (stage.provenance.sourceFactIds ?? []).filter(id => ctx.availableFactIds.has(id));
     // Canon grounding is only claimed when the cited facts are LOCALLY
@@ -265,11 +279,31 @@ export function compileCampaignPlan(input: {
   const errors: string[] = [];
   const situationEntryId = input.situationId ?? FIRST_SITUATION_ENTRY_ID;
   const situationAliases = new Map<string, string>([['self', situationEntryId]]);
-  const nodes = compileNodes(model, ctx, situationAliases, errors);
-  const methods = compileMethods(model, ctx, situationAliases, errors);
+  const knowledgeAliases = new Map<string, string>();
+  const clues: CampaignClueArtifactV1[] = [];
+  for (const clue of model.clues ?? []) {
+    if (knowledgeAliases.has(clue.clueId) || ctx.visibleEntries.some(e => e.entryId === clue.clueId)) {
+      errors.push(`clue ${clue.clueId}: duplicate alias or collision with the existing catalog.`); continue;
+    }
+    for (const id of clue.sourceEntryIds) {
+      if (!ctx.visibleEntries.some(e => e.entryId === id)) errors.push(`clue ${clue.clueId}: source ${id} is outside the bound catalog.`);
+    }
+    const sourceFactIds = clue.provenance.sourceFactIds ?? [];
+    if (sourceFactIds.some(id => !ctx.availableFactIds.has(id))
+      || (clue.provenance.kind === 'canon_inspired' && sourceFactIds.length === 0)
+      || (clue.provenance.kind === 'design_fill' && sourceFactIds.length > 0)) {
+      errors.push(`clue ${clue.clueId}: provenance must use locally verified facts or an honest design_fill.`);
+    }
+    const entryId = campaignClueEntryId(input.planId, input.revision, clue.clueId);
+    knowledgeAliases.set(clue.clueId, entryId);
+    clues.push({ entryId, definition: { name: clue.title, title: clue.title, text: clue.text },
+      provenance: { ...clue.provenance, sourceFactIds }, dependencyIds: [...clue.sourceEntryIds] });
+  }
+  const nodes = compileNodes(model, ctx, situationAliases, errors, knowledgeAliases);
+  const methods = compileMethods(model, ctx, situationAliases, errors, knowledgeAliases);
   const endings: CampaignEndingV1[] = [];
   for (const ending of model.endings) {
-    const condition = compileCondition(ending.condition, ctx, situationAliases, errors);
+    const condition = compileCondition(ending.condition, ctx, situationAliases, errors, knowledgeAliases);
     if (condition === null) continue;
     endings.push({
       endingId: ending.endingId, title: ending.title,
@@ -310,6 +344,7 @@ export function compileCampaignPlan(input: {
     .map(reward => ({
       policyId: reward.policyId, nodeId: reward.nodeId,
       description: reward.description, rewards: reward.rewards.map(spec => ({ ...spec,
+        ...(spec.kind === 'knowledge' ? { targetId: knowledgeAliases.get(spec.targetId) ?? spec.targetId } : {}),
         ...(spec.toActorId && ['pc','player','self','__player__','玩家'].includes(spec.toActorId)
           ? { toActorId: intent.protagonistBinding.actorId } : {}) })),
     }));
@@ -322,15 +357,13 @@ export function compileCampaignPlan(input: {
     planRevision: input.revision,
     namespace: 'campaign',
     situations: [{ entryId: situationEntryId, nodeId: concreteStart?.nodeId ?? nodes[0]?.nodeId ?? '', definition: situationDefinition }],
+    ...(clues.length ? { clues } : {}),
     rewardPolicies,
     consequenceTemplates: model.consequences.map(consequence => ({
       consequenceId: consequence.consequenceId,
       description: consequence.description,
-      triggerCondition: compileCondition(consequence.trigger, ctx, situationAliases, errors) ?? { kind: 'world_time_at_least', order: 0 },
-      effectSpecs: consequence.effects.map(effect =>
-        'situationId' in effect && typeof effect.situationId === 'string'
-          ? { ...effect, situationId: situationAliases.get(effect.situationId) ?? effect.situationId } as typeof effect
-          : effect),
+      triggerCondition: compileCondition(consequence.trigger, ctx, situationAliases, errors, knowledgeAliases) ?? { kind: 'world_time_at_least', order: 0 },
+      effectSpecs: consequence.effects.map(effect => compileEffect(effect, situationAliases, knowledgeAliases)),
       visibility: consequence.visibility,
     })),
     dependencies: {
@@ -343,6 +376,20 @@ export function compileCampaignPlan(input: {
     provenance: { kind: 'design_fill', sourceFactIds: [], rationale: 'campaign plan compilation' },
     createdAt: input.createdAt,
   };
+  if (clues.length || ctx.campaignEntryIds?.size) {
+    const referenced = new Set(clues.flatMap(clue => clue.dependencyIds));
+    const collect = (value: unknown): void => {
+      if (typeof value === 'string') {
+        if (ctx.visibleEntries.some(entry => entry.entryId === value)) referenced.add(value);
+      } else if (Array.isArray(value)) value.forEach(collect);
+      else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+    };
+    collect([nodes, endings, methods, artifactDraft.consequenceTemplates, rewardPolicies]);
+    const campaignEntryIds = [...referenced].filter(id => ctx.campaignEntryIds?.has(id)).sort();
+    artifactDraft.dependencies = { worldEntryIds: [...new Set([...artifactDraft.dependencies.worldEntryIds,
+      ...[...referenced].filter(id => !ctx.campaignEntryIds?.has(id))])].filter(id => !ctx.campaignEntryIds?.has(id)).sort(),
+      ...(campaignEntryIds.length ? { campaignEntryIds } : {}) };
+  }
   const artifact: CampaignContentArtifactV1 = {
     ...artifactDraft,
     contentHash: sha256HexOf(canonicalJsonOf(artifactDraft as unknown as Record<string, unknown>)),

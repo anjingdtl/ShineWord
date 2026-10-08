@@ -32,10 +32,12 @@ import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 import { LocalSourceSearchService } from '../../src/application/search/localSourceSearch';
 import { ProgressiveBuildQueue } from '../../src/application/progressiveBuild/progressiveBuildQueue';
 import { ProgressiveTurnContextService } from '../../src/application/progressiveBuild/progressiveTurnContext';
+import { configureBuildDatabase } from './buildServiceBridge';
 
 SQLite.enablePromise(true);
 
 export interface MobileDatabaseRuntime {
+  databaseName: string;
   db: ReactNativeSqliteAdapter;
   turns: SqliteTurnStore;
   narratives: SqliteNarrativeStore;
@@ -65,8 +67,9 @@ let singleton: Promise<MobileDatabaseRuntime> | null = null;
 const DATABASE_SELECTION_KEY = 'shineword.currentDevelopmentDatabase';
 
 async function createRuntime(): Promise<MobileDatabaseRuntime> {
+  const databaseName = await AsyncStorage.getItem(DATABASE_SELECTION_KEY) ?? 'shineword.db';
   const nativeDb = await SQLite.openDatabase({
-    name: await AsyncStorage.getItem(DATABASE_SELECTION_KEY) ?? 'shineword.db',
+    name: databaseName,
     location: 'default',
   });
   const db = new ReactNativeSqliteAdapter(
@@ -74,6 +77,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   );
   try { await installBaselineSchema(db); }
   catch (error) { await nativeDb.close(); throw error; }
+  await configureBuildDatabase(databaseName);
   const fts5 = await probeFts5(db);
   const worldStore = new SqliteWorldStore(db);
   const sourceStore = new SqliteSourceStore(db);
@@ -116,6 +120,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   // with a locked world package; existing demo-main data stays readable
   // through its campaign but is never auto-created or auto-selected.
   return {
+    databaseName,
     db,
     turns: new SqliteTurnStore(db),
     narratives: new SqliteNarrativeStore(db),

@@ -13,6 +13,28 @@ const PROFILE = {
   reasoningTier: 'low', reasoningDialect: 'glm', contentOutputTokens: 3_000, concurrency: 1,
 };
 
+test('sourceImport: a native acknowledgement cannot skip selected-database control persistence', async () => {
+  const commands = [];
+  const h = await createMobileHarness({ bytes: Buffer.from('第一章 石殿\n林凡在青石巷停下。'),
+    nativeControl: async (runId, kind) => { commands.push(kind); return true; } });
+  try {
+    const imported = await h.sourceImport.importNovelUnified('memory://novel', 'binding.txt', PROFILE, 'progressive', () => {});
+    const runId = imported.runIds[0];
+    h.db.prepare("UPDATE world_build_runs SET status='failed_retryable',pause_requested=1,cancel_requested=1 WHERE run_id=?").run(runId);
+    const units = h.db.prepare('SELECT * FROM world_build_units WHERE run_id=? ORDER BY ord').all(runId);
+    await h.sourceImport.resumeRun(runId);
+    assert.equal((await h.runStore.getRun(runId)).pauseRequested, false);
+    assert.equal((await h.runStore.getRun(runId)).cancelRequested, false);
+    h.sourceImport.pauseRun(runId);
+    await h.sourceImport.requestSegmentRunControl(runId, 'pause');
+    assert.equal((await h.runStore.getRun(runId)).status, 'paused_user');
+    await h.sourceImport.cancelRun(runId);
+    assert.equal((await h.runStore.getRun(runId)).status, 'stopped_user');
+    assert.deepEqual(h.db.prepare('SELECT * FROM world_build_units WHERE run_id=? ORDER BY ord').all(runId), units);
+    assert.deepEqual(commands, ['resume','pause','pause','cancel']);
+  } finally { h.db.close(); }
+});
+
 function deferred() {
   let resolve;
   const promise = new Promise(r => { resolve = r; });

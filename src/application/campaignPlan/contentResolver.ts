@@ -1,13 +1,14 @@
 import type { ContentEntry } from '../../domain/content/types';
 import type { CampaignContentArtifactV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
 import type { SituationDefinitionV1 } from '../../domain/situations/types';
+import { validateCampaignClues } from '../../domain/campaignPlan/clues';
 
 /**
  * Unified read-only content resolution (plan §7): world published entries +
  * the branch's adopted campaign artifacts compose ONE entry list consumed by
  * the turn session, rules and projections. Campaign content lives in its own
- * namespace (`camp-` prefix / artifact binding) and never writes back into
- * world canon; world entry ids always win on collision.
+ * namespace and never writes back into world canon. Ownership comes from
+ * the verified snapshot binding; an id prefix alone grants no authority.
  */
 
 export function campaignSituationEntries(artifact: CampaignContentArtifactV1): ContentEntry[] {
@@ -27,18 +28,38 @@ export function campaignSituationEntries(artifact: CampaignContentArtifactV1): C
   }));
 }
 
+export function campaignClueEntries(artifact: CampaignContentArtifactV1): ContentEntry[] {
+  const errors = validateCampaignClues(artifact);
+  if (errors.length) throw new Error(errors.join('; '));
+  return (artifact.clues ?? []).map(clue => ({ entryId: clue.entryId, kind: 'lore', revision: artifact.planRevision,
+    visibility: 'discoverable', provenance: { kind: clue.provenance.kind === 'canon_inspired' ? 'inferred' : 'design_fill',
+      sourceFactIds: [...clue.provenance.sourceFactIds], rationale: clue.provenance.rationale },
+    fieldProvenance: {}, dependencyIds: [...clue.dependencyIds], definition: clue.definition }));
+}
+
+export function campaignContentEntries(artifacts: readonly CampaignContentArtifactV1[]): ContentEntry[] {
+  const entries = artifacts.flatMap(artifact => [...campaignSituationEntries(artifact), ...campaignClueEntries(artifact)]);
+  const ids = new Set(entries.map(entry => entry.entryId));
+  for (const artifact of artifacts) for (const id of artifact.dependencies.campaignEntryIds ?? []) {
+    if (!ids.has(id)) throw new Error(`战役依赖 ${id} 不在当前快照绑定的内容中。`);
+  }
+  return entries;
+}
+
 export function resolveCampaignContent(
   worldEntries: readonly ContentEntry[],
   artifacts: readonly CampaignContentArtifactV1[],
 ): ContentEntry[] {
   const worldIds = new Set(worldEntries.map(entry => entry.entryId));
   const merged = [...worldEntries];
-  for (const artifact of artifacts) {
-    for (const entry of campaignSituationEntries(artifact)) {
-      if (worldIds.has(entry.entryId)) continue; // world canon wins; never shadow
-      if (merged.some(existing => existing.entryId === entry.entryId)) continue;
-      merged.push(entry);
-    }
+  const entries = campaignContentEntries(artifacts);
+  const ids = new Set([...worldIds, ...entries.map(entry => entry.entryId)]);
+  for (const entry of entries) {
+    if (entry.kind === 'lore' && entry.dependencyIds.some(id => !ids.has(id))) throw new Error(`战役线索 ${entry.entryId} 的来源不在当前目录中。`);
+    if (entry.kind === 'lore' && worldIds.has(entry.entryId)) throw new Error(`战役线索 ${entry.entryId} 与世界条目冲突。`);
+    if (worldIds.has(entry.entryId)) continue; // world canon wins; never shadow
+    if (merged.some(existing => existing.entryId === entry.entryId)) continue;
+    merged.push(entry);
   }
   return merged;
 }

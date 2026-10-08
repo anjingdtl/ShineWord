@@ -97,6 +97,7 @@ import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { applySituationRuntime } from '../situations/causalProjection';
 import { resolveCampaignContent, projectPlayableSituations } from '../campaignPlan/contentResolver';
+import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW } from '../../domain/campaignPlan/progressReducer';
 import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
@@ -1303,22 +1304,7 @@ export class CampaignSession {
   ): Promise<ContentEntry[]> {
     const binding = state.campaignContentBinding;
     if (!binding || binding.artifactIds.length === 0) return [...entries];
-    const artifacts: CampaignContentArtifactV1[] = [];
-    for (const artifactId of binding.artifactIds) {
-      const row = await this.deps.db.queryOne<{ artifact_json: string; content_hash: string }>(
-        'SELECT artifact_json, content_hash FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
-      if (!row) {
-        throw new Error(`战役内容 ${artifactId} 缺失或哈希不符，拒绝以不完整内容继续回合。`);
-      }
-      const artifact = JSON.parse(row.artifact_json) as CampaignContentArtifactV1;
-      const { contentHash, ...body } = artifact;
-      const { canonicalJsonOf, sha256HexOf } = await import('../campaignPlan/hashing');
-      if (artifact.campaignId !== campaignId || artifact.artifactId !== artifactId || row.content_hash !== contentHash
-        || contentHash !== sha256HexOf(canonicalJsonOf(body))) throw new Error(`战役内容 ${artifactId} 缺失或哈希不符，拒绝以不完整内容继续回合。`);
-      artifacts.push(artifact);
-    }
-    const { campaignContentBindingHash } = await import('../campaignPlan/contentBinding');
-    if (campaignContentBindingHash(artifacts) !== binding.contentHash) throw new Error('战役内容组合 hash 不匹配，拒绝继续。');
+    const artifacts = await readBoundCampaignArtifacts(this.deps.db, campaignId, binding);
     return resolveCampaignContent(entries, artifacts);
   }
 
@@ -1338,21 +1324,8 @@ export class CampaignSession {
     const { canonicalJsonOf, sha256HexOf } = await import('../campaignPlan/hashing');
     const { contentHash: planHash, ...planBody } = plan;
     if (planHash !== runtime.planBinding.contentHash || planHash !== sha256HexOf(canonicalJsonOf(planBody))) throw new Error('主线计划 hash 不匹配，拒绝继续。');
-    const artifacts: CampaignContentArtifactV1[] = [];
-    for (const artifactId of state.campaignContentBinding?.artifactIds ?? plan.contentArtifactRefs) {
-      const row = await this.deps.db.queryOne<{ artifact_json: string; content_hash: string }>(
-        'SELECT artifact_json,content_hash FROM campaign_content_artifacts WHERE artifact_id=?', [artifactId]);
-      if (!row) throw new Error(`战役内容 ${artifactId} 缺失，拒绝以不完整内容结算。`);
-      const artifact = JSON.parse(row.artifact_json) as CampaignContentArtifactV1;
-      const { contentHash, ...body } = artifact;
-      if (artifact.campaignId !== campaignId || artifact.artifactId !== artifactId || row.content_hash !== contentHash
-        || contentHash !== sha256HexOf(canonicalJsonOf(body))) throw new Error(`战役内容 ${artifactId} 哈希不符，拒绝结算。`);
-      artifacts.push(artifact);
-    }
-    if (state.campaignContentBinding) {
-      const { campaignContentBindingHash } = await import('../campaignPlan/contentBinding');
-      if (campaignContentBindingHash(artifacts) !== state.campaignContentBinding.contentHash) throw new Error('战役内容组合 hash 不匹配，拒绝结算。');
-    }
+    const artifacts = await readBoundCampaignArtifacts(this.deps.db, campaignId,
+      state.campaignContentBinding ?? { artifactIds: plan.contentArtifactRefs });
     return { plan, artifacts, runtime };
   }
 
