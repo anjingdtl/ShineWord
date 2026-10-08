@@ -1,4 +1,4 @@
-import type { AttributeName, SkillRank } from '../../domain/rules/types';
+import type { AttributeName } from '../../domain/rules/types';
 import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
 import type { ActorCard, CompanionDirective, SkillCatalog } from '../../domain/characters/card';
 import type { ActorTemplateDefinition, ContentEntry, OriginDefinition, SkillDefinition } from '../../domain/content/types';
@@ -11,8 +11,8 @@ import { createBaseContentManifest } from '../worldPackage/contentManifest';
 import { hasBranchContentManifestTable, insertBranchContentManifest } from '../worldPackage/branchContentStore';
 import { requireCompiledRules } from '../content/runtimeRules';
 import type { CampaignContentArtifactV1, CampaignIntentV1, CampaignPlanV1 } from '../../domain/campaignPlan/types';
-import { evaluateCampaignProgress } from '../../domain/campaignPlan/progressReducer';
-import { applySituationRuntime } from '../situations/causalProjection';
+import { settleCampaignProgress } from '../campaignPlan/settlement';
+import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { emptyRuntimeForPlan } from '../../domain/campaignPlan/types';
 import type { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
 
@@ -82,14 +82,6 @@ export interface CreatedCampaign {
 
 function branchIdFor(campaignId: string): string {
   return `${campaignId}-main`;
-}
-
-function cardSkillRows(card: ActorCard): Array<{ actorId: string; skillId: string; rank: SkillRank }> {
-  return Object.entries(card.skills).map(([skillId, rank]) => ({
-    actorId: card.actorId,
-    skillId,
-    rank,
-  }));
 }
 
 /**
@@ -488,6 +480,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
   // P9 adoption pass: initial mainline runtime is part of the creation
   // transaction — the start node activates from evaluated conditions, never
   // from model claims, and the content artifact binds to the branch snapshot.
+  const adoptionEvents: Array<{ eventType: string; payload: unknown }> = [];
   if (input.adoption) {
     // Initialize the campaign situations (activation tick) BEFORE progress
     // evaluation, so the first turn already offers the stage's methods.
@@ -501,29 +494,31 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       playerActorId: input.protagonist.actorId,
       methodOps: [],
     });
-    snapshot.situations = situationRuntime.situations;
+    applySituationProjection(snapshot, situationRuntime);
     const runtime = emptyRuntimeForPlan({
       branchId, plan: input.adoption.plan, intentRevision: input.adoption.intent.intentRevision,
       stateVersion: 0, playerActorId: input.protagonist.actorId,
     });
-    const adoptionPass = evaluateCampaignProgress({
+    snapshot.campaignRuntime = runtime;
+    snapshot.campaignRuntime.intent = input.adoption.intent;
+    const progressEvents = settleCampaignProgress({
       plan: input.adoption.plan,
-      runtime,
-      state: snapshot,
-      transactionEvents: [],
+      nextState: snapshot,
+      transactionEvents: situationRuntime.events,
       historyEvents: [],
-      artifact: input.adoption.artifact,
+      artifacts: [input.adoption.artifact],
       turnId: `${branchId}:adoption`,
       nextStateVersion: 0,
     });
     // A plan whose ENDING condition already holds at the opening creates a
     // dead-on-arrival campaign — refuse adoption (found in real GLM journey
     // J1: ending-caught fired at the adoption pass itself).
-    if (adoptionPass.runtime.ending) {
-      throw new Error(`提案的结局「${adoptionPass.runtime.ending.title}」在开局状态即成立，拒绝采用该提案；请重新生成。`);
+    if (snapshot.campaignRuntime.ending) {
+      throw new Error(`提案的结局「${snapshot.campaignRuntime.ending.title}」在开局状态即成立，拒绝采用该提案；请重新生成。`);
     }
-    snapshot.campaignRuntime = adoptionPass.runtime;
-    snapshot.campaignRuntime.intent = input.adoption.intent;
+    adoptionEvents.push({ eventType: 'campaign_plan_adopted', payload: {
+      planId: input.adoption.plan.planId, revision: input.adoption.plan.revision, reasons: [input.adoption.sourceTrigger],
+    } }, ...situationRuntime.events, ...progressEvents);
     snapshot.campaignContentBinding = {
       artifactIds: [input.adoption.artifact.artifactId],
       contentHash: input.adoption.artifact.contentHash,
@@ -561,12 +556,13 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       [branchId, input.campaignId, input.createdAt],
     );
     if (snapshot.contentManifest) await insertBranchContentManifest(tx, snapshot.contentManifest, input.createdAt);
-    for (const card of cards) {
+    for (const stored of snapshot.cards ?? []) {
+      const card = stored.card as ActorCard;
       const actor = snapshot.actors[card.actorId]!;
       await tx.execute(
         `INSERT INTO actor_states (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)
-         VALUES (?, ?, 0, ?, ?, '[]')`,
-        [branchId, card.actorId, actor.locationId, JSON.stringify(actor.resources)],
+         VALUES (?, ?, 0, ?, ?, ?)`,
+        [branchId, card.actorId, actor.locationId, JSON.stringify(actor.resources), JSON.stringify(actor.conditions)],
       );
       await tx.execute(
         `INSERT INTO actor_cards (branch_id, actor_id, card_json, created_at, updated_at, updated_state_version)
@@ -580,7 +576,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
           [branchId, card.actorId, card.controller, card.controller === 'player' ? 'protagonist' : 'companion', input.createdAt],
         );
       }
-      for (const skill of cardSkillRows(card)) {
+      for (const skill of (snapshot.skills ?? []).filter(s => s.actorId === card.actorId)) {
         await tx.execute(
           `INSERT INTO actor_skills (branch_id, actor_id, skill_id, rank, practice_points, awarded_turns_json, state_version)
            VALUES (?, ?, ?, ?, 0, '[]', 0)`,
@@ -588,14 +584,14 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
         );
       }
     }
-    for (const relationship of relationships) {
+    for (const relationship of snapshot.relationships ?? []) {
       await tx.execute(
         `INSERT INTO relationships (branch_id, rel_id, from_actor_id, to_actor_id, stance, closeness, updated_turn_id, state_version)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, 0)`,
-        [branchId, relationship.relId, relationship.fromActorId, relationship.toActorId, relationship.stance, relationship.closeness],
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+        [branchId, relationship.relId, relationship.fromActorId, relationship.toActorId, relationship.stance, relationship.closeness, relationship.updatedTurnId],
       );
     }
-    for (const [itemId, ownerActorId] of Object.entries(itemOwners)) {
+    for (const [itemId, ownerActorId] of Object.entries(snapshot.itemOwners)) {
       await tx.execute(
         'INSERT INTO inventory (branch_id, item_id, owner_actor_id, state_version) VALUES (?, ?, ?, 0)',
         [branchId, itemId, ownerActorId],
@@ -615,6 +611,26 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       [branchId, JSON.stringify(snapshot), input.createdAt],
     );
     if (input.adoption) {
+      const adoptionTurnId = `${branchId}:adoption`;
+      // A version-zero management record gives opening authority events a
+      // durable turn owner without adding elapsed time or a player decision.
+      await tx.execute(`INSERT INTO turns
+        (branch_id, turn_id, expected_state_version, committed_state_version, status, outcome_grade,
+         public_summary, effects_json, action_contract_json, action_contract_hash, created_at, committed_at)
+        VALUES (?, ?, 0, 0, 'Committed', 'success', ?, '[]', '{}', 'manage-adoption', ?, ?)`,
+        [branchId, adoptionTurnId, '主线规划已在开局采用。', input.createdAt, input.createdAt]);
+      for (const [index, event] of adoptionEvents.entries()) {
+        await tx.execute(`INSERT INTO branch_events
+          (branch_id, event_seq, turn_id, state_version, event_type, payload_json, created_at)
+          VALUES (?, ?, ?, 0, ?, ?, ?)`,
+          [branchId, index + 1, adoptionTurnId, event.eventType, JSON.stringify(event.payload), input.createdAt]);
+      }
+      for (const discovery of snapshot.discoveries ?? []) {
+        await tx.execute(`INSERT INTO branch_knowledge
+          (branch_id, actor_id, entry_id, known_via, source_turn_id, known_state_version)
+          VALUES (?, ?, ?, ?, ?, 0)`,
+          [branchId, discovery.actorId, discovery.entryId, discovery.knownVia, discovery.sourceTurnId]);
+      }
       await input.adoption.planStore.archivePlanRevision(tx, {
         plan: input.adoption.plan,
         intent: input.adoption.intent,
@@ -628,5 +644,6 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
     }
   });
 
-  return { campaignId: input.campaignId, branchId, snapshot: cloneGameState(snapshot), cards };
+  return { campaignId: input.campaignId, branchId, snapshot: cloneGameState(snapshot),
+    cards: (snapshot.cards ?? []).map(stored => stored.card as ActorCard) };
 }

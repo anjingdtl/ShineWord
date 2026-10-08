@@ -88,7 +88,9 @@ test('closeout: two ordinary successful decisions complete a counter route witho
     const after = await h.turns.getState(h.branchId);
     assert.equal(after.campaignRuntime.nodeStates[0].status, 'succeeded');
     assert.equal(after.campaignRuntime.grantedRewardKeys.length, 1);
-    assert.deepEqual(h.db.prepare('SELECT outcome_grade FROM turns WHERE branch_id=? ORDER BY committed_state_version').all(h.branchId).map(r => r.outcome_grade), ['success','success']);
+    const actionTurns = h.db.prepare('SELECT outcome_grade FROM turns WHERE branch_id=? AND action_contract_hash<>? ORDER BY committed_state_version')
+      .all(h.branchId, 'manage-adoption');
+    assert.deepEqual(actionTurns.map(r => r.outcome_grade), ['success','success']);
   } finally { h.db.close(); }
 });
 

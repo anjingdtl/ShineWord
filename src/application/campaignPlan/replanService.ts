@@ -3,7 +3,7 @@ import type { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignP
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { ApiProfile, LlmProvider } from '../llm/types';
 import type { CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
-import type { GameStateSnapshot } from '../../domain/state/types';
+import { cloneGameState, type GameStateSnapshot } from '../../domain/state/types';
 import type { SituationCondition } from '../../domain/situations/types';
 import { evaluateCondition, snapshotConditionFacts } from '../../domain/situations/conditions';
 import { validateCampaignPlan } from '../../domain/campaignPlan/planValidation';
@@ -14,6 +14,9 @@ import { sha256HexOf, canonicalJsonOf } from './hashing';
 import { stableFingerprint } from '../llm/requestPlan';
 import { isIntactReadyCandidate } from './candidateIntegrity';
 import { campaignContentBindingHash } from './contentBinding';
+import { settleCampaignProgress, readCampaignEventHistory } from './settlement';
+import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
+import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 
 /**
  * Campaign replanning (plan §10). Triggers are evaluated LOCALLY after each
@@ -58,8 +61,10 @@ export function evaluateReplanTriggers(input: ReplanTriggerInput): string[] {
     collectActorRefs(node.failure, actorIds);
   }
   let fateFlipped = false;
+  const resolveActor = createActorReferenceResolver({ actors: state.actors,
+    cards: (state.cards ?? []).map(row => ({ actorId: row.actorId, templateId: (row.card as { templateId?: string }).templateId })) });
   for (const actorId of actorIds) {
-    const alive = (state.actors[actorId] ?? state.actors[`npc-${actorId}`])?.lifeStatus ?? 'active';
+    const alive = state.actors[resolveActor(actorId)]?.lifeStatus;
     if (alive === 'dead' || alive === 'critical') fateFlipped = true;
   }
   if (fateFlipped) reasons.push('critical_actor_fate');
@@ -281,23 +286,21 @@ export async function adoptReplanCandidate(input: AdoptReplanInput): Promise<
         nodeId: n.nodeId, status: 'planned' as const, completedEvidence: [] })),
     ],
   };
-  const nextState: GameStateSnapshot = { ...state, stateVersion: state.stateVersion + 1, campaignRuntime: nextRuntime,
+  const nextState: GameStateSnapshot = { ...cloneGameState(state), stateVersion: state.stateVersion + 1, campaignRuntime: nextRuntime,
     campaignContentBinding: { artifactIds, contentHash: campaignContentBindingHash(artifacts as NonNullable<typeof artifact>[]) } };
-  const { applySituationRuntime } = await import('../situations/causalProjection');
-  const ticked = applySituationRuntime({ nextState, definitions: candidate.artifact.situations.map(s => ({ situationId: s.entryId, definition: s.definition })),
-    playerActorId: intent.protagonistBinding.actorId, sourceTurnId: input.branchId + ':manage-replan:' + nextRevision, methodOps: [] });
-  nextState.situations = ticked.situations;
-  const { evaluateCampaignProgress } = await import('../../domain/campaignPlan/progressReducer');
-  const progress = evaluateCampaignProgress({ plan: candidate.plan, runtime: nextRuntime, state: nextState,
-    transactionEvents: [], historyEvents: [], turnId: input.branchId + ':manage-replan:' + nextRevision, nextStateVersion: nextState.stateVersion });
-  nextState.campaignRuntime = progress.runtime;
   const turnId = input.branchId + ':manage-replan:' + nextRevision;
   try {
+    const ticked = applySituationRuntime({ nextState, definitions: artifact.situations.map(s => ({ situationId: s.entryId, definition: s.definition })),
+      playerActorId: intent.protagonistBinding.actorId, sourceTurnId: turnId, methodOps: [] });
+    applySituationProjection(nextState, ticked);
+    const progressEvents = settleCampaignProgress({ plan: candidate.plan, nextState,
+      artifacts: artifacts as NonNullable<typeof artifact>[], transactionEvents: ticked.events,
+      historyEvents: await readCampaignEventHistory(input.db, input.branchId), turnId, nextStateVersion: nextState.stateVersion });
     await input.turns.commitAtomic({ branchId: input.branchId, turnId, expectedStateVersion: state.stateVersion,
       nextState, actionContractJson: '{}', actionContractHash: 'manage-replan',
       committedTurn: { branchId: input.branchId, turnId, previousStateVersion: state.stateVersion, stateVersion: nextState.stateVersion,
         outcomeGrade: 'success', publicSummary: '主线规划已根据最新局势修订。', effects: [], committedAt: now() },
-      events: [{ eventType: 'campaign_plan_adopted', payload: { planId: candidate.plan.planId, revision: nextRevision, reasons: job.triggerReasons } }, ...progress.events],
+      events: [{ eventType: 'campaign_plan_adopted', payload: { planId: candidate.plan.planId, revision: nextRevision, reasons: job.triggerReasons } }, ...ticked.events, ...progressEvents],
       transactionChanges: async tx => {
         const active = await tx.queryOne<{ n: number }>(
           "SELECT COUNT(*) n FROM turns WHERE branch_id=? AND status<>'Committed'", [input.branchId]);

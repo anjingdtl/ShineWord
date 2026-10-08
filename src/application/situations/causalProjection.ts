@@ -14,6 +14,7 @@ import {
   type ReferenceEventProjectionV1,
 } from '../../domain/situations/referenceEvents';
 import { snapshotConditionFacts } from '../../domain/situations/conditions';
+import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 
 /**
  * Branch causal projection (plan §4, P7-1). Runs INSIDE the turn reduction
@@ -49,6 +50,14 @@ export interface ApplySituationRuntimeResult {
   actorFates: ReadonlyArray<{ actorId: string; lifeStatus: 'active' | 'dead'; eventKey: string }>;
 }
 
+/** Persist a causal decision and its actor fate in the same draft. */
+export function applySituationProjection(state: GameStateSnapshot, projection: ApplySituationRuntimeResult): void {
+  state.situations = projection.situations;
+  for (const fate of projection.actorFates) {
+    if (state.actors[fate.actorId]) state.actors[fate.actorId]!.lifeStatus = fate.lifeStatus;
+  }
+}
+
 function initialEntry(situationId: string, sourceTurnId: string): SituationSnapshotEntry {
   return {
     situationId,
@@ -78,15 +87,10 @@ function resolvedReferenceKeys(situations: readonly SituationSnapshotEntry[]): s
  * actors. Unresolvable fates are skipped (never applied to a guessed actor).
  */
 function resolveFateActor(actorId: string, state: GameStateSnapshot): string | null {
-  if (state.actors[actorId]) return actorId;
-  for (const card of state.cards ?? []) {
-    const cardRecord = card.card as { actorId?: string; templateId?: string } | null;
-    if (!cardRecord || typeof cardRecord.templateId !== 'string') continue;
-    if (cardRecord.templateId === actorId || cardRecord.templateId === `npc-${actorId.replace(/^npc-/, '')}`) {
-      return state.actors[card.actorId] ? card.actorId : null;
-    }
-  }
-  return null;
+  const resolved = createActorReferenceResolver({ actors: state.actors,
+    cards: (state.cards ?? []).map(row => ({ actorId: row.actorId,
+      templateId: (row.card as { templateId?: string } | null)?.templateId })) })(actorId);
+  return state.actors[resolved] ? resolved : null;
 }
 
 export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplySituationRuntimeResult {

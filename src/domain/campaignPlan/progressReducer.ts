@@ -51,6 +51,8 @@ export interface ProgressReducerInput {
   turnId: string;
   nextStateVersion: number;
   consequenceTriggerBudget?: number;
+  /** The commit adapter resolves effects before selecting a terminal ending. */
+  evaluationMode?: 'progress_only' | 'ending_only';
 }
 
 export interface CampaignRewardGrant {
@@ -222,7 +224,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   let transitions = 0;
 
   // --- Node lifecycle evaluation (bounded batch) ---
-  for (let round = 0; runtime.campaignStatus === 'active' && round < NODE_TRANSITION_BATCH_LIMIT; round += 1) {
+  for (let round = 0; input.evaluationMode !== 'ending_only' && runtime.campaignStatus === 'active' && round < NODE_TRANSITION_BATCH_LIMIT; round += 1) {
     const currentFacts = facts();
     let roundChanged = false;
 
@@ -372,6 +374,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   // --- Deferred consequences: evaluate pending triggers (bounded) ---
   let triggered = 0;
   for (const consequence of runtime.deferredConsequences) {
+    if (input.evaluationMode === 'ending_only') break;
     if (triggered >= Math.min(CONSEQUENCE_TRIGGER_LIMIT, input.consequenceTriggerBudget ?? CONSEQUENCE_TRIGGER_LIMIT)) break;
     if (consequence.status !== 'pending') continue;
     if (isTrue(consequence.triggerCondition, facts())) {
@@ -390,7 +393,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   }
 
   // --- Rewards: grant once per nodeId+policyId on success ---
-  if (input.artifact) {
+  if (input.artifact && input.evaluationMode !== 'ending_only') {
     for (const policy of input.artifact.rewardPolicies) {
       const nodeEntry = stateById.get(policy.nodeId);
       if (!nodeEntry || nodeEntry.status !== 'succeeded') continue;
@@ -408,7 +411,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   }
 
   // --- Endings: condition-driven, highest priority wins ---
-  if (runtime.campaignStatus === 'active' && input.plan.possibleEndings.length > 0) {
+  if (input.evaluationMode !== 'progress_only' && runtime.campaignStatus === 'active' && input.plan.possibleEndings.length > 0) {
     const currentFacts = facts();
     const satisfied = input.plan.possibleEndings
       .filter(ending => isTrue(ending.condition, currentFacts))
