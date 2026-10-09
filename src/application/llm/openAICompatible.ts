@@ -9,7 +9,7 @@ import type {
   SecretStore,
 } from './types';
 import { normalizeReasoningTier } from './types';
-import { EXTENDED_OPERATION_KINDS, physicalRequestTimeoutMs } from './requestDeadline';
+import { EXTENDED_OPERATION_KINDS, physicalRequestTimeoutMs, streamActivityTimeoutMs, STREAMING_OPERATION_HARD_TIMEOUT_MS } from './requestDeadline';
 import { IncompleteCompletionStreamError, readCompletionStream } from './completionStream';
 import { elapsedHttpDeadline } from './httpErrors';
 import { looksTruncated } from './responseNormalizer';
@@ -27,8 +27,19 @@ export interface HttpRequest {
   headers: Record<string, string>;
   body: string;
   timeoutMs: number;
+  /** Maximum silence between complete SSE frames. */
+  streamActivityTimeoutMs?: number;
   /** Local execution policy only; never serialised into the provider body. */
   requestKind?: LlmRequestKind;
+  /** Local audit correlation; never serialised into the provider body. */
+  logicalRequestId?: string;
+  attemptId?: string;
+  attemptNo?: number;
+  campaignId?: string;
+  branchId?: string;
+  worldId?: string;
+  stateVersion?: number;
+  profileFingerprint?: string;
 }
 
 /** A transport prerequisite failed before any HTTP call was created. */
@@ -44,6 +55,10 @@ export interface HttpResponse {
     firstBodyByteMs?: number | null;
     completeResponseMs?: number | null;
     providerQueueMs?: number | null;
+    streamFrameCount?: number;
+    firstStreamFrameMs?: number | null;
+    maxStreamFrameGapMs?: number | null;
+    streamActivityMonitored?: boolean;
   };
 }
 
@@ -259,7 +274,6 @@ export class OpenAICompatibleProvider implements LlmProvider {
         ?? request.reasoningEffort
         ?? this.profile.reasoningEffort,
     );
-    const timeoutMs = physicalRequestTimeoutMs(this.timeoutMs, request.requestKind, reasoningTier);
     // Long single-thinking operations share SSE delivery when the profile
     // declares streaming support: buffered calls through gateways that only
     // see headers after the full body have died at ~300s server-side while
@@ -268,6 +282,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
       && EXTENDED_OPERATION_KINDS.includes(request.requestKind)
       && reasoningTier !== 'low'
       && this.profile.capabilities.supportsStreaming === true;
+    const activityTimeoutMs = streamActivityTimeoutMs(request.requestKind, reasoningTier, streamedOperation);
+    const timeoutMs = activityTimeoutMs === undefined
+      ? physicalRequestTimeoutMs(this.timeoutMs, request.requestKind, reasoningTier)
+      : STREAMING_OPERATION_HARD_TIMEOUT_MS;
 
     while (true) {
       // Resident-mode request structure: [system, user, ...followUps]. The
@@ -306,7 +324,16 @@ export class OpenAICompatibleProvider implements LlmProvider {
           },
           body: JSON.stringify(body),
           timeoutMs,
+          ...(activityTimeoutMs !== undefined ? { streamActivityTimeoutMs: activityTimeoutMs } : {}),
           requestKind: request.requestKind,
+          logicalRequestId: request.ledger?.logicalRequestId,
+          attemptId: request.ledger?.attemptId,
+          attemptNo: request.ledger?.attemptNo,
+          campaignId: request.ledger?.campaignId,
+          branchId: request.ledger?.branchId,
+          worldId: request.ledger?.worldId,
+          stateVersion: request.ledger?.stateVersion,
+          profileFingerprint: request.ledger?.profileFingerprint,
         });
       } catch (error) {
         const category = transportErrorCategory(error);

@@ -16,6 +16,36 @@ function bridge(acquire, os = 'android') {
 }
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 
+test('planning execution: local QA proxy ports carry durable request identity but provider endpoints do not', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const original = global.fetch;
+  const seen = [];
+  global.fetch = async (url, options) => {
+    seen.push({ url, headers: options.headers });
+    return { status: 200, headers: new Map([['content-type', 'application/json']]), text: async () => '{}' };
+  };
+  const identity = { ...request, headers: { 'Content-Type': 'application/json' }, requestKind: 'campaign_plan',
+    logicalRequestId: 'campaign-plan:c1:b1', attemptId: 'attempt-123', attemptNo: 2, campaignId: 'c1',
+    branchId: 'b1', worldId: 'w1', stateVersion: 28, profileFingerprint: 'sha256:profile' };
+  try {
+    for (const port of ['18591', '18691']) {
+      await new transport.FetchHttpTransport().post({
+        ...identity, url: `http://10.0.2.2:${port}/v1/chat/completions`,
+      });
+    }
+    await new transport.FetchHttpTransport().post(identity);
+  } finally { global.fetch = original; }
+  assert.equal(seen.length, 3);
+  for (const item of seen.slice(0, 2)) {
+    assert.equal(item.headers['x-phase9-attempt-id'], 'attempt-123');
+    assert.equal(item.headers['x-phase9-campaign-id'], 'c1');
+    assert.equal(item.headers['x-phase9-branch-id'], 'b1');
+    assert.equal(item.headers['x-phase9-state-version'], '28');
+    assert.equal(item.headers['x-phase9-profile-fingerprint'], 'sha256:profile');
+  }
+  assert.equal(Object.keys(seen[2].headers).some(key => key.startsWith('x-phase9-')), false);
+});
+
 test('planning execution: concurrent headless keep-alives never dispatch and only their own completed request releases them', async () => {
   const tokens = [], b = bridge(async (token, timeoutMs) => { tokens.push(token); assert.equal(timeoutMs, 900000); return true; });
   const a = await b.acquireLlmExecution(request), c = await b.acquireLlmExecution(request);
@@ -137,5 +167,47 @@ test('planning execution: a fetch body finishing after its elapsed deadline cann
   try {
     await assert.rejects(new transport.FetchHttpTransport().post({ ...request, timeoutMs: 10 }), HttpRequestTimeoutError);
     await b.llmRequestKeepAlive({ token });
+  } finally { global.fetch = original; }
+});
+
+test('planning execution: Android fetch transport counts complete SSE frames across byte chunks and decodes UTF-8', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const original = global.fetch;
+  const source = Buffer.from('data: {"text":"世界"}\r\n\r\ndata: [DONE]\r\n\r\n', 'utf8');
+  const split = source.indexOf(Buffer.from('世')) + 1; // split a multibyte UTF-8 character
+  const chunks = [source.subarray(0, split), source.subarray(split, split + 14), source.subarray(split + 14)];
+  global.fetch = async () => ({ status: 200, headers: new Map([['content-type', 'text/event-stream']]),
+    body: { getReader: () => ({ async read() {
+      const value = chunks.shift();
+      return value ? { done: false, value: new Uint8Array(value) } : { done: true };
+    } }) },
+  });
+  try {
+    const result = await new transport.FetchHttpTransport().post({ ...request, timeoutMs: 1000, streamActivityTimeoutMs: 100 });
+    assert.equal(result.body, source.toString('utf8'));
+    assert.equal(result.timings.streamFrameCount, 2);
+    assert.equal(result.timings.streamActivityMonitored, true);
+    assert.notEqual(result.timings.firstStreamFrameMs, null);
+  } finally { global.fetch = original; }
+});
+
+test('planning execution: Android SSE idle deadline ignores chunks without a complete frame', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const original = global.fetch;
+  global.fetch = async (_url, options) => ({ status: 200, headers: new Map([['content-type', 'text/event-stream']]),
+    body: { getReader: () => {
+      let first = true;
+      return { read() {
+        if (first) { first = false; return Promise.resolve({ done: false, value: Buffer.concat([Buffer.from('data: partial'), Buffer.from([10])]) }); }
+        return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('reader aborted')), { once: true }));
+      } };
+    } },
+  });
+  try {
+    await assert.rejects(new transport.FetchHttpTransport().post({ ...request, timeoutMs: 1000, streamActivityTimeoutMs: 25 }), error => {
+      assert.ok(error instanceof HttpRequestTimeoutError);
+      assert.equal(error.deadlineKind, 'sse_idle');
+      return true;
+    });
   } finally { global.fetch = original; }
 });

@@ -78,6 +78,10 @@ export interface LlmPhysicalRequestMetric {
     firstBodyByteMs?: number | null;
     completeResponseMs?: number | null;
     providerQueueMs?: number | null;
+    streamFrameCount?: number;
+    firstStreamFrameMs?: number | null;
+    maxStreamFrameGapMs?: number | null;
+    streamActivityMonitored?: boolean;
   };
   usage?: LlmUsage;
 }
@@ -146,6 +150,10 @@ export interface LlmRequest {
    */
   ledger?: {
     logicalRequestId: string;
+    /** Physical attempt identity, attached by the durable ledger before transport. */
+    attemptId?: string;
+    attemptNo?: number;
+    profileFingerprint?: string;
     /** Durable aggregate cap for this logical request, including repairs. */
     physicalAttemptLimit?: number;
     requestKind: string;

@@ -20,3 +20,16 @@ export function physicalRequestTimeoutMs(baseTimeoutMs: number, kind: LlmRequest
   const planningDeadline = tier === 'max' ? 1_200_000 : 900_000;
   return Math.min(1_200_000, Math.max(baseTimeoutMs, planningDeadline));
 }
+
+/** P9-O2 applies only to high/max extended requests that actually use SSE. */
+export function streamActivityTimeoutMs(
+  kind: LlmRequestKind | undefined,
+  tier: ReasoningTier,
+  supportsStreaming: boolean,
+): number | undefined {
+  if (!kind || !EXTENDED_OPERATION_KINDS.includes(kind) || tier === 'low' || !supportsStreaming) return undefined;
+  return 60_000;
+}
+
+/** A live stream may run to this hard cap even when frames keep arriving. */
+export const STREAMING_OPERATION_HARD_TIMEOUT_MS = 1_200_000;

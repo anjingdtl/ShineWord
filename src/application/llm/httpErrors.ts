@@ -2,8 +2,8 @@
  * A response abort, socket reset or user cancellation proves no duration. */
 export class HttpRequestTimeoutError extends Error {
   readonly code = 'LLM_HTTP_DEADLINE_EXCEEDED';
-  constructor(readonly timeoutMs: number) {
-    super('LLM request timed out.');
+  constructor(readonly timeoutMs: number, readonly deadlineKind: 'absolute' | 'sse_idle' = 'absolute') {
+    super(deadlineKind === 'sse_idle' ? 'LLM SSE stream had no complete event before its activity deadline.' : 'LLM request timed out.');
     this.name = 'HttpRequestTimeoutError';
   }
 }

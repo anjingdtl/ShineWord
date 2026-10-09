@@ -159,3 +159,38 @@ test('QA HTTP early response disconnect is not confused with its full-body deadl
   });
   assert.equal(sent, 1);
 });
+
+test('QA HTTP SSE activity deadline ignores arbitrary chunks and expires without a complete frame', async t => {
+  let sent = 0;
+  const endpoint = await listen(t, http.createServer(async (req, res) => {
+    for await (const _ of req) {} sent++;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const timer = setInterval(() => { if (!res.destroyed) res.write('data: partial'); }, 15);
+    res.on('close', () => clearInterval(timer));
+  }));
+  await assert.rejects(postQaHttp({ url: endpoint, body: '{}', headers: {}, timeoutMs: 500, streamActivityTimeoutMs: 60 }), error => {
+    assert.equal(error.code, 'LLM_HTTP_DEADLINE_EXCEEDED');
+    assert.equal(error.deadlineKind, 'sse_idle');
+    assert.equal(error.timeoutMs, 60);
+    return true;
+  });
+  assert.equal(sent, 1);
+});
+
+test('QA HTTP SSE activity monitor counts complete CRLF frames across chunk boundaries', async t => {
+  let sent = 0;
+  const endpoint = await listen(t, http.createServer(async (req, res) => {
+    for await (const _ of req) {} sent++;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: one\r');
+    setTimeout(() => res.write('\n\r'), 20);
+    setTimeout(() => res.write('\ndata: two\r\n\r\n'), 40);
+    setTimeout(() => res.end('data: [DONE]\r\n\r\n'), 65);
+  }));
+  const response = await postQaHttp({ url: endpoint, body: '{}', headers: {}, timeoutMs: 500, streamActivityTimeoutMs: 100 });
+  assert.equal(response.timings.streamActivityMonitored, true);
+  assert.equal(response.timings.streamFrameCount, 3);
+  assert.ok(response.timings.firstStreamFrameMs >= 0);
+  assert.ok(response.timings.maxStreamFrameGapMs >= 0);
+  assert.equal(sent, 1);
+});

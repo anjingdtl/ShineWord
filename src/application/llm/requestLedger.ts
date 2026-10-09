@@ -169,7 +169,12 @@ export class LedgeredProvider implements LlmProvider {
     await this.store.updateAttempt(attempt.attemptId, { status: 'sent' });
 
     try {
-      const response = await this.inner.complete({ ...request, maxPhysicalRequests: 1 });
+      const response = await this.inner.complete({
+        ...request,
+        ledger: { ...meta, attemptId: attempt.attemptId, attemptNo: attempt.attemptNo,
+          profileFingerprint: this.options.modelProfileFingerprint },
+        maxPhysicalRequests: 1,
+      });
       const patch: LlmAttemptPatch = {
         status: 'succeeded',
         responseJson: JSON.stringify(response),
