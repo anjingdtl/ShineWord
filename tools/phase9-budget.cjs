@@ -250,12 +250,20 @@ function createScopedPhysicalBudget({ filePath, expectedCapPhysicalRequests, exp
     const owner = String(meta.owner ?? '').trim();
     const requestKind = String(meta.requestKind ?? '').trim();
     const attemptId = String(meta.attemptId ?? '').trim();
+    const profileFingerprint = String(meta.profileFingerprint ?? '').trim();
     if (!owner || owner.length > 80 || /[\r\n]/.test(owner)) throw new Error('Invalid scoped Phase 9 dispatch owner.');
     if (!requestKind || requestKind.length > 80 || /[\r\n]/.test(requestKind)) throw new Error('Scoped Phase 9 dispatch request kind is required.');
     if (!attemptId || attemptId.length > 200 || /[\r\n]/.test(attemptId)) throw new Error('Scoped Phase 9 dispatch attempt identity is required.');
+    if (!profileFingerprint || profileFingerprint.length > 200 || /[\r\n]/.test(profileFingerprint)) {
+      throw new Error('Scoped Phase 9 model profile fingerprint is required.');
+    }
     const reservationId = `p9-${id()}`;
     updateManifest(manifest => {
       const rows = manifest.physicalDispatchAudit;
+      const expectedFingerprint = manifest.inputs?.profileFingerprint;
+      if (typeof expectedFingerprint === 'string' && profileFingerprint !== expectedFingerprint) {
+        throw new Error('Scoped Phase 9 request model profile differs from its pinned identity; refusing dispatch.');
+      }
       if (rows.some(row => row.attemptId === attemptId)) throw new Error('This durable LLM attempt already has a physical dispatch reservation.');
       const unresolved = rows.filter(row => row.status === 'reserved').length;
       if (manifest.spentPhysicalRequests + unresolved >= manifest.capPhysicalRequests) {
@@ -268,7 +276,7 @@ function createScopedPhysicalBudget({ filePath, expectedCapPhysicalRequests, exp
         ...(typeof meta.branchId === 'string' ? { branchId: meta.branchId } : {}),
         ...(typeof meta.worldId === 'string' ? { worldId: meta.worldId } : {}),
         ...(Number.isInteger(meta.stateVersion) ? { stateVersion: meta.stateVersion } : {}),
-        ...(typeof meta.profileFingerprint === 'string' ? { profileFingerprint: meta.profileFingerprint } : {}),
+        profileFingerprint,
         status: 'reserved', reservedAt: now(), processId: process.pid };
       rows.push(reservation);
       manifest.lastReservation = { reservationId, owner, requestKind, at: reservation.reservedAt };

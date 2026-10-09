@@ -46,7 +46,8 @@ test('Phase9 emulator proxy binds each request to the shared scoped ledger and f
     res.write(stream.slice(0, 27)); res.end(stream.slice(27));
   }));
   const metrics = [];
-  const endpoint = await listen(t, createQaProxy({ endpoint: upstream, budget, log: metric => metrics.push(metric) }));
+  const endpoint = await listen(t, createQaProxy({ endpoint: upstream, expectedModel: 'test-model',
+    capabilities: { supportsStreaming: true }, budget, log: metric => metrics.push(metric) }));
   const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer test-only',
     'x-phase9-request-kind': 'narrator', 'x-phase9-logical-request-id': 'turn:c1:b1',
     'x-phase9-attempt-id': 'attempt-proxy-1', 'x-phase9-attempt-no': '1', 'x-phase9-campaign-id': 'c1',
@@ -70,6 +71,32 @@ test('Phase9 emulator proxy binds each request to the shared scoped ledger and f
   manifest = budget.readManifest();
   assert.equal(manifest.spentPhysicalRequests, 1);
   assert.equal(JSON.stringify(metrics).includes('test-only'), false);
+});
+test('Phase9 scoped proxy rejects model drift and unconfigured streaming before upstream dispatch', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'phase9-proxy-profile-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, 'dispatch-budget.json');
+  initializeScopedBudgetManifest({ filePath, scopeId: 'simulator-profile-fence', capPhysicalRequests: 2,
+    inputs: { llm: { endpoint: 'http://placeholder.invalid/v4', model: 'test-model', capabilities: { supportsStreaming: false } },
+      profileFingerprint: 'sha256:test-profile' } });
+  const budget = createScopedPhysicalBudget({ filePath, expectedScopeId: 'simulator-profile-fence', expectedCapPhysicalRequests: 2 });
+  let sent = 0;
+  const upstream = await listen(t, http.createServer(async (req, res) => {
+    for await (const _ of req) {} sent++; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
+  }));
+  const endpoint = await listen(t, createQaProxy({ endpoint: upstream, expectedModel: 'test-model',
+    capabilities: { supportsStreaming: false }, budget }));
+  const makeHeaders = attemptId => ({ 'Content-Type': 'application/json', 'x-phase9-request-kind': 'narrator',
+    'x-phase9-attempt-id': attemptId, 'x-phase9-profile-fingerprint': 'sha256:test-profile' });
+  const modelDrift = await fetch(endpoint + '/chat/completions', { method: 'POST', headers: makeHeaders('attempt-model-drift'),
+    body: JSON.stringify({ model: 'other-model', messages: [] }) });
+  assert.equal(modelDrift.status, 400); assert.equal(sent, 0);
+  const unsupportedStream = await fetch(endpoint + '/chat/completions', { method: 'POST', headers: makeHeaders('attempt-stream-unconfigured'),
+    body: JSON.stringify({ model: 'test-model', stream: true, messages: [] }) });
+  assert.equal(unsupportedStream.status, 400); assert.equal(sent, 0);
+  const manifest = budget.readManifest();
+  assert.equal(manifest.spentPhysicalRequests, 0);
+  assert.deepEqual(manifest.physicalDispatchAudit.map(row => row.status), ['not_sent', 'not_sent']);
 });
 test('Phase9 QA upstream disconnect remains outcome_unknown and production SQLite refuses replay', async t => {
   let sent = 0, reserved = 0; const metrics = [];

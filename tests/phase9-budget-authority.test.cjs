@@ -98,13 +98,13 @@ test('Phase 9 interrupted reservation remains charged against the hard stop afte
   assert.equal(manifest.budget.physicalDispatchAudit[0].status, 'reserved');
 });
 
-function tempScopedManifest(t, cap = 12) {
+function tempScopedManifest(t, cap = 12, profileFingerprint = 'sha256:profile-safe') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'phase9-scoped-budget-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const filePath = path.join(dir, 'dispatch-budget.json');
   const scopeId = 'simulator-longrun-test';
   initializeScopedBudgetManifest({ filePath, scopeId, capPhysicalRequests: cap,
-    inputs: { llm: { endpoint: 'https://example.invalid/v4', model: 'test-model' } } });
+    inputs: { llm: { endpoint: 'https://example.invalid/v4', model: 'test-model' }, profileFingerprint } });
   return { filePath, scopeId, cap, budget: createScopedPhysicalBudget({ filePath, expectedScopeId: scopeId, expectedCapPhysicalRequests: cap }) };
 }
 
@@ -118,6 +118,7 @@ test('scoped simulator budget charges dispatched and unknown requests once; dupl
   const { filePath, budget, cap, scopeId } = tempScopedManifest(t, 2);
   assert.throws(() => initializeScopedBudgetManifest({ filePath, scopeId, capPhysicalRequests: cap }), /already exists/);
   assert.throws(() => budget.reservePhysicalRequest({ owner: 'android:phase9-proxy', requestKind: 'narrator' }), /attempt identity/);
+  assert.throws(() => budget.reservePhysicalRequest(scopedRequest('attempt-wrong-profile', { profileFingerprint: 'sha256:wrong' })), /differs from its pinned identity/);
   const unknown = budget.reservePhysicalRequest(scopedRequest('attempt-unknown'));
   budget.markPhysicalRequestDispatched(unknown);
   budget.markPhysicalRequestDispatched(unknown);
@@ -155,7 +156,7 @@ test('host and emulator proxy processes share one scoped simulator budget under 
   const runOne = index => new Promise((resolve, reject) => {
     const code = `const b=require(${JSON.stringify(modulePath)});`+
       `const r=b.reservePhysicalRequest({owner:${JSON.stringify(index % 2 ? 'android:phase9-proxy' : 'host:phase9')},`+
-      `requestKind:'narrator',attemptId:${JSON.stringify(`shared-attempt-${index}`)}});`+
+      `requestKind:'narrator',attemptId:${JSON.stringify(`shared-attempt-${index}`)},profileFingerprint:'sha256:profile-safe'});`+
       `b.markPhysicalRequestDispatched(r);b.finishPhysicalRequest(r,{outcome:'completed',httpStatus:200});`;
     const child = spawn(process.execPath, ['-e', code], { env: { ...process.env,
       PHASE9_BUDGET_SCOPE_FILE: filePath, PHASE9_BUDGET_SCOPE_CAP: String(cap), PHASE9_BUDGET_SCOPE_ID: scopeId },
@@ -174,7 +175,7 @@ test('host and emulator proxy processes share one scoped simulator budget under 
 });
 
 test('host HTTP adapter reserves and reconciles through the same scoped simulator authority', async t => {
-  const { budget } = tempScopedManifest(t, 1);
+  const { budget } = tempScopedManifest(t, 1, 'sha256:host-profile');
   const upstream = http.createServer(async (req, res) => {
     for await (const _ of req) {}
     res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');

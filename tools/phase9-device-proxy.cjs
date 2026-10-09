@@ -3,7 +3,7 @@ const http = require('node:http');
 const { postQaHttp } = require('./phase9-http.cjs');
 const defaultBudget = require('./phase9-budget.cjs');
 
-function createQaProxy({ endpoint, budget = defaultBudget, reserve, log = () => {}, timeoutMs = 1_200_000,
+function createQaProxy({ endpoint, expectedModel, capabilities, budget = defaultBudget, reserve, log = () => {}, timeoutMs = 1_200_000,
   streamActivityTimeoutMs = 60_000 } = {}) {
   if (typeof endpoint !== 'string' || !/^https?:\/\//i.test(endpoint)) throw new Error('Phase 9 proxy endpoint is invalid.');
   endpoint = endpoint.replace(/\/+$/, '');
@@ -48,6 +48,16 @@ function createQaProxy({ endpoint, budget = defaultBudget, reserve, log = () => 
       }
 
       const streaming = parsed.stream === true;
+      if (expectedModel && parsed.model !== expectedModel) {
+        if (reservationId) budget.finishPhysicalRequest(reservationId, { outcome: 'not_sent', failureClass: 'model_binding_mismatch' });
+        report({ status: 400, failure: 'qa_model_binding_mismatch', dispatched: false });
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"request model differs from the pinned QA profile"}'); return;
+      }
+      if (streaming && capabilities?.supportsStreaming === false) {
+        if (reservationId) budget.finishPhysicalRequest(reservationId, { outcome: 'not_sent', failureClass: 'streaming_not_configured' });
+        report({ status: 400, failure: 'qa_streaming_not_configured', dispatched: false });
+        res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"error":"streaming is not enabled by the pinned QA profile"}'); return;
+      }
       const response = await postQaHttp({
         url: `${endpoint}/chat/completions`,
         headers: { 'Content-Type': 'application/json', ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}) },
@@ -91,16 +101,23 @@ function createQaProxy({ endpoint, budget = defaultBudget, reserve, log = () => 
 module.exports = { createQaProxy };
 
 if (require.main === module) {
-  const fs = require('node:fs');
   const budgetModule = require('./phase9-budget.cjs');
-  const manifest = process.env.PHASE9_BUDGET_SCOPE_FILE
+  const scoped = Boolean(process.env.PHASE9_BUDGET_SCOPE_FILE);
+  const manifest = scoped
     ? budgetModule.readScopedBudgetManifest(process.env.PHASE9_BUDGET_SCOPE_FILE)
     : budgetModule.readManifest();
   const endpoint = manifest.inputs?.llm?.endpoint;
   if (typeof endpoint !== 'string' || !/^https?:\/\//i.test(endpoint)) {
     throw new Error('Phase 9 QA proxy endpoint is missing from the selected budget manifest.');
   }
-  const server = createQaProxy({ endpoint, budget: budgetModule, log: metric => console.log(JSON.stringify(metric)) });
+  const expectedModel = manifest.inputs?.llm?.model;
+  const capabilities = manifest.inputs?.llm?.capabilities;
+  if (scoped && (typeof expectedModel !== 'string' || !expectedModel.trim()
+    || !manifest.inputs?.profileFingerprint || typeof capabilities?.supportsStreaming !== 'boolean')) {
+    throw new Error('Scoped Phase 9 proxy requires the pinned model, profile fingerprint and capabilities.');
+  }
+  const server = createQaProxy({ endpoint, expectedModel, capabilities, budget: budgetModule,
+    log: metric => console.log(JSON.stringify(metric)) });
   const port = Number(process.env.PHASE9_PROXY_PORT || 18591);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Phase 9 QA proxy port is invalid.');
   server.listen(port, '0.0.0.0', () => {
