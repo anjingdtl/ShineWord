@@ -1,5 +1,7 @@
 # ShineWord 项目建设进度（PROGRESS）
 
+> 当前阶段入口（2026-10-09）：第九阶段仍为29 PASS / 2 FAIL / 9 NOT RUN；最新[检查点](reviews/phase9/HANDOFF_R69_CLOUD_2026-10-09.md)与[全通收尾方案](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)。本轮仅完成审计和执行方案，未新增产品验收PASS。下文保留旧阶段历史记录。
+
 更新日期：2026-10-03。当前第六阶段见 [FINAL_REPORT](reviews/phase6/FINAL_REPORT.md) 与 [逐项验收矩阵](reviews/phase6/ACCEPTANCE_MATRIX.md)。历史设备验收见 [Android 验收报告](reviews/android-qa-20261001/TEST_RESULTS.md)，发版产物见 [V0.4.2 发版记录](releases/V0.4.2.md)；更早阶段保留为历史快照。
 
 ## 当前阶段（V0.6.0 第六阶段建设，PR交付）

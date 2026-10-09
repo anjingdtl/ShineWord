@@ -1,5 +1,7 @@
 # Shine-TRPG 第九阶段改造方案：战役主线规划与持续后果
 
+> 2026-10-09 当前收尾执行入口：[全通测试与修复收尾方案](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)及[执行提示词](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_AGENT_PROMPT.md)。本文继续定义产品与验收合同；下方各批预算/状态是历史检查点，不能直接作为当前派发依据。已批准 A1/C-2 见 R69 优化方案。
+
 2026-10-09 UTC 输入接入见[资产与访问证据](reviews/phase9/CLOUD_INPUTS_2026-10-09.md)：真实小说生产导入及完整冷读已完成；GLM配置已提供，云代理拒绝域名，新增模型请求/决定0。预算1210/1500、矩阵29 PASS / 2 FAIL / 9 NOT RUN及全部验收门槛保持。
 
 2026-10-08 云端 R57–R59 执行记录见[续作报告](reviews/phase9/CLOUD_REVIEW_R57_R59_2026-10-08.md)：工程1167/1167通过，整体验收29 PASS / 2 FAIL / 9 NOT RUN；本方案真实旅程、质量、持续后果和性能门槛不变。

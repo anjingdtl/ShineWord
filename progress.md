@@ -1,5 +1,7 @@
 # ShineWord 第六阶段进度与本地接续
 
+> 当前阶段入口（2026-10-09）：第九阶段仍为29 PASS / 2 FAIL / 9 NOT RUN。R69后继预生成工程已修，真实全旅程尚未闭合；最新[检查点](docs/reviews/phase9/HANDOFF_R69_CLOUD_2026-10-09.md)、[全通收尾方案](docs/Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)、[执行提示词](docs/Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_AGENT_PROMPT.md)。下文为第六阶段历史进度，不能作为当前第九阶段状态或测试预算。
+
 记录日期：2026-10-03。范围依据：`docs/Shine-TRPG_PHASE6_CONSTRUCTION_PLAN.md`，方案入库提交 `51033973445825f01b730b7e62eec0a3352414e1`。本文件记录实际完成范围，不把工程通过等同于全部内容、设备和性能验收通过。
 
 ## 当前交付

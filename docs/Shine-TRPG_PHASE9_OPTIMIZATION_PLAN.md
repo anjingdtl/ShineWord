@@ -1,5 +1,7 @@
 # Shine-TRPG 第九阶段优化改造方案（R69）
 
+> 2026-10-09 执行补充与算术更正：[全通收尾方案](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)。A1/C-2批准继续有效；P9-O1在`a82a0ea`已实现。批准继承5后剩余75决定，回合请求下界150，按原额外假设估算应为173而非下文历史171；还须核算基线、记忆、补建和修复。下文原估算及施工顺序保留为R69历史合同，后续按新方案退出门执行，预算仍不重置/增额。
+
 - 编写日期：2026-10-09（Asia/Shanghai）。
 - 文档状态：V1.0，**已获用户裁决批准后生效**；本文是改造与验收合同，不是完成报告。
 - 依据文档：[独立诊断报告](reviews/phase9/INDEPENDENT_DIAGNOSIS_2026-10-09.md)（根因与证据表）、[第九阶段建设方案](Shine-TRPG_PHASE9_CONSTRUCTION_PLAN.md)（原验收合同）、[R68 交接](reviews/phase9/HANDOFF_R68_2026-10-09.md)。

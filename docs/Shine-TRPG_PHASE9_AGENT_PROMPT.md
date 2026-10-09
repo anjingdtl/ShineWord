@@ -1,5 +1,7 @@
 # 第九阶段本地 Agent 开发与测试提示词
 
+> 原施工提示词保留为历史资料。R69之后的全通收尾使用[当前执行方案](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)与[新执行提示词](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_AGENT_PROMPT.md)，先核对原库、当前预算与已批准A1/C-2，不按本文旧基线重新初始化已完成工作。
+
 配套方案：[Shine-TRPG_PHASE9_CONSTRUCTION_PLAN.md](Shine-TRPG_PHASE9_CONSTRUCTION_PLAN.md)。
 
 将下面横线之间的内容作为新本地开发会话的完整提示词。它授权本地实现与必要测试；本提示词文件本身不表示已经执行。

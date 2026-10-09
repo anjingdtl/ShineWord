@@ -1,5 +1,7 @@
 # Shine-TRPG 第九阶段续作 Agent 提示词（R66 之后）
 
+> 历史提示词，停止直接执行下方代码块。其R66“唯一权威”、1283预算、turn-0002计数、A19“1/2已证”和J1全20 UI已被R67–R69及已批准C-2覆盖。“全PASS或诚实未完交接”也不能同作完成定义。当前使用[全通收尾方案](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)和[新执行提示词](Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_AGENT_PROMPT.md)；旧内容保留供追溯。
+
 用法：把下面 ```text 代码块整段复制给下一个 Agent。提示词自包含；接手 Agent 应先读列出的文档再动手。
 
 ```text
