@@ -24,6 +24,7 @@ import type {
 } from '../../application/ports/worldStore';
 import { mirrorSourceId, mirrorSourceIndex, StaleBuildCommitError } from '../../application/ports/worldStore';
 import { sanitizeTokenFragment } from '../../application/world/extraction';
+import { resolveRuleMappingEvidenceRefs } from '../../application/world/ruleMappingEvidence';
 import { canonicalStringify } from '../../domain/turns/canonical';
 import { requireCompiledRules, validateRuleEntryCapabilities } from '../../application/content/runtimeRules';
 import { createUnsupportedConstraintReview, readMappingConstraintReview, MAPPING_CONSTRAINT_REVIEW_KIND } from '../../application/worldPackage/mappingConstraintReview';
@@ -1172,8 +1173,24 @@ export class SqliteWorldStore implements WorldStore {
       }
       // 1M plan P4: rule mappings land in the SAME single transaction; the
       // stable mappingId makes replayed/duplicate commits idempotent.
+      const mappingFacts = input.ruleMappings?.length ? await this.listFacts(input.worldId, tx) : [];
       for (const mapping of input.ruleMappings ?? []) {
-        await this.saveRuleMappingTx(tx, mapping, input.createdAt);
+        if (mapping.worldId !== input.worldId) throw new Error('规则映射不属于当前世界，拒绝提交。');
+        const evidenceRefs = resolveRuleMappingEvidenceRefs(mapping.evidenceRefs, mappingFacts,
+          input.mappingEvidenceFormat ?? 'ids_or_legacy_quotes');
+        if (!evidenceRefs) {
+          await tx.execute(`INSERT INTO review_issues
+            (world_id,issue_id,kind,severity,detail_json,status,created_at,resolved_at)
+            VALUES (?,?,?,'major',?,'open',?,NULL)
+            ON CONFLICT(world_id,issue_id) DO UPDATE SET detail_json=excluded.detail_json,status='open',resolved_at=NULL`,
+          [input.worldId, `mapping-evidence-${mapping.mappingId}`, 'rule_mapping_evidence',
+            JSON.stringify({ mappingId: mapping.mappingId, reason: 'accepted_fact_reference_missing' }), input.updatedAt]);
+          continue;
+        }
+        await this.saveRuleMappingTx(tx, { ...mapping, evidenceRefs }, input.createdAt);
+        await tx.execute(`UPDATE review_issues SET status='resolved',resolved_at=?
+          WHERE world_id=? AND issue_id=? AND kind='rule_mapping_evidence' AND status='open'`,
+        [input.updatedAt, input.worldId, `mapping-evidence-${mapping.mappingId}`]);
       }
       if (input.completeChunk !== false) await tx.execute(
         `UPDATE source_chunks SET extraction_status = 'extracted' WHERE world_id = ? AND chunk_id = ?`,

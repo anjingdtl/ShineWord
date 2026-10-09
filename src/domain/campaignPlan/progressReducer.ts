@@ -50,6 +50,8 @@ export interface ProgressReducerInput {
   artifact?: CampaignContentArtifactV1;
   turnId: string;
   nextStateVersion: number;
+  /** Remaining allowance across all settlement passes in this transaction. */
+  nodeTransitionBudget?: number;
   consequenceTriggerBudget?: number;
   /** The commit adapter resolves effects before selecting a terminal ending. */
   evaluationMode?: 'progress_only' | 'ending_only';
@@ -69,6 +71,7 @@ export interface ProgressReducerOutput {
   result: 'no_change' | 'changed';
   /** Player-visible progress lines added this transaction. */
   progressLines: string[];
+  nodeTransitions: number;
 }
 
 function isTrue(condition: SituationCondition | null, facts: ConditionFacts): boolean {
@@ -205,7 +208,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
   const setStatus = (nodeId: string, status: CampaignRuntimeV1['nodeStates'][number]['status'],
     extra: Partial<CampaignRuntimeV1['nodeStates'][number]>): boolean => {
     const entry = stateById.get(nodeId);
-    if (!entry || entry.status === status) return false;
+    if (!entry || entry.status === status || transitions >= transitionLimit) return false;
     const from = entry.status;
     entry.status = status;
     if (status === 'active') entry.activatedAtVersion = input.nextStateVersion;
@@ -213,6 +216,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
       entry.resolvedAtVersion = input.nextStateVersion;
     }
     Object.assign(entry, extra);
+    transitions += 1;
     events.push({
       eventType: 'campaign_node_changed',
       payload: { nodeId, from, to: status, ...(extra.supersededBy ? { supersededBy: extra.supersededBy } : {}), ...(extra.supersedeReason ? { reason: extra.supersedeReason } : {}) },
@@ -222,6 +226,8 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
 
   let changed = false;
   let transitions = 0;
+  const transitionLimit = Math.max(0, Math.min(NODE_TRANSITION_BATCH_LIMIT,
+    input.nodeTransitionBudget ?? NODE_TRANSITION_BATCH_LIMIT));
 
   // --- Node lifecycle evaluation (bounded batch) ---
   for (let round = 0; input.evaluationMode !== 'ending_only' && runtime.campaignStatus === 'active' && round < NODE_TRANSITION_BATCH_LIMIT; round += 1) {
@@ -229,12 +235,12 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
     let roundChanged = false;
 
     for (const node of input.plan.nodes) {
-      if (transitions >= NODE_TRANSITION_BATCH_LIMIT) break;
+      if (transitions >= transitionLimit) break;
       const entry = stateById.get(node.nodeId);
       if (!entry) continue;
       if (['succeeded', 'failed', 'superseded', 'cancelled'].includes(entry.status)) continue;
       if (input.plan.startNodeIds.includes(node.nodeId) && node.activation === null && entry.status === 'planned') {
-        if (setStatus(node.nodeId, 'available', {})) { transitions += 1; roundChanged = true; }
+        if (setStatus(node.nodeId, 'available', {})) { roundChanged = true; }
       }
       if (entry.status === 'planned' && node.activation !== null) {
         const depsMet = node.statusDependencies.every(depId => {
@@ -242,7 +248,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
           return dep !== undefined && ['succeeded', 'superseded', 'cancelled'].includes(dep.status);
         });
         if (depsMet && isTrue(node.activation, currentFacts)) {
-          if (setStatus(node.nodeId, 'available', {})) { transitions += 1; roundChanged = true; }
+          if (setStatus(node.nodeId, 'available', {})) { roundChanged = true; }
         }
       }
       // Early completion (A17): evidence may already satisfy a stage the plan
@@ -252,7 +258,6 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         && completed.value && !completed.unknown) {
         const evidence = collectCompletionEvidence(node, input);
         if (setStatus(node.nodeId, 'succeeded', { completedEvidence: evidence })) {
-          transitions += 1;
           roundChanged = true;
           progressLines.push(`目标推进：${node.title}已完成。`);
         }
@@ -260,13 +265,12 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         // longer needed — superseded with an explicit reason, never re-run.
         const skippedDeps = collectTransitiveDependencies(node.nodeId, input.plan);
         for (const depId of skippedDeps) {
-          if (transitions >= NODE_TRANSITION_BATCH_LIMIT) break;
+          if (transitions >= transitionLimit) break;
           const depEntry = stateById.get(depId);
           const depNode = nodeById.get(depId);
           if (!depEntry || !depNode || depNode.role !== 'main') continue;
           if (!['planned', 'available', 'suspended', 'active'].includes(depEntry.status)) continue;
           if (setStatus(depId, 'superseded', { supersededBy: node.nodeId, supersedeReason: 'skipped_by_early_completion' })) {
-            transitions += 1;
             roundChanged = true;
           }
         }
@@ -275,14 +279,14 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
       entryGuard: if (entry.status === 'available' || entry.status === 'suspended' || entry.status === 'active') {
         if (!completed.value && !completed.unknown && node.failure !== null && isTrue(node.failure, currentFacts)) {
           if (setStatus(node.nodeId, 'failed', {})) {
-            transitions += 1; roundChanged = true;
+            roundChanged = true;
             progressLines.push(`目标受阻：${node.title}未能完成，后续方向需要调整。`);
           }
           break entryGuard;
         }
         if (node.cancellation !== null && isTrue(node.cancellation, currentFacts)) {
           if (setStatus(node.nodeId, 'cancelled', {})) {
-            transitions += 1; roundChanged = true;
+            roundChanged = true;
             progressLines.push(`阶段已取消：${node.title}。`);
           }
           break entryGuard;
@@ -292,7 +296,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         // pointer strand the ready content after adoption. An active concrete
         // stage keeps ownership; ordinary exploration never steals it.
         const primaryNode = runtime.primaryNodeId === null ? undefined : nodeById.get(runtime.primaryNodeId);
-        if (entry.status !== 'active' && (runtime.primaryNodeId === null
+        if (transitions < transitionLimit && entry.status !== 'active' && (runtime.primaryNodeId === null
           || (runtime.primaryNodeId === node.nodeId && node.coverage === 'concrete')
           || (node.coverage === 'concrete' && primaryNode?.coverage === 'provisional'))) {
           const depsMet = node.statusDependencies.every(depId => {
@@ -301,13 +305,12 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
           }) || node.statusDependencies.length === 0;
           if (depsMet) {
             if (node.coverage === 'concrete') {
-              entry.status = 'active';
-              entry.activatedAtVersion = input.nextStateVersion;
-              events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
+              setStatus(node.nodeId, 'active', {});
+            } else {
+              transitions += 1;
             }
             runtime.primaryNodeId = node.nodeId;
             runtime.publicObjectiveProjection = node.publicObjective;
-            transitions += 1;
             roundChanged = true;
             progressLines.push(`${node.coverage === 'concrete' ? '当前目标' : '后续方向待准备'}：${node.publicObjective}`);
           }
@@ -317,7 +320,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
 
     // Supersede pass: a succeeded node makes unneeded intermediate main nodes superseded.
     for (const node of input.plan.nodes) {
-      if (transitions >= NODE_TRANSITION_BATCH_LIMIT) break;
+      if (transitions >= transitionLimit) break;
       const entry = stateById.get(node.nodeId);
       if (!entry || !['planned', 'available', 'suspended', 'active'].includes(entry.status)) continue;
       if (node.role !== 'main' || node.coverage === 'provisional') continue;
@@ -328,7 +331,6 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
       });
       if (alternativeDone) {
         if (setStatus(node.nodeId, 'superseded', { supersededBy: node.alternativeNodeIds[0], supersedeReason: 'alternative_succeeded' })) {
-          transitions += 1;
           roundChanged = true;
         }
       }
@@ -341,11 +343,11 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
         runtime.primaryNodeId = null;
         for (const node of input.plan.nodes) {
           const entry = stateById.get(node.nodeId);
-          if (entry && entry.status === 'available') {
+          if (entry && entry.status === 'available' && transitions < transitionLimit) {
             if (node.coverage === 'concrete') {
-              entry.status = 'active';
-              entry.activatedAtVersion = input.nextStateVersion;
-              events.push({ eventType: 'campaign_node_changed', payload: { nodeId: node.nodeId, from: 'available', to: 'active' } });
+              setStatus(node.nodeId, 'active', {});
+            } else {
+              transitions += 1;
             }
             runtime.primaryNodeId = node.nodeId;
             runtime.publicObjectiveProjection = node.publicObjective;
@@ -454,6 +456,7 @@ export function evaluateCampaignProgress(input: ProgressReducerInput): ProgressR
     rewards,
     result: changed || events.length > 0 ? 'changed' : 'no_change',
     progressLines,
+    nodeTransitions: transitions,
   };
 }
 

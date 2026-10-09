@@ -1334,6 +1334,7 @@ async function runExtractionInternal(
     {
       sourceStore,
       runStore,
+      readRequestOutcome: (id, worldId) => runtime.llmLedger.readBuildRequestOutcome(id, worldId),
       worldStore: runtime.worldStore,
       extractor: coordinatorExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),
       groupExtractor: coordinatorGroupExtractor(effectiveProfile, requestGovernance, request => makeProvider().complete(request)),

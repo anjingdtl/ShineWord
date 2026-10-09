@@ -1633,7 +1633,11 @@ async function projectNamedMentionEvidence(store: SqliteWorldStore, entities: re
     if (facts.some(f => f.subjectEntityId === entity.entityId && (f.status === 'explicit' || f.status === 'inference'))) continue;
     const names = [entity.name, ...entity.aliases].filter(name => Array.from(name).length >= 2
       && !entities.some(other => other.entityId !== entity.entityId && [other.name,...other.aliases].includes(name)));
-    const support = facts.find(f => f.status === 'explicit' && f.sources.some(span => names.some(name => span.quote.includes(name))));
+    // An inferred relationship can still carry a verified literal name. Keep
+    // its uncertainty on the mention rather than promoting the relationship
+    // or rejecting its otherwise evidenced dependency.
+    const support = facts.find(f => (f.status === 'explicit' || f.status === 'inference')
+      && f.sources.some(span => names.some(name => span.quote.includes(name))));
     if (!support) continue;
     const spans = support.sources.filter(span => names.some(name => span.quote.includes(name)));
     const mention = names.find(name => spans[0]!.quote.includes(name))!;

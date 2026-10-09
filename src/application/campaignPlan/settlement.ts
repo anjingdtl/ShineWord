@@ -1,14 +1,16 @@
 import type { ActionContract } from '../../domain/turns/types';
 import type { RollGrade } from '../../domain/rules/types';
 import type { ActorCard } from '../../domain/characters/card';
-import type { CampaignContentArtifactV1, CampaignPlanV1 } from '../../domain/campaignPlan/types';
+import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1, DeferredConsequenceRecordV1 } from '../../domain/campaignPlan/types';
 import type { GameStateSnapshot } from '../../domain/state/types';
-import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW,
+import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW, NODE_TRANSITION_BATCH_LIMIT, CONSEQUENCE_TRIGGER_LIMIT,
   type BranchEventRecord } from '../../domain/campaignPlan/progressReducer';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { applyEffects } from '../../domain/state/effects';
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
+import { canonicalJsonOf } from './hashing';
+import { outcomeSetHashFor } from './localCompile';
 import type { SqliteDatabase } from '../ports/sqlite';
 
 export interface CampaignSettlementInput {
@@ -49,6 +51,29 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
     rel.updatedTurnId = input.turnId;
     events.push({ eventType: 'relationship_changed', payload: { fromActorId, toActorId, delta } });
   };
+  const scheduleConsequences = (target: CampaignRuntimeV1, ids: readonly string[],
+    owners: readonly CampaignContentArtifactV1[]): void => {
+    for (const consequenceId of ids) {
+      const candidates = owners.flatMap(owner => owner.consequenceTemplates.filter(t => t.consequenceId === consequenceId));
+      const template = candidates[0];
+      if (!template || candidates.some(t => canonicalJsonOf(t) !== canonicalJsonOf(template))) {
+        throw new Error(`战役后果 ${consequenceId} 的来源模板缺失或有歧义，拒绝提交。`);
+      }
+      const scheduled = registerDeferredConsequence(target, {
+        consequenceId: template.consequenceId, description: template.description,
+        triggerCondition: template.triggerCondition, sourceEventRefs: [input.turnId], affectedActors: [],
+        effectSpecs: template.effectSpecs, visibility: template.visibility,
+      }, input.turnId, nextVersion);
+      if (scheduled) events.push(scheduled);
+    }
+  };
+  // Pending records retain their original effects across replans. Resolve a
+  // nested template against that archived definition, never a same-ID revision.
+  const consequenceOwners = (record: DeferredConsequenceRecordV1): CampaignContentArtifactV1[] =>
+    input.artifacts.filter(owner => owner.consequenceTemplates.some(t =>
+      t.consequenceId === record.consequenceId && t.description === record.description
+      && t.visibility === record.visibility && canonicalJsonOf(t.triggerCondition) === canonicalJsonOf(record.triggerCondition)
+      && canonicalJsonOf(t.effectSpecs) === canonicalJsonOf(record.effectSpecs)));
   // 1. Per-grade campaign outcome extensions frozen in the contract.
   const extension = input.action?.contract.campaignEffects?.[input.action.grade];
   if (extension) {
@@ -67,21 +92,11 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
     for (const shift of extension.relationshipShifts) {
       shiftRelationship(shift.fromActorId, shift.toActorId, shift.delta);
     }
-    const ownerArtifact = input.artifacts.find(item => item.situations.some(s => s.entryId === input.action?.contract.methodRef?.situationId));
-    for (const consequenceId of extension.scheduledConsequences) {
-      const template = ownerArtifact?.consequenceTemplates.find(item => item.consequenceId === consequenceId);
-      if (!template) continue;
-      const scheduled = registerDeferredConsequence(runtime, {
-        consequenceId: template.consequenceId,
-        description: template.description,
-        triggerCondition: template.triggerCondition,
-        sourceEventRefs: [input.turnId],
-        affectedActors: [],
-        effectSpecs: template.effectSpecs,
-        visibility: template.visibility,
-      }, input.turnId, nextVersion);
-      if (scheduled) events.push(scheduled);
-    }
+    const ref = input.action?.contract.methodRef;
+    const owners = input.artifacts.filter(item => item.situations.some(s => s.entryId === ref?.situationId
+      && s.definition.methods.some(m => m.methodId === ref.methodId
+        && (!ref.outcomeSetHash || outcomeSetHashFor(m) === ref.outcomeSetHash))));
+    scheduleConsequences(runtime, extension.scheduledConsequences, owners);
   }
   // 2. Progress reducer over the post-settlement state (history preloaded).
   const authorityEvents = [...(input.action?.contract.outcomes[input.action.grade].effects ?? []).map(effect => ({
@@ -93,55 +108,7 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
   }));
   const artifact = input.artifacts.find(item => item.planId === runtime.planBinding.planId
     && item.planRevision === runtime.planBinding.revision) ?? input.artifacts[0];
-  let outcome = evaluateCampaignProgress({
-    plan: input.plan, runtime, state: nextState,
-    transactionEvents, historyEvents: input.historyEvents, artifact,
-    evaluationMode: 'progress_only',
-    turnId: input.turnId, nextStateVersion: nextVersion,
-  });
-  nextState.campaignRuntime = outcome.runtime;
-  events.push(...outcome.events);
-  const rewards = [...outcome.rewards];
-  // A triggered consequence must apply its effects in this Prepared state,
-  // not merely publish a "triggered" label. Re-evaluate progress afterwards.
-  const appliedConsequences = new Set(runtime.deferredConsequences.filter(c => c.status === 'triggered').map(c => c.idempotencyKey));
-  let consequenceCount = 0;
-  for (let round = 0; round < 4; round += 1) {
-    const triggered = nextState.campaignRuntime.deferredConsequences.filter(c => c.status === 'triggered' && !appliedConsequences.has(c.idempotencyKey));
-    if (!triggered.length) break;
-    for (const consequence of triggered) {
-      appliedConsequences.add(consequence.idempotencyKey);
-      consequenceCount += 1;
-      const compiled = compileCampaignEffects(consequence.effectSpecs, { actorResolver: campaignActor });
-      compiled.effects = bindCampaignResources(compiled.effects, nextState, (nextState.cards ?? []).map(c => ({ actorId: c.actorId, resourceMax: (c.card as { resourceMax: Record<string, number> }).resourceMax })));
-      Object.assign(nextState, applyEffects(nextState, compiled.effects));
-      for (const effect of compiled.effects) events.push({ eventType: effect.op === 'recordEvent' ? effect.eventType : 'campaign_consequence_effect', payload: { consequenceId: consequence.consequenceId, ...effect } });
-      const causal = applySituationRuntime({ nextState: { ...nextState, stateVersion: nextVersion }, sourceTurnId: input.turnId, playerActorId,
-        definitions: input.artifacts.flatMap(a => a.situations.map(s => ({ situationId: s.entryId, definition: s.definition }))), methodOps: compiled.transitions });
-      applySituationProjection(nextState, causal);
-      events.push(...causal.events);
-      for (const grant of compiled.knowledgeGrants) {
-        nextState.discoveries ??= [];
-        if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === grant.actorId)) {
-          nextState.discoveries.push({ entryId: grant.entryId, actorId: grant.actorId, knownAtStateVersion: nextVersion, sourceTurnId: input.turnId, knownVia: 'told' });
-          events.push({ eventType: 'knowledge_discovered', payload: grant });
-        }
-      }
-      for (const shift of compiled.relationshipShifts) {
-        shiftRelationship(shift.fromActorId, shift.toActorId, shift.delta);
-      }
-    }
-    outcome = evaluateCampaignProgress({ plan: input.plan, runtime: nextState.campaignRuntime, state: nextState,
-      evaluationMode: 'progress_only',
-      consequenceTriggerBudget: Math.max(0, 4 - consequenceCount),
-      transactionEvents: [...transactionEvents, ...events.map((event, index) => ({ ...event, eventKey: `campaign:${index}`, stateVersion: nextVersion }))],
-      historyEvents: input.historyEvents, artifact, turnId: input.turnId, nextStateVersion: nextVersion });
-    nextState.campaignRuntime = outcome.runtime;
-    events.push(...outcome.events);
-    rewards.push(...outcome.rewards);
-  }
-  // 3. Stage rewards: applied locally, deduped by runtime.grantedRewardKeys.
-  if (artifact) {
+  const applyRewards = (rewards: ReturnType<typeof evaluateCampaignProgress>['rewards']): void => {
     for (const reward of rewards) {
       for (const spec of reward.policy.rewards) {
         if (spec.kind === 'knowledge') {
@@ -186,10 +153,54 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
         }
       }
     }
+  };
+  // Rewards and deferred effects can both satisfy later conditions. Reach a
+  // bounded closure in this Prepared state before any ending is selected.
+  const appliedConsequences = new Set(runtime.deferredConsequences.filter(c => c.status === 'triggered').map(c => c.idempotencyKey));
+  let consequenceCount = 0;
+  let nodeTransitions = 0;
+  for (let round = 0; round <= NODE_TRANSITION_BATCH_LIMIT + CONSEQUENCE_TRIGGER_LIMIT; round += 1) {
+    const outcome = evaluateCampaignProgress({ plan: input.plan, runtime: nextState.campaignRuntime!, state: nextState,
+      evaluationMode: 'progress_only', nodeTransitionBudget: NODE_TRANSITION_BATCH_LIMIT - nodeTransitions,
+      consequenceTriggerBudget: CONSEQUENCE_TRIGGER_LIMIT - consequenceCount,
+      transactionEvents: [...transactionEvents, ...events.map((event, index) => ({ ...event, eventKey: `campaign:${index}`, stateVersion: nextVersion }))],
+      historyEvents: input.historyEvents, artifact, turnId: input.turnId, nextStateVersion: nextVersion });
+    nodeTransitions += outcome.nodeTransitions;
+    nextState.campaignRuntime = outcome.runtime;
+    events.push(...outcome.events);
+    applyRewards(outcome.rewards);
+    const triggered = outcome.runtime.deferredConsequences.filter(c => c.status === 'triggered' && !appliedConsequences.has(c.idempotencyKey));
+    for (const consequence of triggered) {
+      appliedConsequences.add(consequence.idempotencyKey);
+      consequenceCount += 1;
+      const compiled = compileCampaignEffects(consequence.effectSpecs, { actorResolver: campaignActor });
+      compiled.effects = bindCampaignResources(compiled.effects, nextState, (nextState.cards ?? []).map(c => ({ actorId: c.actorId, resourceMax: (c.card as { resourceMax: Record<string, number> }).resourceMax })));
+      Object.assign(nextState, applyEffects(nextState, compiled.effects));
+      for (const effect of compiled.effects) events.push({ eventType: effect.op === 'recordEvent' ? effect.eventType : 'campaign_consequence_effect', payload: { consequenceId: consequence.consequenceId, ...effect } });
+      const causal = applySituationRuntime({ nextState: { ...nextState, stateVersion: nextVersion }, sourceTurnId: input.turnId, playerActorId,
+        definitions: input.artifacts.flatMap(a => a.situations.map(s => ({ situationId: s.entryId, definition: s.definition }))), methodOps: compiled.transitions });
+      applySituationProjection(nextState, causal);
+      events.push(...causal.events);
+      for (const grant of compiled.knowledgeGrants) {
+        nextState.discoveries ??= [];
+        if (!nextState.discoveries.some(d => d.entryId === grant.entryId && d.actorId === grant.actorId)) {
+          nextState.discoveries.push({ entryId: grant.entryId, actorId: grant.actorId, knownAtStateVersion: nextVersion, sourceTurnId: input.turnId, knownVia: 'told' });
+          events.push({ eventType: 'knowledge_discovered', payload: grant });
+        }
+      }
+      for (const shift of compiled.relationshipShifts) {
+        shiftRelationship(shift.fromActorId, shift.toActorId, shift.delta);
+      }
+      scheduleConsequences(nextState.campaignRuntime!, compiled.scheduledConsequences, consequenceOwners(consequence));
+    }
+    if (!outcome.rewards.length && !triggered.length) break;
+    if (round === NODE_TRANSITION_BATCH_LIMIT + CONSEQUENCE_TRIGGER_LIMIT) {
+      throw new Error('战役结算未能在有界处理内收敛，拒绝提交。');
+    }
   }
   // Ending claims observe the complete prepared facts, including consequence
   // and reward effects. This pass cannot claim any additional unapplied grant.
-  const ending = evaluateCampaignProgress({ plan: input.plan, runtime: nextState.campaignRuntime, state: nextState,
+  const ending = evaluateCampaignProgress({ plan: input.plan, runtime: nextState.campaignRuntime!, state: nextState,
     evaluationMode: 'ending_only', transactionEvents: [...transactionEvents,
       ...events.map((event, index) => ({ ...event, eventKey: `campaign:${index}`, stateVersion: nextVersion }))],
     historyEvents: input.historyEvents, turnId: input.turnId, nextStateVersion: nextVersion });

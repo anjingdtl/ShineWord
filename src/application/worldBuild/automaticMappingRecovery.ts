@@ -4,7 +4,10 @@ import type { WorldStore } from '../ports/worldStore';
 export const AUTOMATIC_MAPPING_RETRY = 'mapping_auto_retry';
 
 export function isAutomaticMappingFailure(reason: string): boolean {
-  if (/outcome_unknown|unknown outcome|401|403|unauthorized|invalid.{0,12}(key|credential)|API key is missing|不支持思考|cannot reserve|capability.*insufficient/i.test(reason)) return false;
+  // 结果未知，请核对请求账本 is the shared transport's stable unknown-outcome
+  // phrase (elapsed deadline / incomplete body); the ledger replay guard owns
+  // those outcomes and automatic recovery must never loop into it.
+  if (/outcome_unknown|unknown outcome|结果未知，请核对请求账本|401|403|unauthorized|invalid.{0,12}(key|credential)|API key is missing|不支持思考|cannot reserve|capability.*insufficient/i.test(reason)) return false;
   return /truncat|finish_reason|思维链|未产生正文|no JSON|could not be parsed|proposal arrays|Mandatory protocol input|context length|prompt too long|input too long|network|offline|timeout|timed out|429|502|503|504|fetch failed|econn/i.test(reason);
 }
 

@@ -380,6 +380,33 @@ test('incremental closure reuses only certified compatible old evidence and does
  assert.ok(selectCanonSubset({...data,facts:[...data.facts,fresh],options:{...scoped,publishedEvidence:[{sourceFactIds:[old.factId],coverage:[{...r(0,100),normalizedTreeHash:sha('changed')}]}]}}).diagnostics.length);
 });
 
+test('scoped publication preserves inferred named-item evidence without promoting restraint or borrowing out-of-range facts',async()=>{
+ const h=await setup();try{
+  await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
+  await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+  const data=canon(24),item=entity('ent-lock','item','神罚之锁');
+  data.facts[0].predicate='current_location';data.facts[0].value={location:'旧桥'};
+  data.entities.push(item);
+  const restraint={...fact('restraint','hero',{item:'神罚之锁'}),status:'inference',confidence:0.85,
+   sources:[{chapterId:'ch-1',startOffset:30,endOffset:42,quote:'即使她被神罚之锁困住',quoteSha256:sha('即使她被神罚之锁困住')}]};
+  data.facts.push(restraint);
+  for(const e of data.entities)await h.worldStore.upsertEntity(e,now());
+  for(const f of data.facts)await h.worldStore.saveFact(f,now());
+  for(const e of data.events)await h.worldStore.saveEvent(e,now());
+  let calls=0;const input={worldStore:h.worldStore,provider:{async complete(){calls++;throw Error('Unexpected paid mapping');}},sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),mappingVersion:'local',mappingMode:'startup_local',createdAt:now(),requirePlayableOpening:true,incrementalMapping:options('opening',{openingFactLimit:40})};
+  const draft=await buildPackageDraftFromCanon(input);
+  const mention=draft.selection.facts.find(f=>f.subjectEntityId===item.entityId);
+  assert.ok(mention,'quoted item dependency closes despite inferred restraint');
+  assert.equal(mention.status,'inference');assert.equal(mention.confidence,0.85);
+  assert.deepEqual(mention.value,{mention:'神罚之锁'});
+  assert.equal((await h.worldStore.listFacts('w')).find(f=>f.factId==='restraint').status,'inference');
+  assert.equal(calls,0);assert.equal((await h.worldStore.listWorldPackages('w')).length,0);
+  const narrower={...input,incrementalMapping:options('incremental',{ranges:[{...range,startCp:20,endCp:28}]})};
+  await assert.rejects(buildPackageDraftFromCanon(narrower),/缺少当前开局可用的地点证据/);
+  assert.equal(calls,0,'no out-of-range inference becomes paid mapping context');
+ }finally{h.db.close()}
+});
+
 test('immutable entry versioning rewrites nested scene/card/item references and keeps prose',()=>{
  const {remapEntryReferences}=load('application/worldPackage/remapEntryReferences');
  const entry={entryId:'scene',kind:'scene',revision:1,dependencyIds:['actor','item'],definition:{name:'场所',description:'原著原句',actors:['actor'],visibleItems:['item'],zones:[{zoneId:'z',exits:[{toSceneId:'scene'}]}]}};

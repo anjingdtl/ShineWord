@@ -233,14 +233,15 @@ function compileNodes(
     if (stage.failure && failure === null) continue;
     const cancellation = stage.cancellation ? compileCondition(stage.cancellation, ctx, situationAliases, errors, knowledgeAliases) : null;
     if (stage.cancellation && cancellation === null) continue;
-    const sourceFactIds = (stage.provenance.sourceFactIds ?? []).filter(id => ctx.availableFactIds.has(id));
-    // Canon grounding is only claimed when the cited facts are LOCALLY
-    // verifiable; unverifiable citations downgrade to design_fill instead of
-    // rejecting the stage (创作补充不得伪装原著引用 — but a rejected stage is
-    // worse than an honest design_fill).
-    const provenance = sourceFactIds.length > 0
-      ? { kind: 'canon_inspired' as const, sourceFactIds, rationale: stage.provenance.rationale }
-      : { kind: 'design_fill' as const, sourceFactIds: [], rationale: `${stage.provenance.rationale}（原著引用未能本地核实，按设计补充处理）` };
+    const sourceFactIds = stage.provenance.sourceFactIds ?? [];
+    // A false citation is a validation failure, not permission to rewrite the
+    // model's provenance. Share the same contract as campaign clues.
+    if (sourceFactIds.some(id => !ctx.availableFactIds.has(id))
+      || (stage.provenance.kind === 'canon_inspired' && sourceFactIds.length === 0)
+      || (stage.provenance.kind === 'design_fill' && sourceFactIds.length > 0)) {
+      errors.push(`stage ${stage.nodeId}: provenance must use locally verified facts or an honest design_fill.`);
+    }
+    const provenance = { ...stage.provenance, sourceFactIds: [...sourceFactIds] };
     nodes.push({
       nodeId: stage.nodeId,
       role: stage.role,

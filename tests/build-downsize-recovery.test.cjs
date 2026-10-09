@@ -1,6 +1,6 @@
-// Build-downsize recovery: a transport TIMEOUT or an input-too-large 4xx on a
-// multi-slice batch must transactionally split the unit and shrink the queued
-// tail's source ratio instead of retrying the identical oversized body forever
+// Build-downsize recovery: only known provider rejections may split work.
+// An unobservable timeout retains its original identity for review. Input-too-
+// large 4xx may shrink the queued source ratio
 // (the "构建阶段 0/N 永远无法推进" stall). Also covers provider 400 error text
 // capture: sanitized, length-capped, and persisted on the request metric.
 'use strict';
@@ -220,19 +220,17 @@ function parseRanges(unit) {
   return Array.isArray(parsed) ? parsed : parsed.ranges;
 }
 
-test('timeout splits the batch, shrinks the tail ratio, and coverage still completes', async () => {
+test('timeout retains the original batch and source ratio for unknown-outcome review', async () => {
   const db = setupDb();
   try {
     const { done, units, planState, allChunksDone } = await runDownsizeScenario(db, timeoutFailure);
-    assert.equal(done.completed, true, 'run completes after timeout downsizing instead of stalling');
-    assert.ok(units.some(u => u.status === 'canceled'), 'the timed-out unit was replaced, not retried as-is');
-    assert.ok(units.some(u => u.parentUnitId !== null), 'split children exist');
-    assert.equal(planState.sourceRatio, 0.06, 'source ratio stepped down 0.12 -> 0.06 for the tail');
-    assert.ok(planState.replanCount >= 1, 'replan recorded');
-    assert.equal(await allChunksDone(), true, 'every chunk still covered exactly once');
-  } finally {
-    db.close();
-  }
+    assert.equal(done.completed, false);
+    assert.ok(units.some(u => u.status === 'needs_review' && u.errorCode === 'outcome_unknown'));
+    assert.ok(units.every(u => u.status !== 'canceled' && u.parentUnitId === null), 'no unknown dispatch is replaced by split work');
+    assert.equal(planState.sourceRatio, 0.12, 'unknown outcome cannot justify shrinking and redispatching');
+    assert.equal(planState.replanCount ?? 0, 0);
+    assert.equal(await allChunksDone(), false, 'unfinished coverage remains honest');
+  } finally { db.close(); }
 });
 
 test('input-too-large 400 splits the batch and the run still completes', async () => {

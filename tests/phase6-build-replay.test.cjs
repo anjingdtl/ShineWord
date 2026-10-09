@@ -104,7 +104,7 @@ async function linkMapping(h,id,logical) {
 }
 test('native-style opaque network failure is projected from the ledger, blocks resume/API replacement and never dispatches twice',async()=>{
   const h=await setup();try {
-    assert.equal((await h.runStore.listUnits(h.id))[0].errorCode,'network');
+    assert.equal((await h.runStore.listUnits(h.id))[0].errorCode,'outcome_unknown');
     const readiness=await h.runtime.segments.readReadiness({worldId:h.worldId});
     assert.equal(readiness.segments[0].status,'needs_review');assert.equal(readiness.segments[0].lastErrorCode,'outcome_unknown');
     const {tasks,projects}=modules(h), task=(await tasks.listBuildTasksForWorld(h.worldId))[0];
@@ -115,6 +115,18 @@ test('native-style opaque network failure is projected from the ledger, blocks r
     await h.sourceImport.runExtraction(h.id,profile,()=>{});assert.equal(h.calls(),1);
     assert.equal((await h.ledger.listAttempts(h.logical)).length,1);
   } finally {h.db.close()}
+});
+test('an exact approved build retry may dispatch once despite retained unknown metrics, then parks the new unknown',async()=>{
+  const h=await setup();try {
+    await h.ledger.acknowledgeBuildReplay(await h.ledger.readBuildReplay(h.id));
+    await h.sourceImport.resumeRun(h.id);
+    await h.sourceImport.runExtraction(h.id,profile,()=>{});
+    assert.equal(h.calls(),2,'formal approval permits one new attempt');
+    const attempts=await h.ledger.listAttempts(h.logical);
+    assert.equal(attempts.length,2);assert.ok(attempts[0].replayApprovedAt>0);
+    assert.equal(attempts[1].status,'outcome_unknown');assert.equal(attempts[1].replayApprovedAt,null);
+    await h.sourceImport.runExtraction(h.id,profile,()=>{});assert.equal(h.calls(),2);
+  }finally{h.db.close()}
 });
 test('exact approval preserves unknown usage and user pause; it sends nothing and a later interruption needs separate approval',async()=>{
   const h=await setup();try {

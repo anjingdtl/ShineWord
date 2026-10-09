@@ -128,7 +128,7 @@ const WINDOWED_BUDGET = {
  * verbatim quote, an unknown-target mapping, and a mapping citing an
  * invented quote that exists nowhere in the book.
  */
-function mappingGroupExtractor() {
+function mappingGroupExtractor(evidenceAtTail = false) {
   const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
   return {
     version: 'llm-group-extractor-1',
@@ -155,7 +155,7 @@ function mappingGroupExtractor() {
       // Deterministic verbatim fact at the head of the FIRST segment: the
       // quote and span are real, so checkEvidence must accept it and the
       // verified-evidence mapping below must survive.
-      const head = segments[0];
+      const head = segments[evidenceAtTail ? segments.length - 1 : 0];
       const cpLen = Math.min(12, [...head.text].length);
       const quote = [...head.text].slice(0, cpLen).join('');
       entities.set('陈青云', { entityKey: '陈青云', type: 'character', name: '陈青云' });
@@ -186,7 +186,7 @@ function mappingGroupExtractor() {
   };
 }
 
-test('T5 ruleMappings land through the production extract->commit path with honest rejection', async () => {
+for (const evidenceAtTail of [false, true]) test(`T5 ruleMappings bind stored facts from the ${evidenceAtTail ? 'last' : 'first'} member chunk with honest rejection`, async () => {
   const db = setupDb();
   try {
     const { store: sourceStore } = await prepareSource(db);
@@ -202,7 +202,7 @@ test('T5 ruleMappings land through the production extract->commit path with hone
         budget: WINDOWED_BUDGET,
       },
     );
-    const groupExtractor = mappingGroupExtractor();
+    const groupExtractor = mappingGroupExtractor(evidenceAtTail);
     const done = await executeRun({
       sourceStore, runStore, worldStore, extractor: fixture, groupExtractor,
       sha256Hex: sha.sha256Hex, owner: 'p4', budget: WINDOWED_BUDGET,
@@ -229,11 +229,35 @@ test('T5 ruleMappings land through the production extract->commit path with hone
     assert.equal(mapping.rulesetVersion, '0.4.0');
     assert.deepEqual(mapping.mapping, { skillId: 'sword', rank: 'trained' });
     assert.equal(mapping.evidenceRefs.length, 1);
+    assert.ok(mapping.evidenceRefs.every(ref => facts.some(fact => fact.factId === ref)),
+      'durable mapping evidence must reference stored fact IDs, never raw quotes');
+    const { exportPortableCanon } = require('../dist/application/export/portableCanon');
+    const manifest = { worldId: 'w-p4', sourceSha256: (await worldStore.getWorld('w-p4')).sourceSha256, contentHash: 'a'.repeat(64) };
+    const exported = await exportPortableCanon(worldStore, manifest, [], sha.sha256Hex);
+    assert.deepEqual(exported.ruleMappings[0].evidenceRefs, mapping.evidenceRefs);
+    const originalQuote = facts.find(f => f.factId === mapping.evidenceRefs[0]).sources[0].quote;
+    await worldStore.saveRuleMapping({ ...mapping, evidenceRefs: [originalQuote] }, new Date().toISOString());
+    const legacy = await worldStore.listRuleMappings('w-p4');
+    const portable = await exportPortableCanon(worldStore, manifest, [], sha.sha256Hex);
+    assert.ok(portable.ruleMappings[0].evidenceRefs.every(ref => facts.some(f => f.factId === ref)));
+    assert.deepEqual(await worldStore.listRuleMappings('w-p4'), legacy, 'export normalization never rewrites historical canon');
+    await worldStore.saveRuleMapping({ ...mapping, evidenceRefs: ['unverified legacy quote'] }, new Date().toISOString());
+    await assert.rejects(exportPortableCanon(worldStore, manifest, [], sha.sha256Hex), /拒绝导出/);
     // Stable idempotent identity derived from world+target+kind+token.
     assert.equal(mapping.mappingId, ruleMappingIdFor('w-p4', mapping.targetEntityId, 'skill', { skillId: 'sword', rank: 'trained' }));
   } finally {
     db.close();
   }
+});
+
+test('extraction quote resolution cannot impersonate a fact ID and retains every matching visibility gate', () => {
+  const { resolveRuleMappingEvidenceRefs } = require('../dist/application/world/ruleMappingEvidence');
+  const facts = [{ factId: 'fact-early', sources: [{ quote: 'ordinary evidence' }] },
+    { factId: 'fact-later-a', sources: [{ quote: 'fact-early' }] },
+    { factId: 'fact-later-b', sources: [{ quote: 'fact-early' }] }];
+  assert.deepEqual(resolveRuleMappingEvidenceRefs(['fact-early'], facts, 'quotes'), ['fact-later-a', 'fact-later-b']);
+  assert.deepEqual(resolveRuleMappingEvidenceRefs(['fact-early'], facts), ['fact-early']);
+  assert.equal(resolveRuleMappingEvidenceRefs(['missing'], facts, 'quotes'), null);
 });
 
 test('T4 replaying a full run over the same world never inflates world_rule_mappings', async () => {

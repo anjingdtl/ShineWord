@@ -22,7 +22,7 @@ import { mirrorSourceId, StaleBuildCommitError, type CommitChunkResultInput, typ
 import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from '../world/extraction';
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
-import { OutcomeUnknownReplayError } from '../llm/requestLedger';
+import { OutcomeUnknownReplayError, classifyLlmFailure } from '../llm/requestLedger';
 import { BudgetInfeasibleError } from '../llm/requestPlan';
 import {
   DEFAULT_MODEL_BUDGET,
@@ -170,6 +170,8 @@ export interface CoordinatorDeps {
     setPhase: (phase: BuildRunPhase) => Promise<void>;
   }) => Promise<void>;
   signal?: { aborted: boolean; stopRequested?: boolean };
+  /** Durable replay approvals are the authority when a ledger is available. */
+  readRequestOutcome?: (runId: string, worldId: string) => Promise<'none' | 'prepared' | 'sent' | 'known' | 'outcome_unknown'>;
 }
 
 export interface CreateRunInput {
@@ -622,6 +624,28 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
   const fencingToken = await deps.runStore.acquireLease(runId, owner, ttl, now());
   if (fencingToken === null) {
     return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: true };
+  }
+
+  // Resume must not step past an unreviewed unknown dispatch into new work.
+  // Inspect retained metrics too: older coordinators parked these as ordinary
+  // retryable network errors. Preserve those paid records and frozen ranges.
+  const retainedUnits = await deps.runStore.listUnits(runId);
+  const unknownPending = retainedUnits.some(unit => {
+    if (unit.status === 'completed' || unit.status === 'canceled') return false;
+    if (unit.errorCode === 'outcome_unknown') return true;
+    if (!unit.usageJson) return false;
+    const metrics = (JSON.parse(unit.usageJson) as { requestMetrics?: LlmRequestFailure['requestMetrics'] }).requestMetrics;
+    if (!metrics?.length) return false;
+    const failure = classifyLlmFailure(new LlmRequestFailure('', metrics));
+    return failure === 'timeout_unknown' || failure === 'network_unknown';
+  });
+  const requestOutcome = await deps.readRequestOutcome?.(runId, run.worldId);
+  if (requestOutcome === 'outcome_unknown' || requestOutcome === 'prepared' || requestOutcome === 'sent'
+    || (requestOutcome !== 'known' && (run.lastErrorCode === 'outcome_unknown' || unknownPending))) {
+    await deps.runStore.setRunStatus(runId, 'needs_review', now(), 'outcome_unknown',
+      '上次模型请求的扣费结果未知。请先在请求账本确认，避免重复计费。');
+    await deps.runStore.releaseLease(runId, owner, fencingToken, now());
+    return { runId, completed: false, unitsDone: run.unitsDone, unitsTotal: run.unitsTotal, unitsFailed: run.unitsFailed, lostLease: false };
   }
 
   const manifest = await deps.sourceStore.getManifest(run.sourceId);
@@ -1265,11 +1289,6 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
       const lastMetric = error instanceof LlmRequestFailure
         ? error.requestMetrics[error.requestMetrics.length - 1]
         : undefined;
-      // A 300s-class timeout already burned a full request cycle; retrying the
-      // SAME oversized body just burns another one. Downsizing on the first
-      // timeout (halving + tail-ratio shrink) converges to a size the provider
-      // can answer inside the transport cap - retrying never does.
-      const isTimeoutFailure = classification === 'network' && lastMetric?.errorCategory === 'timeout';
       // A 4xx rejection is deterministic for an identical body: three strikes
       // on one unit means park it for review WITH the provider's own text.
       const is4xxRejection = (lastMetric?.httpStatus ?? 0) >= 400 && (lastMetric?.httpStatus ?? 0) < 500;
@@ -1283,11 +1302,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         ? safeProviderFailureText(error, classification)
         : message.slice(0, 500);
       const needsDownsize = classification === 'truncation' || classification === 'budget_infeasible'
-        || classification === 'input_too_large' || classification === 'content_filter'
-        || isTimeoutFailure;
+        || classification === 'input_too_large' || classification === 'content_filter';
       if (needsDownsize && ranges.length > 1) {
-        // Transactional split (plan §7.2, generalized by §5 calibration and the
-        // timeout/4xx downsize rules): the oversized group is replaced by
+        // Only known completed/rejected requests may be downsized. An unknown
+        // dispatch must retain its identity and ranges for review.
+        // The oversized group is replaced by
         // calibrated, budget-fitting child units; the parent is canceled and
         // never counts. Halving per failure converges: whatever the provider's
         // real window/speed, some split size completes within the transport cap.
@@ -1532,7 +1551,11 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           const missingOpeningLocation = reason.includes('当前开局可用的地点证据');
           const mappingFailed = reason.includes('小说→三宝书映射失败');
           const automaticRecovery = mappingFailed && isAutomaticMappingFailure(reason);
-          const unknownOutcome = error instanceof OutcomeUnknownReplayError || reason.includes('outcome_unknown');
+          // The shared transport reports both of its unknown-outcome shapes with
+          // the stable phrase below (deadline elapsed / incomplete body); the
+          // wrapping mapper keeps it inline, so match the phrase, not a code.
+          const unknownOutcome = error instanceof OutcomeUnknownReplayError
+            || reason.includes('outcome_unknown') || reason.includes('结果未知，请核对请求账本');
           const errorCode = unknownOutcome ? 'outcome_unknown' : canonConflict ? 'canon_conflict'
             : missingOpeningLocation ? 'opening_location_missing'
             : mappingFailed ? (automaticRecovery ? AUTOMATIC_MAPPING_RETRY : 'mapping_configuration_required')
@@ -1717,8 +1740,9 @@ async function commitGroupResult(
   const fallbackChunk = chunks[0]!;
   // Group-level rule mappings may cite evidence from ANY member chunk, so the
   // verbatim-verified quotes travel with the commit (1M plan P4); mappings
-  // themselves ride the FIRST chunk commit only - the store dedupes by stable
-  // mappingId on replay.
+  // themselves ride the LAST chunk commit: every referenced accepted fact
+  // has landed by then, including deduplication to an older stable identity.
+  // The store resolves quotes to those actual IDs in the same transaction.
   const groupVerifiedQuotes = group.facts.map(fact => fact.evidence.quote);
   for (const chunk of chunks) {
     const facts = group.facts.filter(fact => fact.chunkId === chunk.chunkId);
@@ -1736,7 +1760,7 @@ async function commitGroupResult(
           ]
           : events.map(({ chunkId: _chunkId, ...event }) => event))
         : [],
-      ruleMappings: chunk === fallbackChunk ? group.ruleMappings : [],
+      ruleMappings: chunk === chunks[chunks.length - 1] ? group.ruleMappings : [],
     };
     const resolved = await applyExtraction({
       worldId: run.worldId,
@@ -1798,6 +1822,7 @@ async function commitResolvedChunk(
     facts: factsWithIds,
     eventProposals,
     ruleMappings: resolved.ruleMappings,
+    mappingEvidenceFormat: 'quotes',
     job,
     createdAt: now(),
     updatedAt: now(),
@@ -1812,6 +1837,8 @@ async function commitResolvedChunk(
 function classifyExtractionError(message: string, error?: unknown): ErrorClass {
   if (error instanceof BudgetInfeasibleError) return 'budget_infeasible';
   if (error instanceof OutcomeUnknownReplayError) return 'outcome_unknown';
+  const failure = classifyLlmFailure(error);
+  if (failure === 'timeout_unknown' || failure === 'network_unknown') return 'outcome_unknown';
   if (error instanceof LlmRequestFailure) {
     const metric = error.requestMetrics[error.requestMetrics.length - 1];
     if (metric?.httpStatus === 401 || metric?.httpStatus === 403) return 'config';

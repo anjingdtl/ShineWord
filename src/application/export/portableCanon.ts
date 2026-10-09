@@ -3,6 +3,7 @@ import { canonicalStringify, type CanonicalJson, type Sha256HexProvider } from '
 import { codePointLength } from '../../domain/world/textOffsets';
 import type { WorldCanonSnapshot } from '../ports/worldStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
+import { resolveRuleMappingEvidenceRefs } from '../world/ruleMappingEvidence';
 
 export interface PortableCanon extends WorldCanonSnapshot {
   worldId: string;
@@ -26,8 +27,16 @@ export async function exportPortableCanon(
     store.getChapters(worldId), store.listEntities(worldId), store.listFacts(worldId),
     store.listEvents(worldId), store.listRuleMappings(worldId),
   ]);
+  // Historical extraction rows stored verbatim quotes here. Normalize only
+  // the portable draft against its verified canon graph; never rewrite paid
+  // records, archived packages or source rows during export.
+  const portableMappings = ruleMappings.map(mapping => {
+    const evidenceRefs = resolveRuleMappingEvidenceRefs(mapping.evidenceRefs, facts);
+    if (!evidenceRefs) throw new Error('规则映射缺少已核验的原著事实引用，拒绝导出世界包。');
+    return { ...mapping, evidenceRefs };
+  });
   const body = { worldId, sourceSha256: manifest.sourceSha256, packageContentHash: manifest.contentHash,
-    chapters, entities, facts, events, ruleMappings };
+    chapters, entities, facts, events, ruleMappings: portableMappings };
   const canon = { ...body, contentHash: await canonHash(body, sha) };
   await validatePortableCanon(canon, manifest, entries, sha);
   return canon;

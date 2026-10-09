@@ -604,6 +604,13 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
     // predecessor — an explicit, honest compiler default.
     if (!completion) { errors.push(`${prefix}.completion: valid completion required.`); return null; }
     const effectiveCompletion = completion;
+    const provenance = s.provenance;
+    if (!isRecord(provenance) || !isOneOf(provenance.kind, ['design_fill', 'canon_inspired'])
+      || !isBoundedString(provenance.rationale, 1, 400)
+      || (provenance.sourceFactIds !== undefined && (!Array.isArray(provenance.sourceFactIds)
+        || provenance.sourceFactIds.length > 8 || !provenance.sourceFactIds.every(isReference)))) {
+      errors.push(`${prefix}.provenance: explicit kind, rationale and string fact references required.`); return null;
+    }
     stages.push({
       nodeId: String(s.nodeId), role: stageRole as 'main' | 'optional',
       title: stageTitle, publicObjective: stageObjective, gmPurpose: stagePurpose,
@@ -618,10 +625,9 @@ export function parseCampaignPlanCandidate(raw: unknown, errors: string[]): Camp
       rewardPolicyRefs: Array.isArray(s.rewardPolicyRefs) ? s.rewardPolicyRefs.map(String) : [],
       consequenceRefs: Array.isArray(s.consequenceRefs) ? s.consequenceRefs.map(String) : [],
       provenance: {
-        kind: s.provenance && (s.provenance as Record<string, unknown>).kind === 'canon_inspired' ? 'canon_inspired' : 'design_fill',
-        sourceFactIds: Array.isArray((s.provenance as Record<string, unknown>)?.sourceFactIds)
-          ? ((s.provenance as Record<string, unknown>).sourceFactIds as unknown[]).map(String) : [],
-        rationale: String((s.provenance as Record<string, unknown>)?.rationale ?? 'model planned'),
+        kind: provenance.kind as StageSpec['provenance']['kind'],
+        sourceFactIds: (provenance.sourceFactIds ?? []) as string[],
+        rationale: provenance.rationale as string,
       },
     });
   }

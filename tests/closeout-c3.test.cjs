@@ -397,6 +397,44 @@ test('G0 user pause commits successful in-flight extraction and resumes only unf
   }
 });
 
+test('G0 unknown extraction outcomes park unchanged without splitting or replay', async () => {
+  for (const category of ['timeout', 'network']) {
+    const db = setupDb();
+    try {
+      const { store: sourceStore } = await prepareActiveSqliteSource(db, 'novel-medium.txt', 'src-unknown');
+      const adapter = new NodeSqliteAdapter(db);
+      const runStore = new SqliteBuildRunStore(adapter);
+      const worldStore = new SqliteWorldStore(adapter);
+      const fixture = new FixtureExtractor({ knownNames: fixtureNames() });
+      await createExtractionRun({ sourceStore, runStore, worldStore, sha256Hex: sha.sha256Hex }, {
+        runId: 'run-unknown', worldId: 'w-unknown', sourceId: 'src-unknown',
+        modelFingerprint: 'ep#m', title: 't', extractorVersion: fixture.version, mode: 'group',
+        budget: { contextWindowTokens: 60000, maxContentOutputTokens: 8000, reasoningReserveTokens: 0,
+          reasoningEffort: 'off', supportsPromptCache: false, reserveTokens: 2000 },
+      });
+      const original = await runStore.listUnits('run-unknown');
+      let calls = 0;
+      const failing = { version: fixture.version, async extract() {
+        calls += 1;
+        throw new LlmRequestFailure('PRIVATE_RAW_RESPONSE', [{ attempt: 1, durationMs: 300000,
+          httpStatus: null, outcome: 'transport_error', errorCategory: category, dispatchState: 'sent' }]);
+      } };
+      const deps = { sourceStore, runStore, worldStore, extractor: failing, groupExtractor: failing,
+        sha256Hex: sha.sha256Hex, owner: 'unknown-owner', concurrency: 1 };
+      await executeRun(deps, 'run-unknown');
+      const stopped = await runStore.listUnits('run-unknown');
+      assert.equal(stopped.length, original.length, 'unknown work cannot create split or replanned children');
+      assert.equal(calls, 1, 'the coordinator must stop after the first unknown dispatch');
+      assert.equal(stopped.filter(u => u.status === 'needs_review').length, 1);
+      assert.equal(stopped.find(u => u.status === 'needs_review').errorCode, 'outcome_unknown');
+      assert.deepEqual(stopped.map(u => [u.unitId, u.sourceRangesJson]), original.map(u => [u.unitId, u.sourceRangesJson]));
+      await executeRun({ ...deps, owner: 'cold-owner' }, 'run-unknown');
+      assert.equal(calls, 1, 'a resumed coordinator cannot bypass the parked unknown outcome');
+      assert.doesNotMatch(JSON.stringify(stopped), /PRIVATE_RAW_RESPONSE/);
+    } finally { db.close(); }
+  }
+});
+
 test('G0 failed physical request metrics survive a later unit retry', async () => {
   const db = setupDb();
   try {
@@ -416,21 +454,20 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
     const failed = {
       version: 'llm-group-extractor-1',
       async extract() {
-        throw new LlmRequestFailure('network timeout PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
-          attempt: 1, durationMs: 90000, httpStatus: null, outcome: 'transport_error',
-          errorCategory: 'timeout', timings: { completeResponseMs: 90000 },
+        throw new LlmRequestFailure('network connect PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
+          attempt: 1, durationMs: 100, httpStatus: null, outcome: 'transport_error',
+          errorCategory: 'network', dispatchState: 'not_sent', timings: { completeResponseMs: 100 },
         }]);
       },
     };
-    // The chunk path must fail too: without this, the downsize policy splits
-    // every group down to single chunks and the fixture chunk extractor would
-    // complete them, leaving nothing failed_retryable to retry.
+    // The known not-sent connection failure may retry; both extraction paths
+    // retain failure metrics without leaking raw provider text.
     const failingChunkExtractor = {
       version: fixture.version,
       async extract() {
-        throw new LlmRequestFailure('network timeout PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
-          attempt: 1, durationMs: 90000, httpStatus: null, outcome: 'transport_error',
-          errorCategory: 'timeout', timings: { completeResponseMs: 90000 },
+        throw new LlmRequestFailure('network connect PRIVATE_RAW_RESPONSE_NEVER_STORE', [{
+          attempt: 1, durationMs: 100, httpStatus: null, outcome: 'transport_error',
+          errorCategory: 'network', dispatchState: 'not_sent', timings: { completeResponseMs: 100 },
         }]);
       },
     };
@@ -438,14 +475,11 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
       sourceStore, runStore, worldStore, extractor: failingChunkExtractor, groupExtractor: failed,
       sha256Hex: sha.sha256Hex, owner: 'metrics-owner',
     }, 'run-g0-metrics');
-    // Build-downsize policy: a timeout SPLITS a multi-slice batch instead of
-    // retrying the identical body, so after an always-timeout extractor the
-    // ledger holds canceled split parents plus single-slice leaves in
-    // failed_retryable - the leaves carry the surviving failure metrics.
+    // A known not-sent failure parks for backoff without splitting work.
     const unitsAfterFailure = await runStore.listUnits('run-g0-metrics');
     const pending = unitsAfterFailure.find(unit => unit.status === 'failed_retryable');
-    assert.ok(pending, `a single-slice leaf parks failed_retryable: ${JSON.stringify(unitsAfterFailure.map(u => u.status))}`);
-    assert.equal(JSON.parse(pending.usageJson).requestMetrics[0].errorCategory, 'timeout');
+    assert.ok(pending, `known connection failure parks failed_retryable: ${JSON.stringify(unitsAfterFailure.map(u => u.status))}`);
+    assert.equal(JSON.parse(pending.usageJson).requestMetrics[0].errorCategory, 'network');
     assert.doesNotMatch(pending.errorMessage, /PRIVATE_RAW_RESPONSE/);
     assert.doesNotMatch((await runStore.getRun('run-g0-metrics')).lastErrorMessage ?? '', /PRIVATE_RAW_RESPONSE/);
 
@@ -469,7 +503,7 @@ test('G0 failed physical request metrics survive a later unit retry', async () =
     const metricsHolder = finalUnits[0];
     const usage = JSON.parse(metricsHolder.usageJson);
     assert.equal(usage.requestMetrics.length, 1, JSON.stringify(usage.requestMetrics));
-    assert.equal(usage.requestMetrics[0].durationMs, 90000);
+    assert.equal(usage.requestMetrics[0].durationMs, 100);
     const finished = finalUnits.find(unit => unit.status === 'completed');
     assert.ok(finished, 'retry completes the requeued work');
     assert.equal(finished.errorMessage, null, 'completed work carries no lingering failure text');

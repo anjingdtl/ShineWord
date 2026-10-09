@@ -58,6 +58,14 @@ export interface FrozenRunConfig {
   maxOutputTokens: number;
   supportsPromptCache: boolean;
   supportsJson: boolean;
+  /**
+   * SSE delivery capability, frozen at run creation. Absent on legacy configs:
+   * they keep their buffered identity forever (a live executor's transport
+   * mode is immutable; switching is the explicit useCurrentApiForRun path).
+   * Deliberately NOT part of frozenConfigIdentity - transport mode never
+   * invalidates paid extraction checkpoints.
+   */
+  supportsStreaming?: boolean;
   /** Worker concurrency for this run (1-4). */
   concurrency: number;
   /** Provider tokens-per-minute, if known. */
@@ -131,6 +139,7 @@ export function freezeRunConfig(
     maxOutputTokens,
     supportsPromptCache: budget.supportsPromptCache,
     supportsJson: profile.capabilities.supportsJson,
+    ...(profile.capabilities.supportsStreaming === true ? { supportsStreaming: true } : {}),
     concurrency: Math.max(1, Math.min(4, profile.concurrency ?? 2)),
     tpm: profile.tpm,
     rpm: profile.rpm,
@@ -199,6 +208,7 @@ export function reviveRunConfig(json: string | null): FrozenRunConfig | null {
       maxOutputTokens: raw.maxOutputTokens ?? raw.contentOutputTokens,
       supportsPromptCache: raw.supportsPromptCache === true,
       supportsJson: raw.supportsJson !== false,
+      ...(raw.supportsStreaming === true ? { supportsStreaming: true } : {}),
       concurrency: raw.concurrency ?? 3,
       tpm: raw.tpm,
       rpm: raw.rpm,
@@ -226,7 +236,9 @@ export function providerProfileFromFrozen(config: FrozenRunConfig): ApiProfile {
     keyRef: config.keyRef,
     capabilities: {
       supportsJson: config.supportsJson,
-      supportsStreaming: false,
+      // Absent field = legacy frozen config with a buffered identity; only a
+      // config frozen after the capability was declared revives with SSE.
+      supportsStreaming: config.supportsStreaming === true,
       reportsUsage: true,
       contextWindow: config.contextWindowTokens,
       maxOutputTokens: config.maxOutputTokens,

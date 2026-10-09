@@ -124,6 +124,8 @@ export interface CommitChunkResultInput {
   facts: readonly StoredFact[];
   eventProposals: readonly Omit<StoredEventProposal, 'worldId' | 'status'>[];
   ruleMappings?: readonly StoredRuleMapping[];
+  /** Extractor evidence is verbatim text until this transaction binds it. */
+  mappingEvidenceFormat?: 'quotes';
   job: WorldJobRecord;
   createdAt: string;
   updatedAt: string;

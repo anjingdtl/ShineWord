@@ -9,7 +9,7 @@ import type {
   SecretStore,
 } from './types';
 import { normalizeReasoningTier } from './types';
-import { physicalRequestTimeoutMs } from './requestDeadline';
+import { EXTENDED_OPERATION_KINDS, physicalRequestTimeoutMs } from './requestDeadline';
 import { IncompleteCompletionStreamError, readCompletionStream } from './completionStream';
 import { elapsedHttpDeadline } from './httpErrors';
 import { looksTruncated } from './responseNormalizer';
@@ -260,7 +260,13 @@ export class OpenAICompatibleProvider implements LlmProvider {
         ?? this.profile.reasoningEffort,
     );
     const timeoutMs = physicalRequestTimeoutMs(this.timeoutMs, request.requestKind, reasoningTier);
-    const streamedPlanning = request.requestKind === 'campaign_plan' && reasoningTier !== 'low'
+    // Long single-thinking operations share SSE delivery when the profile
+    // declares streaming support: buffered calls through gateways that only
+    // see headers after the full body have died at ~300s server-side while
+    // the same tier streamed to completion (real host/device evidence).
+    const streamedOperation = request.requestKind !== undefined
+      && EXTENDED_OPERATION_KINDS.includes(request.requestKind)
+      && reasoningTier !== 'low'
       && this.profile.capabilities.supportsStreaming === true;
 
     while (true) {
@@ -278,7 +284,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
         model: this.profile.model,
         messages,
         max_tokens: maxTokens,
-        stream: streamedPlanning,
+        stream: streamedOperation,
       };
       if (request.jsonMode && this.profile.capabilities.supportsJson) {
         body.response_format = { type: 'json_object' };
@@ -322,9 +328,17 @@ export class OpenAICompatibleProvider implements LlmProvider {
             requestMetrics,
           );
         }
-        throw new LlmRequestFailure(sanitizedFailureMessage(
+        // A sent-but-disconnected request says nothing about server completion
+        // or billing: every such failure carries the stable unknown-outcome
+        // phrase so upstream classifiers park it for ledger review instead of
+        // treating it as a known configuration error.
+        const sanitized = sanitizedFailureMessage(
           error instanceof Error ? error.message : 'LLM transport failed.', apiKey,
-        ), requestMetrics);
+        );
+        throw new LlmRequestFailure(
+          notSent ? sanitized : `${sanitized}；请求结果未知，请核对请求账本。`,
+          requestMetrics,
+        );
       }
 
       let parsed: OpenAIResponseShape;
