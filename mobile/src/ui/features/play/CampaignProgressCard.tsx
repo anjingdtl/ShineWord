@@ -18,6 +18,7 @@ export interface CampaignProgressData {
   completedStages: Array<{ nodeId: string; title: string; resolution?: string }>;
   recentProgress: Array<{ text: string; atStateVersion: number }>;
   pendingConsequences: string[];
+  preparationNotice?: string | null;
   ending: { title: string; outcomeKind: string } | null;
 }
 
@@ -70,6 +71,7 @@ export function CampaignProgressCard(props: {
       {latest ? (
         <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)} numberOfLines={2}>最近进展：{latest.text}</Text>
       ) : null}
+      {progress.preparationNotice ? <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>{progress.preparationNotice}</Text> : null}
       {props.expanded ? (
         <View style={{ gap: theme.space.xs }}>
           <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>长期目标：{progress.longTermGoal}</Text>

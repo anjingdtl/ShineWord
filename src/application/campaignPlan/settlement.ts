@@ -193,7 +193,24 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
       }
       scheduleConsequences(nextState.campaignRuntime!, compiled.scheduledConsequences, consequenceOwners(consequence));
     }
-    if (!outcome.rewards.length && !triggered.length) break;
+    // A prepared successor stays dormant until its node becomes active. Tick
+    // its board in the SAME Prepared draft as the stage transition, so the
+    // next decision point has content and starts pressure at actual activation.
+    let activatedBoard = false;
+    if (outcome.events.some(event => event.eventType === 'campaign_node_changed')) {
+      const definitions = input.artifacts.flatMap(a => a.situations)
+        .filter(s => s.definition.activation.kind === 'campaign_node_status'
+          || (s.definition.activation.kind === 'any' && s.definition.activation.of.some(c => c.kind === 'campaign_node_status')))
+        .map(s => ({ situationId: s.entryId, definition: s.definition }));
+      if (definitions.length) {
+        const causal = applySituationRuntime({ nextState: { ...nextState, stateVersion: nextVersion }, sourceTurnId: input.turnId,
+          playerActorId, definitions, methodOps: [] });
+        applySituationProjection(nextState, causal);
+        events.push(...causal.events);
+        activatedBoard = causal.events.length > 0;
+      }
+    }
+    if (!outcome.rewards.length && !triggered.length && !activatedBoard) break;
     if (round === NODE_TRANSITION_BATCH_LIMIT + CONSEQUENCE_TRIGGER_LIMIT) {
       throw new Error('战役结算未能在有界处理内收敛，拒绝提交。');
     }

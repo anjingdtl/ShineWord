@@ -17,6 +17,7 @@ import { normalizeReasoningTier } from '../llm/types';
 import { freezeReasoningUsageFeedback } from '../llm/reasoningFeedback';
 import { readBoundCampaignArtifacts } from './boundArtifacts';
 import { resolveCampaignContent, campaignContentEntries } from './contentResolver';
+import { stagePreparationTargetId } from './stagePreparation';
 
 /** Both planning modes share durable generation, bounded repair and fencing. */
 export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, input: {
@@ -77,6 +78,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     }
   };
   try {
+    const preparedNodeId = stagePreparationTargetId(job.triggerReasons);
     // Read the original root BEFORE consulting live world/state/profile data.
     let frozen = await readPlanFreeze(deps.db, jobId);
     if (!frozen) {
@@ -134,17 +136,25 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         materials.user += `\n修订原因：${job.triggerReasons.join('、')}\n原计划：${JSON.stringify(basePlan)}\n已提交当前状态：${JSON.stringify({
           actors: state.actors, items: state.itemOwners, discoveries: state.discoveries, relationships: state.relationships,
           situations: state.situations, nodes: state.campaignRuntime?.nodeStates, currentGoal: state.campaignRuntime?.publicObjectiveProjection })}`;
+        if (preparedNodeId) {
+          const target = basePlan.nodes.find(node => node.nodeId === preparedNodeId);
+          if (!target || basePlan.retiredNodeIds?.includes(preparedNodeId)
+            || state.campaignRuntime?.nodeStates.some(node => node.nodeId === preparedNodeId && ['succeeded','failed','superseded','cancelled'].includes(node.status))) throw new Error('base_plan_stale');
+          materials.system += `\n本次只预生成后继节点 ${preparedNodeId} 的 firstSituation。完整意图、其它节点、当前局面与结局沿用原计划，不预生成更远节点或结局；奖励只能对应 ${preparedNodeId}。该节点成为当前阶段前不启动局面或压力，也不实例化人物。`;
+        }
       }
       const reasoningPolicy = await freezeReasoningUsageFeedback(deps.provider, 'campaign_plan', {
         tier: normalizeReasoningTier(deps.profile.reasoningTier ?? deps.profile.reasoningEffort),
         providerDialect: deps.profile.reasoningDialect ?? reasoningDialectForModel(deps.profile.model), model: deps.profile.model });
-      frozen = { ...frozenPlanJob(intent, deps.profile, materials, ctx), reasoningPolicy, ...(state ? { baseState: state, basePlan } : {}) };
+      frozen = { ...frozenPlanJob(intent, deps.profile, materials, ctx), reasoningPolicy, ...(state ? { baseState: state, basePlan } : {}),
+        ...(preparedNodeId ? { preparedNodeId } : {}) };
       await assertCurrent();
       await writePlanFreeze(deps.db, jobId, job.setupId, frozen, now());
       await deps.db.execute('UPDATE campaign_plan_jobs SET freeze_root_id=?, intent_hash=? WHERE job_id=? AND status=\'running\' AND fencing_token=?',
         [`campaign-job:${jobId}`, sha256HexOf(canonicalJsonOf(intent)), jobId, claim.fencingToken]);
     }
     if (!frozen) throw new Error('freeze missing');
+    if ((frozen.preparedNodeId ?? null) !== preparedNodeId) throw Object.assign(new Error('规划预生成范围与冻结根不一致，停止请求。'), { name: 'FrozenMaterialsCorruptedError' });
     if (llmModelProfileFingerprint(frozen.profile) !== llmModelProfileFingerprint(deps.profile)) throw new Error('模型配置已改变，请恢复原配置后继续此规划。');
     await assertCurrent();
     if (existing?.stage === 'ready' || existing?.stage === 'rejected') {
@@ -182,6 +192,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       planId: baseRuntime ? `plan-replan-${sha256HexOf(job.branchId!).slice(0, 24)}` : `plan-${job.setupId}`,
       revision: baseRuntime ? baseRuntime.planBinding.revision + 1 : 1,
       parentRevision: baseRuntime?.planBinding.revision ?? null, createdAt: now(),
+      ...(frozen!.preparedNodeId ? { firstSituationNodeId: frozen!.preparedNodeId } : {}),
       ...(baseRuntime ? { situationId: `camp-sit-${sha256HexOf(jobId).slice(0, 16)}` } : {}) });
     if (baseRuntime && frozen!.basePlan) {
       const terminal = new Set(baseRuntime.nodeStates.filter(n => ['succeeded','failed','superseded','cancelled'].includes(n.status)).map(n => n.nodeId));
@@ -191,11 +202,34 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
           compiled.errors.push(`firstSituation targets committed or retired node ${situation.nodeId}; provide a current unfinished stage`);
         }
       }
-      const newNodeIds = new Set(compiled.plan.nodes.filter(n => !terminal.has(n.nodeId)).map(n => n.nodeId));
-      compiled.plan.retiredNodeIds = frozen!.basePlan.nodes.filter(n => !newNodeIds.has(n.nodeId)).map(n => n.nodeId);
-      compiled.plan.nodes = [...frozen!.basePlan.nodes.filter(n => !newNodeIds.has(n.nodeId)), ...compiled.plan.nodes.filter(n => !terminal.has(n.nodeId))];
-      compiled.plan.startNodeIds = compiled.plan.startNodeIds.filter(id => !terminal.has(id));
-      compiled.plan.contentArtifactRefs = [...compiled.plan.contentArtifactRefs, ...frozen!.basePlan.contentArtifactRefs];
+      const targetId = frozen!.preparedNodeId;
+      if (targetId) {
+        const target = compiled.plan.nodes.find(node => node.nodeId === targetId);
+        if (!target) compiled.errors.push('prepared successor is missing');
+        if (compiled.artifact.rewardPolicies.some(policy => policy.nodeId !== targetId)) compiled.errors.push('preparation reward is outside the frozen successor');
+        for (const situation of compiled.artifact.situations) {
+          situation.definition.activation = { kind: 'any', of: [
+            { kind: 'campaign_node_status', nodeId: targetId, status: 'active' },
+            { kind: 'campaign_node_status', nodeId: targetId, status: 'suspended' },
+          ] };
+        }
+        const { contentHash: _artifactHash, ...artifactBody } = compiled.artifact;
+        compiled.artifact.contentHash = sha256HexOf(canonicalJsonOf(artifactBody));
+        compiled.plan = { ...frozen!.basePlan, planId: compiled.plan.planId, revision: compiled.plan.revision,
+          parentRevision: compiled.plan.parentRevision, createdAt: compiled.plan.createdAt,
+          contentArtifactRefs: [...compiled.plan.contentArtifactRefs, ...frozen!.basePlan.contentArtifactRefs],
+          unresolvedDependencies: frozen!.basePlan.unresolvedDependencies.filter(d => d.nodeId !== targetId),
+          nodes: frozen!.basePlan.nodes.map(node => node.nodeId === targetId && target ? { ...node,
+            coverage: 'concrete', situationRef: target.situationRef, completion: target.completion,
+            rewardPolicyRefs: [...new Set([...(node.rewardPolicyRefs ?? []), ...target.rewardPolicyRefs])],
+            consequenceRefs: [...new Set([...(node.consequenceRefs ?? []), ...target.consequenceRefs])] } : node) };
+      } else {
+        const newNodeIds = new Set(compiled.plan.nodes.filter(n => !terminal.has(n.nodeId)).map(n => n.nodeId));
+        compiled.plan.retiredNodeIds = frozen!.basePlan.nodes.filter(n => !newNodeIds.has(n.nodeId)).map(n => n.nodeId);
+        compiled.plan.nodes = [...frozen!.basePlan.nodes.filter(n => !newNodeIds.has(n.nodeId)), ...compiled.plan.nodes.filter(n => !terminal.has(n.nodeId))];
+        compiled.plan.startNodeIds = compiled.plan.startNodeIds.filter(id => !terminal.has(id));
+        compiled.plan.contentArtifactRefs = [...compiled.plan.contentArtifactRefs, ...frozen!.basePlan.contentArtifactRefs];
+      }
       const { contentHash: _hash, ...body } = compiled.plan;
       compiled.plan.contentHash = sha256HexOf(canonicalJsonOf(body));
     }
@@ -214,6 +248,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         entries: ctx.visibleEntries, situationStatuses: new Map((state.situations ?? []).map(s => [s.situationId, s])),
         causalWorldTimeOrder: ctx.coverageWorldTimeOrder }).eligible).map(method => method.methodId))) : undefined;
     const errors = [...compiled.errors, ...validateCampaignPlan(compiled.plan, {
+      ...(frozen!.preparedNodeId ? { materializedNodeId: frozen!.preparedNodeId } : {}),
       visibleWorldEntryIds: new Set(ctx.visibleEntries.filter(e => !ctx.campaignEntryIds?.has(e.entryId)).map(e => e.entryId)),
       campaignKnowledgeEntryIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'lore' && ctx.campaignEntryIds?.has(e.entryId)).map(e => e.entryId)),
       adoptedCampaignEntryIds: ctx.campaignEntryIds, availableFactIds: ctx.availableFactIds, openingActorIds: ctx.openingActorIds,
@@ -227,7 +262,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         relationships: state?.relationships ?? openingRelationships, discoveries: state?.discoveries,
         actorAliases: state ? cards : frozen!.intent.companionBindings,
         situations: state?.situations,
-      }), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact)];
+      }, frozen!.preparedNodeId), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact)];
       return { compiled, errors };
     };
     // One scope spans scheduler waiting, all bounded dispatches, validation and

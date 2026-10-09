@@ -27,6 +27,9 @@ function canonicalStructure(value: unknown): string {
 }
 
 export interface PlanValidationContext {
+  /** Apply existing board gates to the newly materialized successor. The
+   * immutable graph's original start nodes keep their meaning. */
+  materializedNodeId?: string;
   /** World entry ids visible to the player at the opening anchor. */
   visibleWorldEntryIds: ReadonlySet<string>;
   /** Verified branch-bound lore ids plus the candidate's own definitions. */
@@ -85,8 +88,8 @@ function currentCompletionHasProducer(condition: SituationCondition, artifact: C
  * full_success. Counting ordinary successes cannot create a missing resolved
  * status/event. Existing adopted archives are deliberately not reinterpreted.
  */
-export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1, baseline?: CompletionBaseline): string[] {
-  const start = plan.nodes.find(n => plan.startNodeIds.includes(n.nodeId) && n.coverage === 'concrete');
+export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1, baseline?: CompletionBaseline, materializedNodeId?: string): string[] {
+  const start = plan.nodes.find(n => (materializedNodeId ? n.nodeId === materializedNodeId : plan.startNodeIds.includes(n.nodeId)) && n.coverage === 'concrete');
   if (!start) return [];
   const own = new Set(artifact.situations.map(s => s.entryId));
   const allEffects = artifactEffects(artifact);
@@ -138,7 +141,7 @@ export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact
     }
     if (!added) break;
   }
-  if (possible(start.completion) && !ordinaryCompletionBeforeExit(plan, artifact, baseline)) return [
+  if (possible(start.completion) && !ordinaryCompletionBeforeExit(plan, artifact, baseline, materializedNodeId)) return [
     `artifact: current stage ${start.nodeId} cannot supply an ordinary completion route before its situation closes; a resolved/suppressed situation cannot repeat its methods to reach remaining counters, promises or relationships. Provide independent preparation and a final fulfillment route, or use the actual committed baseline.`,
   ];
   return possible(start.completion) ? [] : [
@@ -476,7 +479,7 @@ export function validateContentArtifact(
       errors.push(`artifact ${situation.entryId}: situation needs methods.`);
     }
   }
-  const startNode = plan.nodes.find(node => plan.startNodeIds.includes(node.nodeId) && node.coverage === 'concrete');
+  const startNode = plan.nodes.find(node => (ctx.materializedNodeId ? node.nodeId === ctx.materializedNodeId : plan.startNodeIds.includes(node.nodeId)) && node.coverage === 'concrete');
   const startSituation = startNode
     ? artifact.situations.find(s => s.entryId === startNode.situationRef)
     : artifact.situations[0];

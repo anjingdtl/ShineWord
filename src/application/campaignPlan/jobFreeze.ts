@@ -15,6 +15,7 @@ export interface FrozenPlanJob {
   reasoningPolicy?: ReasoningPolicySelection;
   basePlan?: import('../../domain/campaignPlan/types').CampaignPlanV1;
   baseState?: import('../../domain/state/types').GameStateSnapshot;
+  preparedNodeId?: string;
   context: Omit<LocalCompileContext, 'openingActorIds' | 'openingTemplateIds' | 'protagonistSkills' | 'availableFactIds' | 'campaignEntryIds'> & {
     openingActorIds: string[]; openingTemplateIds: string[]; protagonistSkills: string[]; availableFactIds: string[];
     campaignEntryIds?: string[];
@@ -54,6 +55,9 @@ export async function readPlanFreeze(db: SqliteDatabase, jobId: string): Promise
       || frozen.context.campaignEntryIds.some(id => typeof id !== 'string' || !frozen.context.visibleEntries.some(e => e.entryId === id)))) {
       throw new Error('invalid campaign content scope');
     }
+    if (frozen.preparedNodeId !== undefined && (typeof frozen.preparedNodeId !== 'string'
+      || !frozen.basePlan?.nodes.some(node => node.nodeId === frozen.preparedNodeId)
+      || !frozen.baseState?.campaignRuntime)) throw new Error('invalid prepared stage scope');
     if (frozen.reasoningPolicy !== undefined && (!frozen.reasoningPolicy || frozen.reasoningPolicy.model !== frozen.profile.model
       || frozen.reasoningPolicy.tier !== normalizeReasoningTier(frozen.profile.reasoningTier ?? frozen.profile.reasoningEffort)
       || frozen.reasoningPolicy.providerDialect !== (frozen.profile.reasoningDialect ?? reasoningDialectForModel(frozen.profile.model))

@@ -339,6 +339,7 @@ export class CampaignSession {
     completedStages: Array<{ nodeId: string; title: string; resolution?: string }>;
     recentProgress: Array<{ text: string; atStateVersion: number }>;
     pendingConsequences: string[];
+    preparationNotice: string | null;
     ending: { title: string; outcomeKind: string } | null;
   } | null> {
     await this.assertCampaignBranch(campaignId, branchId);
@@ -362,6 +363,12 @@ export class CampaignSession {
         stage.resolution = situation.resolution;
       }
     }
+    const preparation = await this.deps.db.queryOne<{ status: string }>(
+      `SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' AND intent_hash=?
+       AND EXISTS (SELECT 1 FROM json_each(trigger_reasons_json) WHERE value='stage_content_prepared_ahead')
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`, [branchId, context?.plan.intentHash ?? '']);
+    const preparationNotice = preparation?.status === 'outcome_unknown' ? '后续内容请求结果未知，请先处理请求账本。'
+      : preparation && ['invalid', 'retryable_failed'].includes(preparation.status) ? '后续内容准备失败，请在主线面板处理后再继续准备。' : null;
     return {
       status: runtime.campaignStatus,
       longTermGoal: runtime.intent?.normalizedIntent ?? plan?.longTermGoal ?? runtime.publicObjectiveProjection,
@@ -369,6 +376,7 @@ export class CampaignSession {
       completedStages,
       recentProgress: runtime.recentProgressLines.map(line => ({ text: line.text, atStateVersion: line.atStateVersion })),
       pendingConsequences: runtime.deferredConsequences.filter(item => item.status === 'pending' && item.visibility === 'public').map(item => item.description),
+      preparationNotice,
       ending: runtime.ending ? { title: runtime.ending.title, outcomeKind: runtime.ending.outcomeKind } : null,
     };
   }
@@ -462,13 +470,29 @@ export class CampaignSession {
     if ((pending?.n ?? 0) + (busy?.n ?? 0) + (unknown?.n ?? 0) > 0) throw new Error('请先完成进行中的回合或处理未确认的请求，再管理主线。');
   }
 
-  /** Executes only an existing triggered job; ordinary turns never add a director call. */
+  /** Local preparation discovery dispatches only a dependency-triggered job. */
   async runCampaignReplan(campaignId: string, branchId: string, options: { automatic?: boolean } = {}): Promise<string> {
     await this.assertCampaignBranch(campaignId, branchId);
     const planStore = new SqliteCampaignPlanStore(this.deps.db);
     let job = await planStore.findActiveJob(branchId, 'replan');
+    if (job?.status === 'queued' && !job.freezeRootId && !options.automatic) {
+      const { stagePreparationTargetId } = await import('../campaignPlan/stagePreparation');
+      // A player-requested repair is a different operation from preparing a
+      // future stage. Only unstarted speculation may yield to that request.
+      if (stagePreparationTargetId(job.triggerReasons)) job = null;
+    }
+    if (!job && options.automatic) {
+      const last = await this.deps.db.queryOne<{ status: string }>(
+        "SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1", [branchId]);
+      // Opening/entry discovery is not approval to buy another root after a
+      // definitive rejection, exhausted recovery, or an unknown sent result.
+      if (!last || !['invalid','retryable_failed','outcome_unknown'].includes(last.status)) {
+        await this.enqueueCampaignReplan(campaignId, branchId);
+        job = await planStore.findActiveJob(branchId, 'replan');
+      }
+    }
     if (!job && !options.automatic) {
-      const latest = await this.deps.db.queryOne<{ status: string }>("SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' ORDER BY created_at DESC LIMIT 1", [branchId]);
+      const latest = await this.deps.db.queryOne<{ status: string }>("SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1", [branchId]);
       if (latest?.status === 'outcome_unknown') throw new Error('上次规划的请求结果尚未确认，请先在请求账本处理，不能自动重发。');
       const state = await this.deps.turns.getState(branchId);
       const context = state && await this.loadCampaignPlanForState(campaignId, state);
@@ -1343,6 +1367,11 @@ export class CampaignSession {
       if (!state?.campaignRuntime || !context) return;
       const { evaluateReplanTriggers, enqueueReplan } = await import('../campaignPlan/replanService');
       const reasons = evaluateReplanTriggers({ plan: context.plan, runtime: state.campaignRuntime, state });
+      if (!reasons.length) {
+        const { evaluateStagePreparationTarget, stagePreparationReasons } = await import('../campaignPlan/stagePreparation');
+        const target = evaluateStagePreparationTarget({ plan: context.plan, runtime: state.campaignRuntime, state });
+        if (target) reasons.push(...stagePreparationReasons(target.nodeId));
+      }
       if (reasons.length) await enqueueReplan({
         deps: { db: this.deps.db, planStore: new SqliteCampaignPlanStore(this.deps.db), worldStore: this.deps.worldStore,
           provider: this.provider, profile: this.profile }, campaignId, branchId,

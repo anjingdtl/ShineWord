@@ -275,6 +275,8 @@ export function compileCampaignPlan(input: {
   parentRevision: number | null;
   createdAt: string;
   situationId?: string;
+  /** Preparation materializes this successor instead of replacing the opener. */
+  firstSituationNodeId?: string;
 }): LocalCompileOutput {
   const { model, intent, ctx } = input;
   const errors: string[] = [];
@@ -315,8 +317,11 @@ export function compileCampaignPlan(input: {
   // Missing exits are validation errors; the compiler cannot invent a success ending.
   const startNodes = nodes.filter(node => node.activation === null).map(node => node.nodeId);
   // Wire the concrete start stage to the first situation.
-  const concreteStart = nodes.find(node => startNodes.includes(node.nodeId) && node.coverage === 'concrete')
-    ?? nodes.find(node => startNodes.includes(node.nodeId));
+  const concreteStart = input.firstSituationNodeId
+    ? nodes.find(node => node.nodeId === input.firstSituationNodeId)
+    : nodes.find(node => startNodes.includes(node.nodeId) && node.coverage === 'concrete')
+      ?? nodes.find(node => startNodes.includes(node.nodeId));
+  if (input.firstSituationNodeId && !concreteStart) errors.push('prepared successor is missing from the candidate graph');
   if (concreteStart) {
     concreteStart.situationRef = situationEntryId;
     concreteStart.coverage = 'concrete';

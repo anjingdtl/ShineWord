@@ -46,9 +46,9 @@ export function producesSituationMarker(e: CampaignEffectSpec, c: SituationCondi
  * This new-authoring gate never reinterprets adopted archives.
  */
 export function ordinaryCompletionBeforeExit(
-  plan: CampaignPlanV1, artifact: CampaignContentArtifactV1, baseline: CompletionBaseline = {},
+  plan: CampaignPlanV1, artifact: CampaignContentArtifactV1, baseline: CompletionBaseline = {}, materializedNodeId?: string,
 ): boolean {
-  const start = plan.nodes.find(n => plan.startNodeIds.includes(n.nodeId) && n.coverage === 'concrete');
+  const start = plan.nodes.find(n => (materializedNodeId ? n.nodeId === materializedNodeId : plan.startNodeIds.includes(n.nodeId)) && n.coverage === 'concrete');
   const situation = artifact.situations.find(s => s.entryId === start?.situationRef);
   if (!start || !situation) return true;
   const sid = situation.entryId, methods = situation.definition.methods;

@@ -17,6 +17,7 @@ import { campaignContentBindingHash } from './contentBinding';
 import { settleCampaignProgress, readCampaignEventHistory } from './settlement';
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
+import { stagePreparationTargetId, stagePreparationReasons } from './stagePreparation';
 
 /**
  * Campaign replanning (plan §10). Triggers are evaluated LOCALLY after each
@@ -137,8 +138,19 @@ export async function enqueueReplan(input: {
   reasons: string[];
 }): Promise<{ jobId: string; merged: boolean }> {
   const now = input.deps.now ?? (() => new Date().toISOString());
+  const target = stagePreparationTargetId(input.reasons);
+  if (target) {
+    const failures = await input.deps.db.queryAll<{ job_id: string }>(
+      `SELECT job_id FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' AND intent_hash=?
+       AND status IN ('invalid','retryable_failed','outcome_unknown')
+       AND EXISTS (SELECT 1 FROM json_each(trigger_reasons_json) WHERE value=?)
+       ORDER BY created_at DESC, rowid DESC LIMIT 2`,
+      [input.branchId, input.runtime.intent ? sha256HexOf(canonicalJsonOf(input.runtime.intent)) : input.plan.intentHash,
+        stagePreparationReasons(target)[1]!]);
+    if (failures.length >= 2) return { jobId: failures[0]!.job_id, merged: true };
+  }
   return input.deps.planStore.enqueueJobMergingTriggers({
-    jobId: `replan:${input.branchId}:v${input.state.stateVersion}:${now()}`,
+    jobId: `replan:${input.branchId}:v${input.state.stateVersion}:${now()}:${sha256HexOf(canonicalJsonOf(input.reasons)).slice(0, 12)}`,
     setupId: `replan:${input.campaignId}`,
     campaignId: input.campaignId,
     branchId: input.branchId,

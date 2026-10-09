@@ -118,6 +118,7 @@ export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplyS
     discoveries: snapshot.discoveries,
     relationships: snapshot.relationships,
     questProgress: snapshot.questProgress,
+    campaignNodeStates: snapshot.campaignRuntime?.nodeStates,
     situations: snapshot.situations ?? situations,
     playerActorId: input.playerActorId,
     resolvedReferenceEventKeys: resolvedReferenceKeys(snapshot.situations ?? situations),

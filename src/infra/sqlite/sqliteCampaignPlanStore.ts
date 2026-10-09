@@ -1,4 +1,5 @@
 import type { SqliteDatabase, SqliteTransaction } from '../../application/ports/sqlite';
+import { stagePreparationTargetId } from '../../application/campaignPlan/stagePreparation';
 import type {
   CampaignContentArtifactV1,
   CampaignIntentV1,
@@ -184,11 +185,24 @@ export class SqliteCampaignPlanStore {
     return this.db.transaction(async tx => {
       if (job.branchId) {
         const row = await tx.queryOne<JobRow>(
-          'SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? ORDER BY created_at DESC LIMIT 1', [job.branchId, job.jobKind]);
+          'SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? ORDER BY created_at DESC, rowid DESC LIMIT 1', [job.branchId, job.jobKind]);
         if (row) {
           const existing = rowToJob(row);
           const sameIntent = existing.intentHash === job.intentHash;
           const samePlan = existing.basePlanId === job.basePlanId && existing.basePlanRevision === job.basePlanRevision;
+          const oldTarget = stagePreparationTargetId(existing.triggerReasons);
+          const newTarget = stagePreparationTargetId(newReasons);
+          if (sameIntent && samePlan && (oldTarget || newTarget) && oldTarget !== newTarget
+            && ['queued','running','candidate_ready','retryable_failed','outcome_unknown'].includes(existing.status)) {
+            // Reactive/manual repair takes precedence over speculative work.
+            // Speculation cannot replace a queued repair or retarget a freeze.
+            if (oldTarget && existing.status === 'queued' && !existing.freezeRootId) {
+              await tx.execute('UPDATE campaign_plan_jobs SET trigger_reasons_json=?,base_state_version=?,fencing_token=fencing_token+1,updated_at=? WHERE job_id=?',
+                [JSON.stringify(newReasons), job.baseStateVersion, now, existing.jobId]);
+              return { jobId: existing.jobId, merged: true };
+            }
+            return { jobId: existing.jobId, merged: true };
+          }
           const mergedReasons = [...new Set([...existing.triggerReasons, ...newReasons])];
           if (sameIntent && samePlan && (['queued','running','candidate_ready','retryable_failed','outcome_unknown'].includes(existing.status)
             || newReasons.every(reason => existing.triggerReasons.includes(reason)))) {
@@ -220,7 +234,7 @@ export class SqliteCampaignPlanStore {
   async findActiveJob(branchId: string, kind: 'opening_plan' | 'replan'): Promise<CampaignPlanJobRecord | null> {
     const row = await this.db.queryOne<JobRow>(
       `SELECT * FROM campaign_plan_jobs WHERE branch_id=? AND job_kind=? AND status IN ('queued','running','candidate_ready','retryable_failed')
-       ORDER BY created_at DESC LIMIT 1`, [branchId, kind]);
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`, [branchId, kind]);
     return row ? rowToJob(row) : null;
   }
 
