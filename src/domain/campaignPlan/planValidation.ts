@@ -159,17 +159,31 @@ function completionCanUseDeadlineAlone(condition: SituationCondition, artifact: 
     if (c.kind === 'not') return false;
     return c.kind === 'situation_status' && c.status === 'resolved' && timed.has(c.situationId);
   };
-  const successEvents = new Set(artifact.situations.flatMap(s => s.definition.methods.flatMap(m =>
-    ['success', 'full_success'].flatMap(grade => m.outcomeTemplates?.[grade as 'success' | 'full_success']?.effects ?? [])))
-    .flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
-  const failureEvents = new Set(artifact.situations.flatMap(s => s.definition.methods.flatMap(m =>
-    ['failure', 'severe_failure'].flatMap(grade => m.outcomeTemplates?.[grade as 'failure' | 'severe_failure']?.effects ?? [])))
-    .flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
+  const outcomeEffects = (grades: readonly ('success' | 'full_success' | 'failure' | 'severe_failure')[]) =>
+    artifact.situations.flatMap(s => s.definition.methods.flatMap(m =>
+      grades.flatMap(grade => m.outcomeTemplates?.[grade]?.effects ?? [])));
+  const successfulEffects = outcomeEffects(['success', 'full_success']);
+  const failedEffects = outcomeEffects(['failure', 'severe_failure']);
+  const markerKey = (...parts: string[]) => JSON.stringify(parts);
+  const successfulCounters = new Set(successfulEffects.flatMap(e => e.template === 'situation_counter' && e.delta > 0
+    ? [markerKey(e.situationId, e.counterId)] : []));
+  const failedCounters = new Set(failedEffects.flatMap(e => e.template === 'situation_counter' && e.delta > 0
+    ? [markerKey(e.situationId, e.counterId)] : []));
+  const successfulPromises = new Set(successfulEffects.flatMap(e => e.template === 'promise_fulfill'
+    ? [markerKey(e.situationId, e.promiseId)] : []));
+  const failedPromises = new Set(failedEffects.flatMap(e => e.template === 'promise_fulfill'
+    ? [markerKey(e.situationId, e.promiseId)] : []));
+  const successEvents = new Set(successfulEffects.flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
+  const failureEvents = new Set(failedEffects.flatMap(e => e.template === 'record_event' ? [e.eventType] : []));
   const withoutMarker = (c: SituationCondition): boolean => {
     if (c.kind === 'all') return c.of.every(withoutMarker);
     if (c.kind === 'any') return c.of.some(withoutMarker);
-    if (c.kind === 'situation_counter_at_least' && timed.has(c.situationId) && c.minimum > 0) return false;
-    if (c.kind === 'promise_status' && timed.has(c.situationId) && c.status === 'fulfilled') return false;
+    if (c.kind === 'situation_counter_at_least' && timed.has(c.situationId) && c.minimum > 0
+      && successfulCounters.has(markerKey(c.situationId, c.counterId))
+      && !failedCounters.has(markerKey(c.situationId, c.counterId))) return false;
+    if (c.kind === 'promise_status' && timed.has(c.situationId) && c.status === 'fulfilled'
+      && successfulPromises.has(markerKey(c.situationId, c.promiseId))
+      && !failedPromises.has(markerKey(c.situationId, c.promiseId))) return false;
     if (c.kind === 'committed_event' && successEvents.has(c.eventType) && !failureEvents.has(c.eventType)) return false;
     return true;
   };
