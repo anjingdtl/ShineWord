@@ -10,6 +10,8 @@ import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import { replaceEncounterSnapshots } from '../../infra/sqlite/encounterPersistence';
 import { hasBranchContentManifestTable, insertBranchContentManifest, readBranchContentManifest, rebindBranchContentManifest } from '../worldPackage/branchContentStore';
 import { forkStoryMemory } from '../memory/storyMemoryRepository';
+import type { BranchContentManifest } from '../../domain/content/types';
+import { isBranchContentManifestStructure } from '../worldPackage/contentManifest';
 
 export interface ForkBranchInput {
   db: SqliteDatabase;
@@ -161,6 +163,50 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
   if (cards.length > 0) snapshot.cards = cards;
   if (party.length > 0) snapshot.party = party;
 
+  // Inherited committed contracts pin the content at their pre-turn version.
+  // Carry that actual history as well as the fork head, so save validation and
+  // later historical forks can resolve it without consulting the parent.
+  const historyRows = await db.queryAll<{ state_version: number; snapshot_json: string; created_at: string }>(
+    'SELECT state_version, snapshot_json, created_at FROM snapshots WHERE branch_id = ? AND state_version < ? ORDER BY state_version',
+    [input.sourceBranchId, targetStateVersion],
+  );
+  const history = historyRows.map(row => {
+    const state = cloneGameState(JSON.parse(row.snapshot_json) as GameStateSnapshot);
+    if (state.stateVersion !== row.state_version) throw new Error('Historical fork snapshot version is inconsistent.');
+    state.branchId = input.targetBranchId;
+    if (state.campaignRuntime) state.campaignRuntime = { ...state.campaignRuntime, branchId: input.targetBranchId };
+    if (state.contentManifest) state.contentManifest = rebindBranchContentManifest(state.contentManifest, input.targetBranchId, row.state_version);
+    if (state.segmentContentBinding) state.segmentContentBinding = { ...state.segmentContentBinding, branchId: input.targetBranchId, stateVersion: row.state_version };
+    return { state, createdAt: row.created_at };
+  });
+
+  // Content publication does not advance game state. A prepared turn may pin
+  // a newer content generation than the snapshot at that same state version.
+  // Preserve every generation up to the fork, not just manifests embedded in
+  // committed snapshots; otherwise inherited frozen contracts lose their basis.
+  const contentHistory = new Map<string, { manifest: BranchContentManifest; createdAt: string }>();
+  for (const item of [...history, { state: snapshot, createdAt: input.createdAt }]) {
+    const manifest = item.state.contentManifest;
+    if (manifest) contentHistory.set(`${manifest.stateVersion}:${manifest.contentVersion}`, { manifest, createdAt: item.createdAt });
+  }
+  if (await hasBranchContentManifestTable(db)) {
+    const rows = await db.queryAll<{ state_version: number; content_version: number; manifest_hash: string; manifest_json: string; created_at: string }>(
+      'SELECT state_version, content_version, manifest_hash, manifest_json, created_at FROM branch_content_manifests WHERE branch_id = ? AND state_version <= ? ORDER BY state_version, content_version',
+      [input.sourceBranchId, targetStateVersion],
+    );
+    for (const row of rows) {
+      const manifest: unknown = JSON.parse(row.manifest_json);
+      if (!isBranchContentManifestStructure(manifest) || manifest.branchId !== input.sourceBranchId ||
+          manifest.stateVersion !== row.state_version || manifest.contentVersion !== row.content_version ||
+          manifest.manifestHash.toLowerCase() !== row.manifest_hash.toLowerCase()) {
+        throw new Error('Historical fork content binding is inconsistent.');
+      }
+      contentHistory.set(`${row.state_version}:${row.content_version}`, {
+        manifest: rebindBranchContentManifest(manifest, input.targetBranchId), createdAt: row.created_at,
+      });
+    }
+  }
+
   // Branch creation and ALL authoritative projections commit atomically.
   await db.transaction(async tx => {
     await tx.execute(
@@ -168,7 +214,7 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
        VALUES (?, ?, ?, ?, ?, ?)`,
       [input.targetBranchId, input.campaignId, input.sourceBranchId, input.forkTurnId, targetStateVersion, input.createdAt],
     );
-    if (snapshot.contentManifest) await insertBranchContentManifest(tx, snapshot.contentManifest, input.createdAt);
+    for (const item of contentHistory.values()) await insertBranchContentManifest(tx, item.manifest, item.createdAt);
     for (const actor of Object.values(snapshot.actors)) {
       await tx.execute(
         `INSERT INTO actor_states (branch_id, actor_id, state_version, location_id, resources_json, conditions_json)
@@ -211,6 +257,13 @@ export async function forkBranch(input: ForkBranchInput): Promise<ForkBranchResu
       );
     }
     await replaceEncounterSnapshots(tx, input.targetBranchId, snapshot.encounters ?? []);
+    for (const item of history) {
+      await tx.execute(
+        `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
+         VALUES (?, ?, ?, NULL, ?)`,
+        [input.targetBranchId, item.state.stateVersion, JSON.stringify(item.state), item.createdAt],
+      );
+    }
     await tx.execute(
       `INSERT INTO snapshots (branch_id, state_version, snapshot_json, state_hash, created_at)
        VALUES (?, ?, ?, NULL, ?)`,

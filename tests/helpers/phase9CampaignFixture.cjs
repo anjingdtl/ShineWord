@@ -183,7 +183,7 @@ async function fixture(options = {}) {
   }, NOW);
   const published = await publishWorldPackage({
     worldStore: worlds, sha256Hex: sha.sha256Hex, worldId: 'w', sourceSha256: 'a'.repeat(64),
-    mappingVersion: 'p9-test', entries, sections: [], createdAt: NOW,
+    mappingVersion: 'p9-test', entries, sections: options.sections ?? [], createdAt: NOW,
   });
   await worlds.upsertEntity({ worldId: 'w', entityId: 'ent-lin', type: 'character', name: '林凡', aliases: [], firstSeenChapterId: 'ch' }, NOW);
   await worlds.saveFact({

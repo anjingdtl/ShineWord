@@ -27,11 +27,14 @@ try {
     .map(row => ({ version: row.state_version, state: parse(row.snapshot_json, 'snapshot') }));
   if (!snapshots.length) throw Error('No branch snapshots');
   const turns = db.prepare("SELECT turn_id,committed_state_version,action_contract_json,effects_json,outcome_grade FROM turns WHERE branch_id=? AND status='Committed' ORDER BY committed_state_version").all(branchId);
-  const events = db.prepare('SELECT state_version,event_type FROM branch_events WHERE branch_id=? ORDER BY event_seq').all(branchId);
+  const events = db.prepare('SELECT state_version,event_type,payload_json FROM branch_events WHERE branch_id=? ORDER BY event_seq').all(branchId)
+    .map(event => ({ ...event, semanticType: event.event_type === 'recordEvent'
+      ? parse(event.payload_json, 'recordEvent').eventType : event.event_type }));
   const decisions = [];
   for (const turn of turns) {
     const version = turn.committed_state_version;
-    if (turn.turn_id.includes(':manage-') || turn.turn_id.includes(':system-')) continue;
+    if (turn.turn_id.includes(':manage-') || turn.turn_id.includes(':system-')
+      || turn.turn_id.startsWith('system-') || turn.turn_id.endsWith(':adoption')) continue;
     const before = snapshots.filter(row => row.version < version).at(-1)?.state;
     const after = snapshots.find(row => row.version === version)?.state;
     const contract = parse(turn.action_contract_json, 'contract');
@@ -45,7 +48,7 @@ try {
       for (const situation of after.situations ?? []) {
         const old = before.situations?.find(s => s.situationId === situation.situationId);
         for (const key of ['status', 'counters', 'promises', 'suppressedEventKeys']) {
-          const baseline = old?.[key] ?? (key === 'counters' ? {} : key === 'status' ? 'active' : []);
+          const baseline = old?.[key] ?? (key === 'counters' || key === 'suppressedEventKeys' ? {} : key === 'status' ? 'active' : []);
           if (!equal(baseline, situation[key])) changes.push('situation.' + key);
         }
       }
@@ -60,7 +63,7 @@ try {
       }
       if (!equal(before.campaignRuntime?.deferredConsequences ?? [], after.campaignRuntime?.deferredConsequences ?? [])) changes.push('consequences');
       if (!equal(before.campaignRuntime?.ending, after.campaignRuntime?.ending)) changes.push('ending');
-      const previousTypes = new Set(events.filter(e => e.state_version < version).map(e => e.event_type));
+      const previousTypes = new Set(events.filter(e => e.state_version < version).map(e => e.semanticType));
       if (effects.some(e => e.op === 'recordEvent' && !previousTypes.has(e.eventType))) changes.push('new.committed_event');
     }
     decisions.push({ turnId: turn.turn_id, version, grade: turn.outcome_grade, methodId: contract.methodRef?.methodId,
@@ -74,7 +77,8 @@ try {
   for (const row of snapshots) for (const c of row.state.campaignRuntime?.deferredConsequences ?? []) {
     if (c.status !== 'triggered' || seen.has(c.idempotencyKey)) continue;
     seen.add(c.idempotencyKey);
-    const intervening = candidates.filter(d => d.version > c.createdAtVersion && d.version < c.triggeredAtVersion).length;
+    // Output scoping must not erase the earlier history needed to prove delay.
+    const intervening = decisions.filter(d => d.candidateMeaningful && d.version > c.createdAtVersion && d.version < c.triggeredAtVersion).length;
     consequences.push({ consequenceId: c.consequenceId, createdAtVersion: c.createdAtVersion, triggeredAtVersion: c.triggeredAtVersion,
       interveningCandidateDecisions: intervening, meetsDelayCandidate: intervening >= 2 });
   }
