@@ -27,5 +27,6 @@ turn-0010 排程了 `con-church-watch` 与 `con-trust-deepens`。之后 turn-001
 - SQLite `integrity_check=ok`；数据库中 campaign=5、branch=7，目标分支 17 个已提交状态变更记录。没有替换数据库。
 - 共用 Android/主机派发账本为 **70/200**，reserved=0、outcome_unknown=0。
 - 从游戏菜单用“导出存档”写入 Android `Download`。文件为 `shine-trpg-camp-mv1s7cga-camp-mv1s7cga-main.shineword-save.json`，1,609,767 bytes，SHA-256 `D9B7354357D203F1D519CF6C2FC1178EC2D29A82C4656D55106875E693561344`。production `validateSaveJson` 校验返回 `ok=true`、errors=[]；manifest 为 `shineword-save-10`、stateVersion 16，且含同一分支与成功结局。
+- 结局后的 Android 游戏信息→知识页显示 4 条已知条目；“教会眼线的动向”条目已在 v16 出现，故事记忆覆盖提示为 **16/16 回合**，与 consequence grant 和导出快照一致。
 
 脱敏快照、UI 与导出证据保存在 `.tmp/phase9/simulator-longrun-20261010/`；不包含 API key 或小说正文。本旅程关闭后仍需继续其他第九阶段改造方向的 Android 功能与工程验收，故本记录不表示整阶段已完成或具备发版条件。
