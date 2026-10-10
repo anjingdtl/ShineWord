@@ -98,6 +98,7 @@ export function buildPlanRequestMaterials(input: {
     '- 若篇幅偏好为长篇，至少设计两个 trigger 和权威效果各不相同、且能在同一条可达玩家旅程中被排程的持续后果：先由成功行动明确排程，至少经过两次不同的有效玩家决定后才满足触发条件；每个后果的权威效果都必须被后续办法、阶段完成条件或结局条件实际消费。只有 record_event 文案、同回合自触发、重复关系/知识授予或没有后续消费者的后果不算。',
     '- 长篇后果必须可执行：每个 consequence 都要被一个 success/full_success outcome 的 schedule_consequence 排程；调度它的办法不能同时满足 trigger。trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功（可直接用 node_succeeded），不能只靠同回合事件/知识发现。两项后果必须能同程排程：允许同一普通成功 outcome 同时排程两项，或在顺序可达的不同必做 main 阶段分别排程；不得分别放在同一场景互斥办法或同一办法互斥成功等级。两个后果使用不同 trigger 和不同权威效果。',
     '- 每个长篇后果至少有一个非文案效果被其触发后的下游 main 阶段 completion 或结局条件正向引用；仅授予线索、关系或事件而后续没有任何条件使用，不算消费。',
+    '- 长篇后果最小串联示例（两项都由 stage-1 的同一个 success outcome 排程时）：设置五个必做 main 阶段，stage-1→stage-2→stage-3→stage-4→stage-5 每段都通过 dependsOn 硬依赖紧接的前一段，next 不得跳过阶段；后果 A 在 stage-3 成功时触发，效果由 stage-4 completion 消费；后果 B 在 stage-4 成功时触发，效果由 stage-5 completion 消费。两个 trigger 必须引用不同的必做 main 节点，条件 JSON 不得相同。若在更晚阶段排程，就把两个触发点与消费者继续后移，仍保证每个 trigger 前至少两段硬依赖的必做 main 成功。',
     '- 行动文本、firstStep.targetEntryId 与效果必须指向同一实际参与者和场景：与未具名镇民/矿工闲谈时省略 targetEntryId；不得把被关押人物写成酒馆交谈对象，也不得因与第三人闲谈而改变她的关系。只有结果明确描述与该角色互动，才可产生针对她的关系效果。',
     '- 公开字段（title/publicObjective/publicPitch/longTermGoal/signs/summary）不得泄漏 gmPremise、gmPurpose、隐藏身份或原著后期走向；',
     '- 下方已验证事实与人物资料约束全部文案（包括 GM 字段、线索和四档 resultFact），不是只供引用 ID。不得改写原著人物的身份/职务、被捕原因、灾害原因、既有事件或开局时间；不得用 design_fill 包装替换原著事实。未提供的原案细节保持未知，设计新的调查/探视/协作过程，不编造已发生的罪行、损失或罪证。不能把开局锚点无依据地跳到若干日之后，也不能替换人物职务来迁就剧情。',

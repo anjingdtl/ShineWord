@@ -51,6 +51,8 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /至少设计两个 trigger 和权威效果各不相同、且能在同一条可达玩家旅程中被排程的持续后果/);
     assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
     assert.match(materials.system, /trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功/);
+    assert.match(materials.system, /长篇后果最小串联示例/);
+    assert.match(materials.system, /stage-1→stage-2→stage-3→stage-4→stage-5/);
     assert.match(materials.system, /每个后续阶段的 completion 必须证明它自己的公开目标/);
     assert.match(materials.system, /每个 consequence 都要被一个 success\/full_success outcome 的 schedule_consequence 排程/);
     assert.match(materials.system, /允许同一普通成功 outcome 同时排程两项/);

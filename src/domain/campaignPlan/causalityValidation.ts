@@ -10,21 +10,34 @@ function conditionLeaves(condition: SituationCondition, positive = true): Condit
   return [{ leaf: condition, positive }];
 }
 
-function nodeDistances(plan: CampaignPlanV1, startNodeId: string): Map<string, number> {
-  const distances = new Map([[startNodeId, 0]]);
-  const queue = [startNodeId];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const node = plan.nodes.find(candidate => candidate.nodeId === current);
-    if (!node) continue;
-    const next = [...node.nextNodeIds, ...plan.nodes.filter(candidate => candidate.statusDependencies.includes(current)).map(candidate => candidate.nodeId)];
-    for (const id of next) {
-      if (distances.has(id)) continue;
-      distances.set(id, distances.get(current)! + 1);
-      queue.push(id);
-    }
-  }
-  return distances;
+/**
+ * Counts main-stage successes that are hard prerequisites for a trigger node.
+ * nextNodeIds describe navigable routes and can contain shortcuts; only
+ * statusDependencies prevent a node from activating before its predecessors.
+ */
+function requiredMainStageDistance(plan: CampaignPlanV1, startNodeId: string, targetNodeId: string): number | undefined {
+  const retired = new Set(plan.retiredNodeIds ?? []);
+  if (retired.has(startNodeId) || retired.has(targetNodeId)) return undefined;
+  const byId = new Map(plan.nodes.map(node => [node.nodeId, node]));
+  const memo = new Map<string, number>([[startNodeId, 0]]);
+  const visiting = new Set<string>();
+  const distance = (nodeId: string): number | undefined => {
+    if (memo.has(nodeId)) return memo.get(nodeId);
+    if (visiting.has(nodeId) || retired.has(nodeId)) return undefined;
+    const node = byId.get(nodeId);
+    if (!node) return undefined;
+    visiting.add(nodeId);
+    const prerequisiteDistances = node.statusDependencies
+      .map(dependencyId => distance(dependencyId))
+      .filter((value): value is number => value !== undefined);
+    visiting.delete(nodeId);
+    if (prerequisiteDistances.length === 0) return undefined;
+    const afterLatestRequiredPrerequisite = Math.max(...prerequisiteDistances);
+    const result = afterLatestRequiredPrerequisite + (node.role === 'main' ? 1 : 0);
+    memo.set(nodeId, result);
+    return result;
+  };
+  return distance(targetNodeId);
 }
 
 /**
@@ -90,14 +103,16 @@ function definitelyProduced(condition: SituationCondition, effects: readonly Cam
 
 function everyTriggerRouteHasLaterMainGate(
   condition: SituationCondition,
-  distances: ReadonlyMap<string, number>,
+  startNodeId: string,
   plan: CampaignPlanV1,
 ): boolean {
   if (condition.kind === 'not') return false;
-  if (condition.kind === 'all') return condition.of.some(child => everyTriggerRouteHasLaterMainGate(child, distances, plan));
-  if (condition.kind === 'any') return condition.of.length > 0 && condition.of.every(child => everyTriggerRouteHasLaterMainGate(child, distances, plan));
+  if (condition.kind === 'all') return condition.of.some(child => everyTriggerRouteHasLaterMainGate(child, startNodeId, plan));
+  if (condition.kind === 'any') return condition.of.length > 0 && condition.of.every(child => everyTriggerRouteHasLaterMainGate(child, startNodeId, plan));
+  const requiredDistance = condition.kind === 'campaign_node_status' && condition.status === 'succeeded'
+    ? requiredMainStageDistance(plan, startNodeId, condition.nodeId) : undefined;
   return condition.kind === 'campaign_node_status' && condition.status === 'succeeded'
-    && distances.get(condition.nodeId)! >= 2
+    && requiredDistance !== undefined && requiredDistance >= 2
     && plan.nodes.some(node => node.nodeId === condition.nodeId && node.role === 'main');
 }
 
@@ -168,10 +183,10 @@ function hasCoReachableConsequenceSchedulers(
         if (sameSuccessfulOutcome && first.nodeId === second.nodeId) return true;
         // A stage resolves one situation, so different methods in that scene
         // are alternatives. They can only co-schedule across distinct main
-        // stages when the campaign graph has a directed route between them.
+        // stages when one is a hard status prerequisite of the other.
         if (first.nodeId === second.nodeId) continue;
-        if (nodeDistances(plan, first.nodeId).has(second.nodeId)
-          || nodeDistances(plan, second.nodeId).has(first.nodeId)) return true;
+        if (requiredMainStageDistance(plan, first.nodeId, second.nodeId) !== undefined
+          || requiredMainStageDistance(plan, second.nodeId, first.nodeId) !== undefined) return true;
       }
     }
   }
@@ -218,9 +233,8 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
       errors.push(`consequence ${consequence.consequenceId}: no ordinary-success method schedules this consequence.`);
       continue;
     }
-    const distancesBySource = sources.map(source => source.nodeId ? nodeDistances(plan, source.nodeId) : new Map<string, number>());
-    if (!sources.every((source, index) => source.nodeId
-      && everyTriggerRouteHasLaterMainGate(consequence.triggerCondition, distancesBySource[index]!, plan))) {
+    if (!sources.every(source => source.nodeId
+      && everyTriggerRouteHasLaterMainGate(consequence.triggerCondition, source.nodeId, plan))) {
       errors.push(`consequence ${consequence.consequenceId}: trigger must wait for a required main stage at least two stages after its scheduling action on every trigger path.`);
     }
     for (const source of sources) {
@@ -241,8 +255,9 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
       .map(({ leaf }) => (leaf as Extract<Leaf, { kind: 'campaign_node_status' }>).nodeId);
     const consumers = new Set<string>();
     for (const triggerNodeId of triggerNodes) {
-      const downstream = new Set(nodeDistances(plan, triggerNodeId).keys());
-      for (const node of plan.nodes.filter(candidate => downstream.has(candidate.nodeId)
+      const downstream = new Set(plan.nodes.filter(candidate =>
+        requiredMainStageDistance(plan, triggerNodeId, candidate.nodeId) !== undefined).map(node => node.nodeId));
+      for (const node of plan.nodes.filter(candidate => candidate.role === 'main' && downstream.has(candidate.nodeId)
         && !retired.has(candidate.nodeId) && candidate.nodeId !== triggerNodeId)) {
         if (consequence.effectSpecs.some(effect => hasPositiveConsumer(node.completion, effect)
           || (node.activation !== null && hasPositiveConsumer(node.activation, effect)))) consumers.add(node.nodeId);

@@ -126,6 +126,30 @@ test('a long plan passes when distinct successful actions schedule delayed, cons
   } finally { h.db.close(); }
 });
 
+test('long consequence delay counts hard stage dependencies, not navigational shortcuts', async () => {
+  const { h, plan, artifact } = await longFixture();
+  try {
+    plan.nodes.find(node => node.nodeId === 'stage-1').nextNodeIds = ['stage-2', 'stage-3'];
+    plan.nodes.find(node => node.nodeId === 'stage-3').statusDependencies = ['stage-1', 'stage-2'];
+    assert.deepEqual(validateCampaignPlanCausality(plan, artifact), []);
+
+    plan.nodes.find(node => node.nodeId === 'stage-3').statusDependencies = ['stage-1'];
+    assert.match(validateCampaignPlanCausality(plan, artifact).join('\n'), /trigger must wait for a required main stage at least two stages after its scheduling action/);
+  } finally { h.db.close(); }
+});
+
+test('long consequences cannot rely on navigational links for co-scheduling or downstream consumption', async () => {
+  const { h, plan, artifact } = await longFixture();
+  try {
+    plan.nodes.find(node => node.nodeId === 'stage-2').statusDependencies = [];
+    assert.match(validateCampaignPlanCausality(plan, artifact).join('\n'), /co-schedulable in one journey/);
+
+    plan.nodes.find(node => node.nodeId === 'stage-2').statusDependencies = ['stage-1'];
+    plan.nodes.find(node => node.nodeId === 'stage-4').statusDependencies = [];
+    assert.match(validateCampaignPlanCausality(plan, artifact).join('\n'), /consequence consequence-one: no later stage or ending consumes its authoritative effect/);
+  } finally { h.db.close(); }
+});
+
 test('long plans reject consequences scheduled only by mutually exclusive methods in one scene', async () => {
   const { h, plan, artifact } = await longFixture();
   try {
