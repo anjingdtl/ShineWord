@@ -13,7 +13,8 @@
 | Core Verify | `PASS` | `npm run verify:core`, 1,262 tests passed, 0 failed |
 | Local Android debug APK | `NOT RUN` | `npm --prefix mobile run apk:debug` was attempted and stopped with `Android SDK not configured. Set ANDROID_HOME/ANDROID_SDK_ROOT or mobile/android/local.properties.` No Gradle build occurred. |
 | Installed Android device / emulator journey | `NOT RUN` | No configured Android SDK/device was available in this environment. A successful typecheck is not device evidence. |
-| GitHub Core Verify / Android Verify | `PENDING PR` | Inspect both applicable pull-request workflows after opening the PR; do not infer their result from local checks. |
+| GitHub Core Verify | `PASS` | PR #12, run #118, successful on code head `d37b2aef972a73fd48247f8de5128a74b5ff0ba4`. |
+| GitHub Android Verify | `PASS` | PR #12, run #84, successful on code head `d37b2aef972a73fd48247f8de5128a74b5ff0ba4`; setup, mobile typecheck and `:app:assembleDebug` completed. |
 
 ## Save and recovery boundary
 
@@ -40,4 +41,4 @@ The APK command's version prebuild rewrote the tracked generated `mobile/src/ver
 4. Reach a prepared successor and a terminal situation; verify route-specific consequences remain distinct after convergence and that a missing successor reports a content gap without an empty-action loop.
 5. Repeat on an independently prepared save fixture and have an independent tester record any narrative-quality or usability issues. Do not use a real campaign database without separate authorization.
 
-Until those steps run, Android and human-play acceptance remain `NOT RUN`.
+The Android workflow proves a CI debug APK build, not installation or gameplay. Until the follow-up journey runs, Android device and human-play acceptance remain `NOT RUN`.

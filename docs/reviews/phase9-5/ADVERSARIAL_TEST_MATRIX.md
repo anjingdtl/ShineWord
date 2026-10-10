@@ -23,10 +23,11 @@
 | Repeated guidance collapses distinct authored methods with different effects | RED test against the former title/signature dedupe dropped a route ref; exact-reference dedupe now retains both routes. | `PASS` after fix |
 | Opportunity projection adds background LLM calls or agent roles | Controlled provider ledger observed the existing Planner and Narrator once each on each of two fresh actions; no added role or dispatch was introduced. | `PASS` for dispatch count; provider token cost not measured |
 | M2 structural content gap proves the need for generation | The gap is an intentionally provisional synthetic successor. R69 stage-preparation tests exercise preparing the nearest missing successor. No real adopted campaign exhaustion was established. | `M3 NOT NEEDED` |
+| Android debug APK assembles on the configured CI image | PR #12 Android Verify run #84 completed successfully, including `:app:assembleDebug`. | `PASS` |
 | Android runtime and human game quality are proved by engineering tests | No SDK/device or independent tester was available. | `NOT RUN` |
 
 ## Local engineering evidence
 
-`npm run verify:core` passed: 1,262 tests, 0 failures. Separate root and mobile typechecks passed. `npm run verify:version` passed (`1.0.0`, version code `1000000`). The Android debug build command was attempted but stopped before Gradle because no Android SDK is configured; device validation is recorded as `NOT RUN` in `ANDROID_SAVE_VALIDATION.md`.
+`npm run verify:core` passed: 1,262 tests, 0 failures. Separate root and mobile typechecks passed. `npm run verify:version` passed (`1.0.0`, version code `1000000`). PR #12 Core Verify run #118 passed, and Android Verify run #84 built the debug APK successfully on GitHub Actions. The local Android debug command stopped before Gradle because no Android SDK is configured; device validation is recorded as `NOT RUN` in `ANDROID_SAVE_VALIDATION.md`.
 
 These checks establish deterministic repository behavior only. They do not establish that L1 is active, that provider cost or latency fell, that Android behavior passed, or that end-user play quality meets the Phase 9 acceptance matrix.
