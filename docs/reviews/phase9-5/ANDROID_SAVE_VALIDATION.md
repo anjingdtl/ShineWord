@@ -11,10 +11,11 @@
 | Mobile TypeScript | `PASS` | `npm --prefix mobile run typecheck`, exit 0 |
 | Product version | `PASS` | `npm run verify:version`, exit 0; `version=1.0.0`, `versionCode=1000000` |
 | Core Verify | `PASS` | `npm run verify:core`, 1,262 tests passed, 0 failed |
-| Local Android debug APK | `NOT RUN` | `npm --prefix mobile run apk:debug` was attempted and stopped with `Android SDK not configured. Set ANDROID_HOME/ANDROID_SDK_ROOT or mobile/android/local.properties.` No Gradle build occurred. |
-| Installed Android device / emulator journey | `NOT RUN` | No configured Android SDK/device was available in this environment. A successful typecheck is not device evidence. |
-| GitHub Core Verify | `PASS` | PR #12, run #118, successful on code head `d37b2aef972a73fd48247f8de5128a74b5ff0ba4`. |
-| GitHub Android Verify | `PASS` | PR #12, run #84, successful on code head `d37b2aef972a73fd48247f8de5128a74b5ff0ba4`; setup, mobile typecheck and `:app:assembleDebug` completed. |
+| Local Android debug APK | `PASS` | `npm --prefix mobile run apk:debug` succeeded. APK is 103,771,573 bytes, SHA-256 `5eb24d0e280c33e7343fbc94279bc78f76c6421988801c528535e48eed80d109`. |
+| Android emulator launch smoke | `FAIL / INCONCLUSIVE` | Android 36 x86_64 AVD without KVM installed and launched the APK, but stayed on a blank React Native surface and raised an app-not-responding dialog during startup. See [player simulator follow-up](PLAYER_SIMULATOR_FOLLOWUP.md). |
+| Android player flow / save import | `NOT RUN` | The app did not present usable UI controls, so first-run setup, save import, gameplay, and UI-level restart/restore were not exercised. |
+| GitHub Core Verify | `PASS` | PR #12, run #119, successful on code head `33b5620d676d1282d8771ca946fd20db461614ad`. |
+| GitHub Android Verify | `PASS` | PR #12, run #85, successful on code head `33b5620d676d1282d8771ca946fd20db461614ad`; setup, mobile typecheck and `:app:assembleDebug` completed. |
 
 ## Save and recovery boundary
 
@@ -31,7 +32,7 @@ This feature branch does not change save serialization, migrations, database own
 
 The feature adds no save migration. These automated fixtures are regression coverage; they are not an import/export check against a real user save. No private user database or campaign was read.
 
-The APK command's version prebuild rewrote the tracked generated `mobile/src/version.json`; that generated-only change was restored because it was not part of this task. The worktree was clean after restoration, and the recorded version check had already passed.
+The APK command's version prebuild rewrote the tracked generated `mobile/src/version.json`; that generated-only change was restored because it was not part of this task. The worktree was clean after restoration. The current APK hash and emulator launch evidence are recorded in [player simulator follow-up](PLAYER_SIMULATOR_FOLLOWUP.md).
 
 ## Executable follow-up when an Android environment and tester are available
 
@@ -41,4 +42,4 @@ The APK command's version prebuild rewrote the tracked generated `mobile/src/ver
 4. Reach a prepared successor and a terminal situation; verify route-specific consequences remain distinct after convergence and that a missing successor reports a content gap without an empty-action loop.
 5. Repeat on an independently prepared save fixture and have an independent tester record any narrative-quality or usability issues. Do not use a real campaign database without separate authorization.
 
-The Android workflow proves a CI debug APK build, not installation or gameplay. Until the follow-up journey runs, Android device and human-play acceptance remain `NOT RUN`.
+The Android workflow and local build prove APK assembly. The no-KVM emulator launch was attempted but did not reach usable UI; Android player and human-play acceptance remain `NOT RUN`.
