@@ -42,6 +42,10 @@ export function MissingSituationCard(props: { worldId: string; issue: ReviewIssu
         {fact?.sources.length ? fact.sources.map((source, index) => <Text key={index} style={textStyle}>“{source.quote}”</Text>)
           : <Text style={textStyle}>缺少可核对的原文证据。</Text>}
       </View>)}
+      {preview.warnings.length > 0 ? <View style={{ gap: theme.space.xs }}>
+        <Text style={textStyle}>已安全移除未解析的可选角色引用，局面方法仍保留：</Text>
+        {preview.warnings.map((warning, index) => <Text key={index} style={textStyle}>· {warning}</Text>)}
+      </View> : null}
       <Text style={textStyle}>{preview.ready ? '依赖与发布验证已通过。请核对上述内容，再决定是否补充发布。'
         : '当前提案尚未通过发布验证，可刷新核对或拒绝这份提案。'}</Text>
       <Text style={textStyle}>补充发布会生成新的档案，在战役安全边界采用。拒绝只记住这份提案及证据，内容变化时重新审查。</Text>

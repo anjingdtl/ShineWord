@@ -752,7 +752,13 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
     if (resolved) participantIds.push(resolved);
     else danglingParticipants.push(participantId);
   }
-  if (danglingParticipants.length > 0) reasons.push(`unknown participant ids: ${danglingParticipants.join(',')}.`);
+  if (danglingParticipants.length > 0) {
+    rejectEntry(situation.ctx, 'situation_participant', id ?? String(record.id ?? '?'),
+      [`unresolved participant ids dropped; situation kept: ${danglingParticipants.join(',')}.`]);
+    if (rawParticipants.length > 0 && participantIds.length === 0) {
+      reasons.push('situation has no resolvable participants after removing unknown references.');
+    }
+  }
 
   const rawMethods = Array.isArray(record.methods) ? record.methods : [];
   const methods: Array<Record<string, unknown>> = [];

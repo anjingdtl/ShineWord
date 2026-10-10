@@ -16,7 +16,7 @@ const stable = (value: unknown): string => canonicalStringify(value as Canonical
 const refresh = (): Error => new Error('局面、证据或已发布内容已变化，请刷新审查后重试。');
 export interface SituationReviewPreview {
   worldId: string; issueId: string; proofHash: string; review: MappingSituationReview;
-  ready: boolean; errors: readonly string[];
+  ready: boolean; errors: readonly string[]; warnings: readonly string[];
 }
 
 /** Review only completed mapping checkpoints. No provider, replay or archive mutation. */
@@ -82,6 +82,7 @@ export class SituationReviewService {
     const proofHash = await sha256Hex(stable({ ...state.seal, sourceBinding: snapshot.binding }));
     const entries = new Map<string, ContentEntry>();
     const errors: string[] = [];
+    const warnings: string[] = [];
     for (const entry of [...state.base.entries, ...artifacts.flatMap(a => a.entries)]) {
       const previous = entries.get(entry.entryId);
       if (previous && stable(previous) !== stable(entry)) errors.push(`immutable_entry_collision:${entry.entryId}`);
@@ -103,7 +104,11 @@ export class SituationReviewService {
       factSubjects: new Map(state.facts.map(f => [f.factId, f.subjectEntityId])), entityNameToTemplateId,
       entryKinds: new Map(catalog.map(e => [e.entryId, e.kind])),
       knowledgeEntryIds: new Set(catalog.filter(e => e.kind === 'lore' && e.visibility !== 'gm').map(e => e.entryId)) });
-    errors.push(...ctx.rejected.flatMap(r => r.reasons));
+    for (const rejection of ctx.rejected) {
+      const messages = rejection.reasons.map(reason => `${rejection.kind}:${rejection.id}:${reason}`);
+      if (rejection.kind === 'situation_target' || rejection.kind === 'situation_participant') warnings.push(...messages);
+      else errors.push(...messages);
+    }
     let entry: ContentEntry | null = null;
     if (cleaned) {
       const resolved = resolveSituationReferences(cleaned, catalog, state.entities);
@@ -134,13 +139,14 @@ export class SituationReviewService {
         const citations = await buildSegmentCitations({ worldId, entries: [entry], facts: state.facts, catalog: sourceCatalog, sourceBinding: snapshot.binding });
         const { createdAt, ...frozenDraft } = draft;
         const payload = { ...frozenDraft, schemaVersion: SEGMENT_ARTIFACT_VERSION, validationVersion: SEGMENT_VALIDATION_VERSION,
-          citations, validation: { warnings: [] } };
+          citations, validation: { warnings: [...new Set(warnings)] } };
         const contentHash = await computeSegmentArtifactHash(payload, sha256Hex);
         errors.push(...validateSegmentArtifactContent({ artifact: { ...payload, createdAt, contentHash, artifactId: `segment-artifact-${contentHash}` },
           dependencyEntries: catalog, facts: state.facts, entities: state.entities, events: state.events, blockingReviews: state.reviews }).errors);
       } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
     }
-    const preview: SituationReviewPreview = { worldId, issueId, proofHash, review: state.review, ready: errors.length === 0, errors: [...new Set(errors)] };
+    const preview: SituationReviewPreview = { worldId, issueId, proofHash, review: state.review,
+      ready: errors.length === 0, errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
     const assertCurrent = async (tx: SqliteTransaction): Promise<void> => {
       const current = await this.readState(tx, worldId, issueId);
       await store.assertSourceBindingCurrent(tx, worldId, snapshot.binding);
@@ -163,7 +169,8 @@ export class SituationReviewService {
     if (changed !== 1) throw refresh();
     await tx.execute(`INSERT INTO review_issues (world_id,issue_id,kind,severity,detail_json,status,created_at,resolved_at)
       VALUES (?,?,'situation_mapping_decision','minor',?,'resolved',?,?)`, [preview.worldId, `situation-decision-${preview.proofHash}`,
-      JSON.stringify({ decision, proofHash: preview.proofHash, review: preview.review, ...(artifact ? { artifactId: artifact.artifactId, contentHash: artifact.contentHash } : {}) }), now, now]);
+      JSON.stringify({ decision, proofHash: preview.proofHash, review: preview.review, warnings: preview.warnings,
+        ...(artifact ? { artifactId: artifact.artifactId, contentHash: artifact.contentHash } : {}) }), now, now]);
   }
 
   async reject(worldId: string, issueId: string, expectedProofHash: string): Promise<void> {

@@ -64,6 +64,40 @@ test('missing locations stay unpublished until an actual scene dependency exists
   }finally{h.db.raw.close();}
 });
 
+test('unresolved optional situation actors and targets are safely dropped, visibly audited, and do not block a valid scene',async()=>{
+  const h=await harness({participantIds:['common-guard-template','npc-anna-imprisoned'],methods:[
+    {id:'observe',title:'查看来路',goal:'了解现场',firstStep:{actionKind:'observe',intent:'查看灯下的来路'},requires:{},tradeoffs:'需要时间'},
+    {id:'talk',title:'询问女囚',goal:'了解她的处境',firstStep:{actionKind:'talk',intent:'向女囚询问矿区塌方',targetId:'npc-anna-imprisoned'},requires:{},tradeoffs:'需要接近监牢'},
+  ]});try{
+    const preview=await h.review.prepare(h.worldId,h.issueId);
+    assert.equal(preview.ready,true,JSON.stringify(preview.errors));
+    assert.deepEqual(preview.errors,[]);
+    assert.equal(preview.warnings.length,2);
+    assert.ok(preview.warnings.some(w=>w.includes('situation_participant')&&w.includes('npc-anna-imprisoned')));
+    assert.ok(preview.warnings.some(w=>w.includes('situation_target')&&w.includes('npc-anna-imprisoned')));
+    const artifact=await h.review.publish(h.worldId,h.issueId,preview.proofHash);
+    const entry=artifact.entries.find(e=>e.entryId==='situation-cached-lights');
+    assert.ok(entry);
+    assert.deepEqual(entry.definition.participantEntryIds,['common-guard-template']);
+    assert.equal(entry.definition.methods[1].firstStep.targetEntryId,undefined);
+    const audit=h.db.raw.prepare("SELECT detail_json FROM review_issues WHERE kind='situation_mapping_decision'").get();
+    const decision=JSON.parse(audit.detail_json);
+    assert.equal(decision.artifactId,artifact.artifactId);
+    assert.deepEqual(decision.warnings,preview.warnings);
+  }finally{h.db.raw.close();}
+});
+
+test('a situation with no resolvable declared participants remains blocked',async()=>{
+  const h=await harness({participantIds:['npc-anna-imprisoned']});try{
+    const preview=await h.review.prepare(h.worldId,h.issueId);
+    assert.equal(preview.ready,false);
+    assert.ok(preview.errors.some(error=>error.includes('no resolvable participants')));
+    assert.equal((await h.store.listArtifacts(h.worldId)).length,0);
+    await assert.rejects(h.review.publish(h.worldId,h.issueId,preview.proofHash),/尚未通过/);
+    assert.equal((await h.worldStore.listReviewIssues(h.worldId)).find(issue=>issue.issueId===h.issueId).status,'open');
+  }finally{h.db.raw.close();}
+});
+
 test('changed evidence, full paid payload, issue, source, and competing publication invalidate shown decisions',async()=>{
   for(const change of ['fact','job','issue','source','artifact']) {
     const h=await harness();try{
