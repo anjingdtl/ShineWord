@@ -52,7 +52,17 @@ async function longFixture() {
   const situation = artifact.situations[0];
   const [firstMethod, secondMethod] = situation.definition.methods;
   firstMethod.outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-one' });
-  secondMethod.outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-two' });
+  const secondStageSituation = structuredClone(situation);
+  secondStageSituation.entryId = 'situation-stage-2';
+  secondStageSituation.nodeId = 'stage-2';
+  secondStageSituation.definition.situationTitle = '第二阶段的后续场景';
+  secondStageSituation.definition.methods = [structuredClone(secondMethod)];
+  secondStageSituation.definition.methods[0].outcomeTemplates.success.effects.push(
+    { template: 'schedule_consequence', consequenceId: 'consequence-two' },
+  );
+  situation.definition.methods = [firstMethod];
+  artifact.situations.push(secondStageSituation);
+  plan.nodes.find(node => node.nodeId === 'stage-2').situationRef = secondStageSituation.entryId;
   artifact.consequenceTemplates = [
     {
       consequenceId: 'consequence-one', description: '后续线索', visibility: 'public',
@@ -93,8 +103,9 @@ test('long plans reject unscheduled, same-action and unconsumed consequence temp
     assert.match(errors, /no ordinary-success method schedules this consequence/);
 
     const situation = artifact.situations[0];
+    const secondStageSituation = artifact.situations[1];
     situation.definition.methods[0].outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-one' });
-    situation.definition.methods[1].outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-two' });
+    secondStageSituation.definition.methods[0].outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-two' });
     artifact.consequenceTemplates[0].effectSpecs = [{ template: 'record_event', eventType: 'orphan_event', summary: '仅记录' }];
     const orphan = validateCampaignPlanCausality(plan, artifact).join('\n');
     assert.match(orphan, /no later stage or ending consumes its authoritative effect/);
@@ -111,6 +122,38 @@ test('long plans reject unscheduled, same-action and unconsumed consequence temp
 test('a long plan passes when distinct successful actions schedule delayed, consumed consequences', async () => {
   const { h, plan, artifact } = await longFixture();
   try {
+    assert.deepEqual(validateCampaignPlanCausality(plan, artifact), []);
+  } finally { h.db.close(); }
+});
+
+test('long plans reject consequences scheduled only by mutually exclusive methods in one scene', async () => {
+  const { h, plan, artifact } = await longFixture();
+  try {
+    const opening = artifact.situations.find(situation => situation.entryId === plan.nodes[0].situationRef);
+    const later = artifact.situations.find(situation => situation.entryId === plan.nodes.find(node => node.nodeId === 'stage-2').situationRef);
+    const laterMethod = structuredClone(later.definition.methods[0]);
+    laterMethod.outcomeTemplates.success.effects = laterMethod.outcomeTemplates.success.effects.filter(
+      effect => !(effect.template === 'schedule_consequence' && effect.consequenceId === 'consequence-two'),
+    );
+    later.definition.methods[0].outcomeTemplates.success.effects = [...laterMethod.outcomeTemplates.success.effects];
+    const alternative = structuredClone(laterMethod);
+    alternative.methodId = 'alternative-opening-method';
+    alternative.outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-two' });
+    opening.definition.methods.push(alternative);
+    const errors = validateCampaignPlanCausality(plan, artifact).join('\n');
+    assert.match(errors, /co-schedulable in one journey/);
+  } finally { h.db.close(); }
+});
+
+test('one successful outcome may schedule both distinct delayed consequences for a shared journey', async () => {
+  const { h, plan, artifact } = await longFixture();
+  try {
+    const opening = artifact.situations.find(situation => situation.entryId === plan.nodes[0].situationRef);
+    const later = artifact.situations.find(situation => situation.entryId === plan.nodes.find(node => node.nodeId === 'stage-2').situationRef);
+    later.definition.methods[0].outcomeTemplates.success.effects = later.definition.methods[0].outcomeTemplates.success.effects.filter(
+      effect => !(effect.template === 'schedule_consequence' && effect.consequenceId === 'consequence-two'),
+    );
+    opening.definition.methods[0].outcomeTemplates.success.effects.push({ template: 'schedule_consequence', consequenceId: 'consequence-two' });
     assert.deepEqual(validateCampaignPlanCausality(plan, artifact), []);
   } finally { h.db.close(); }
 });

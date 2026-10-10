@@ -144,6 +144,40 @@ function canonical(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 
+function hasCoReachableConsequenceSchedulers(
+  consequences: readonly CampaignContentArtifactV1['consequenceTemplates'][number][],
+  sourcesByConsequence: ReadonlyMap<string, readonly {
+    methodKey: string;
+    outcomeGrade: 'success' | 'full_success';
+    nodeId: string;
+    effects: readonly CampaignEffectSpec[];
+  }[]>,
+  plan: CampaignPlanV1,
+): boolean {
+  const retired = new Set(plan.retiredNodeIds ?? []);
+  const sourceNodes = consequences.map(consequence => (sourcesByConsequence.get(consequence.consequenceId) ?? [])
+    .filter(source => {
+      const node = plan.nodes.find(candidate => candidate.nodeId === source.nodeId);
+      return Boolean(node && node.role === 'main' && !retired.has(node.nodeId));
+    }));
+  for (let left = 0; left < sourceNodes.length; left++) {
+    for (let right = left + 1; right < sourceNodes.length; right++) {
+      for (const first of sourceNodes[left]!) for (const second of sourceNodes[right]!) {
+        const sameSuccessfulOutcome = first.methodKey === second.methodKey
+          && first.outcomeGrade === second.outcomeGrade;
+        if (sameSuccessfulOutcome && first.nodeId === second.nodeId) return true;
+        // A stage resolves one situation, so different methods in that scene
+        // are alternatives. They can only co-schedule across distinct main
+        // stages when the campaign graph has a directed route between them.
+        if (first.nodeId === second.nodeId) continue;
+        if (nodeDistances(plan, first.nodeId).has(second.nodeId)
+          || nodeDistances(plan, second.nodeId).has(first.nodeId)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Long plans promise delayed consequences, not decorative templates. Require
  * ordinary-success scheduling, a genuinely later main-stage trigger, distinct
@@ -154,7 +188,12 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
   const errors: string[] = [];
   const consequences = artifact.consequenceTemplates;
   if (consequences.length < 2) errors.push('long plan: at least two executable delayed consequences are required.');
-  const sourcesByConsequence = new Map<string, { methodKey: string; nodeId: string; effects: readonly CampaignEffectSpec[] }[]>();
+  const sourcesByConsequence = new Map<string, {
+    methodKey: string;
+    outcomeGrade: 'success' | 'full_success';
+    nodeId: string;
+    effects: readonly CampaignEffectSpec[];
+  }[]>();
   for (const situation of artifact.situations) {
     const sourceNode = plan.nodes.find(node => node.situationRef === situation.entryId);
     for (const method of situation.definition.methods ?? []) {
@@ -163,13 +202,13 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
         for (const schedule of effects.filter((effect): effect is Extract<CampaignEffectSpec, { template: 'schedule_consequence' }> =>
           effect.template === 'schedule_consequence')) {
           const rows = sourcesByConsequence.get(schedule.consequenceId) ?? [];
-          rows.push({ methodKey: `${situation.entryId}:${method.methodId}`, nodeId: sourceNode?.nodeId ?? '', effects });
+          rows.push({ methodKey: `${situation.entryId}:${method.methodId}`, outcomeGrade: grade,
+            nodeId: sourceNode?.nodeId ?? '', effects });
           sourcesByConsequence.set(schedule.consequenceId, rows);
         }
       }
     }
   }
-  const usedSourceMethods = new Set<string>();
   const triggerKeys = new Set<string>();
   const effectKeys = new Set<string>();
   const retired = new Set(plan.retiredNodeIds ?? []);
@@ -179,9 +218,6 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
       errors.push(`consequence ${consequence.consequenceId}: no ordinary-success method schedules this consequence.`);
       continue;
     }
-    const distinctSource = sources.find(source => !usedSourceMethods.has(source.methodKey));
-    if (!distinctSource) errors.push(`consequence ${consequence.consequenceId}: long consequences need distinct successful action sources.`);
-    else usedSourceMethods.add(distinctSource.methodKey);
     const distancesBySource = sources.map(source => source.nodeId ? nodeDistances(plan, source.nodeId) : new Map<string, number>());
     if (!sources.every((source, index) => source.nodeId
       && everyTriggerRouteHasLaterMainGate(consequence.triggerCondition, distancesBySource[index]!, plan))) {
@@ -222,8 +258,8 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
     }
     if (consumers.size === 0) errors.push(`consequence ${consequence.consequenceId}: no later stage or ending consumes its authoritative effect.`);
   }
-  if (usedSourceMethods.size < Math.min(consequences.length, 2)) {
-    errors.push('long plan: at least two consequences must be scheduled by distinct successful methods.');
+  if (consequences.length >= 2 && !hasCoReachableConsequenceSchedulers(consequences, sourcesByConsequence, plan)) {
+    errors.push('long plan: at least two delayed consequences must be co-schedulable in one journey (the same successful outcome or sequentially reachable required main stages); alternative methods or outcome grades cannot jointly schedule them.');
   }
   return errors;
 }
