@@ -101,6 +101,73 @@ test('P9-O1: generated content belongs only to the successor; adoption preserves
   } finally { h.db.close(); }
 });
 
+test('P9-O1: stage-content preparation inherits endings without rewriting the raw model response', async () => {
+  const model = nextStageModel();
+  delete model.endings;
+  const rawText = JSON.stringify(model);
+  const h = await fixture();
+  try {
+    const before = await context(h);
+    const job = await queued(h);
+    const result = await generate(h, job.jobId, { complete: async () => ({ text: rawText }) });
+    assert.equal(result.status, 'candidate_ready', result.errors.join('; '));
+    const candidate = await h.planStore.getCandidate(result.candidateId);
+    assert.deepEqual(candidate.plan.possibleEndings, before.plan.possibleEndings);
+    assert.equal(candidate.rawResponseText, rawText, 'audit retains the exact provider response');
+    assert.equal(JSON.parse(candidate.rawResponseText).endings, undefined, 'the parser placeholder is never persisted');
+  } finally { h.db.close(); }
+});
+
+test('P9-O1: stage-content preparation compiles only its frozen successor and ignores unrelated model provenance', async () => {
+  const model = nextStageModel();
+  model.stages[0] = { ...model.stages[0], provenance: {
+    kind: 'canon_inspired', sourceFactIds: ['not-in-the-frozen-catalog'], rationale: '模型改写的其他阶段来源',
+  } };
+  const rawText = JSON.stringify(model);
+  const h = await fixture();
+  try {
+    const before = await context(h);
+    const job = await queued(h);
+    let calls = 0;
+    const result = await generate(h, job.jobId, { complete: async () => { calls++; return { text: rawText }; } });
+    assert.equal(result.status, 'candidate_ready', result.errors.join('; '));
+    assert.equal(calls, 1, 'scope projection avoids paying for repair of a node the job cannot change');
+    const candidate = await h.planStore.getCandidate(result.candidateId);
+    assert.deepEqual(candidate.plan.nodes.find(node => node.nodeId === 'stage-1'), before.plan.nodes.find(node => node.nodeId === 'stage-1'));
+    assert.deepEqual(candidate.plan.nodes.find(node => node.nodeId === 'stage-2').completion,
+      before.plan.nodes.find(node => node.nodeId === 'stage-2').completion,
+      'stage-content preparation must preserve the frozen successor completion condition');
+    assert.deepEqual(candidate.plan.possibleEndings, before.plan.possibleEndings);
+    assert.equal(candidate.rawResponseText, rawText, 'scope projection does not rewrite the audited provider response');
+  } finally { h.db.close(); }
+});
+
+test('P9-O1: stage-content preparation drops newly authored long consequences from a single-stage scope', async () => {
+  const model = nextStageModel();
+  const consequenceId = 'stage-content-too-soon';
+  model.stages[1] = { ...model.stages[1], consequenceRefs: [consequenceId] };
+  model.consequences = [{ consequenceId, description: '在后继阶段结算的新后果。',
+    trigger: { kind: 'node_succeeded', nodeId: 'stage-2' }, effects: [{ template: 'record_event', eventType: 'too_soon_effect', summary: '新后果' }], visibility: 'public' }];
+  for (const method of model.firstSituation.methods) for (const outcome of Object.values(method.outcomes)) {
+    outcome.effects = [...outcome.effects, { template: 'schedule_consequence', consequenceId }];
+  }
+  const rawText = JSON.stringify(model);
+  const h = await fixture();
+  try {
+    const job = await queued(h);
+    const result = await generate(h, job.jobId, { complete: async () => ({ text: rawText }) });
+    assert.equal(result.status, 'candidate_ready', result.errors.join('; '));
+    const candidate = await h.planStore.getCandidate(result.candidateId);
+    assert.equal(candidate.rawResponseText, rawText, 'the original provider response remains auditable');
+    assert.equal(candidate.artifact.consequenceTemplates.length, 0, 'a one-stage materialization cannot author a long consequence');
+    for (const situation of candidate.artifact.situations) for (const method of situation.definition.methods) {
+      for (const outcome of Object.values(method.outcomeTemplates)) {
+        assert.ok(outcome.effects.every(effect => effect.template !== 'schedule_consequence'));
+      }
+    }
+  } finally { h.db.close(); }
+});
+
 test('P9-O1: an in-flight turn holds a ready candidate without invalidation or repeated generation', async () => {
   const h = await fixture();
   try {

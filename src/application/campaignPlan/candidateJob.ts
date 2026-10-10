@@ -66,7 +66,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     if (renewalInFlight || lostLease) return;
     renewalInFlight = renew().catch(() => { lostLease = true; }).finally(() => { renewalInFlight = null; });
   }, Math.floor(leaseTtlMs / 3));
-  const assertCurrent = async (): Promise<void> => {
+  const assertCurrent = async (requireBaseStateVersion = false): Promise<void> => {
     if (renewalInFlight) await renewalInFlight;
     await renew();
     if (lostLease) throw new Error('campaign_job_fence_expired');
@@ -76,6 +76,31 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       const setup = await deps.planStore.getSetup(job.setupId);
       if (!setup || ['cancelled','adopted'].includes(setup.status)) throw new Error('campaign_setup_cancelled');
       if (sha256HexOf(canonicalJsonOf(setup.intent)) !== current.intentHash) throw new Error('campaign_intent_stale');
+    } else {
+      if (!job.campaignId || !job.branchId || job.setupId !== `replan:${job.campaignId}`
+        || !Number.isInteger(job.baseStateVersion) || !job.basePlanId || !Number.isInteger(job.basePlanRevision)) {
+        throw new Error('base_plan_stale');
+      }
+      const binding = await deps.db.queryOne<{ campaign_id: string; world_id: string }>(
+        `SELECT c.campaign_id,c.world_id FROM campaigns c JOIN branches b ON b.campaign_id=c.campaign_id
+         WHERE c.campaign_id=? AND b.branch_id=?`, [job.campaignId, job.branchId]);
+      const snapshot = await deps.db.queryOne<{ state_version: number; snapshot_json: string }>(
+        'SELECT state_version,snapshot_json FROM snapshots WHERE branch_id=? ORDER BY state_version DESC LIMIT 1', [job.branchId]);
+      if (!binding || binding.campaign_id !== job.campaignId || !snapshot
+        || (requireBaseStateVersion && snapshot.state_version !== job.baseStateVersion)) throw new Error('base_plan_stale');
+      let liveState: GameStateSnapshot;
+      try { liveState = JSON.parse(snapshot.snapshot_json) as GameStateSnapshot; }
+      catch { throw Object.assign(new Error('replan_snapshot_corrupt'), { name: 'FrozenMaterialsCorruptedError' }); }
+      const runtime = liveState.campaignRuntime;
+      if (!runtime || !['active','paused'].includes(runtime.campaignStatus)
+        || runtime.planBinding.planId !== job.basePlanId || runtime.planBinding.revision !== job.basePlanRevision) {
+        throw new Error('base_plan_stale');
+      }
+      const revision = await deps.planStore.getPlanRevision(job.basePlanId, job.basePlanRevision);
+      const liveIntent = runtime.intent ?? revision?.intent;
+      if (!revision || !liveIntent || sha256HexOf(canonicalJsonOf(liveIntent)) !== current.intentHash
+        || current.intentHash !== job.intentHash
+        || binding.world_id !== revision.intent.sourceCoverageBinding.worldId) throw new Error('campaign_intent_stale');
     }
   };
   try {
@@ -149,7 +174,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         providerDialect: deps.profile.reasoningDialect ?? reasoningDialectForModel(deps.profile.model), model: deps.profile.model });
       frozen = { ...frozenPlanJob(intent, deps.profile, materials, ctx), reasoningPolicy, ...(state ? { baseState: state, basePlan } : {}),
         ...(preparedNodeId ? { preparedNodeId } : {}) };
-      await assertCurrent();
+      await assertCurrent(true);
       await writePlanFreeze(deps.db, jobId, job.setupId, frozen, now());
       await deps.db.execute('UPDATE campaign_plan_jobs SET freeze_root_id=?, intent_hash=? WHERE job_id=? AND status=\'running\' AND fencing_token=?',
         [`campaign-job:${jobId}`, sha256HexOf(canonicalJsonOf(intent)), jobId, claim.fencingToken]);
@@ -157,7 +182,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
     if (!frozen) throw new Error('freeze missing');
     if ((frozen.preparedNodeId ?? null) !== preparedNodeId) throw Object.assign(new Error('规划预生成范围与冻结根不一致，停止请求。'), { name: 'FrozenMaterialsCorruptedError' });
     if (llmModelProfileFingerprint(frozen.profile) !== llmModelProfileFingerprint(deps.profile)) throw new Error('模型配置已改变，请恢复原配置后继续此规划。');
-    await assertCurrent();
+    await assertCurrent(true);
     if (existing?.stage === 'ready' || existing?.stage === 'rejected') {
       const ready = isIntactReadyCandidate(existing);
       const status = ready ? 'candidate_ready' : 'invalid';
@@ -221,7 +246,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
           contentArtifactRefs: [...compiled.plan.contentArtifactRefs, ...frozen!.basePlan.contentArtifactRefs],
           unresolvedDependencies: frozen!.basePlan.unresolvedDependencies.filter(d => d.nodeId !== targetId),
           nodes: frozen!.basePlan.nodes.map(node => node.nodeId === targetId && target ? { ...node,
-            coverage: 'concrete', situationRef: target.situationRef, completion: target.completion,
+            coverage: 'concrete', situationRef: target.situationRef,
             rewardPolicyRefs: [...new Set([...(node.rewardPolicyRefs ?? []), ...target.rewardPolicyRefs])],
             consequenceRefs: [...new Set([...(node.consequenceRefs ?? []), ...target.consequenceRefs])] } : node) };
       } else {
@@ -264,23 +289,85 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         actorAliases: state ? cards : frozen!.intent.companionBindings,
         situations: state?.situations,
       }, frozen!.preparedNodeId), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact),
-      ...validateCampaignPlanCausality(compiled.plan, compiled.artifact)];
+      // The full frozen journey was validated when adopted. A scoped stage
+      // materialization contains only one playable situation, so re-running
+      // the global delayed-consequence minimum against this partial artifact
+      // would reject valid preparation even though all inherited plan nodes,
+      // endings, and consequence refs remain frozen and unchanged.
+      ...(frozen!.preparedNodeId ? [] : validateCampaignPlanCausality(compiled.plan, compiled.artifact))];
       return { compiled, errors };
     };
     // One scope spans scheduler waiting, all bounded dispatches, validation and
     // publication; physical transport protection alone leaves gaps at repair.
     releaseExecution = await deps.acquireExecution?.();
-    await assertCurrent();
+    await assertCurrent(true);
     const generation = await generateCampaignPlanCandidate({ provider: deps.provider, profile: frozen.profile,
       materials: frozen.materials, logicalRequestId: `campaign-plan:${jobId}`, worldId: frozen.intent.sourceCoverageBinding.worldId,
       reasoningPolicy: frozen.reasoningPolicy,
       ...(job.branchId ? { branchId: job.branchId } : {}),
+      ...(job.campaignId ? { campaignId: job.campaignId } : {}),
+      ...(job.baseStateVersion !== null ? { stateVersion: job.baseStateVersion } : {}),
       ...(existing?.rawResponseText !== null && existing?.rawResponseText !== undefined ? { resume: { text: existing.rawResponseText, repairUsed: existing.repairUsed } } : {}),
       ...(lastAttempt && ['reasoning_only', 'length'].includes(lastAttempt.failure_class ?? '')
         ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
           previousWireOutputTokens: lastAttempt.wire_output_tokens,
           observedReasoningTokens: lastAttempt.estimated_usage === 0 ? lastAttempt.reasoning_tokens : null } : {}),
-      validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(); deps.onStage?.('planning'); } });
+      normalizeCandidate: candidate => {
+        const preparedNodeId = frozen!.preparedNodeId;
+        if (!preparedNodeId || !frozen!.basePlan || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
+        const source = candidate as Record<string, unknown>;
+        const isRecord = (value: unknown): value is Record<string, unknown> =>
+          value !== null && typeof value === 'object' && !Array.isArray(value);
+        const target = frozen!.basePlan.nodes.find(node => node.nodeId === preparedNodeId);
+        const modelStages = Array.isArray(source.stages) ? source.stages : [];
+        const authoredTarget = modelStages.find((stage): stage is Record<string, unknown> =>
+          isRecord(stage) && stage.nodeId === preparedNodeId);
+        const firstSituation = isRecord(source.firstSituation) ? source.firstSituation : null;
+        const authoredRewards = source.rewards ?? firstSituation?.rewards;
+        const targetRewards = Array.isArray(authoredRewards)
+          ? authoredRewards.filter((reward): reward is Record<string, unknown> => isRecord(reward) && reward.nodeId === preparedNodeId) : [];
+        const targetRewardIds = targetRewards.flatMap(reward => typeof reward.policyId === 'string' ? [reward.policyId] : []);
+        const targetConsequences: Record<string, unknown>[] = [];
+        const targetConsequenceIds: string[] = [];
+        const stageSituation: Record<string, unknown> | null = firstSituation ? { ...firstSituation,
+          methods: Array.isArray(firstSituation.methods) ? firstSituation.methods.map(method => {
+            if (!isRecord(method) || !isRecord(method.outcomes)) return method;
+            return { ...method, outcomes: Object.fromEntries(Object.entries(method.outcomes).map(([grade, outcome]) => [grade,
+              isRecord(outcome) && Array.isArray(outcome.effects) ? { ...outcome,
+                effects: outcome.effects.filter(effect => !isRecord(effect) || effect.template !== 'schedule_consequence') } : outcome])) };
+          }) : firstSituation.methods } : null;
+        // A stage-content job only authors one playable successor. All other
+        // plan nodes, proposal text, rewards, clues and endings are inherited
+        // from the frozen plan or omitted. The synthetic anchor is parser-only
+        // and never reaches the adopted plan. Raw provider text is persisted
+        // before this scope projection and remains byte-for-byte auditable.
+        const projected: Record<string, unknown> = { ...source, endings: [{
+          endingId: 'stage-content-inherited-ending', title: '沿用既有结局',
+          publicDescription: '本次仅准备后继阶段，沿用原计划结局。', outcomeKind: 'open',
+          condition: { kind: 'node_succeeded', nodeId: preparedNodeId },
+        }], clues: [], rewards: targetRewards, consequences: targetConsequences,
+          proposal: { ...(isRecord(source.proposal) ? source.proposal : {}),
+            longTermGoal: frozen!.basePlan.longTermGoal, publicPitch: frozen!.basePlan.publicPitch,
+            gmPremise: frozen!.basePlan.gmPremise, tone: frozen!.basePlan.tone } };
+        if (authoredTarget && target) {
+          const { rewards: _nestedRewards, consequences: _nestedConsequences, ...situationBody } = stageSituation ?? {};
+          if (stageSituation) projected.firstSituation = situationBody;
+          projected.stages = [{ ...authoredTarget, nodeId: preparedNodeId, role: target.role, title: target.title,
+            publicObjective: target.publicObjective, gmPurpose: target.gmPurpose, coverage: 'provisional',
+            activation: null, failure: null, cancellation: null, dependsOn: [], alternatives: [], next: [],
+            situationRef: undefined, rewardPolicyRefs: targetRewardIds, consequenceRefs: targetConsequenceIds,
+            provenance: target.provenance }, {
+            nodeId: `${preparedNodeId}-scope-anchor`, role: 'optional', title: '本地编译锚点',
+            publicObjective: '限定后继阶段的编译范围', gmPurpose: '仅作为解析锚点，不进入保存计划。',
+            coverage: 'provisional', activation: null, completion: { kind: 'node_succeeded', nodeId: preparedNodeId },
+            failure: null, cancellation: null, dependsOn: [], alternatives: [], next: [],
+            rewardPolicyRefs: [], consequenceRefs: [],
+            provenance: { kind: 'design_fill', sourceFactIds: [], rationale: '本地解析锚点，不作为生成内容保存。' },
+          }];
+        }
+        return projected;
+      },
+      validateModel: model => compile(model).errors, physicalRequestBudget: Math.max(0, claim.physicalRequestBudget - used), onResponse: persistResponse, beforeDispatch: async () => { await assertCurrent(true); deps.onStage?.('planning'); } });
     physicalRequests = generation.physicalRequests;
     await countDispatchedRequests();
     await assertCurrent();

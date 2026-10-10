@@ -182,10 +182,14 @@ export async function generateCampaignPlanCandidate(input: {
   materials: PlanRequestMaterials;
   logicalRequestId: string;
   worldId: string;
+  campaignId?: string;
   branchId?: string;
+  stateVersion?: number;
   /** Durable response recovery; never redispatch a completed generation. */
   resume?: { text: string; repairUsed: boolean };
   physicalRequestBudget?: number;
+  /** Scope-specific parsing defaults; raw provider responses stay untouched in the audit store. */
+  normalizeCandidate?: (candidate: unknown) => unknown;
   /** Feedback selected at material freeze, never from live history on restore. */
   reasoningPolicy?: ReasoningPolicySelection;
   /** Resume a known output-exhausted attempt under the original aggregate cap. */
@@ -239,7 +243,9 @@ export async function generateCampaignPlanCandidate(input: {
     reasoningTier: reasoningPolicy.tier,
     reasoningReserveTokens: reasoningPolicy.reserveTokens,
     reasoningPolicyVersion: reasoningPolicy.policyVersion,
-    ledger: { logicalRequestId: input.logicalRequestId, physicalAttemptLimit: 2, requestKind: 'campaign_plan', worldId: input.worldId, ...(input.branchId ? { branchId: input.branchId } : {}) },
+    ledger: { logicalRequestId: input.logicalRequestId, physicalAttemptLimit: 2, requestKind: 'campaign_plan', worldId: input.worldId,
+      ...(input.campaignId ? { campaignId: input.campaignId } : {}), ...(input.branchId ? { branchId: input.branchId } : {}),
+      ...(input.stateVersion !== undefined ? { stateVersion: input.stateVersion } : {}) },
     scheduling: {
       logicalTaskId: input.logicalRequestId,
       role: 'mapper', priority: 'P2',
@@ -305,7 +311,8 @@ export async function generateCampaignPlanCandidate(input: {
   }
   const firstErrors: string[] = [];
   const firstParsed = extractJsonObject(first.text);
-  const firstModel = firstParsed === null ? null : parseCampaignPlanCandidate(firstParsed, firstErrors);
+  const firstModel = firstParsed === null ? null : parseCampaignPlanCandidate(
+    input.normalizeCandidate ? input.normalizeCandidate(firstParsed) : firstParsed, firstErrors);
   if (firstModel) firstErrors.push(...(input.validateModel?.(firstModel) ?? []));
   if (firstModel !== null && firstErrors.length === 0) {
     return { status: 'ready', model: firstModel, parseErrors: [], rawText: first.text, physicalRequests };
@@ -324,7 +331,8 @@ export async function generateCampaignPlanCandidate(input: {
   await input.onResponse?.(repair.text, true);
   const repairErrors: string[] = [];
   const repairParsed = extractJsonObject(repair.text);
-  const repairModel = repairParsed === null ? null : parseCampaignPlanCandidate(repairParsed, repairErrors);
+  const repairModel = repairParsed === null ? null : parseCampaignPlanCandidate(
+    input.normalizeCandidate ? input.normalizeCandidate(repairParsed) : repairParsed, repairErrors);
   if (repairModel) repairErrors.push(...(input.validateModel?.(repairModel) ?? []));
   if (repairModel !== null && repairErrors.length === 0) {
     return { status: 'ready', model: repairModel, parseErrors: [], rawText: repair.text, physicalRequests };
