@@ -286,7 +286,7 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
   };
   const session = new CampaignSession(
     { db: adapter, turns, game, worldStore: worlds, narratives, hashProvider: sha,
-      random: { nextIntInclusive: () => 6 } },
+      random: options.random ?? { nextIntInclusive: () => 6 } },
     options.provider ?? provider,
     { endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
       capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } },
