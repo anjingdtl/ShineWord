@@ -60,6 +60,29 @@ test('phase 9 ending references stay strict: stage IDs cannot compile as situati
   } finally { h.db.close(); }
 });
 
+test('phase 9 ending outcomes cannot reuse an identical completion condition', async () => {
+  const h = await fixture();
+  try {
+    const { intent } = await h.planStore.getSetup('setup-t');
+    const { ctx } = await buildPlanningContext({ worldStore: h.worlds, intent, protagonistSkills: ['skill-observation'] });
+    const duplicate = candidateModel();
+    duplicate.endings.push({ ...duplicate.endings[0], endingId: 'end-pyrrhic-copy', title: '同一时刻的另一结局', outcomeKind: 'pyrrhic' });
+    const duplicatePlan = compile(h, intent, ctx, duplicate, 'duplicate-ending-condition');
+    let errors = validateCampaignPlan(duplicatePlan.plan, validationContext(ctx, duplicatePlan.artifact), duplicatePlan.artifact);
+    assert.ok(errors.some(error => error.includes('have identical conditions')), errors.join('\n'));
+
+    const distinct = candidateModel();
+    distinct.endings.push({ ...distinct.endings[0], endingId: 'end-costly-proof', title: '代价留下的证据', outcomeKind: 'pyrrhic',
+      condition: { kind: 'all', of: [
+        { kind: 'node_succeeded', nodeId: 'stage-2' },
+        { kind: 'committed_event', eventType: 'verified_costly_choice' },
+      ] } });
+    const distinctPlan = compile(h, intent, ctx, distinct, 'distinct-ending-condition');
+    errors = validateCampaignPlan(distinctPlan.plan, validationContext(ctx, distinctPlan.artifact), distinctPlan.artifact);
+    assert.ok(!errors.some(error => error.includes('have identical conditions')), errors.join('\n'));
+  } finally { h.db.close(); }
+});
+
 test('phase 9 timed completion requires evidence produced by success and absent from failure', async () => {
   const h = await fixture();
   try {

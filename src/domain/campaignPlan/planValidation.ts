@@ -388,7 +388,15 @@ export function validateCampaignPlan(
       errors.push(`node ${node.nodeId}: canon_inspired requires source fact ids.`);
     }
   }
+  const endingConditions = new Map<string, string>();
   for (const ending of plan.possibleEndings) {
+    const conditionKey = canonicalStructure(ending.condition);
+    const duplicate = endingConditions.get(conditionKey);
+    if (duplicate) {
+      errors.push(`plan: endings ${duplicate} and ${ending.endingId} have identical conditions; each outcome needs its own reachable evidence.`);
+    } else {
+      endingConditions.set(conditionKey, ending.endingId);
+    }
     validateConditionShape(ending.condition, errors, `ending ${ending.endingId}`);
     validateConditionReferences(ending.condition, ctx, errors, `ending ${ending.endingId}`);
     for (const nodeId of collectConditionNodeRefs(ending.condition)) {
