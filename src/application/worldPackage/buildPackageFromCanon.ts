@@ -1739,8 +1739,13 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
     throw new Error('Canon blocking conflict：存在冲突事实，未请求模型映射、未发布世界包。已抽取资料保留，请在审查中解决冲突后重试。');
   }
   if (selection.diagnostics.length > 0) throw new Error(`开局/增量依赖门禁未通过：${selection.diagnostics.join('；')}`);
-  // Only retire this world-wide blocker once the actual condition is gone.
-  await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
+  // A scoped build can prove that its own evidence range has no conflict, but
+  // it cannot retire the world's shared conflict queue while another range
+  // still contains unresolved facts. Otherwise a concurrent/narrow build can
+  // hide a conflict that a later segment still needs reviewed.
+  if (!allFacts.some(fact => fact.status === 'conflict')) {
+    await worldStore.resolveReviewIssuesByPrefix(worldId, ['canon-conflict']);
+  }
   // Stage scoping (unified P3): a stage package maps only facts whose
   // evidence lies inside the built prefix. Facts without recorded spans are
   // world-level synthetics (e.g. opening facts) and stay in scope.

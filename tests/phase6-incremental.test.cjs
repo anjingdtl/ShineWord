@@ -349,6 +349,34 @@ test('90s opening locally compiles evidenced action closure with zero mapper cal
     assert.ok(!recovered.entries.some(e=>e.provenance.sourceFactIds.includes('conflict')),'unverified evidence never becomes playable content');
   }finally{h.db.close()}
 });
+
+test('a scoped build cannot retire the world conflict queue while an out-of-range canon conflict remains', async () => {
+  const h = await setup();
+  try {
+    await h.worldStore.createWorld({ worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now() });
+    await h.worldStore.saveImportedSource('w',{text:'',encoding:'utf-8',sourceSha256Hex:sha(h.text),sourceByteLength:Buffer.byteLength(h.text),normalizeVersion:'n',chapterSplitVersion:'c',splitStrategy:'standard',codePointCount:h.text.length,chapters:await h.sourceStore.getChapters('src'),chunks:await h.sourceStore.getChunks('src')},now());
+    const data=canon(24);data.facts[0].predicate='current_location';data.facts[0].value={location:'place'};
+    for(const e of data.entities)await h.worldStore.upsertEntity(e,now());
+    for(const f of data.facts)await h.worldStore.saveFact(f,now());
+    for(const e of data.events)await h.worldStore.saveEvent(e,now());
+    const outside={...fact('outside-conflict','hero',{note:'后续范围的事实'},1500),status:'conflict'};
+    await h.worldStore.saveFact(outside,now());
+    await h.worldStore.saveReviewIssue({worldId:'w',issueId:'canon-conflict',kind:'canon_conflict',severity:'blocking',
+      detailJson:JSON.stringify({factIds:['outside-conflict'],count:1}),createdAt:now(),canonConflictFactIds:['outside-conflict']});
+
+    const draft=await buildPackageDraftFromCanon({worldStore:h.worldStore,sha256Hex:sha,worldId:'w',sourceSha256:sha('source'),
+      mappingVersion:'scoped-conflict-queue',mappingMode:'startup_local',createdAt:now(),requirePlayableOpening:true,
+      incrementalMapping:options('opening',{openingFactLimit:40}),
+      provider:{async complete(){throw Error('local opening must not dispatch mapping');}}});
+    assert.equal(draft.selection.facts.length,24,'the unrelated conflict is outside this opening range');
+    assert.ok((await h.worldStore.listReviewIssues('w','open')).some(issue=>issue.issueId==='canon-conflict'),
+      'a scoped build cannot hide unresolved world evidence');
+
+    await h.worldStore.resolveCanonFactConflict('w','outside-conflict','unverified');
+    assert.ok(!(await h.worldStore.listReviewIssues('w','open')).some(issue=>issue.issueId==='canon-conflict'),
+      'the deliberate fact decision retires the blocker when no conflicts remain');
+  } finally { h.db.close(); }
+});
 test('review writer rolls back guard side effects and creates no blocker after a fence rejection',async()=>{
   const h=await setup();try {
     await h.worldStore.createWorld({worldId:'w',title:'测试',sourceSha256:sha('source'),sourceBytes:1,normalizeVersion:'n',chapterSplitVersion:'c',buildStatus:'ready',createdAt:now(),updatedAt:now()});
