@@ -30,6 +30,95 @@ export interface PlanRequestMaterials {
   user: string;
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as JsonRecord : null;
+}
+
+function collectSucceededNodeIds(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectSucceededNodeIds);
+  const record = asRecord(value);
+  if (!record) return [];
+  const kind = record.kind;
+  const direct = (kind === 'node_succeeded' || kind === 'campaign_node_status' && record.status === 'succeeded')
+    && typeof record.nodeId === 'string' ? [record.nodeId] : [];
+  return [...direct, ...Object.values(record).flatMap(collectSucceededNodeIds)];
+}
+
+function downstreamMainStageIds(candidate: unknown, triggerNodeIds: readonly string[]): string[] {
+  const root = asRecord(candidate);
+  const stages = Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [];
+  if (stages.length === 0 || triggerNodeIds.length === 0) return [];
+  const stageById = new Map(stages.flatMap(stage => typeof stage.nodeId === 'string' ? [[stage.nodeId, stage] as const] : []));
+  const isAfter = (candidateId: string, triggerId: string, visiting = new Set<string>()): boolean => {
+    if (candidateId === triggerId || visiting.has(candidateId)) return false;
+    visiting.add(candidateId);
+    const stage = stageById.get(candidateId);
+    const dependencies = Array.isArray(stage?.dependsOn) ? stage.dependsOn.filter((id): id is string => typeof id === 'string') : [];
+    return dependencies.some(dependencyId => dependencyId === triggerId || isAfter(dependencyId, triggerId, new Set(visiting)));
+  };
+  return stages.flatMap(stage => {
+    const nodeId = typeof stage.nodeId === 'string' ? stage.nodeId : null;
+    if (!nodeId || stage.role !== 'main' || triggerNodeIds.some(triggerId => !isAfter(nodeId, triggerId))) return [];
+    return [nodeId];
+  });
+}
+
+function consequenceEffectConsumerExamples(candidate: unknown, consequenceId: string): string[] {
+  const root = asRecord(candidate);
+  const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord) : [];
+  const consequence = consequences.find(item => item?.consequenceId === consequenceId);
+  const effects = Array.isArray(consequence?.effects) ? consequence.effects.map(asRecord) : [];
+  return effects.flatMap(effect => {
+    if (!effect || typeof effect.template !== 'string') return [];
+    const condition: JsonRecord | null = effect.template === 'grant_knowledge' && typeof effect.entryId === 'string'
+      ? { kind: 'knowledge_known', entryId: effect.entryId }
+      : effect.template === 'grant_item' && typeof effect.itemId === 'string' && typeof effect.toActorId === 'string'
+        ? { kind: 'item_owned', itemId: effect.itemId, actorId: effect.toActorId }
+        : effect.template === 'relationship_shift' && typeof effect.fromActorId === 'string'
+          && typeof effect.toActorId === 'string' && typeof effect.delta === 'number' && effect.delta > 0
+          ? { kind: 'relationship_at_least', fromActorId: effect.fromActorId, toActorId: effect.toActorId, closeness: 1 }
+          : effect.template === 'situation_counter' && typeof effect.situationId === 'string'
+            && typeof effect.counterId === 'string' && typeof effect.delta === 'number' && effect.delta > 0
+            ? { kind: 'counter_at_least', situationId: effect.situationId, counterId: effect.counterId, minimum: 1 }
+            : effect.template === 'record_event' && typeof effect.eventType === 'string'
+              ? { kind: 'committed_event', eventType: effect.eventType }
+              : null;
+    return condition ? [JSON.stringify(condition)] : [];
+  });
+}
+
+/** Add machine-shaped, candidate-specific directions for the strict causal gate. */
+function structuralRepairGuidance(errors: readonly string[], candidate: unknown): string {
+  const guidance = errors.flatMap(error => {
+    const match = /^consequence ([^:]+): no later stage or ending consumes its authoritative effect\.$/.exec(error.trim());
+    if (match) {
+      const consequenceId = match[1]!;
+      const root = asRecord(candidate);
+      const consequence = (Array.isArray(root?.consequences) ? root.consequences.map(asRecord) : [])
+        .find(item => item?.consequenceId === consequenceId);
+      const triggerNodes = collectSucceededNodeIds(consequence?.trigger);
+      const downstream = downstreamMainStageIds(candidate, triggerNodes);
+      const effectConditions = consequenceEffectConsumerExamples(candidate, consequenceId);
+      const target = downstream.length > 0 ? `可用的后续必做 main 阶段 nodeId：${downstream.join(', ')}。` :
+        '未能从 dependsOn 找到合格的后续必做 main 阶段；先补出真实、可达的硬依赖阶段，再设置消费者。';
+      const examples = effectConditions.length > 0
+        ? `该 consequence 的权威效果可对应这些正向条件叶：${effectConditions.join(' 或 ')}。`
+        : '检查该 consequence.effects 中每个权威效果，使用与效果字段完全一致且当前 schema 支持的正向条件叶。';
+      return [`- consequence ${consequenceId}：${target}${examples}将匹配条件放入触发节点之后的阶段 completion 或有效 ending.condition；不要把它留在触发阶段或任何更早阶段。若触发阶段 completion 已引用该效果，移除那一个循环条件叶，把其他既有门槛原样保留，并用 kind="all" 合并原门槛和后续消费条件。不得删除 consequence、放宽阶段依赖或仅改文案。`];
+    }
+    const clueMatch = /^clue ([^:]+): source (.+) is outside the bound catalog\.$/.exec(error.trim());
+    if (clueMatch) {
+      const [, clueId, sourceId] = clueMatch;
+      return [`- clue ${clueId}：sourceEntryIds 中被拒绝的目录 ID 是 ${sourceId}。从该 clue 的 sourceEntryIds 删除这个被拒绝值；若仍有其它错误，逐项删除相应被拒绝值，只保留冻结资料目录里逐字存在的条目 ID；没有合法条目时使用 []。sourceFactIds 是不同命名空间：不要把被拒绝值迁移、改写或补造到 provenance.sourceFactIds，也不要修改已有且合法的 provenance.sourceFactIds。此修复同时消除由该 sourceEntryIds 派生的 artifact 目录依赖错误；保留线索正文和其它合法字段。`];
+    }
+    return [];
+  });
+  return guidance.length > 0 ? `\n\n因果校验的定点修复要求（必须执行）：\n${guidance.join('\n')}` : '';
+}
+
 export function buildPlanRequestMaterials(input: {
   intent: CampaignIntentV1;
   ctx: LocalCompileContext;
@@ -231,11 +320,11 @@ export async function generateCampaignPlanCandidate(input: {
   const initialPolicy = plan.reasoningPolicy;
   if (!initialPolicy) throw new Error('campaign_plan_policy_missing');
   let reasoningPolicy = initialPolicy;
-  const buildRequest = (repairErrors: string[] | null): LlmRequest => ({
+  const buildRequest = (repairErrors: string[] | null, repairCandidate?: unknown): LlmRequest => ({
     role: 'WorldMapper',
     system: input.materials.system,
     user: repairErrors === null ? input.materials.user
-      : `${input.materials.user}\n\n上一次输出未通过校验，错误如下：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON（保持相同结构与玩家意图，不要删除必需字段）。`,
+      : `${input.materials.user}\n\n上一次输出未通过校验，错误如下：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON（保持相同结构与玩家意图，不要删除必需字段）。${structuralRepairGuidance(repairErrors, repairCandidate)}`,
     maxOutputTokens: plan.wireOutputTokens,
     maxPhysicalRequests: 1,
     jsonMode: input.profile.capabilities.supportsJson,
@@ -322,7 +411,7 @@ export async function generateCampaignPlanCandidate(input: {
     return { status: 'invalid', model: null, parseErrors: firstErrors, rawText: first.text, physicalRequests };
   }
   // One bounded repair with the SAME frozen materials + error list.
-  const repairRequest = buildRequest(firstErrors.slice(0, 12));
+  const repairRequest = buildRequest(firstErrors.slice(0, 12), firstParsed);
   repairRequest.user += `\n待修复候选（保留完整意图和合法合同）：\n${first.text}`;
   const repair = await dispatch(repairRequest);
   if (repair.unknown) {

@@ -58,6 +58,38 @@ test('planning budget: reasoning-only recovery re-enters the kernel and schedule
     assert.equal((await q.run()).physicalRequests,0); assert.equal(q.wires.length,2);
   } finally { h.db.close(); }
 });
+
+test('campaign-plan structural repair targets a downstream consequence consumer and invalid clue namespace references', async () => {
+  const model = structuredClone(candidateModel());
+  model.consequences[0].trigger = { kind: 'node_succeeded', nodeId: 'stage-1' };
+  model.consequences[0].effects = [{ template: 'grant_knowledge', entryId: 'lore-crates' }];
+  model.clues = [{ clueId: 'clue-x', title: '调查线索', text: '现场证词指向一条尚待核实的线索。',
+    sourceEntryIds: ['lore-outside-catalog'],
+    provenance: { kind: 'canon_inspired', sourceFactIds: ['fact-known'], rationale: '据已绑定的事实整理。' } }];
+  const requests = [];
+  let validationPass = 0;
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(model) }; } },
+    profile,
+    materials: { system: 'frozen campaign-plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'orphan-consequence-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel: () => validationPass++ === 0
+      ? ['consequence lin-favor: no later stage or ending consumes its authoritative effect.',
+        'clue clue-x: source lore-outside-catalog is outside the bound catalog.',
+        'artifact: clue camp-clue-x depends on content outside its bound catalog.'] : [],
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /可用的后续必做 main 阶段 nodeId：stage-2/);
+  assert.match(requests[1].user, /\{"kind":"knowledge_known","entryId":"lore-crates"\}/);
+  assert.match(requests[1].user, /触发阶段 completion 已引用该效果，移除那一个循环条件叶/);
+  assert.match(requests[1].user, /不得删除 consequence、放宽阶段依赖或仅改文案/);
+  assert.match(requests[1].user, /从该 clue 的 sourceEntryIds 删除这个被拒绝值/);
+  assert.match(requests[1].user, /sourceFactIds 是不同命名空间/);
+  assert.match(requests[1].user, /lore-outside-catalog/);
+});
+
 test('planning budget: restart after a known thought-only response resumes the frozen root with one larger-budget HTTP', async () => {
   const h = await fixture();
   try {
