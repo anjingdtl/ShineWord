@@ -98,7 +98,7 @@ export async function buildPlanningContext(input: {
       const d = t.definition as { name?: string; description?: string; behavior?: { goal?: string } };
       return { actorId: t.entryId, name: d.name ?? t.entryId, description: d.description ?? '', goal: d.behavior?.goal ?? '' };
     }),
-    openingFacts: facts.filter(f => !['speculation','conflict'].includes(f.status) && isFactVisibleAtAnchor(f, anchorOrder)).slice(0, 40)
+    openingFacts: facts.filter(f => !['speculation','conflict'].includes(f.status) && isFactVisibleAtAnchor(f, anchorOrder))
       .map(f => ({ factId: f.factId, subject: entities.find(e => e.entityId === f.subjectEntityId)?.name ?? f.subjectEntityId, predicate: f.predicate, value: f.value })),
     availableFactIds: new Set(facts.filter(fact => !['speculation','conflict'].includes(fact.status) && isFactVisibleAtAnchor(fact, anchorOrder)).map(fact => fact.factId)),
   };
