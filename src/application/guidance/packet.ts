@@ -6,6 +6,7 @@ import type {
 } from '../../domain/situations/types';
 import type { ActorCard } from '../../domain/characters/card';
 import type { PreparedTurnResolution } from '../turns/commitTurn';
+import type { NarrativeOpportunityProjection } from '../campaignPlan/opportunityProjection';
 import { collectAllowedCandidates, type MethodCandidateContext } from './candidates';
 import type { AllowedCandidateV1, GuidanceSeverity, PublicSituationPacketV1 } from './types';
 
@@ -58,6 +59,7 @@ export interface BuildSituationPacketInput {
   allowedCandidates?: readonly AllowedCandidateV1[];
   preferredCandidateRef?: string;
   preferredSituationId?: string;
+  opportunityProjection?: NarrativeOpportunityProjection;
 }
 
 function summarizeChanges(prepared: PreparedTurnResolution, names: ReadonlyMap<string, string>): string[] {
@@ -131,25 +133,40 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
     situationStatuses,
     causalWorldTimeOrder: causalOrder,
   };
+  const preferredSituationId = input.opportunityProjection?.primarySituationId ?? input.preferredSituationId;
+  const preferredCandidateRef = input.preferredCandidateRef ?? input.opportunityProjection?.preferredCandidateRef;
   const prioritizedDefinitions = [...situationDefinitions].sort((a, b) =>
-    Number(b.situationId === input.preferredSituationId) - Number(a.situationId === input.preferredSituationId));
+    Number(b.situationId === preferredSituationId) - Number(a.situationId === preferredSituationId));
   const candidates = [...(input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions: prioritizedDefinitions, context }))];
-  candidates.sort((a, b) => Number(b.situationId === input.preferredSituationId) - Number(a.situationId === input.preferredSituationId));
+  candidates.sort((a, b) => Number(b.situationId === preferredSituationId) - Number(a.situationId === preferredSituationId));
+  if (preferredCandidateRef) candidates.sort((a, b) => Number(b.ref === preferredCandidateRef) - Number(a.ref === preferredCandidateRef));
   // Bound model input even after many regions have been built. Keep current
   // situation methods and legal base actions within a fixed public envelope.
   const allowedCandidates = [...candidates.filter(c => c.methodId).slice(0, 8), ...candidates.filter(c => !c.methodId).slice(0, 4)];
-  if (input.preferredCandidateRef) allowedCandidates.sort((a, b) => Number(b.ref === input.preferredCandidateRef) - Number(a.ref === input.preferredCandidateRef));
-  if (allowedCandidates.length === 0 && situationDefinitions.length === 0) return null;
+  if (preferredCandidateRef) allowedCandidates.sort((a, b) => Number(b.ref === preferredCandidateRef) - Number(a.ref === preferredCandidateRef));
+  if (allowedCandidates.length === 0 && situationDefinitions.length === 0 && !input.opportunityProjection?.feedback) return null;
 
   const opportunities: Array<{ text: string; situationId?: string }> = [];
   const pressures: Array<{ text: string; deadlineClockSeconds?: number }> = [];
   const actorNotes: Array<{ actorId: string; note: string }> = [];
   const clockSeconds = state.clockSeconds ?? state.clockMinutes * 60;
+  const projectedSituationIds = new Set<string>();
+  if (input.opportunityProjection) {
+    const projectedLimit = input.opportunityProjection.feedback ? 4 : 5;
+    for (const opportunity of input.opportunityProjection.opportunities) {
+      if (opportunities.length >= projectedLimit) break;
+      projectedSituationIds.add(opportunity.situationId);
+      opportunities.push({ text: `${opportunity.title}：${opportunity.objective}`, situationId: opportunity.situationId });
+    }
+    if (input.opportunityProjection.feedback && opportunities.length < 5) {
+      opportunities.push({ text: input.opportunityProjection.feedback });
+    }
+  }
   for (const { situationId, definition } of situationDefinitions) {
     const entry = situationStatuses.get(situationId);
     if (!entry) continue;
     if (definition.locationId && definition.locationId !== state.actors[playerCard.actorId]?.locationId) continue;
-    if (entry.status === 'active') {
+    if (entry.status === 'active' && !projectedSituationIds.has(situationId)) {
       opportunities.push({ text: definition.summary, situationId });
       if (definition.pressure.description) {
         pressures.push({
@@ -180,7 +197,7 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   void candidateIds;
 
   return {
-    ...(input.preferredSituationId ? { preferredSituationId: input.preferredSituationId } : {}),
+    ...(preferredSituationId ? { preferredSituationId } : {}),
     changes: summarizeChanges(prepared, new Map([...input.visibleActorNames, [playerCard.actorId, playerCard.name]])),
     opportunities: opportunities.slice(0, 5),
     pressures: pressures.slice(0, 5),

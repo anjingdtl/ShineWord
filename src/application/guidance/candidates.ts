@@ -244,8 +244,9 @@ export function baseActionCandidates(state: GameStateSnapshot, playerCard: Actor
 /**
  * Collect allowed candidates from ACTIVE situations (eligible situations are
  * surfaced as opportunities, not yet as methods — the player first needs the
- * knowledge condition) plus stable base actions. Deduped by first-step
- * signature; ordering: situation methods first, base actions after.
+ * knowledge condition) plus stable base actions. Method references remain
+ * distinct because their authored effects can differ; repeated references and
+ * duplicate generic base actions are suppressed.
  */
 export function collectAllowedCandidates(input: {
   situationDefinitions: ReadonlyArray<{ situationId: string; definition: SituationDefinitionV1 }>;
@@ -255,7 +256,13 @@ export function collectAllowedCandidates(input: {
   const collected: AllowedCandidateV1[] = [];
   const seenSignatures = new Set<string>();
   const push = (candidate: AllowedCandidateV1): void => {
-    const signature = `${candidate.actionKind}|${candidate.skillId ?? ''}|${candidate.title}`;
+    // A method reference carries authored grade effects and campaign
+    // consequences. Never collapse distinct methods just because they look
+    // like the same gesture; only repeated references are duplicates. Generic
+    // base actions still dedupe by their visible action signature.
+    const signature = candidate.methodId
+      ? `method:${candidate.ref}`
+      : `action:${candidate.actionKind}|${candidate.skillId ?? ''}|${candidate.title}`;
     if (seenSignatures.has(signature)) return;
     seenSignatures.add(signature);
     collected.push(candidate);

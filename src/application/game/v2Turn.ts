@@ -138,6 +138,8 @@ export interface RunV2TurnInput {
   /** P7: build the player-safe situation packet from the prepared state. */
   buildSituationPacket?: (
     prepared: PreparedTurnResolution,
+    contract: ActionContract,
+    grade: RollGrade,
   ) => import('../guidance/types').PublicSituationPacketV1 | null;
   /** P7: validate LLM steps against the packet and build the final guidance. */
   buildGuidance?: (args: {
@@ -497,7 +499,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   let packet: import('../guidance/types').PublicSituationPacketV1 | null = null;
   if (input.prepareResolution) {
     prepared = await input.prepareResolution({ contract, contractHash, grade, rollRecord });
-    packet = input.buildSituationPacket ? (input.buildSituationPacket(prepared) ?? null) : null;
+    packet = input.buildSituationPacket ? (input.buildSituationPacket(prepared, contract, grade) ?? null) : null;
   }
 
   let narrative = await input.narratives.get(input.branchId, input.turnId);

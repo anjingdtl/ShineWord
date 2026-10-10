@@ -6,6 +6,7 @@ import type { ActionContract } from '../../domain/turns/types';
 import type { LlmProvider, LlmRequest } from '../llm/types';
 import { parseStructuredOutput } from '../llm/structuredOutput';
 import type { GuidanceStore } from '../ports/guidanceStore';
+import type { NarrativeOpportunityProjection } from '../campaignPlan/opportunityProjection';
 import { detectSeverity, buildSituationPacket } from './packet';
 import { assembleTurnGuidance } from './validate';
 import { stableFingerprint } from '../llm/requestPlan';
@@ -66,6 +67,7 @@ export interface AncillaryGuidanceInput {
   allowedCandidates?: readonly import('./types').AllowedCandidateV1[];
   preferredCandidateRef?: string;
   preferredSituationId?: string;
+  opportunityProjection?: NarrativeOpportunityProjection;
 }
 
 export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): TurnGuidanceV1 {
@@ -125,6 +127,7 @@ export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): Turn
       allowedCandidates: input.allowedCandidates,
       preferredCandidateRef: input.preferredCandidateRef,
       preferredSituationId: input.preferredSituationId,
+      opportunityProjection: input.opportunityProjection,
     }),
     campaignId: input.campaignId,
     playerActorId: input.playerCard.actorId,
@@ -134,7 +137,9 @@ export function buildLocalAncillaryGuidance(input: AncillaryGuidanceInput): Turn
     visibleActorNames: input.visibleActorNames,
     contentBindingHash: guidanceContentBindingHash(input.state),
     knowledgeHash: input.knowledgeHash ?? stableFingerprint([...input.knownEntryIds].sort()),
-    contextHash: stableFingerprint({ definitions: input.situationDefinitions, candidates: input.allowedCandidates, preferredCandidateRef: input.preferredCandidateRef, preferredSituationId: input.preferredSituationId }),
+    contextHash: stableFingerprint({ definitions: input.situationDefinitions, candidates: input.allowedCandidates,
+      opportunityProjection: input.opportunityProjection, preferredCandidateRef: input.preferredCandidateRef,
+      preferredSituationId: input.preferredSituationId }),
   });
 }
 
@@ -232,6 +237,7 @@ async function performUpgrade(input: AncillaryGuidanceInput): Promise<TurnGuidan
     allowedCandidates: input.allowedCandidates,
     preferredCandidateRef: input.preferredCandidateRef,
     preferredSituationId: input.preferredSituationId,
+    opportunityProjection: input.opportunityProjection,
   });
   if (!packet) return null;
 

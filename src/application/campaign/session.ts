@@ -98,6 +98,7 @@ import { retrieveContext } from '../memory/retrieval';
 import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution } from '../turns/commitTurn';
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { projectPlayableSituations } from '../campaignPlan/contentResolver';
+import { projectNarrativeOpportunities } from '../campaignPlan/opportunityProjection';
 import { loadCampaignContentCatalog } from './contentCatalog';
 import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
@@ -2109,6 +2110,18 @@ export class CampaignSession {
           && summary.state.actors[card.actorId]?.locationId === summary.state.actors[playerCard.actorId]?.locationId
           && (card.controller === 'companion' || publicEntries.some(entry => entry.entryId === card.templateId)))
         .map(card => [card.actorId, card.name] as const));
+      const visibleCards = allCards.filter(card => card.actorId === playerCard.actorId || visibleActorNames.has(card.actorId));
+      const opportunityProjection = !combatCandidates && campaignContent
+        ? projectNarrativeOpportunities({
+          state: summary.state,
+          plan: campaignContent.plan,
+          artifacts: campaignContent.artifacts,
+          situationDefinitions: currentDefinitions,
+          playerCard,
+          cards: visibleCards,
+          entries: publicEntries,
+        })
+        : undefined;
       const input = {
         provider: this.provider,
         guidanceStore: this.deps.guidance,
@@ -2116,7 +2129,7 @@ export class CampaignSession {
         campaignId: options.campaignId,
         branchId: options.branchId,
         playerCard,
-        cards: allCards.filter(card => card.actorId === playerCard.actorId || visibleActorNames.has(card.actorId)),
+        cards: visibleCards,
         state: summary.state,
         sourceTurnId,
         committedEvents,
@@ -2124,9 +2137,10 @@ export class CampaignSession {
         allowedCandidates: combatCandidates,
         preferredCandidateRef: options.preferredCandidateRef,
         preferredSituationId: summary.state.campaignRuntime?.campaignStatus === 'active'
-          ? campaignContent?.plan.nodes
+          ? opportunityProjection?.primarySituationId ?? campaignContent?.plan.nodes
             .find(node => node.nodeId === summary.state.campaignRuntime?.primaryNodeId)?.situationRef
           : undefined,
+        opportunityProjection,
         entries: publicEntries,
         blockedEntries: allEntries.filter(entry => !publicEntries.some(publicEntry => publicEntry.entryId === entry.entryId)),
         knownEntryIds,
@@ -2560,6 +2574,18 @@ export class CampaignSession {
     const campaignContent = await this.loadCampaignPlanForState(options.campaignId, summary.state);
     const playableSituationsFor = (state: GameStateSnapshot) => projectPlayableSituations(
       situationDefinitions, campaignContent?.artifacts ?? [], state.campaignRuntime);
+    const opportunityProjectionFor = (state: GameStateSnapshot, failedMethodRef?: string) => campaignContent
+      ? projectNarrativeOpportunities({
+        state,
+        plan: campaignContent.plan,
+        artifacts: campaignContent.artifacts,
+        situationDefinitions: playableSituationsFor(state),
+        playerCard,
+        cards: plannerCards,
+        entries,
+        ...(failedMethodRef ? { failedMethodRef } : {}),
+      })
+      : undefined;
     const playableSituations = playableSituationsFor(summary.state);
     const situationStatusById = new Map((summary.state.situations ?? [])
       .map(entry => [entry.situationId, entry] as const));
@@ -2587,6 +2613,17 @@ export class CampaignSession {
         }
       }
     }
+    const opportunityRouteOrder = new Map((opportunityProjectionFor(summary.state)?.opportunities ?? [])
+      .flatMap(opportunity => opportunity.routes.filter(route => route.available).map(route => route.candidateRef))
+      .map((candidateRef, index) => [candidateRef, index] as const));
+    const orderedMethods = activeMethods.map((method, index) => ({
+      method,
+      situationId: activeMethodSituations[index]!,
+      sourceIndex: index,
+      rank: opportunityRouteOrder.get(`method:${activeMethodSituations[index]}:${method.methodId}`) ?? Number.MAX_SAFE_INTEGER,
+    })).sort((a, b) => a.rank - b.rank || a.sourceIndex - b.sourceIndex);
+    activeMethods.splice(0, activeMethods.length, ...orderedMethods.map(item => item.method));
+    activeMethodSituations.splice(0, activeMethodSituations.length, ...orderedMethods.map(item => item.situationId));
     const factsById = new Map(facts.map(fact => [fact.factId, fact] as const));
     const methodOpsForContract = (contract: ActionContract, grade: RollGrade): SituationTransitionOp[] => {
       const ref = contract.methodRef;
@@ -2818,8 +2855,11 @@ export class CampaignSession {
       return plan;
     };
     const guidancePlan = campaignContent?.plan;
-    const preferredSituationFor = (state: GameStateSnapshot): string | undefined => state.campaignRuntime?.campaignStatus === 'active'
-      ? guidancePlan?.nodes.find(node => node.nodeId === state.campaignRuntime?.primaryNodeId)?.situationRef : undefined;
+    const preferredSituationFor = (state: GameStateSnapshot): string | undefined =>
+      opportunityProjectionFor(state)?.primarySituationId
+      ?? (state.campaignRuntime?.campaignStatus === 'active'
+        ? guidancePlan?.nodes.find(node => node.nodeId === state.campaignRuntime?.primaryNodeId)?.situationRef
+        : undefined);
     let result;
     try {
       // P9 (A11/A13): resolve the selected guidance candidate to a stable
@@ -2931,21 +2971,32 @@ export class CampaignSession {
               },
             });
           },
-          buildSituationPacket: (prepared: PreparedTurnResolution) => buildSituationPacket({
-            prepared,
-            preferredSituationId: preferredSituationFor(prepared.nextState),
-            situationDefinitions: playableSituationsFor(prepared.nextState),
-            playerCard,
-            visibleActorNames,
-            keyItemIds,
-            entries, cards: plannerCards,
-          }),
+          buildSituationPacket: (prepared: PreparedTurnResolution, contract: ActionContract, grade: RollGrade) => {
+            const methodRef = contract.methodRef;
+            const failedMethodRef = methodRef && grade !== 'success' && grade !== 'full_success'
+              ? `method:${methodRef.situationId}:${methodRef.methodId}` : undefined;
+            return buildSituationPacket({
+              prepared,
+              preferredSituationId: preferredSituationFor(prepared.nextState),
+              situationDefinitions: playableSituationsFor(prepared.nextState),
+              playerCard,
+              visibleActorNames,
+              keyItemIds,
+              entries, cards: plannerCards,
+              opportunityProjection: opportunityProjectionFor(prepared.nextState, failedMethodRef),
+            });
+          },
           buildGuidance: async ({
             prepared, contract, grade, llmSteps, llmSummary,
           }) => {
+            const methodRef = contract.methodRef;
+            const failedMethodRef = methodRef && grade !== 'success' && grade !== 'full_success'
+              ? `method:${methodRef.situationId}:${methodRef.methodId}` : undefined;
+            const opportunityProjection = opportunityProjectionFor(prepared.nextState, failedMethodRef);
             const packet = buildSituationPacket({
               prepared, situationDefinitions: playableSituationsFor(prepared.nextState), playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
               preferredSituationId: preferredSituationFor(prepared.nextState),
+              opportunityProjection,
             });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
               [...new Set((prepared.nextState.discoveries ?? []).filter(d => d.actorId === playerCard.actorId).map(d => d.entryId))].sort().join('\n'));
