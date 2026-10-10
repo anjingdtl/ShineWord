@@ -39,6 +39,8 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     const materials = buildPlanRequestMaterials({ intent, ctx: planning.ctx, visibleEntries: planning.visibleEntries,
       worldTitle: planning.worldTitle, ...planningArgs });
     assert.match(materials.system, /\{"kind":"node_succeeded","nodeId":"stage-2"\}/);
+    assert.match(materials.system, /结局硬门槛（逐个 ending 自检）/);
+    assert.match(materials.system, /若 stage-4 是 role=main 且接在 stage-3 后/);
     assert.match(materials.system, /严禁把阶段 ID 写入 situationId/);
     assert.match(materials.system, /firstSituation 默认省略 deadlineClockSeconds/);
     assert.match(materials.system, /failure\/severe_failure 不得产生同一证据/);
