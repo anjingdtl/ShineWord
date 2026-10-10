@@ -211,3 +211,150 @@ test('planning execution: Android SSE idle deadline ignores chunks without a com
     });
   } finally { global.fetch = original; }
 });
+
+test('planning execution: React Native XHR renews the SSE idle deadline only after complete frames', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const originalFetch = global.fetch, originalXhr = global.XMLHttpRequest;
+  let dispatched = 0, lastXhr;
+  class FakeXhr {
+    static HEADERS_RECEIVED = 2;
+    static LOADING = 3;
+    static DONE = 4;
+    constructor() { this.readyState = 0; this.responseText = ''; this.status = 200; this.headers = {}; this.timers = []; this.aborted = false; lastXhr = this; }
+    open(method, url, async) { this.opened = { method, url, async }; }
+    setRequestHeader(name, value) { this.headers[name] = value; }
+    getAllResponseHeaders() { return 'Content-Type: text/event-stream\r\nX-Queue-Time-Ms: 12\r\n'; }
+    emit(text, state = FakeXhr.LOADING) {
+      this.responseText += text;
+      this.readyState = state;
+      this.onreadystatechange?.();
+      this.onprogress?.();
+    }
+    send(body) {
+      dispatched += 1;
+      this.sentBody = body;
+      this.readyState = FakeXhr.HEADERS_RECEIVED;
+      this.onreadystatechange?.();
+      for (const [delay, text] of [
+        [35, 'data: one\r\n'], [70, '\r\n'], [140, 'data: two\r\n\r\n'], [150, ''],
+      ]) this.timers.push(setTimeout(() => {
+        if (this.aborted) return;
+        if (delay === 150) {
+          this.readyState = FakeXhr.DONE;
+          this.onreadystatechange?.();
+          this.onload?.();
+        } else this.emit(text);
+      }, delay));
+    }
+    abort() {
+      this.aborted = true;
+      for (const timer of this.timers) clearTimeout(timer);
+      this.onabort?.();
+    }
+  }
+  global.fetch = async () => { throw Error('stream request must use incremental XHR'); };
+  global.XMLHttpRequest = FakeXhr;
+  try {
+    const result = await new transport.FetchHttpTransport().post({
+      ...request, url: 'http://10.0.2.2:18591/v1/chat/completions', headers: { 'Content-Type': 'application/json' },
+      attemptId: 'attempt-xhr-123', campaignId: 'campaign-xhr-123', branchId: 'branch-xhr-123', stateVersion: 28,
+      timeoutMs: 1000, streamActivityTimeoutMs: 90,
+    });
+    assert.equal(dispatched, 1);
+    assert.equal(result.body, 'data: one\r\n\r\ndata: two\r\n\r\n');
+    assert.equal(result.status, 200);
+    assert.equal(result.timings.streamFrameCount, 2);
+    assert.equal(result.timings.streamActivityMonitored, true);
+    assert.equal(result.timings.providerQueueMs, 12);
+    assert.equal(lastXhr.headers['x-phase9-attempt-id'], 'attempt-xhr-123');
+    assert.equal(lastXhr.headers['x-phase9-campaign-id'], 'campaign-xhr-123');
+    assert.equal(lastXhr.headers['x-phase9-branch-id'], 'branch-xhr-123');
+    assert.equal(lastXhr.headers['x-phase9-state-version'], '28');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalXhr === undefined) delete global.XMLHttpRequest; else global.XMLHttpRequest = originalXhr;
+  }
+});
+
+test('planning execution: React Native XHR partial SSE progress cannot hide an idle deadline', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const originalFetch = global.fetch, originalXhr = global.XMLHttpRequest;
+  let dispatched = 0, aborted = 0;
+  class FakeXhr {
+    static HEADERS_RECEIVED = 2;
+    static LOADING = 3;
+    static DONE = 4;
+    constructor() { this.readyState = 0; this.responseText = ''; this.status = 200; this.timers = []; }
+    open() {}
+    setRequestHeader() {}
+    getAllResponseHeaders() { return 'Content-Type: text/event-stream\r\n'; }
+    send() {
+      dispatched += 1;
+      this.readyState = FakeXhr.HEADERS_RECEIVED;
+      this.onreadystatechange?.();
+      const emitPartial = count => {
+        this.timers.push(setTimeout(() => {
+          if (this.aborted) return;
+          this.responseText += `data: partial-${count}\n`;
+          this.readyState = FakeXhr.LOADING;
+          this.onreadystatechange?.();
+          this.onprogress?.();
+          emitPartial(count + 1);
+        }, 15));
+      };
+      emitPartial(1);
+    }
+    abort() {
+      this.aborted = true;
+      aborted += 1;
+      for (const timer of this.timers) clearTimeout(timer);
+      this.onabort?.();
+    }
+  }
+  global.fetch = async () => { throw Error('stream request must use incremental XHR'); };
+  global.XMLHttpRequest = FakeXhr;
+  try {
+    await assert.rejects(new transport.FetchHttpTransport().post({
+      ...request, timeoutMs: 1000, streamActivityTimeoutMs: 75,
+    }), error => {
+      assert.ok(error instanceof HttpRequestTimeoutError);
+      assert.equal(error.deadlineKind, 'sse_idle');
+      return true;
+    });
+    assert.equal(dispatched, 1);
+    assert.equal(aborted, 1);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalXhr === undefined) delete global.XMLHttpRequest; else global.XMLHttpRequest = originalXhr;
+  }
+});
+
+test('planning execution: React Native XHR reports status-zero completion as a network failure', async () => {
+  const transport = loadMobileModule('mobile/src/fetchTransport.ts', { './llmExecutionBridge': bridge(async () => true) });
+  const originalFetch = global.fetch, originalXhr = global.XMLHttpRequest;
+  class FakeXhr {
+    static HEADERS_RECEIVED = 2;
+    static LOADING = 3;
+    static DONE = 4;
+    constructor() { this.readyState = 0; this.responseText = ''; this.status = 0; }
+    open() {}
+    setRequestHeader() {}
+    getAllResponseHeaders() { return ''; }
+    send() {
+      this.readyState = FakeXhr.DONE;
+      this.onreadystatechange?.();
+      this.onerror?.();
+    }
+    abort() { this.onabort?.(); }
+  }
+  global.fetch = async () => { throw Error('stream request must use incremental XHR'); };
+  global.XMLHttpRequest = FakeXhr;
+  try {
+    await assert.rejects(new transport.FetchHttpTransport().post({
+      ...request, timeoutMs: 1000, streamActivityTimeoutMs: 100,
+    }), error => error instanceof TypeError && /Network request failed/.test(error.message));
+  } finally {
+    global.fetch = originalFetch;
+    if (originalXhr === undefined) delete global.XMLHttpRequest; else global.XMLHttpRequest = originalXhr;
+  }
+});
