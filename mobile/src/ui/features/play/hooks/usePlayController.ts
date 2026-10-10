@@ -40,6 +40,7 @@ import { tryActivateStagePackages, checkStageTriggers } from '../../../../source
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import type { GuidanceStepView, TurnGuidanceV1 } from '../../../../../../src/application/guidance/types';
 import type { PlayTurnOptions } from '../../../../../../src/application/campaign/session';
+import type { CampaignPlanUnknownReplayPreview } from '../../../../../../src/application/campaignPlan/unknownReplayRecovery';
 import { getPlayUiProjection } from '../../../../playProjection';
 import { createExportFile, writeExportFile } from '../../../../fileBridge';
 import { useAppSession } from '../../../state/AppSessionContext';
@@ -97,6 +98,8 @@ export interface PlayController {
   trainSkill: (skillId: string) => Promise<void>;
   /** Party / recruitment actions that only need a session call. */
   partyCall: (action: (session: Awaited<ReturnType<typeof createSession>>) => Promise<void>) => Promise<void>;
+  previewReplanReplay: () => Promise<CampaignPlanUnknownReplayPreview>;
+  confirmReplanReplay: (approvalFingerprint: string) => Promise<void>;
   /** Encounter actions that return the updated encounter view. */
   encounterCall: (work: (session: Awaited<ReturnType<typeof createSession>>) => Promise<EncounterView>) => Promise<void>;
   beginSceneEncounter: (sceneEntryId: string) => Promise<void>;
@@ -752,6 +755,32 @@ export function usePlayController(): PlayController {
     finally { setBusy(false); }
   }
 
+  async function previewReplanReplay(): Promise<CampaignPlanUnknownReplayPreview> {
+    if (!profile) throw new Error('请先配置模型后再核对主线恢复。');
+    const session = await createSession(profile, await buildProvider(profile));
+    // This is a read-only ledger/freeze inspection. Do not run the general
+    // post-processing sweep here: it may dispatch unrelated memory requests.
+    return session.previewCampaignReplanReplay(campaignId, branchId);
+  }
+
+  async function confirmReplanReplay(approvalFingerprint: string): Promise<void> {
+    if (!profile || actionInFlight.current) return;
+    actionInFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await createSession(profile, await buildProvider(profile));
+      await session.confirmCampaignReplanReplay(campaignId, branchId, approvalFingerprint);
+      setNotice('关联主线规划已通过稳定边界采用。');
+      await refresh();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
   return {
     campaignId,
     branchId,
@@ -790,6 +819,8 @@ export function usePlayController(): PlayController {
     exportSave,
     trainSkill,
     partyCall,
+    previewReplanReplay,
+    confirmReplanReplay,
     encounterCall,
     beginSceneEncounter,
     checkAttackTarget,

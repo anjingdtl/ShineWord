@@ -1,6 +1,6 @@
 /** Text-first play surface: story, at most three direct choices, and free input. */
 import React, { useEffect, useState } from 'react';
-import { Keyboard, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Keyboard, Text, View, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -64,6 +64,26 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     Keyboard.dismiss();
     setProgressExpanded(false);
     setGoalDraft(null);
+  };
+
+  const confirmUnknownReplan = (): void => {
+    void (async () => {
+      try {
+        const preview = await controller.previewReplanReplay();
+        if (!preview.approvalFingerprint) throw new Error('无法核对这次主线规划的冻结材料和请求账本。');
+        const message = preview.alreadyApproved
+          ? '已存在与当前配置、存档和请求记录匹配的确认。继续会运行关联任务；如果该任务本身结果未知，不会自动再次发送。'
+          : `原规划结果未知，可能已经计费。当前状态与冻结材料仍匹配；确认会保留原记录并追加关联审计，最多再使用 ${preview.remainingPhysicalRequestBudget} 个计划内请求。只有确认后才会派发。`;
+        Alert.alert(preview.alreadyApproved ? '继续已批准的关联规划？' : '确认恢复未知主线规划？', message, [
+          { text: '取消', style: 'cancel' },
+          { text: preview.alreadyApproved ? '继续关联规划' : '确认并恢复', onPress: () => {
+            void controller.confirmReplanReplay(preview.approvalFingerprint!);
+          } },
+        ]);
+      } catch (error) {
+        controller.setError(error instanceof Error ? error.message : String(error));
+      }
+    })();
   };
 
   useEffect(() => {
@@ -180,7 +200,8 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         <CampaignProgressCard progress={campaignProgress} expanded onToggle={closeProgress} busy={busy || recoveryLocked}
           onPauseResume={() => void partyCall(async session => { await session.setCampaignStatus({ campaignId, branchId, status: campaignProgress?.status === 'paused' ? 'active' : 'paused' }); })}
           onAdjustGoal={() => setGoalDraft(campaignProgress?.currentObjective ?? '')}
-          onReplan={() => void partyCall(async session => { const status = await session.runCampaignReplan(campaignId, branchId); controller.setNotice(status === 'no_change' ? '当前没有需要处理的主线修订。' : '后续主线已准备。'); })} />
+          onReplan={() => void partyCall(async session => { const status = await session.runCampaignReplan(campaignId, branchId); controller.setNotice(status === 'no_change' ? '当前没有需要处理的主线修订。' : '后续主线已准备。'); })}
+          onResumeUnknownReplan={confirmUnknownReplan} />
         {goalDraft !== null ? <View style={{ gap: theme.space.sm }}>
           <TextField label="这次想做什么" value={goalDraft} onChangeText={setGoalDraft} multiline disabled={busy} />
           <Button label="采用新目标并规划" disabled={busy || recoveryLocked || !goalDraft.trim()} onPress={() => void partyCall(async session => {

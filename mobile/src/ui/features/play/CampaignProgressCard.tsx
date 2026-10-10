@@ -19,6 +19,7 @@ export interface CampaignProgressData {
   recentProgress: Array<{ text: string; atStateVersion: number }>;
   pendingConsequences: string[];
   preparationNotice?: string | null;
+  replanOutcomeUnknown: boolean;
   ending: { title: string; outcomeKind: string } | null;
 }
 
@@ -50,6 +51,7 @@ export function CampaignProgressCard(props: {
   onPauseResume?: () => void;
   onAdjustGoal?: () => void;
   onReplan?: () => void;
+  onResumeUnknownReplan?: () => void;
 }): React.JSX.Element | null {
   const { theme } = useTheme();
   const progress = props.progress;
@@ -72,6 +74,8 @@ export function CampaignProgressCard(props: {
         <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)} numberOfLines={2}>最近进展：{latest.text}</Text>
       ) : null}
       {progress.preparationNotice ? <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>{progress.preparationNotice}</Text> : null}
+      {props.expanded && progress.replanOutcomeUnknown ? <Button label="核对并确认恢复未知规划" variant="secondary"
+        disabled={props.busy} onPress={props.onResumeUnknownReplan} testID="campaign-confirm-unknown-replan" /> : null}
       {props.expanded ? (
         <View style={{ gap: theme.space.xs }}>
           <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>长期目标：{progress.longTermGoal}</Text>

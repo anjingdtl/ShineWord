@@ -11,14 +11,16 @@
  * No `legacyStyles` import remains.
  */
 import React, { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
 import { getSegmentReadiness } from '../../segmentRuntime';
-import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation, cancelCampaignPreparation, type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
+import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation,
+  previewCampaignPreparationReplay, confirmAndResumeCampaignPreparationReplay, cancelCampaignPreparation,
+  type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
 import { CampaignProposalCard, PlanningStatus } from '../features/opening/CampaignProposalCard';
 import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
@@ -84,6 +86,7 @@ export function OpeningScreen(): React.JSX.Element {
   const planningSetupId = React.useRef<string | null>(null);
   const selectionBinding = React.useRef<string | null>(null);
   const actionInFlight = React.useRef(false);
+  const replayDialogOpen = React.useRef(false);
   const [lengthPreference, setLengthPreference] = useState<'short' | 'medium' | 'long'>('medium');
   const [noPackage, setNoPackage] = useState(false);
   const [repairMessage, setRepairMessage] = useState<string | null>(null);
@@ -383,6 +386,42 @@ export function OpeningScreen(): React.JSX.Element {
     finally { actionInFlight.current = false; setBusy(false); }
   }
 
+  async function requestUnknownReplayConfirmation() {
+    const setupId = planningSetupId.current;
+    if (!profile || !pendingCreate.current || !setupId || busy || actionInFlight.current || replayDialogOpen.current) return;
+    actionInFlight.current = true; setBusy(true); setPlanningError(null);
+    try {
+      const preview = await previewCampaignPreparationReplay(setupId, profile);
+      if (!preview.approvalFingerprint) throw new Error('无法核对这次规划的冻结材料和请求账本。');
+      replayDialogOpen.current = true;
+      const titleText = preview.alreadyApproved ? '继续已批准的关联规划？' : '确认创建关联规划？';
+      const message = preview.alreadyApproved
+        ? '先前的确认记录仍与当前模型配置和冻结材料匹配。继续只运行已关联任务；如果该关联任务本身结果未知，不会再次自动发送。'
+        : `原请求结果未知，可能已经计费。当前冻结材料、配置和存档状态匹配，可再使用 ${preview.remainingPhysicalRequestBudget} 个计划内物理请求。确认会保留原未知记录并追加审批审计；只有确认后才会派发。`;
+      Alert.alert(titleText, message, [
+        { text: '取消', style: 'cancel', onPress: () => { replayDialogOpen.current = false; } },
+        { text: preview.alreadyApproved ? '继续已批准任务' : '确认并继续', onPress: () => {
+          replayDialogOpen.current = false;
+          void (async () => {
+            if (actionInFlight.current) return;
+            actionInFlight.current = true; setBusy(true);
+            try {
+              const result = await confirmAndResumeCampaignPreparationReplay(setupId, preview.approvalFingerprint!,
+                pendingCreate.current!, setPlanningPhase);
+              setProposal(result.proposal); setPlanningPhase(result.phase); setPlanningError(result.error ?? null);
+            } catch (e) {
+              setPlanningError(e instanceof Error ? e.message : String(e)); setPlanningPhase('failed');
+            } finally { actionInFlight.current = false; setBusy(false); }
+          })();
+        } },
+      ]);
+    } catch (e) {
+      setPlanningError(e instanceof Error ? e.message : String(e));
+    } finally {
+      actionInFlight.current = false; setBusy(false);
+    }
+  }
+
   async function startAdventure() {
     if (!profile || busy || actionInFlight.current || !proposal || !pendingCreate.current) return;
     actionInFlight.current = true;
@@ -516,6 +555,8 @@ export function OpeningScreen(): React.JSX.Element {
         ) : null}
         {planningPhase && !proposal && planningSetupId.current ? <View style={{ gap: theme.space.sm }}>
           {!busy ? <Button label="恢复已保存的规划" variant="secondary" onPress={resumePreparation} testID="campaign-resume-preparation" /> : null}
+          {planningPhase === 'outcome_unknown' && profile && !busy ? <Button label="核对并确认关联重试" variant="secondary"
+            onPress={requestUnknownReplayConfirmation} testID="campaign-confirm-unknown-replay" /> : null}
           <Button label="取消这次规划" variant="secondary" onPress={discardPreparation} testID="campaign-cancel-preparation" />
         </View> : null}
         {(!advancedWizard && quickStep === 1) || (advancedWizard && step === 3) ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>

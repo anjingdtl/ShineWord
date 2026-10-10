@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, candidateModel, NOW } = require('./helpers/phase9CampaignFixture.cjs');
 const { runOpeningPlanJob } = require('../dist/application/campaignPlan/planningService');
+const { runReplanJob } = require('../dist/application/campaignPlan/replanService');
+const { CampaignSession } = require('../dist/application/campaign/session');
 const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPlan/hashing');
 const { OpenAICompatibleProvider, HttpRequestTimeoutError } = require('../dist/application/llm/openAICompatible');
 const { LedgeredProvider } = require('../dist/application/llm/requestLedger');
@@ -11,6 +13,10 @@ const { SqliteLlmLedgerStore } = require('../dist/infra/sqlite/sqliteLlmLedgerSt
 const { generateCampaignPlanCandidate } = require('../dist/application/campaignPlan/generationService');
 const { estimateFinalWireInput } = require('../dist/application/llm/finalWireVerifier');
 const { deriveSafetyMargin } = require('../dist/application/context/modelEnvelope');
+const { llmModelProfileFingerprint } = require('../dist/application/llm/profileFingerprint');
+const { previewCampaignPlanUnknownReplay, confirmCampaignPlanUnknownReplay } = require('../dist/application/campaignPlan/unknownReplayRecovery');
+const { adoptOpeningPlan } = require('../dist/application/campaignPlan/adoption');
+const { exportSave } = require('../dist/application/export/saveFile');
 const profile = { id: 'budget', name: 'Budget', endpoint: 'https://example.invalid/v1', model: 'glm-5.3-flash', keyRef: 'test', reasoningTier: 'high',
   capabilities: { contextWindow: 1048576, maxOutputTokens: 32768, supportsJson: true, supportsStreaming: false }, contentOutputTokens: 16384 };
 const largeProfile = { ...profile, capabilities: { ...profile.capabilities, maxOutputTokens: 65536 } };
@@ -19,7 +25,7 @@ async function seedUsage(store, id, tokens, failureClass) {
   await store.updateAttempt(attempt.attemptId, { status: failureClass ? 'failed' : 'succeeded', failureClass: failureClass ?? null,
     reasoningTokens: tokens, estimatedUsage: 0 });
 }
-async function setup(h, id, responses, onResponse = () => {}, runProfile = profile) {
+async function setup(h, id, responses, onResponse = () => {}, runProfile = profile, profileFingerprint = 'budget') {
   const base = await h.planStore.getSetup('setup-t'), intent = { ...base.intent, setupId: id };
   await h.planStore.upsertSetup({ ...base, setupId: id, intent, currentCandidateId: null, status: 'planning' });
   await h.planStore.insertJob({ ...await h.planStore.getJob('job-t'), jobId: id, setupId: id, status: 'queued',
@@ -35,7 +41,7 @@ async function setup(h, id, responses, onResponse = () => {}, runProfile = profi
       usage: { prompt_tokens: 10, completion_tokens: wires.at(-1).max_tokens, completion_tokens_details: { reasoning_tokens: wires.at(-1).max_tokens } }
     } : typeof next === 'object' ? next : { choices: [{ finish_reason: 'stop', message: { content: next } }] }) };
   } }, 300000);
-  const provider = new RateScheduledProvider(new LedgeredProvider(inner, store, { modelProfileFingerprint: 'budget' }),
+  const provider = new RateScheduledProvider(new LedgeredProvider(inner, store, { modelProfileFingerprint: profileFingerprint }),
     new GlobalRateScheduler({ maxConcurrent: 1, endpointBucketId: endpointBucketId(runProfile.endpoint) }));
   const deps = { db: h.adapter, planStore: h.planStore, worldStore: h.worlds, profile: runProfile, provider, now: () => NOW };
   const run = () => runOpeningPlanJob(deps, id, { anchorTitle: '开篇', playerName: '旅人', protagonistSkills: ['skill-observation'] });
@@ -83,6 +89,176 @@ test('planning budget: timeout after the known thought retry reports both HTTP a
     const result = await q.run(); assert.equal(result.status,'outcome_unknown'); assert.equal(result.physicalRequests,2);
     assert.equal((await q.run()).physicalRequests,0); assert.equal(q.wires.length,2);
     assert.deepEqual((await q.store.listAttempts('campaign-plan:thought-unknown')).map(a=>a.status),['failed','outcome_unknown']);
+  } finally { h.db.close(); }
+});
+
+test('campaign-plan recovery: preview sends nothing; confirmed replay preserves unknown attempt and adopts/exports linked result', async () => {
+  const h = await fixture();
+  try {
+    const id = 'unknown-replay-source';
+    const fp = llmModelProfileFingerprint(profile);
+    const responses = ['timeout'];
+    const q = await setup(h, id, responses, undefined, profile, fp);
+    const unknown = await q.run();
+    assert.equal(unknown.status, 'outcome_unknown');
+    assert.equal(q.wires.length, 1);
+    const original = (await q.store.listAttempts(`campaign-plan:${id}`))[0];
+    assert.equal(original.status, 'outcome_unknown');
+    assert.equal(original.replayApprovedAt, null);
+
+    const preview = await previewCampaignPlanUnknownReplay(h.adapter, id, profile);
+    assert.equal(preview.alreadyApproved, false);
+    assert.equal(preview.remainingPhysicalRequestBudget, 1);
+    assert.deepEqual(preview.attemptIds, [original.attemptId]);
+    assert.equal(q.wires.length, 1, 'read-only preview makes no provider call');
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM campaign_plan_replay_approvals').get().n, 0);
+
+    const rootBefore = h.db.prepare('SELECT payload_json,content_hash FROM frozen_turn_material_roots WHERE root_id=?').get(`campaign-job:${id}`);
+    const confirmed = await confirmCampaignPlanUnknownReplay(h.adapter, { sourceJobId: id,
+      approvalFingerprint: preview.approvalFingerprint, activeProfile: profile, now: () => NOW });
+    const duplicate = await confirmCampaignPlanUnknownReplay(h.adapter, { sourceJobId: id,
+      approvalFingerprint: preview.approvalFingerprint, activeProfile: profile, now: () => NOW });
+    assert.equal(duplicate.linkedJobId, confirmed.linkedJobId, 'double confirmation is idempotent');
+    assert.equal(duplicate.alreadyApproved, true);
+    assert.equal(q.wires.length, 1, 'approval only creates a linked job; it does not dispatch');
+    const preserved = (await q.store.listAttempts(`campaign-plan:${id}`))[0];
+    assert.equal(preserved.status, 'outcome_unknown');
+    assert.ok(preserved.replayApprovedAt > 0);
+    const rootAfter = h.db.prepare('SELECT payload_json,content_hash FROM frozen_turn_material_roots WHERE root_id=?').get(`campaign-job:${confirmed.linkedJobId}`);
+    assert.equal(rootAfter.payload_json, rootBefore.payload_json, 'linked freeze reuses the exact original payload');
+    assert.equal(rootAfter.content_hash, rootBefore.content_hash);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM campaign_plan_replay_approvals WHERE source_job_id=?').get(id).n, 1);
+
+    responses.push(JSON.stringify(candidateModel()));
+    const replay = await runOpeningPlanJob(q.deps, confirmed.linkedJobId,
+      { anchorTitle: '开篇', playerName: '旅人', protagonistSkills: ['skill-observation'] });
+    assert.equal(replay.status, 'candidate_ready', JSON.stringify(replay));
+    assert.equal(replay.physicalRequests, 1);
+    assert.equal(q.wires.length, 2);
+    const linked = await h.planStore.getJob(confirmed.linkedJobId);
+    assert.equal(linked.physicalRequestBudget, 1, 'the linked task keeps only the source job’s unused budget');
+    const sourceSetup = await h.planStore.getSetup(id);
+    const candidate = await h.planStore.getCandidate(replay.candidateId);
+    const protagonist = sourceSetup.intent.protagonistBinding;
+    const adopted = await adoptOpeningPlan({ db: h.adapter, planStore: h.planStore, setupId: id, candidateId: replay.candidateId,
+      create: { db: h.adapter, worldStore: h.worlds, campaignId: 'campaign-after-approved-replay',
+        title: 'Approved replay', worldId: sourceSetup.worldId, packageRevision: sourceSetup.packageRevision,
+        anchor: sourceSetup.intent.openingAnchor, protagonist: { actorId: protagonist.actorId, kind: protagonist.kind,
+          name: protagonist.name, description: protagonist.description, attributes: protagonist.attributes ??
+            { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 1, social: 1 },
+          canonEntityId: protagonist.canonEntityId, initialSkills: protagonist.initialSkills ?? ['skill-observation'] },
+        companions: sourceSetup.intent.companionBindings, goal: candidate.plan.longTermGoal, createdAt: NOW } });
+    assert.equal(adopted.outcome, 'created');
+    const save = await exportSave({ db: h.adapter, sha256Hex: async text => sha256HexOf(text),
+      campaignId: 'campaign-after-approved-replay', branchId: 'campaign-after-approved-replay-main', createdAt: NOW });
+    assert.equal(save.save.manifest.campaignId, 'campaign-after-approved-replay');
+    assert.equal(h.db.prepare("SELECT status FROM llm_request_attempts WHERE attempt_id=?").get(original.attemptId).status, 'outcome_unknown');
+  } finally { h.db.close(); }
+});
+
+test('campaign-plan recovery: a replan unknown is fenced to its adopted campaign branch and resumes as a linked job', async () => {
+  const h = await fixture();
+  try {
+    const state = await h.turns.getState(h.branchId);
+    const revision = await h.planStore.getPlanRevision(state.campaignRuntime.planBinding.planId,
+      state.campaignRuntime.planBinding.revision);
+    const intent = state.campaignRuntime.intent ?? revision.intent;
+    const jobId = 'replan-unknown-source';
+    await h.planStore.insertJob({
+      jobId, setupId: `replan:${h.campaignId}`, campaignId: h.campaignId, branchId: h.branchId,
+      jobKind: 'replan', triggerReasons: ['goal_changed'], baseStateVersion: state.stateVersion,
+      basePlanId: revision.plan.planId, basePlanRevision: revision.plan.revision,
+      intentHash: sha256HexOf(canonicalJsonOf(intent)), contentManifestHash: state.campaignContentBinding?.contentHash ?? null,
+      knowledgePolicyHash: null, triggerEventRefs: [], status: 'queued', leaseOwner: null, leaseExpiresAt: null,
+      fencingToken: 0, attemptCount: 0, nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: null,
+      lastError: null, createdAt: NOW, updatedAt: NOW,
+    });
+    const wires = [];
+    const ledgerStore = new SqliteLlmLedgerStore(h.adapter);
+    const inner = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, { async post(request) {
+      wires.push(JSON.parse(request.body));
+      if (wires.length === 1) throw new HttpRequestTimeoutError(request.timeoutMs);
+      return { status: 200, body: JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(candidateModel()) } }] }) };
+    } }, 300000);
+    const provider = new RateScheduledProvider(new LedgeredProvider(inner, ledgerStore,
+      { modelProfileFingerprint: llmModelProfileFingerprint(profile) }),
+      new GlobalRateScheduler({ maxConcurrent: 1, endpointBucketId: endpointBucketId(profile.endpoint) }));
+    const deps = { db: h.adapter, planStore: h.planStore, worldStore: h.worlds, provider, profile, now: () => NOW };
+    const run = linkedJobId => runReplanJob(deps, linkedJobId, { intent, protagonistSkills: ['skill-observation'],
+      anchorTitle: '开篇', playerName: '旅人' });
+    const session = new CampaignSession(h.session.deps, provider, profile);
+
+    const unknown = await run(jobId);
+    assert.equal(unknown.status, 'outcome_unknown');
+    assert.equal(wires.length, 1);
+    const originalAttempt = (await ledgerStore.listAttempts(`campaign-plan:${jobId}`))[0];
+    assert.equal(originalAttempt.status, 'outcome_unknown');
+
+    assert.equal((await session.getCampaignProgress(h.campaignId, h.branchId)).replanOutcomeUnknown, true);
+    const preview = await session.previewCampaignReplanReplay(h.campaignId, h.branchId);
+    assert.equal(preview.jobKind, 'replan');
+    assert.equal(preview.campaignId, h.campaignId);
+    assert.equal(preview.branchId, h.branchId);
+    assert.deepEqual(preview.attemptIds, [originalAttempt.attemptId]);
+    assert.equal(wires.length, 1, 'preview is read-only');
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM campaign_plan_replay_approvals').get().n, 0);
+
+    const [linkedJobId, duplicateLinkedJobId] = await Promise.all([
+      session.confirmCampaignReplanReplay(h.campaignId, h.branchId, preview.approvalFingerprint),
+      session.confirmCampaignReplanReplay(h.campaignId, h.branchId, preview.approvalFingerprint),
+    ]);
+    assert.equal(duplicateLinkedJobId, linkedJobId, 'double confirmation shares the same in-flight recovery');
+    assert.equal(wires.length, 2);
+    assert.equal((await h.planStore.getJob(linkedJobId)).physicalRequestBudget, 1);
+    const originalAfterApproval = (await ledgerStore.listAttempts(`campaign-plan:${jobId}`))[0];
+    assert.equal(originalAfterApproval.status, 'outcome_unknown');
+    assert.ok(originalAfterApproval.replayApprovedAt > 0);
+    const audit = h.db.prepare('SELECT linked_job_id,fence_hash,attempt_ids_json FROM campaign_plan_replay_approvals WHERE source_job_id=?').get(jobId);
+    assert.equal(audit.linked_job_id, linkedJobId);
+    assert.equal(audit.fence_hash, preview.approvalFingerprint);
+    assert.deepEqual(JSON.parse(audit.attempt_ids_json), [originalAttempt.attemptId]);
+    const afterAdoption = await h.turns.getState(h.branchId);
+    assert.equal(afterAdoption.campaignRuntime.planBinding.revision, revision.plan.revision + 1);
+    assert.equal((await session.getCampaignProgress(h.campaignId, h.branchId)).replanOutcomeUnknown, false);
+    assert.equal(await session.confirmCampaignReplanReplay(h.campaignId, h.branchId, preview.approvalFingerprint), linkedJobId,
+      'a repeated confirmation after adoption returns its audited linked job');
+    assert.equal(wires.length, 2, 'repeated confirmation after adoption does not dispatch');
+    const save = await exportSave({ db: h.adapter, sha256Hex: async text => sha256HexOf(text),
+      campaignId: h.campaignId, branchId: h.branchId, createdAt: NOW });
+    assert.equal(save.save.manifest.campaignId, h.campaignId);
+    assert.equal(save.save.manifest.branchId, h.branchId);
+  } finally { h.db.close(); }
+});
+
+test('replan lifecycle: a queued job whose base state moved is rejected before a physical dispatch', async () => {
+  const h = await fixture();
+  try {
+    const state = await h.turns.getState(h.branchId);
+    const revision = await h.planStore.getPlanRevision(state.campaignRuntime.planBinding.planId,
+      state.campaignRuntime.planBinding.revision);
+    const intent = state.campaignRuntime.intent ?? revision.intent;
+    const jobId = 'replan-stale-base';
+    await h.planStore.insertJob({
+      jobId, setupId: `replan:${h.campaignId}`, campaignId: h.campaignId, branchId: h.branchId,
+      jobKind: 'replan', triggerReasons: ['goal_changed'], baseStateVersion: state.stateVersion,
+      basePlanId: revision.plan.planId, basePlanRevision: revision.plan.revision,
+      intentHash: sha256HexOf(canonicalJsonOf(intent)), contentManifestHash: state.campaignContentBinding?.contentHash ?? null,
+      knowledgePolicyHash: null, triggerEventRefs: [], status: 'queued', leaseOwner: null, leaseExpiresAt: null,
+      fencingToken: 0, attemptCount: 0, nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: null,
+      lastError: null, createdAt: NOW, updatedAt: NOW,
+    });
+    let physicalDispatches = 0;
+    const provider = new OpenAICompatibleProvider(profile, { async get() { return 'test-only'; } }, { async post() {
+      physicalDispatches++;
+      throw new Error('stale replan must not reach transport');
+    } }, 300000);
+    const deps = { db: h.adapter, planStore: h.planStore, worldStore: h.worlds, provider, profile, now: () => NOW };
+    await h.session.setCampaignStatus({ campaignId: h.campaignId, branchId: h.branchId, status: 'paused' });
+    const result = await runReplanJob(deps, jobId, { intent, protagonistSkills: ['skill-observation'],
+      anchorTitle: '当前局势', playerName: '旅人' });
+    assert.equal(result.status, 'stale');
+    assert.equal(physicalDispatches, 0);
+    assert.equal((await new SqliteLlmLedgerStore(h.adapter).listAttempts(`campaign-plan:${jobId}`)).length, 0);
   } finally { h.db.close(); }
 });
 test('planning budget: structural repair and reasoning-only response share the same cap rather than nesting retries', async () => {

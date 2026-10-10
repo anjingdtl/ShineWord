@@ -143,7 +143,9 @@ function candidateModel() {
 async function fixture(options = {}) {
   const entries = options.entries ?? baseEntries();
   const db = new DatabaseSync(':memory:');
-  for (const sql of BUILTIN_MIGRATIONS[0].sql.split(';').map(part => part.trim()).filter(Boolean)) db.exec(sql);
+  for (const migration of BUILTIN_MIGRATIONS) {
+    for (const sql of migration.sql.split(';').map(part => part.trim()).filter(Boolean)) db.exec(sql);
+  }
   const adapter = new NodeSqliteAdapter(db);
   const worlds = new SqliteWorldStore(adapter);
   const sources = new SqliteSourceStore(adapter);

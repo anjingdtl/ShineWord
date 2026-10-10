@@ -1293,4 +1293,21 @@ CREATE UNIQUE INDEX idx_campaign_plan_jobs_singleflight
 CREATE INDEX idx_campaign_plan_candidates_job ON campaign_plan_candidates(job_id, stage);
 CREATE INDEX idx_campaign_plan_revisions_campaign ON campaign_plan_revisions(campaign_id, revision);
 CREATE INDEX idx_campaign_content_artifacts_campaign ON campaign_content_artifacts(campaign_id);
+` }, {
+  version: 102,
+  name: 'campaign_plan_unknown_replay_approval_audit',
+  sql: `
+CREATE TABLE campaign_plan_replay_approvals (
+  source_job_id TEXT PRIMARY KEY,
+  linked_job_id TEXT NOT NULL UNIQUE,
+  source_freeze_root_id TEXT NOT NULL,
+  linked_freeze_root_id TEXT NOT NULL,
+  freeze_content_hash TEXT NOT NULL,
+  profile_fingerprint TEXT NOT NULL,
+  attempt_ids_json TEXT NOT NULL,
+  fence_json TEXT NOT NULL,
+  fence_hash TEXT NOT NULL,
+  confirmed_at TEXT NOT NULL
+);
+CREATE INDEX idx_campaign_plan_replay_linked_job ON campaign_plan_replay_approvals(linked_job_id);
 ` }];

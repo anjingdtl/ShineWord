@@ -13,6 +13,7 @@ const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations')
 
 const { SqliteCampaignPlanStore } = require('../dist/infra/sqlite/sqliteCampaignPlanStore');
 const { installBaselineSchema } = require('../dist/application/project/dbBaseline');
+const { detectLegacyDevelopmentDatabase } = require('../dist/application/project/dbBaseline');
 const { exportSave, restoreSave, validateSaveJson, SAVE_SCHEMA_VERSION } = require('../dist/application/export/saveFile');
 
 class NodeSqliteAdapter {
@@ -51,6 +52,25 @@ function freshDb() {
   db.prepare("INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)").run(101, BUILTIN_MIGRATIONS[0].name, NOW);
   return db;
 }
+
+test('P9 baseline: additive migration 102 upgrades a preserved version-101 database in place', async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  db.exec(BUILTIN_MIGRATIONS[0].sql);
+  db.prepare('INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)').run(101, BUILTIN_MIGRATIONS[0].name, NOW);
+  db.prepare('INSERT INTO shineword_baseline(baseline_version,installed_at) VALUES (?,?)').run('shineword-db-baseline-2', NOW);
+  db.prepare(`INSERT INTO campaign_setups(setup_id,world_id,package_revision,intent_json,intent_history_json,current_candidate_id,status,created_at,updated_at)
+    VALUES ('preserved-setup','w',1,'{}','[]',NULL,'planning',?,?)`).run(NOW, NOW);
+  const adapter = new NodeSqliteAdapter(db);
+  try {
+    assert.deepEqual(await detectLegacyDevelopmentDatabase(adapter), { legacy: false, reason: 'current protocol' });
+    const installed = await installBaselineSchema(adapter);
+    assert.deepEqual(installed.appliedVersions, [102]);
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_plan_replay_approvals'").get());
+    assert.equal(db.prepare('SELECT setup_id FROM campaign_setups WHERE setup_id=?').get('preserved-setup').setup_id, 'preserved-setup');
+    assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), [101, 102]);
+  } finally { db.close(); }
+});
 
 const intent = {
   schemaVersion: 'campaign-intent-1', setupId: 'setup-1', intentRevision: 1,

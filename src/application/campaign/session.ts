@@ -101,9 +101,12 @@ import { projectPlayableSituations } from '../campaignPlan/contentResolver';
 import { loadCampaignContentCatalog } from './contentCatalog';
 import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
+import type { CampaignPlanUnknownReplayPreview } from '../campaignPlan/unknownReplayRecovery';
 import { settleCampaignProgress, readCampaignEventHistory } from '../campaignPlan/settlement';
 import type { CampaignContentArtifactV1, CampaignPlanV1, CampaignRuntimeV1 } from '../../domain/campaignPlan/types';
 import { compileCampaignEffects } from '../../domain/campaignPlan/campaignEffects';
+
+const campaignReplanReplayInFlight = new WeakMap<object, Map<string, Promise<string>>>();
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import type {
   MethodTemplateV1,
@@ -340,6 +343,7 @@ export class CampaignSession {
     recentProgress: Array<{ text: string; atStateVersion: number }>;
     pendingConsequences: string[];
     preparationNotice: string | null;
+    replanOutcomeUnknown: boolean;
     ending: { title: string; outcomeKind: string } | null;
   } | null> {
     await this.assertCampaignBranch(campaignId, branchId);
@@ -367,7 +371,12 @@ export class CampaignSession {
       `SELECT status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' AND intent_hash=?
        AND EXISTS (SELECT 1 FROM json_each(trigger_reasons_json) WHERE value='stage_content_prepared_ahead')
        ORDER BY created_at DESC, rowid DESC LIMIT 1`, [branchId, context?.plan.intentHash ?? '']);
-    const preparationNotice = preparation?.status === 'outcome_unknown' ? '后续内容请求结果未知，请先处理请求账本。'
+    const latestReplan = await this.deps.db.queryOne<{ status: string }>(
+      "SELECT status FROM campaign_plan_jobs WHERE campaign_id=? AND branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      [campaignId, branchId]);
+    const replanOutcomeUnknown = latestReplan?.status === 'outcome_unknown';
+    const preparationNotice = replanOutcomeUnknown ? '后续主线规划结果未知，恢复前需要核对冻结材料和请求记录。'
+      : preparation?.status === 'outcome_unknown' ? '后续内容请求结果未知，请先处理请求账本。'
       : preparation && ['invalid', 'retryable_failed'].includes(preparation.status) ? '后续内容准备失败，请在主线面板处理后再继续准备。' : null;
     return {
       status: runtime.campaignStatus,
@@ -377,8 +386,90 @@ export class CampaignSession {
       recentProgress: runtime.recentProgressLines.map(line => ({ text: line.text, atStateVersion: line.atStateVersion })),
       pendingConsequences: runtime.deferredConsequences.filter(item => item.status === 'pending' && item.visibility === 'public').map(item => item.description),
       preparationNotice,
+      replanOutcomeUnknown,
       ending: runtime.ending ? { title: runtime.ending.title, outcomeKind: runtime.ending.outcomeKind } : null,
     };
+  }
+
+  /** Read-only preview for an explicit, fenced recovery of the latest replan. */
+  async previewCampaignReplanReplay(campaignId: string, branchId: string): Promise<CampaignPlanUnknownReplayPreview> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const latest = await this.deps.db.queryOne<{ job_id: string; status: string }>(
+      "SELECT job_id,status FROM campaign_plan_jobs WHERE campaign_id=? AND branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      [campaignId, branchId]);
+    if (!latest || latest.status !== 'outcome_unknown') throw new Error('当前没有可恢复的未知主线规划。');
+    const { previewCampaignPlanUnknownReplay } = await import('../campaignPlan/unknownReplayRecovery');
+    const preview = await previewCampaignPlanUnknownReplay(this.deps.db, latest.job_id, this.profile);
+    if (preview.campaignId !== campaignId || preview.branchId !== branchId || preview.jobKind !== 'replan') {
+      throw new Error('未知主线规划与当前战役分支不匹配。');
+    }
+    return preview;
+  }
+
+  /** Explicitly confirms, resumes the linked plan job, then adopts at the normal stable boundary. */
+  async confirmCampaignReplanReplay(campaignId: string, branchId: string, approvalFingerprint: string): Promise<string> {
+    const dbKey = this.deps.db as object;
+    let active = campaignReplanReplayInFlight.get(dbKey);
+    if (!active) {
+      active = new Map();
+      campaignReplanReplayInFlight.set(dbKey, active);
+    }
+    const key = `${campaignId}\u0000${branchId}\u0000${approvalFingerprint}`;
+    const existing = active.get(key);
+    if (existing) return existing;
+    const operation = this.confirmCampaignReplanReplayOnce(campaignId, branchId, approvalFingerprint);
+    active.set(key, operation);
+    try {
+      return await operation;
+    } finally {
+      if (active.get(key) === operation) active.delete(key);
+    }
+  }
+
+  private async confirmCampaignReplanReplayOnce(campaignId: string, branchId: string, approvalFingerprint: string): Promise<string> {
+    await this.assertCampaignBranch(campaignId, branchId);
+    const priorApproval = await this.deps.db.queryOne<{ source_job_id: string }>(
+      `SELECT a.source_job_id FROM campaign_plan_replay_approvals a
+       JOIN campaign_plan_jobs s ON s.job_id=a.source_job_id
+       JOIN campaign_plan_jobs l ON l.job_id=a.linked_job_id
+       WHERE a.fence_hash=? AND s.campaign_id=? AND s.branch_id=? AND s.job_kind='replan'
+         AND l.campaign_id=? AND l.branch_id=? AND l.job_kind='replan'
+       ORDER BY a.confirmed_at DESC LIMIT 1`,
+      [approvalFingerprint, campaignId, branchId, campaignId, branchId]);
+    const latest = priorApproval ? { job_id: priorApproval.source_job_id, status: 'outcome_unknown' }
+      : await this.deps.db.queryOne<{ job_id: string; status: string }>(
+        "SELECT job_id,status FROM campaign_plan_jobs WHERE campaign_id=? AND branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        [campaignId, branchId]);
+    if (!latest || latest.status !== 'outcome_unknown') throw new Error('未知主线规划已变化，请重新核对。');
+    const { confirmCampaignPlanUnknownReplay } = await import('../campaignPlan/unknownReplayRecovery');
+    const approval = await confirmCampaignPlanUnknownReplay(this.deps.db, {
+      sourceJobId: latest.job_id, approvalFingerprint, activeProfile: this.profile,
+    });
+    const state = await this.deps.turns.getState(branchId);
+    const planStore = new SqliteCampaignPlanStore(this.deps.db);
+    const revision = state?.campaignRuntime && await planStore.getPlanRevision(
+      state.campaignRuntime.planBinding.planId, state.campaignRuntime.planBinding.revision);
+    const intent = state?.campaignRuntime?.intent ?? revision?.intent;
+    if (!state || !intent) throw new Error('战役主线或当前状态缺失，关联任务已保留，未自动重发。');
+    const linkedJob = await planStore.getJob(approval.linkedJobId);
+    if (!linkedJob || linkedJob.campaignId !== campaignId || linkedJob.branchId !== branchId || linkedJob.jobKind !== 'replan') {
+      throw new Error('关联规划任务与当前战役分支不匹配。');
+    }
+    if (linkedJob.status === 'adopted') return approval.linkedJobId;
+    const { runReplanJob, adoptReplanCandidate } = await import('../campaignPlan/replanService');
+    const run = await runReplanJob({ db: this.deps.db, planStore, worldStore: this.deps.worldStore,
+      provider: this.provider, profile: this.profile, segmentContent: this.deps.segmentContent,
+      acquireExecution: this.deps.acquirePlanningExecution }, approval.linkedJobId, {
+      intent, protagonistSkills: (state.skills ?? []).filter(skill => skill.actorId === intent.protagonistBinding.actorId).map(skill => skill.skillId),
+      anchorTitle: '当前已提交局势', playerName: intent.protagonistBinding.name,
+    });
+    if (!['candidate_ready','already_ready'].includes(run.status) || !run.candidateId) {
+      throw new Error(run.errors.join('；') || `关联规划状态：${run.status}`);
+    }
+    const adopted = await adoptReplanCandidate({ db: this.deps.db, planStore, turns: this.deps.turns,
+      campaignId, branchId, candidateId: run.candidateId });
+    if (adopted.outcome === 'stale') throw new Error(`关联规划尚未采用：${adopted.reason}`);
+    return approval.linkedJobId;
   }
 
   /**

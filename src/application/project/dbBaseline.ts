@@ -1,5 +1,5 @@
 import { BUILTIN_MIGRATIONS } from '../../infra/sqlite/builtinMigrations';
-import { splitSqlStatements } from '../../infra/sqlite/migrations';
+import { applySqliteMigrations, splitSqlStatements } from '../../infra/sqlite/migrations';
 import type { SqliteDatabase } from '../ports/sqlite';
 
 export const DB_BASELINE_VERSION = 'shineword-db-baseline-2';
@@ -17,21 +17,28 @@ export async function detectLegacyDevelopmentDatabase(db: SqliteDatabase): Promi
   if (tables.length === 0) return { legacy: false, reason: 'empty database' };
   if (tables.some(t => t.name === 'shineword_baseline')) {
     const marker = await db.queryOne<{ baseline_version: string }>('SELECT baseline_version FROM shineword_baseline');
-    const history = await db.queryAll<{ version: number }>('SELECT version FROM schema_migrations').catch(() => []);
-    if (marker?.baseline_version === DB_BASELINE_VERSION && history.length === 1 && history[0]?.version === PHASE9_BASELINE_FIRST_VERSION) {
-      // A marker alone does not prove that the fresh baseline finished installing.
-      // Verify every declared table and column without modifying the database.
+    const history = await db.queryAll<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version').catch(() => []);
+    const expectedVersions = BUILTIN_MIGRATIONS.map(migration => migration.version);
+    const appliedVersions = history.map(row => row.version);
+    const isKnownPrefix = appliedVersions.length > 0 && appliedVersions.length <= expectedVersions.length
+      && appliedVersions.every((version, index) => version === expectedVersions[index]);
+    if (marker?.baseline_version === DB_BASELINE_VERSION && isKnownPrefix
+      && appliedVersions[0] === PHASE9_BASELINE_FIRST_VERSION) {
+      // Validate the applied prefix before allowing a newer additive migration.
       const installed = new Set(tables.map(table => table.name));
       let complete = true;
-      for (const statement of splitSqlStatements(BUILTIN_MIGRATIONS[0]!.sql)) {
-        const declaration = /^CREATE TABLE (\w+)\s*\(([\s\S]*)\)$/i.exec(statement.trim());
-        if (!declaration) continue;
-        const name = declaration[1]!;
-        if (!installed.has(name)) { complete = false; break; }
-        const columns = await db.queryAll<{ name: string }>(`PRAGMA table_info(${name})`);
-        const names = new Set(columns.map(column => column.name));
-        const expected = [...declaration[2]!.matchAll(/(?:^|,)\s*(\w+)\s+(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b/gi)].map(match => match[1]!);
-        if (expected.some(column => !names.has(column))) { complete = false; break; }
+      for (const migration of BUILTIN_MIGRATIONS.slice(0, appliedVersions.length)) {
+        for (const statement of splitSqlStatements(migration.sql)) {
+          const declaration = /^CREATE TABLE (\w+)\s*\(([\s\S]*)\)$/i.exec(statement.trim());
+          if (!declaration) continue;
+          const name = declaration[1]!;
+          if (!installed.has(name)) { complete = false; break; }
+          const columns = await db.queryAll<{ name: string }>(`PRAGMA table_info(${name})`);
+          const names = new Set(columns.map(column => column.name));
+          const expected = [...declaration[2]!.matchAll(/(?:^|,)\s*(\w+)\s+(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b/gi)].map(match => match[1]!);
+          if (expected.some(column => !names.has(column))) { complete = false; break; }
+        }
+        if (!complete) break;
       }
       if (complete) return { legacy: false, reason: 'current protocol' };
     }
@@ -43,15 +50,10 @@ export interface BaselineInstallResult { appliedVersions: number[]; baselineVers
 export async function installBaselineSchema(db: SqliteDatabase): Promise<BaselineInstallResult> {
   const check = await detectLegacyDevelopmentDatabase(db);
   if (check.legacy) throw new LegacyDevelopmentDatabaseError(check.reason);
-  if (check.reason === 'current protocol') return { appliedVersions: [], baselineVersion: DB_BASELINE_VERSION };
-  await db.execute('PRAGMA foreign_keys = ON');
-  await db.transaction(async tx => {
-    await tx.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
-    const baseline = BUILTIN_MIGRATIONS[0]!;
-    for (const sql of splitSqlStatements(baseline.sql)) await tx.execute(sql);
-    const now = new Date().toISOString();
-    await tx.execute('INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)', [baseline.version, baseline.name, now]);
-    await tx.execute('INSERT INTO shineword_baseline(baseline_version,installed_at) VALUES (?,?)', [DB_BASELINE_VERSION, now]);
-  });
-  return { appliedVersions: [PHASE9_BASELINE_FIRST_VERSION], baselineVersion: DB_BASELINE_VERSION };
+  const appliedVersions = await applySqliteMigrations(db, BUILTIN_MIGRATIONS);
+  if (check.reason !== 'current protocol') {
+    await db.execute('INSERT INTO shineword_baseline(baseline_version,installed_at) VALUES (?,?)',
+      [DB_BASELINE_VERSION, new Date().toISOString()]);
+  }
+  return { appliedVersions, baselineVersion: DB_BASELINE_VERSION };
 }

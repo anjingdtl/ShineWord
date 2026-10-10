@@ -14,6 +14,8 @@ import { buildProvider } from './runtime';
 import { resolveSkillKey } from '../../src/domain/characters/card';
 import { canonicalJsonOf, sha256HexOf } from '../../src/application/campaignPlan/hashing';
 import { acquirePlanningExecution } from './llmExecutionBridge';
+import { approvedCampaignPlanReplayJob, confirmCampaignPlanUnknownReplay, previewCampaignPlanUnknownReplay,
+  type CampaignPlanUnknownReplayPreview } from '../../src/application/campaignPlan/unknownReplayRecovery';
 
 export type PlanningPhase =
   | 'preparing'      // 准备相关资料
@@ -189,11 +191,40 @@ export async function resumeCampaignPreparation(setupId: string, input: PrepareP
   const job = await planStore.getJob(jobId);
   if (!job) throw new Error('保存的规划任务缺失。');
   onPhase('planning');
+  const approvedLinkedJobId = job.status === 'outcome_unknown' ? await approvedCampaignPlanReplayJob(runtime.db, jobId) : null;
+  const runTargetId = approvedLinkedJobId ?? jobId;
   const run = await runOpeningPlanJob({ db: runtime.db, planStore, worldStore: runtime.worldStore,
-    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase, acquireExecution: acquirePlanningExecution }, jobId,
+    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase, acquireExecution: acquirePlanningExecution }, runTargetId,
     { anchorTitle: input.anchorTitle, playerName: input.protagonist.name, protagonistSkills: input.protagonistSkills, openingGoalSuggestions: [] });
   const proposal = await readReadyProposal(setupId);
   const result = projectPreparation(await planStore.getJob(jobId), proposal, run.errors);
+  onPhase(result.phase);
+  return result;
+}
+
+/** Read-only readiness preview. It makes no provider call and writes no approval. */
+export async function previewCampaignPreparationReplay(setupId: string, profile: ApiProfile): Promise<CampaignPlanUnknownReplayPreview> {
+  const runtime = await getDatabaseRuntime();
+  return previewCampaignPlanUnknownReplay(runtime.db, `job-${setupId}`, profile);
+}
+
+/** Called only after the opening UI's explicit confirmation dialog. */
+export async function confirmAndResumeCampaignPreparationReplay(setupId: string, approvalFingerprint: string,
+  input: PreparePlanInput, onPhase: (phase: PlanningPhase) => void): Promise<PreparationView> {
+  const runtime = await getDatabaseRuntime();
+  const sourceJobId = `job-${setupId}`;
+  const approval = await confirmCampaignPlanUnknownReplay(runtime.db, {
+    sourceJobId, approvalFingerprint, activeProfile: input.profile,
+  });
+  const planStore = new SqliteCampaignPlanStore(runtime.db);
+  onPhase('planning');
+  const run = await runOpeningPlanJob({ db: runtime.db, planStore, worldStore: runtime.worldStore,
+    provider: await buildProvider(input.profile), profile: input.profile, onStage: onPhase, acquireExecution: acquirePlanningExecution }, approval.linkedJobId,
+  { anchorTitle: input.anchorTitle, playerName: input.protagonist.name, protagonistSkills: input.protagonistSkills,
+    openingGoalSuggestions: input.goalSuggestions ?? [] });
+  const proposal = await readReadyProposal(setupId);
+  const linked = await planStore.getJob(approval.linkedJobId);
+  const result = projectPreparation(linked, proposal, run.errors);
   onPhase(result.phase);
   return result;
 }

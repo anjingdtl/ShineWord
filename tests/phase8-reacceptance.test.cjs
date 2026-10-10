@@ -155,7 +155,7 @@ test('engine pressure deltas pass the production contract gate; model-authored d
 test('current baseline accepts Android metadata without classifying an empty install as legacy',async()=>{
  const {DatabaseSync}=require('node:sqlite');const {NodeSqliteAdapter}=require('./helpers/mobileHarness.cjs');
  const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE android_metadata(locale TEXT);');
- try{const installed=await require('../dist/application/project/dbBaseline').installBaselineSchema(new NodeSqliteAdapter(db));assert.deepEqual(installed.appliedVersions,[101]);assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='android_metadata'").get());}finally{db.close()}
+ try{const installed=await require('../dist/application/project/dbBaseline').installBaselineSchema(new NodeSqliteAdapter(db));assert.deepEqual(installed.appliedVersions,[101,102]);assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='android_metadata'").get());}finally{db.close()}
 });
 
 test('memory observation coverage checks relationship subjects, not just a shared turn id',()=>{
