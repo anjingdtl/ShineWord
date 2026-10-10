@@ -47,6 +47,7 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /每一条包含 resolved 的可完成路径/);
     assert.match(materials.system, /事实 ID 与目录条目 ID 是两个独立命名空间/);
     assert.match(materials.system, /把 factId 当 entryId/);
+    assert.match(materials.system, /初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实/);
     assert.match(materials.system, /至少设计两个 trigger 和权威效果各不相同、且能在同一条可达玩家旅程中被排程的持续后果/);
     assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
     assert.match(materials.system, /trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功/);

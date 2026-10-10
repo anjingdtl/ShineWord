@@ -106,6 +106,7 @@ export function buildPlanRequestMaterials(input: {
     '- 世界人物、地点、技能、能力、物品和任务只能引用下面的 ID。可在 clues 定义最多8条战役线索（标题2..80、正文4..800字），clueId 是新建的局部别名，不能占用已有条目ID；只在 knowledge_known、grant_knowledge、requires.knowledgeEntryId 或 knowledge 奖励中引用它。本地生成独立战役命名空间ID。没有 clues 定义的新线索引用无效。',
     '- clues.sourceEntryIds 只能引用下方已有目录；canon_inspired 必须引用可核实的 sourceFactIds，设计补充用 design_fill 且 sourceFactIds=[]。线索不能伪称原著事实，不能定义新物品、人物或能力；采纳线索定义不授予知识，必须由成功行动或实际完成后的奖励获得。',
     '- 事实 ID 与目录条目 ID 是两个独立命名空间：sourceFactIds 只能取“唯一允许填写到 stages/clues.provenance.sourceFactIds 的原著事实 ID”列表；clues.sourceEntryIds 只能取“唯一允许填写到 clues.sourceEntryIds 的世界目录条目 ID”列表。列表中没有适合的来源时，clue 可用 sourceEntryIds=[] 与 design_fill/sourceFactIds=[]；宁可省略该线索，也不得拼造、变形或把 factId 当 entryId。',
+    '- 初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实；后续章节中的事实不可写入开局已知线索、公开背景或当前办法结果。未来内容只能作为未揭示目标，等战役进展到相应章节后再由玩家行动发现或在后续规划中引用。',
     '- actorId/fromActorId/toActorId 使用玩家 actorId 或在场人物模板 ID；禁止杜撰 pc、roland、anna 等英文昵称。计数条件必须明确 integer minimum，situation_status 必须明确 status。',
     '- situation_status 的 status 只允许 dormant / eligible / active / resolved / suppressed。failed、completed、cancelled 都不是局面状态。失败或取消条件可用 committed_event，且对应 outcomes 必须用 record_event 产生那个事件；不需要的 failure/cancellation 写 null。',
     '- endings.condition 引用阶段只能使用 node_succeeded，nodeId 必须逐字等于 stages 中的 nodeId；例如 {"kind":"node_succeeded","nodeId":"stage-2"}。严禁把阶段 ID 写入 situationId，也严禁用 situation_resolved/situation_status 代替 node_succeeded。本地不会猜测或代你补造结局。每个末端主阶段都必须被至少一个结局条件引用（包括失败/开放结局）。',

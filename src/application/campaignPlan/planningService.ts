@@ -4,6 +4,7 @@ import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
 import type { ApiProfile, LlmProvider } from '../llm/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import type { ContentEntry } from '../../domain/content/types';
+import type { StoredFact } from '../ports/worldStore';
 import { isEntryVisibleAtAnchor, isTemplateValidAtAnchor } from '../campaign/recruitment';
 import { buildOpening, isFactVisibleAtAnchor } from '../world/opening';
 import { firstSituationEntryId, type LocalCompileContext } from './localCompile';
@@ -24,6 +25,66 @@ export interface PlanningRunDeps {
   acquireExecution?: () => Promise<() => void>;
   segmentContent?: { loadEffectiveCatalog(input: { campaignId: string; branchId: string;
     binding?: import('../../domain/content/segmentArtifact').SegmentContentBindingV1 }): Promise<{ entries: ContentEntry[] }> };
+}
+
+async function anchorSourceChapterIndex(input: {
+  worldStore: SqliteWorldStore;
+  worldId: string;
+  anchorEventId?: string;
+  openingAnchorOrder: number;
+  requestedProjectionOrder: number;
+}): Promise<{ chapterIndexById: ReadonlyMap<string, number>; maximumVisibleChapterIndex: number | null }> {
+  const chapters = await input.worldStore.getChapters(input.worldId);
+  const chapterIndexById = new Map(chapters.map(chapter => [chapter.chapterId, chapter.index]));
+  if (chapters.length === 0) {
+    if (input.anchorEventId) throw new Error('campaign_anchor_source_chapter_unresolved');
+    return { chapterIndexById, maximumVisibleChapterIndex: null };
+  }
+  if (input.anchorEventId) {
+    const [proposals, events] = await Promise.all([
+      input.worldStore.listEventProposals(input.worldId),
+      input.worldStore.listEvents(input.worldId),
+    ]);
+    const anchor = [...proposals, ...events].find(event => event.eventId === input.anchorEventId);
+    const index = anchor?.narrativeChapterId ? chapterIndexById.get(anchor.narrativeChapterId) : undefined;
+    if (index === undefined) throw new Error('campaign_anchor_source_chapter_unresolved');
+    const projectionChapterIndexes = input.requestedProjectionOrder > input.openingAnchorOrder
+      ? [...proposals, ...events]
+        .filter(event => event.worldTimeOrder !== null && event.worldTimeOrder <= input.requestedProjectionOrder)
+        .map(event => event.narrativeChapterId ? chapterIndexById.get(event.narrativeChapterId) : undefined)
+        .filter((chapterIndex): chapterIndex is number => chapterIndex !== undefined)
+      : [];
+    return { chapterIndexById,
+      maximumVisibleChapterIndex: Math.max(index, ...projectionChapterIndexes) };
+  }
+  // Without a canon event binding, use the earliest source chapter. This is a
+  // conservative opening projection; a later chapter must be selected through
+  // its anchored event before its source facts can enter a new plan.
+  const firstChapterIndex = Math.min(...chapters.map(chapter => chapter.index));
+  if (input.requestedProjectionOrder <= input.openingAnchorOrder) {
+    return { chapterIndexById, maximumVisibleChapterIndex: firstChapterIndex };
+  }
+  const [proposals, events] = await Promise.all([
+    input.worldStore.listEventProposals(input.worldId),
+    input.worldStore.listEvents(input.worldId),
+  ]);
+  const projectionChapterIndexes = [...proposals, ...events]
+    .filter(event => event.worldTimeOrder !== null && event.worldTimeOrder <= input.requestedProjectionOrder)
+    .map(event => event.narrativeChapterId ? chapterIndexById.get(event.narrativeChapterId) : undefined)
+    .filter((chapterIndex): chapterIndex is number => chapterIndex !== undefined);
+  return { chapterIndexById,
+    maximumVisibleChapterIndex: Math.max(firstChapterIndex, ...projectionChapterIndexes) };
+}
+
+function factSourceVisibleAtAnchor(
+  fact: StoredFact,
+  chapterIndexById: ReadonlyMap<string, number>,
+  maximumVisibleChapterIndex: number | null,
+): boolean {
+  if (maximumVisibleChapterIndex === null) return true;
+  const sourceIndexes = fact.sources.map(source => chapterIndexById.get(source.chapterId))
+    .filter((index): index is number => index !== undefined);
+  return sourceIndexes.length > 0 && Math.min(...sourceIndexes) <= maximumVisibleChapterIndex;
 }
 
 export interface PlanningRunResult {
@@ -53,10 +114,16 @@ export async function buildPlanningContext(input: {
   const facts = await worldStore.listFacts(intent.sourceCoverageBinding.worldId);
   const entities = await worldStore.listEntities(intent.sourceCoverageBinding.worldId);
   const anchorOrder = input.projectionOrder ?? intent.openingAnchor.worldTimeOrder;
+  const sourceChapter = await anchorSourceChapterIndex({ worldStore, worldId: intent.sourceCoverageBinding.worldId,
+    anchorEventId: intent.openingAnchor.anchorEventId, openingAnchorOrder: intent.openingAnchor.worldTimeOrder,
+    requestedProjectionOrder: anchorOrder });
+  const anchorFacts = facts.filter(fact => !['speculation','conflict'].includes(fact.status)
+    && isFactVisibleAtAnchor(fact, anchorOrder)
+    && factSourceVisibleAtAnchor(fact, sourceChapter.chapterIndexById, sourceChapter.maximumVisibleChapterIndex));
   const entries = input.effectiveEntries ?? pkg.entries;
   const visibleEntries = entries.filter(entry =>
-    entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, facts, anchorOrder));
-  const templates = entries.filter(entry => entry.kind === 'actor_template' && isEntryVisibleAtAnchor(entry, facts, anchorOrder));
+    entry.visibility === 'public' && isEntryVisibleAtAnchor(entry, anchorFacts, anchorOrder));
+  const templates = entries.filter(entry => entry.kind === 'actor_template' && isEntryVisibleAtAnchor(entry, anchorFacts, anchorOrder));
   const openingTemplates = new Set(templates
     .filter(entry => isTemplateValidAtAnchor(entry, anchorOrder))
     .map(entry => entry.entryId));
@@ -67,11 +134,10 @@ export async function buildPlanningContext(input: {
   if (intent.protagonistBinding.kind === 'canon') {
     const entity = intent.protagonistBinding.canonEntityId
       ? await worldStore.getEntity(intent.sourceCoverageBinding.worldId, intent.protagonistBinding.canonEntityId) : null;
-    if (!entity || !facts.some(f => f.subjectEntityId === entity.entityId && !['speculation','conflict'].includes(f.status)
-      && isFactVisibleAtAnchor(f, anchorOrder))) throw new Error('原著角色在该开局锚点没有可用身份。');
+    if (!entity || !anchorFacts.some(f => f.subjectEntityId === entity.entityId)) throw new Error('原著角色在该开局锚点没有可用身份。');
     const opening = buildOpening({ kind: 'canon', actorId: intent.protagonistBinding.actorId,
       displayName: intent.protagonistBinding.name, branchId: `setup:${intent.setupId}`, worldTimeOrder: anchorOrder,
-      canonEntity: entity, fallbackLocationId: locationId }, { facts, mappings: await worldStore.listRuleMappings(intent.sourceCoverageBinding.worldId) });
+      canonEntity: entity, fallbackLocationId: locationId }, { facts: anchorFacts, mappings: await worldStore.listRuleMappings(intent.sourceCoverageBinding.worldId) });
     skills = Object.entries(opening.profile.skillRanks).filter(([, rank]) => rank !== 'untrained').map(([id]) => id);
     skillRanks = opening.profile.skillRanks;
     locationId = opening.startLocation;
@@ -98,9 +164,9 @@ export async function buildPlanningContext(input: {
       const d = t.definition as { name?: string; description?: string; behavior?: { goal?: string } };
       return { actorId: t.entryId, name: d.name ?? t.entryId, description: d.description ?? '', goal: d.behavior?.goal ?? '' };
     }),
-    openingFacts: facts.filter(f => !['speculation','conflict'].includes(f.status) && isFactVisibleAtAnchor(f, anchorOrder))
+    openingFacts: anchorFacts
       .map(f => ({ factId: f.factId, subject: entities.find(e => e.entityId === f.subjectEntityId)?.name ?? f.subjectEntityId, predicate: f.predicate, value: f.value })),
-    availableFactIds: new Set(facts.filter(fact => !['speculation','conflict'].includes(fact.status) && isFactVisibleAtAnchor(fact, anchorOrder)).map(fact => fact.factId)),
+    availableFactIds: new Set(anchorFacts.map(fact => fact.factId)),
   };
   return { ctx, visibleEntries, worldTitle: world?.title ?? intent.sourceCoverageBinding.worldId };
 }
