@@ -45,6 +45,9 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /每一条包含 resolved 的可完成路径/);
     assert.match(materials.system, /事实 ID 与目录条目 ID 是两个独立命名空间/);
     assert.match(materials.system, /把 factId 当 entryId/);
+    assert.match(materials.system, /篇幅偏好为长篇，至少设计两个来源、触发和效果各不相同的持续后果/);
+    assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
+    assert.match(materials.system, /不得把被关押人物写成酒馆交谈对象/);
     assert.match(materials.user, /唯一允许填写到 stages\/clues\.provenance\.sourceFactIds 的原著事实 ID/);
     assert.match(materials.user, /唯一允许填写到 clues\.sourceEntryIds 的世界目录条目 ID/);
     assert.deepEqual([...planning.ctx.availableFactIds].sort(), planning.ctx.openingFacts.map(fact => fact.factId).sort(),
