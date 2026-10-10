@@ -49,6 +49,10 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /把 factId 当 entryId/);
     assert.match(materials.system, /篇幅偏好为长篇，至少设计两个来源、触发和效果各不相同的持续后果/);
     assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
+    assert.match(materials.system, /trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功/);
+    assert.match(materials.system, /每个后续阶段的 completion 必须证明它自己的公开目标/);
+    assert.match(materials.system, /每个 consequence 都要被一个 success\/full_success outcome 的 schedule_consequence 排程/);
+    assert.match(materials.system, /至少有一个非文案效果被其触发后的下游 main 阶段 completion 或结局条件正向引用/);
     assert.match(materials.system, /不得把被关押人物写成酒馆交谈对象/);
     assert.match(materials.user, /唯一允许填写到 stages\/clues\.provenance\.sourceFactIds 的原著事实 ID/);
     assert.match(materials.user, /唯一允许填写到 clues\.sourceEntryIds 的世界目录条目 ID/);

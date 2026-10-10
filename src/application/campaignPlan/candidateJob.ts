@@ -6,6 +6,7 @@ import { canonicalJsonOf, sha256HexOf } from './hashing';
 import { compileCampaignPlan } from './localCompile';
 import { validateCampaignIntent, validateCampaignPlan, validateOrdinarySuccessCompletion } from '../../domain/campaignPlan/planValidation';
 import { validateEndingCompletionOrder } from '../../domain/campaignPlan/endingValidation';
+import { validateCampaignPlanCausality } from '../../domain/campaignPlan/causalityValidation';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { CampaignIntentV1 } from '../../domain/campaignPlan/types';
 import { isIntactReadyCandidate } from './candidateIntegrity';
@@ -262,7 +263,8 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         relationships: state?.relationships ?? openingRelationships, discoveries: state?.discoveries,
         actorAliases: state ? cards : frozen!.intent.companionBindings,
         situations: state?.situations,
-      }, frozen!.preparedNodeId), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact)];
+      }, frozen!.preparedNodeId), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact),
+      ...validateCampaignPlanCausality(compiled.plan, compiled.artifact)];
       return { compiled, errors };
     };
     // One scope spans scheduler waiting, all bounded dispatches, validation and
