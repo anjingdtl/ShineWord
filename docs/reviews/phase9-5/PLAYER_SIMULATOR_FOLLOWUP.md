@@ -1,25 +1,29 @@
 # Phase 9.5 — Player and simulator test follow-up
 
-**Review date:** 2026-10-10
+**Review date:** 2026-10-11
 **Branch:** `feat/phase9-5-evidence-driven-runtime`
-**Code head tested:** `33b5620d676d1282d8771ca946fd20db461614ad`
+**Original simulator-run code head:** `33b5620d676d1282d8771ca946fd20db461614ad`
 **Pull request:** [#12](https://github.com/anjingdtl/ShineWord/pull/12), open and not merged
 
 ## Results
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Full core verification | `PASS` | `npm run verify:core`: root typecheck plus 1,262 tests passed, 0 failed (165.3 s) |
+| Full core verification | `PASS` | Latest `npm run verify:core`: root typecheck plus 1,266 tests passed, 0 failed (120.9 s). |
 | Phase 9.5 player-domain journey | `PASS` | Focused campaign, turn, projection, SQLite, stage-preparation and save/fork suites: 54 passed, 0 failed. This is the synthetic domain journey, not an Android UI session. |
 | LLM/provider and ledger regression | `PASS` | Six focused files covering provider, probe, request budget, JSON, and ledger behavior: 119 passed, 0 failed. |
+| User novel source preflight | `PASS` | Local `--dry-extract` run with explicit GB18030 decoding selected a 79,055-byte sample containing 12 chapter headings; the streaming importer parsed 13 segments including its preface segment. No key file or network provider was used. |
+| Live GLM quality run on supplied novel | `NOT RUN` | No model request was sent. A bounded request count and spend cap have not been approved. |
 | Production provider to local mock | `PASS` | The production `OpenAICompatibleProvider` and `probeConnection` made loopback HTTP requests to a controlled synthetic provider. Counts: 1 connection probe, 1 Planner, 1 Narrator, 0 other. Responses passed turn ID, candidate reference and outcome assertions. |
-| Model spend / private story use | `NONE` | All provider requests went to `127.0.0.1`; dummy key only. No external model call or private novel text was used. The TXT from another chat was not present in this workspace and is not automatically accessible across chats. |
+| Model spend / private story use | `NONE` | All provider requests went to `127.0.0.1`; dummy key only. The newly supplied novel file was used only in the local dry preflight; no prose was printed, committed or sent to a provider. |
 | Mobile typecheck | `PASS` | `npm --prefix mobile run typecheck`, exit 0 |
 | Version check | `PASS` | `npm run verify:version`: version `1.0.0`, version code `1000000` |
-| Local Android debug APK | `PASS` | `npm --prefix mobile run apk:debug` succeeded. APK: 103,771,573 bytes; SHA-256 `5eb24d0e280c33e7343fbc94279bc78f76c6421988801c528535e48eed80d109`. |
+| Local Android debug APK | `PASS` | Earlier build on code head `46ddafc` succeeded. APK: 103,771,573 bytes; SHA-256 `5eb24d0e280c33e7343fbc94279bc78f76c6421988801c528535e48eed80d109`. No mobile source changed in this follow-up. |
+| APK rebuild in current workspace | `BLOCKED` | `npm --prefix mobile run apk:debug` stopped before Gradle because Android SDK is not configured. The command's generated `mobile/src/version.json` timestamp was restored. |
+| Android target availability in current workspace | `BLOCKED` | `adb`, the emulator binary and `/dev/kvm` are unavailable here; no new Android UI run was possible. |
 | Android emulator launch smoke | `FAIL / INCONCLUSIVE` | APK installed and `MainActivity` launched, but the screen stayed blank and Android raised `Shine-TRPG isn't responding`. ActivityManager reported `failed to complete startup`; see environment findings below. |
 | Android player flow / save import | `NOT RUN` | No usable React Native screen appeared, so profile setup, mock connection from the app, synthetic-save import, gameplay, restart and restore could not be exercised through the UI. |
-| GitHub checks before this report-only follow-up | `PASS` | PR #12 Core Verify #119 and Android Verify #85 passed on code head `33b5620d676d1282d8771ca946fd20db461614ad`. Recheck checks after the follow-up commit. |
+| GitHub checks before this source follow-up | `PASS` | PR #12 Core Verify #120 and Android Verify #86 passed on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`. Recheck checks after the follow-up commit. |
 
 ## Simulator evidence and limits
 
@@ -41,7 +45,11 @@ This evidence does not prove an Android product defect or prove the app is healt
 
 The domain tests use fixed fictional campaign content (“青石巷”), fixed rules and deterministic dice. A synthetic `shineword-save-10` fixture was validated on the host; it was not imported into Android. The local mock HTTP smoke exercised the provider contract only. It did not configure or drive the Android app, and it was not a real LLM quality evaluation.
 
-No real API key, private novel, user database, Phase 9 request balance or paid model was used. The mock server observed exactly three loopback requests in total: one probe, one Planner request and one Narrator request.
+No real API key, user database, Phase 9 request balance or paid model was used. The mock server observed exactly three loopback requests in total: one probe, one Planner and one Narrator. The newly supplied novel was only decoded and imported in the local no-key dry run; live GLM evaluation and narrative quality remain `NOT RUN` pending an approved request and spend cap.
+
+## Attachment follow-up
+
+The current smoke harness previously decoded every novel as UTF-8 and silently accepted a missing chapter split, which could have sent the whole source file. The follow-up adds explicit UTF-8/GB18030 selection, fail-closed chapter detection, a 256 KiB sample limit, and a no-key offline mode. Details and sanitized counters are in [ATTACHMENT_LOCAL_PREFLIGHT.md](ATTACHMENT_LOCAL_PREFLIGHT.md).
 
 ## Required next device run
 

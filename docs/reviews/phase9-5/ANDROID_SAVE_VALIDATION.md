@@ -1,6 +1,6 @@
 # Phase 9.5 M4 — Android and save validation
 
-**Review date:** 2026-10-10
+**Review date:** 2026-10-11
 **Branch:** `feat/phase9-5-evidence-driven-runtime`
 
 ## Results
@@ -10,12 +10,14 @@
 | Root TypeScript | `PASS` | `npm run typecheck`, exit 0 |
 | Mobile TypeScript | `PASS` | `npm --prefix mobile run typecheck`, exit 0 |
 | Product version | `PASS` | `npm run verify:version`, exit 0; `version=1.0.0`, `versionCode=1000000` |
-| Core Verify | `PASS` | `npm run verify:core`, 1,262 tests passed, 0 failed |
-| Local Android debug APK | `PASS` | `npm --prefix mobile run apk:debug` succeeded. APK is 103,771,573 bytes, SHA-256 `5eb24d0e280c33e7343fbc94279bc78f76c6421988801c528535e48eed80d109`. |
+| Core Verify | `PASS` | Latest `npm run verify:core`, 1,266 tests passed, 0 failed |
+| Local Android debug APK | `PASS` | Earlier build on code head `46ddafc` succeeded. APK is 103,771,573 bytes, SHA-256 `5eb24d0e280c33e7343fbc94279bc78f76c6421988801c528535e48eed80d109`. No mobile source changed in this follow-up. |
+| Current-workspace APK rebuild | `BLOCKED` | The command stopped before Gradle because Android SDK is not configured. |
+| Android target availability | `BLOCKED` | `adb`, the emulator binary and `/dev/kvm` are unavailable in this workspace; no new Android UI run was possible. |
 | Android emulator launch smoke | `FAIL / INCONCLUSIVE` | Android 36 x86_64 AVD without KVM installed and launched the APK, but stayed on a blank React Native surface and raised an app-not-responding dialog during startup. See [player simulator follow-up](PLAYER_SIMULATOR_FOLLOWUP.md). |
 | Android player flow / save import | `NOT RUN` | The app did not present usable UI controls, so first-run setup, save import, gameplay, and UI-level restart/restore were not exercised. |
-| GitHub Core Verify | `PASS` | PR #12, run #119, successful on code head `33b5620d676d1282d8771ca946fd20db461614ad`. |
-| GitHub Android Verify | `PASS` | PR #12, run #85, successful on code head `33b5620d676d1282d8771ca946fd20db461614ad`; setup, mobile typecheck and `:app:assembleDebug` completed. |
+| GitHub Core Verify | `PASS` | PR #12, run #120, successful on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`. |
+| GitHub Android Verify | `PASS` | PR #12, run #86, successful on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`; setup, mobile typecheck and `:app:assembleDebug` completed. |
 
 ## Save and recovery boundary
 
@@ -32,7 +34,7 @@ This feature branch does not change save serialization, migrations, database own
 
 The feature adds no save migration. These automated fixtures are regression coverage; they are not an import/export check against a real user save. No private user database or campaign was read.
 
-The APK command's version prebuild rewrote the tracked generated `mobile/src/version.json`; that generated-only change was restored because it was not part of this task. The worktree was clean after restoration. The current APK hash and emulator launch evidence are recorded in [player simulator follow-up](PLAYER_SIMULATOR_FOLLOWUP.md).
+The APK command's version prebuild rewrote the tracked generated `mobile/src/version.json`; that generated-only change was restored because it was not part of this task. The current APK hash and emulator launch evidence are recorded in [player simulator follow-up](PLAYER_SIMULATOR_FOLLOWUP.md). A later rebuild attempt in this workspace stopped before Gradle because the Android SDK is not configured.
 
 ## Executable follow-up when an Android environment and tester are available
 

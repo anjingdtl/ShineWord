@@ -13,8 +13,11 @@
  *     printed, never written to any output artifact;
  *   - outputs are sanitized counters (no prose, no secrets).
  *
- * Usage: node scripts/llm-smoke.cjs --provider glm|deepseek [--chapters 12]
- *            [--cap 6] [--json out.json]
+ * Usage: node scripts/llm-smoke.cjs --provider glm|deepseek --key-file <path>
+ *            --novel <path> [--encoding utf-8|gb18030] [--chapters 12]
+ *            [--max-input-bytes 262144] [--cap 6] [--json out.json]
+ * Offline import only: add --dry-extract and omit --key-file. This path never
+ * contacts a provider and logs only chapter/segment counts and lengths.
  */
 const fs = require('node:fs');
 const os = require('node:os');
@@ -34,19 +37,26 @@ const { OpenAICompatibleProvider } = require(path.join(root, 'dist/application/l
 const { evaluatePlayabilityGate } = require(path.join(root, 'dist/application/worldPackage/playabilityGate'));
 const { buildPackageFromCanon } = require(path.join(root, 'dist/application/worldPackage/buildPackageFromCanon'));
 const { modelBudgetFromProfile } = require(path.join(root, 'dist/application/worldBuild/profileModelBudget'));
+const { sliceNovelBytes } = require(path.join(__dirname, 'lib/smokeNovel.cjs'));
 
 const argv = process.argv.slice(2);
 const providerIdx = argv.indexOf('--provider');
 const chaptersIdx = argv.indexOf('--chapters');
 const capIdx = argv.indexOf('--cap');
 const jsonIdx = argv.indexOf('--json');
+const encodingIdx = argv.indexOf('--encoding');
+const maxBytesIdx = argv.indexOf('--max-input-bytes');
 const providerName = providerIdx >= 0 ? argv[providerIdx + 1] : 'glm';
 const chapterTarget = chaptersIdx >= 0 ? Number(argv[chaptersIdx + 1]) : 12;
 const requestCap = capIdx >= 0 ? Number(argv[capIdx + 1]) : 6;
+const sourceEncoding = encodingIdx >= 0 ? argv[encodingIdx + 1] : 'utf-8';
+const maxInputBytes = maxBytesIdx >= 0 ? Number(argv[maxBytesIdx + 1]) : 256 * 1024;
 const jsonOut = jsonIdx >= 0 ? argv[jsonIdx + 1] : null;
+const dryExtract = argv.includes('--dry-extract');
 
 // Local key/novel paths are NEVER baked into the script: pass them in.
-//   node scripts/llm-smoke.cjs --provider glm --key-file <glm-key.txt> //        --novel <path-to-txt> [--chapters 12] [--cap 6] [--json out.json]
+//   node scripts/llm-smoke.cjs --provider glm --key-file <glm-key.txt> \
+//     --novel <path-to-txt> [--encoding gb18030] [--chapters 12] [--cap 6]
 const keyFileIdx = argv.indexOf('--key-file');
 const novelIdx = argv.indexOf('--novel');
 const KEY_FILE = keyFileIdx >= 0 ? argv[keyFileIdx + 1] : null;
@@ -72,20 +82,6 @@ function readKeyConfig(file) {
   }
   if (!endpoint || !key || !model) throw new Error(`Key file ${file} is missing endpoint/key/model fields.`);
   return { endpoint, key, model };
-}
-
-/** First N chapters of the reference novel, by standard chapter headings. */
-function sliceNovel(file, chapters) {
-  const lines = fs.readFileSync(file, 'utf8').split('\n');
-  const heading = /^\s*第\s*[0-9０-９〇零一二两三四五六七八九十百千万]+\s*[章卷回部]\s*\S/;
-  const out = [];
-  let seen = 0;
-  for (const line of lines) {
-    if (heading.test(line)) seen += 1;
-    if (seen > chapters) break;
-    out.push(line);
-  }
-  return Buffer.from(out.join('\n'), 'utf8');
 }
 
 class Adapter {
@@ -148,11 +144,17 @@ const sha = {
 };
 
 async function main() {
-  if (!KEY_FILE) throw new Error('Missing --key-file <path> (never hardcoded).');
   if (!NOVEL) throw new Error('Missing --novel <path> (never hardcoded).');
-  const keyConfig = readKeyConfig(KEY_FILE);
+  if (!dryExtract && !KEY_FILE) throw new Error('Missing --key-file <path> (never hardcoded).');
+  if (!Number.isSafeInteger(chapterTarget) || chapterTarget < 1) throw new Error('--chapters must be a positive integer.');
+  if (!Number.isSafeInteger(requestCap) || requestCap < 1) throw new Error('--cap must be a positive integer.');
+  if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes < 1) throw new Error('--max-input-bytes must be a positive integer.');
   if (!fs.existsSync(NOVEL)) throw new Error(`Reference novel not found: ${NOVEL}`);
-  const smokeBytes = sliceNovel(NOVEL, chapterTarget);
+  const sample = sliceNovelBytes(fs.readFileSync(NOVEL), chapterTarget, sourceEncoding, maxInputBytes);
+  const smokeBytes = sample.bytes;
+  const keyConfig = dryExtract
+    ? { endpoint: 'http://127.0.0.1/mock', key: 'dry-extract-only', model: 'dry-extract-only' }
+    : readKeyConfig(KEY_FILE);
 
   const db = new DatabaseSync(':memory:');
   for (const migration of BUILTIN_MIGRATIONS) {
@@ -264,12 +266,19 @@ async function main() {
       title: 'smoke', extractorVersion: extractor.version, mode: 'group', budget,
     },
   );
-  if (argv.includes('--dry-extract')) {
+  if (dryExtract) {
     const probeGroupExtractor = {
       version: 'probe-1',
       async extract(input) {
-        console.error('PROBE segments:', input.segments.length,
-          'lengths:', input.segments.map(seg => seg.text.length).join(','));
+        console.error('DRY EXTRACT PREFLIGHT:', JSON.stringify({
+          encoding: sample.sourceEncoding,
+          sourceBytes: sample.sourceBytes,
+          sampleBytes: smokeBytes.length,
+          chapters: sample.chapterCount,
+          parsedChapters: parsed.chapters.length,
+          segments: input.segments.length,
+          segmentChars: input.segments.map(seg => seg.text.length),
+        }));
         return { entities: [], facts: [], events: [], ruleMappings: [], rejectedQuotes: 0 };
       },
     };
@@ -337,6 +346,8 @@ async function main() {
   const report = {
     provider: providerName,
     model: keyConfig.model,
+    inputEncoding: sample.sourceEncoding,
+    smokeInputBytes: smokeBytes.length,
     smokeChapters: parsed.chapters.length,
     smokeCodePoints: parsed.codePointCount,
     storageChunks: parsed.chunks.length,
