@@ -18,6 +18,8 @@
 | Android player flow / save import | `NOT RUN` | The app did not present usable UI controls, so first-run setup, save import, gameplay, and UI-level restart/restore were not exercised. |
 | GitHub Core Verify | `PASS` | PR #12, run #120, successful on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`. |
 | GitHub Android Verify | `PASS` | PR #12, run #86, successful on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`; setup, mobile typecheck and `:app:assembleDebug` completed. |
+| Current PR Core Verify | `PASS` | PR #12, run #121, successful on source/test-harness head `55f78046b5e398ef155a6539aca34fd5b0bab295`. |
+| Current PR Android Verify | `PASS` | PR #12, run #87, successful on source/test-harness head `55f78046b5e398ef155a6539aca34fd5b0bab295`; setup, mobile typecheck and `:app:assembleDebug` completed. |
 
 ## Save and recovery boundary
 

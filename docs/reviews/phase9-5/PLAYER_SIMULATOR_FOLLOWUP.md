@@ -23,7 +23,8 @@
 | Android target availability in current workspace | `BLOCKED` | `adb`, the emulator binary and `/dev/kvm` are unavailable here; no new Android UI run was possible. |
 | Android emulator launch smoke | `FAIL / INCONCLUSIVE` | APK installed and `MainActivity` launched, but the screen stayed blank and Android raised `Shine-TRPG isn't responding`. ActivityManager reported `failed to complete startup`; see environment findings below. |
 | Android player flow / save import | `NOT RUN` | No usable React Native screen appeared, so profile setup, mock connection from the app, synthetic-save import, gameplay, restart and restore could not be exercised through the UI. |
-| GitHub checks before this source follow-up | `PASS` | PR #12 Core Verify #120 and Android Verify #86 passed on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`. Recheck checks after the follow-up commit. |
+| GitHub checks before this source follow-up | `PASS` | PR #12 Core Verify #120 and Android Verify #86 passed on code head `46ddafc73c3b686604d82fe02e537090c99ddd71`. |
+| GitHub checks on source follow-up | `PASS` | PR #12 Core Verify #121 and Android Verify #87 passed on source/test-harness head `55f78046b5e398ef155a6539aca34fd5b0bab295`; Android mobile typecheck and APK assembly completed. |
 
 ## Simulator evidence and limits
 

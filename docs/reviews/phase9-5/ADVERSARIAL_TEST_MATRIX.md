@@ -1,6 +1,6 @@
 # Phase 9.5 M4 — Adversarial test matrix
 
-**Review date:** 2026-10-10
+**Review date:** 2026-10-11
 **Branch:** `feat/phase9-5-evidence-driven-runtime`
 **Evidence scope:** local deterministic checks on the feature branch. The L1 fast path was gated off in M1 because the current content protocol cannot fully bind difficulty and evidence.
 
@@ -29,6 +29,12 @@
 
 ## Local engineering evidence
 
-`npm run verify:core` passed: 1,262 tests, 0 failures. Separate root and mobile typechecks passed. `npm run verify:version` passed (`1.0.0`, version code `1000000`). PR #12 Core Verify run #119 passed, and Android Verify run #85 built the debug APK successfully on GitHub Actions. A fresh local APK build also passed. The attempted emulator launch and its limits are recorded in `ANDROID_SAVE_VALIDATION.md` and `PLAYER_SIMULATOR_FOLLOWUP.md`.
+The latest local `npm run verify:core` passed: 1,266 tests, 0 failures. Separate root and mobile typechecks passed. `npm run verify:version` passed (`1.0.0`, version code `1000000`). PR #12 Core Verify #121 and Android Verify #87 passed on source/test-harness head `55f7804`; the Android job completed mobile typecheck and APK assembly. The earlier local APK build passed on `46ddafc`; the current workspace cannot rebuild because it has no Android SDK. The attempted emulator launch and its limits are recorded in `ANDROID_SAVE_VALIDATION.md` and `PLAYER_SIMULATOR_FOLLOWUP.md`.
+
+## User-supplied novel smoke follow-up
+
+The source preflight uncovered an additional RED case: the supplied novel is GB18030, while the prior smoke script forced UTF-8 and treated zero detected chapter headings as a valid slice. That combination could have sent the entire file to the provider. The script now requires explicit supported decoding, refuses missing chapter boundaries, applies a 256 KiB post-slice cap before reading key configuration, and supports a no-key offline import mode.
+
+The new helper tests pass 4/4. The actual supplied file passed a local-only dry import using the first 12 detected chapter headings (79,055 bytes; 13 importer segments including a preface segment). The run printed only counts and lengths; no key file, external provider, or novel prose was used in output or repository files. Live GLM extraction and narrative-quality evaluation remain `NOT RUN` until an independent request-count and spend cap is approved. Full evidence is in `ATTACHMENT_LOCAL_PREFLIGHT.md`.
 
 These checks establish deterministic repository behavior only. They do not establish that L1 is active, that provider cost or latency fell, that Android behavior passed, or that end-user play quality meets the Phase 9 acceptance matrix.
