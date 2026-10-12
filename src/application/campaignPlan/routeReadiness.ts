@@ -9,6 +9,8 @@ import { isTemplateValidAtAnchor } from '../campaign/recruitment';
 
 export const CAMPAIGN_COMPLETION_REWARD_ACTOR_UNAVAILABLE = 'campaign_completion_reward_actor_unavailable';
 export const CAMPAIGN_METHOD_EVENT_UNCONSUMED = 'campaign_method_event_unconsumed';
+export const CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED = 'campaign_method_promise_already_created';
+export const CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED = 'campaign_method_promise_already_resolved';
 export const CAMPAIGN_METHOD_ACTOR_UNAVAILABLE = 'campaign_method_actor_unavailable';
 
 /** Player-visible adopted participants are an explicit scene roster, even when the
@@ -50,8 +52,53 @@ export function campaignMethodEventConsumerBlocker(input: {
   situationId: string;
   method: MethodTemplateV1;
 }): string | null {
+  const { state, situationId, method } = input;
+  const ownerSituationId = (ref: string, fallbackSituationId = situationId): string =>
+    ['self', '__self__'].includes(ref) ? fallbackSituationId : ref;
+  const promiseFor = (ref: { situationId: string; promiseId: string }, fallbackSituationId = situationId) =>
+    (state.situations ?? []).find(item => item.situationId === ownerSituationId(ref.situationId, fallbackSituationId))?.promises
+      ?.find(item => item.promiseId === ref.promiseId);
+  const alreadyCreated = (promise: { situationId: string; promiseId: string }): boolean => Boolean(promiseFor(promise));
+  const successfulPromiseTransitions = (candidate: MethodTemplateV1, grade: 'success' | 'full_success') => [
+    ...(candidate.onSuccess ?? []).flatMap(effect => effect.kind === 'promise_create'
+      || effect.kind === 'promise_fulfill' || effect.kind === 'promise_break'
+      ? [{ kind: effect.kind, situationId: effect.situationId, promiseId: effect.promiseId }] : []),
+    ...(candidate.outcomeTemplates?.[grade]?.effects ?? []).flatMap(effect => effect.template === 'promise_create'
+      || effect.template === 'promise_fulfill' || effect.template === 'promise_break'
+      ? [{ kind: effect.template, situationId: effect.situationId, promiseId: effect.promiseId }] : []),
+  ];
+  const successfulGrades = ['success', 'full_success'] as const;
+  const transitionsBySuccessfulGrade = successfulGrades.map(grade => successfulPromiseTransitions(method, grade));
+  const repeatedCreationsOnly = transitionsBySuccessfulGrade.every(transitions => {
+    const creates = transitions.filter(effect => effect.kind === 'promise_create');
+    return creates.length > 0 && creates.every(alreadyCreated);
+  });
+  const resolvedPromiseTransitionsOnly = transitionsBySuccessfulGrade.every(transitions => {
+    const resolutions = transitions.filter(effect => effect.kind === 'promise_fulfill' || effect.kind === 'promise_break');
+    return resolutions.length > 0 && resolutions.every(effect => {
+      const status = promiseFor(effect)?.status;
+      return status === 'fulfilled' || status === 'broken';
+    });
+  });
+  const repeatedOpenPromises = transitionsBySuccessfulGrade.flatMap(transitions => transitions
+    .filter(effect => effect.kind === 'promise_create' && alreadyCreated(effect) && promiseFor(effect)?.status === 'open'));
+  const sameMethodVersions = input.artifacts.flatMap(artifact => artifact.situations
+    .flatMap(situation => situation.definition.methods
+      .filter(candidate => candidate.methodId === method.methodId)
+      .map(candidate => ({ situationId: situation.entryId, method: candidate }))));
+  const hasAnyOpenPromiseResolution = [{ situationId, method }, ...sameMethodVersions].some(version => successfulGrades.some(grade =>
+    successfulPromiseTransitions(version.method, grade).some(resolve =>
+      (resolve.kind === 'promise_fulfill' || resolve.kind === 'promise_break')
+      && repeatedOpenPromises.some(create => ownerSituationId(resolve.situationId, version.situationId)
+        === ownerSituationId(create.situationId, situationId)
+        && resolve.promiseId === create.promiseId && promiseFor(resolve, version.situationId)?.status === 'open'))));
+  if (repeatedCreationsOnly && !hasAnyOpenPromiseResolution) {
+    return CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED;
+  }
+  if (resolvedPromiseTransitionsOnly) return CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED;
+
   if (!input.plan) return null;
-  const { plan, artifacts, situationId, method, state } = input;
+  const { plan, artifacts } = input;
   if (hasUnconsumedSuccessEventMethod(plan, artifacts, situationId, method)) return CAMPAIGN_METHOD_EVENT_UNCONSUMED;
 
   // A previously useful clue grant becomes a no-op after this branch has

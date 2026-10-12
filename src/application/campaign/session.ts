@@ -100,7 +100,7 @@ import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution 
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { projectPlayableSituations } from '../campaignPlan/contentResolver';
 import { projectNarrativeOpportunities } from '../campaignPlan/opportunityProjection';
-import { campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, CAMPAIGN_COMPLETION_REWARD_ACTOR_UNAVAILABLE, CAMPAIGN_METHOD_EVENT_UNCONSUMED } from '../campaignPlan/routeReadiness';
+import { campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, CAMPAIGN_COMPLETION_REWARD_ACTOR_UNAVAILABLE, CAMPAIGN_METHOD_EVENT_UNCONSUMED, CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED, CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED } from '../campaignPlan/routeReadiness';
 import { loadCampaignContentCatalog } from './contentCatalog';
 import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
@@ -2467,6 +2467,12 @@ export class CampaignSession {
         const eventBlocker = campaignMethodEventConsumerBlocker({
           state, plan: content.plan, artifacts: content.artifacts, situationId: authored.entryId, method,
         });
+        if (eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED) {
+          throw new Error('此路线已经创建了该承诺，重复执行不会再次创建。请选择其他办法。');
+        }
+        if (eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED) {
+          throw new Error('此路线关联的承诺已经解决，不能重复领取奖励。请选择其他办法。');
+        }
         if (eventBlocker === CAMPAIGN_METHOD_EVENT_UNCONSUMED) {
           throw new Error('此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
         }
@@ -2679,12 +2685,17 @@ export class CampaignSession {
             situationId: situation.situationId, method,
           });
           if (eventBlocker) {
+            const blockerMessage = eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED
+              ? '此路线已经创建了该承诺，重复执行不会再次创建。请选择其他办法。'
+              : eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED
+                ? '此路线关联的承诺已经解决，不能重复领取奖励。请选择其他办法。'
+                : '此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。';
             const methodRef = `method:${situation.situationId}:${method.methodId}`;
             blockedMethodRefs.add(methodRef);
-            blockedMethodMessages.set(methodRef, '此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
+            blockedMethodMessages.set(methodRef, blockerMessage);
             if (options.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')
               === method.firstStep.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')) {
-              throw new Error('此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
+              throw new Error(blockerMessage);
             }
             continue;
           }

@@ -568,3 +568,145 @@ test('M2 blocks an unused event route when its only other ordinary-success effec
   assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
     'no frozen turn or dice record is created');
 });
+
+test('M2 blocks a promise-creation route after its fixed promise already exists', async t => {
+  const requests = [];
+  const provider = { async complete(request) {
+    requests.push(request.role);
+    throw new Error('a repeated promise route must not reach a provider');
+  } };
+  const h = await fixture({ provider, includeGuidance: true });
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const promiseId = 'fixture-supplies-promise';
+  state.situations.find(item => item.situationId === SITUATION_ID).promises = [{
+    promiseId, promisorActorId: 'npc-tpl-lin', promiseeActorId: 'pc',
+    description: 'fixture promise', status: 'open', createdAtVersion: state.stateVersion,
+    sourceTurnId: 'fixture-prior-turn',
+  }];
+
+  const artifacts = structuredClone(context.artifacts);
+  const authored = artifacts[0].situations.find(situation => situation.entryId === SITUATION_ID);
+  const source = authored.definition.methods.find(method => method.methodId === 'sweep');
+  const repeatedPromise = {
+    ...structuredClone(source),
+    methodId: 'ask-for-promised-supplies',
+    title: '再次询问补给承诺',
+    goal: '再次确认已经作出的承诺',
+    firstStep: { ...source.firstStep, intent: '再次询问提尔是否准备好补给', actionKind: 'talk' },
+    successEffects: [],
+    onSuccess: [],
+    outcomeTemplates: {
+      ...source.outcomeTemplates,
+      success: { ...source.outcomeTemplates.success, effects: [
+        { template: 'promise_create', situationId: SITUATION_ID, promiseId,
+          promisorActorId: 'npc-tpl-lin', promiseeActorId: 'pc', description: 'fixture promise' },
+        { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'supplies', delta: 10 },
+        { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
+      ] },
+      full_success: { ...source.outcomeTemplates.full_success, effects: [
+        { template: 'promise_create', situationId: SITUATION_ID, promiseId,
+          promisorActorId: 'npc-tpl-lin', promiseeActorId: 'pc', description: 'fixture promise' },
+        { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'supplies', delta: 10 },
+        { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
+      ] },
+    },
+  };
+  authored.definition.methods.push(repeatedPromise);
+  const situationDefinitions = artifacts.flatMap(artifact => artifact.situations.map(situation => ({
+    situationId: situation.entryId, definition: situation.definition,
+  })));
+  const projection = projectNarrativeOpportunities({ ...context, state, artifacts, situationDefinitions });
+  const route = projection.opportunities[0].routes.find(item => item.methodId === repeatedPromise.methodId);
+  assert.equal(route.available, false);
+  assert.ok(route.blockerCodes.includes('campaign_method_promise_already_created'));
+  assert.match(route.blockers.join(' '), /已经创建了这个承诺/);
+  assert.equal(projection.opportunities[0].routes.find(item => item.methodId === 'sweep').available, true,
+    'separate progress routes remain available');
+
+  h.session.loadCampaignPlanForState = async () => ({ plan: context.plan, artifacts });
+  h.turns.getState = async () => structuredClone(state);
+  const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId,
+    branchId: h.branchId, sourceTurnId: 'refresh-after-promise', localOnly: true });
+  assert.ok(guidance);
+  assert.equal(guidance.steps.some(step => step.candidateRef === route.candidateRef), false,
+    'the duplicate promise route is omitted from refreshed guidance');
+  await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: repeatedPromise.firstStep.intent }), /已经创建了该承诺/);
+  assert.deepEqual(requests, [], 'the repeated route is refused before any provider request');
+  assert.equal(await h.adapter.queryOne('SELECT operation_id FROM interaction_operations WHERE branch_id=? LIMIT 1', [h.branchId]), null,
+    'no interaction operation is opened');
+  assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
+    'no frozen turn or dice record is created');
+});
+
+test('M2 blocks a promise-fulfillment route after its fixed promise is already resolved', async t => {
+  const requests = [];
+  const provider = { async complete(request) {
+    requests.push(request.role);
+    throw new Error('a resolved-promise route must not reach a provider');
+  } };
+  const h = await fixture({ provider, includeGuidance: true });
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const promiseId = 'fixture-supplies-promise';
+  state.situations.find(item => item.situationId === SITUATION_ID).promises = [{
+    promiseId, promisorActorId: 'npc-tpl-lin', promiseeActorId: 'pc',
+    description: 'fixture promise', status: 'fulfilled', createdAtVersion: state.stateVersion,
+    sourceTurnId: 'fixture-prior-turn', resolvedAtVersion: state.stateVersion,
+  }];
+
+  const artifacts = structuredClone(context.artifacts);
+  const authored = artifacts[0].situations.find(situation => situation.entryId === SITUATION_ID);
+  const source = authored.definition.methods.find(method => method.methodId === 'sweep');
+  const fulfilledPromiseRoute = {
+    ...structuredClone(source),
+    methodId: 'collect-promised-supplies',
+    title: '再次领取已履约补给',
+    goal: '再次领取已经兑现的补给',
+    firstStep: { ...source.firstStep, intent: '再次领取已经兑现的补给', actionKind: 'talk' },
+    successEffects: [],
+    onSuccess: [],
+    outcomeTemplates: {
+      ...source.outcomeTemplates,
+      success: { ...source.outcomeTemplates.success, effects: [
+        { template: 'promise_fulfill', situationId: SITUATION_ID, promiseId },
+        { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'supplies', delta: 10 },
+        { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
+      ] },
+      full_success: { ...source.outcomeTemplates.full_success, effects: [
+        { template: 'promise_fulfill', situationId: SITUATION_ID, promiseId },
+        { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'supplies', delta: 10 },
+        { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
+      ] },
+    },
+  };
+  authored.definition.methods.push(fulfilledPromiseRoute);
+  const situationDefinitions = artifacts.flatMap(artifact => artifact.situations.map(situation => ({
+    situationId: situation.entryId, definition: situation.definition,
+  })));
+  const projection = projectNarrativeOpportunities({ ...context, state, artifacts, situationDefinitions });
+  const route = projection.opportunities[0].routes.find(item => item.methodId === fulfilledPromiseRoute.methodId);
+  assert.equal(route.available, false);
+  assert.ok(route.blockerCodes.includes('campaign_method_promise_already_resolved'));
+  assert.match(route.blockers.join(' '), /承诺已经解决/);
+  assert.equal(projection.opportunities[0].routes.find(item => item.methodId === 'sweep').available, true,
+    'separate progress routes remain available');
+
+  h.session.loadCampaignPlanForState = async () => ({ plan: context.plan, artifacts });
+  h.turns.getState = async () => structuredClone(state);
+  const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId,
+    branchId: h.branchId, sourceTurnId: 'refresh-after-fulfilled-promise', localOnly: true });
+  assert.ok(guidance);
+  assert.equal(guidance.steps.some(step => step.candidateRef === route.candidateRef), false,
+    'the resolved-promise route is omitted from refreshed guidance');
+  await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: fulfilledPromiseRoute.firstStep.intent }), /承诺已经解决/);
+  assert.deepEqual(requests, [], 'the repeated route is refused before any provider request');
+  assert.equal(await h.adapter.queryOne('SELECT operation_id FROM interaction_operations WHERE branch_id=? LIMIT 1', [h.branchId]), null,
+    'no interaction operation is opened');
+  assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
+    'no frozen turn or dice record is created');
+});

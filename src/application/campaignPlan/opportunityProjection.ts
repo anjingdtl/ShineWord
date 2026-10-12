@@ -5,7 +5,7 @@ import type { CampaignContentArtifactV1, CampaignPlanV1 } from '../../domain/cam
 import type { SituationDefinitionV1 } from '../../domain/situations/types';
 import { assessMethod } from '../guidance/candidates';
 import type { AllowedCandidateV1 } from '../guidance/types';
-import { campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, methodCanSatisfyCompletion } from './routeReadiness';
+import { CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED, CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED, campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, methodCanSatisfyCompletion } from './routeReadiness';
 
 export type OpportunityProjectionStatus =
   | 'no_campaign'
@@ -184,7 +184,11 @@ export function projectNarrativeOpportunities(
         blockers: [
           ...assessed.blockers,
           ...(completionBlocker ? ['该收尾路线所需的人物尚未加入当前战局，暂不可完成此阶段。'] : []),
-          ...(eventBlocker ? ['该路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。'] : []),
+          ...(eventBlocker ? [eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED
+            ? '该路线已经创建了这个承诺，重复执行不能再次创建；请选择其他可用路径。'
+            : eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED
+              ? '这项承诺已经解决，重复执行不能再次领取奖励；请选择其他可用路径。'
+              : '该路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。'] : []),
         ],
         actionSignature: actionSignature(method.firstStep),
       } satisfies ProjectedOpportunityRoute];
