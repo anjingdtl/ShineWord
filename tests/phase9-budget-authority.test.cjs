@@ -5,8 +5,9 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
-const { createPhysicalBudget, initializeScopedBudgetManifest, createScopedPhysicalBudget } = require('../tools/phase9-budget.cjs');
+const { createPhysicalBudget, initializeScopedBudgetManifest, correctScopedProfileBindingBeforeDispatch, createScopedPhysicalBudget } = require('../tools/phase9-budget.cjs');
 const { createBudgetedHttpTransport } = require('../tools/phase9-dispatch.cjs');
+const { llmModelProfileFingerprint } = require('../dist/application/llm/profileFingerprint');
 
 function tempManifest(t, budget = { spent: 1291, totalPhysicalRequests: 1500 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'phase9-budget-'));
@@ -114,6 +115,56 @@ function scopedRequest(attemptId, extra = {}) {
     worldId: 'world-1', stateVersion: 3, profileFingerprint: 'sha256:profile-safe', ...extra };
 }
 
+test('scoped profile binding permits one audited correction before dispatch and stays locked afterward', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'phase9-profile-binding-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const filePath = path.join(dir, 'dispatch-budget.json');
+  const scopeId = 'profile-binding-preflight';
+  const cap = 4;
+  const clientEndpoint = 'http://127.0.0.1:18591';
+  const oldFingerprint = 'a'.repeat(64);
+  const profile = {
+    id: 'qa-profile-1', endpoint: clientEndpoint, model: 'glm-5.3-flash',
+    capabilities: { supportsJson: true, supportsStreaming: true, reportsUsage: true,
+      contextWindow: 1_048_576, maxOutputTokens: 131_072, supportsPromptCache: true },
+    reasoningTier: 'low', concurrency: 3, tpm: 3_000_000,
+  };
+  initializeScopedBudgetManifest({ filePath, scopeId, capPhysicalRequests: cap,
+    inputs: { profileFingerprint: oldFingerprint, llm: { endpoint: 'https://api.example/v4', clientEndpoint,
+      model: profile.model, capabilities: { ...profile.capabilities } } } });
+
+  const args = { filePath, expectedScopeId: scopeId, expectedCapPhysicalRequests: cap,
+    expectedFingerprint: oldFingerprint, profile, reason: 'Bind the saved UI profile after configuration preflight.' };
+  assert.throws(() => correctScopedProfileBindingBeforeDispatch({ ...args,
+    profile: { ...profile, endpoint: 'http://127.0.0.1:9999' } }), /endpoint or model differs/);
+  assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).inputs.profileFingerprint, oldFingerprint);
+
+  const corrected = correctScopedProfileBindingBeforeDispatch(args);
+  const expectedFingerprint = llmModelProfileFingerprint(profile);
+  assert.equal(corrected.profileFingerprint, expectedFingerprint);
+  let manifest = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(manifest.scopeId, scopeId);
+  assert.equal(manifest.capPhysicalRequests, cap);
+  assert.equal(manifest.spentPhysicalRequests, 0);
+  assert.deepEqual(manifest.physicalDispatchAudit, []);
+  assert.equal(manifest.inputs.profileFingerprint, expectedFingerprint);
+  assert.equal(manifest.preDispatchProfileCorrections.length, 1);
+  assert.equal(manifest.preDispatchProfileCorrections[0].from, oldFingerprint);
+  assert.equal(manifest.preDispatchProfileCorrections[0].to, expectedFingerprint);
+  assert.throws(() => correctScopedProfileBindingBeforeDispatch({ ...args, expectedFingerprint,
+    profile: { ...profile, id: 'qa-profile-2' } }), /already received its single/);
+
+  const budget = createScopedPhysicalBudget({ filePath, expectedScopeId: scopeId, expectedCapPhysicalRequests: cap });
+  budget.reservePhysicalRequest({ ...scopedRequest('preflight-bound-attempt'), profileFingerprint: expectedFingerprint });
+  assert.throws(() => correctScopedProfileBindingBeforeDispatch({ ...args, expectedFingerprint,
+    profile: { ...profile, id: 'qa-profile-3' } }), /before any physical reservation or dispatch/);
+  manifest = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(manifest.capPhysicalRequests, cap);
+  assert.equal(manifest.spentPhysicalRequests, 0);
+  assert.equal(manifest.physicalDispatchAudit.length, 1);
+  assert.equal(manifest.preDispatchProfileCorrections.length, 1);
+});
+
 test('scoped simulator budget charges dispatched and unknown requests once; duplicate attempts cannot replay', t => {
   const { filePath, budget, cap, scopeId } = tempScopedManifest(t, 2);
   assert.throws(() => initializeScopedBudgetManifest({ filePath, scopeId, capPhysicalRequests: cap }), /already exists/);
@@ -192,4 +243,48 @@ test('host HTTP adapter reserves and reconciles through the same scoped simulato
   assert.equal(manifest.spentPhysicalRequests, 1);
   assert.equal(manifest.physicalDispatchAudit[0].attemptId, 'host-attempt-1');
   assert.equal(manifest.physicalDispatchAudit[0].status, 'completed');
+});
+
+test('scoped loopback transport keeps the final request across concurrent calls and process restart', async t => {
+  const { filePath, scopeId, cap, budget } = tempScopedManifest(t, 1, 'sha256:host-profile');
+  let upstreamHits = 0;
+  const upstream = http.createServer(async (req, res) => {
+    for await (const _ of req) {}
+    upstreamHits++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+  const transport = createBudgetedHttpTransport({ owner: 'host:phase9-5-loopback', budget });
+  const request = attemptId => transport.post({
+    url: `http://127.0.0.1:${upstream.address().port}/chat/completions`,
+    headers: { 'Content-Type': 'application/json' }, body: '{}', timeoutMs: 1000,
+    requestKind: 'campaign_plan', logicalRequestId: 'loopback:final-credit', attemptId,
+    profileFingerprint: 'sha256:host-profile',
+  });
+  const concurrent = await Promise.allSettled([request('last-credit-a'), request('last-credit-b')]);
+  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(concurrent.filter(result => result.status === 'rejected').length, 1);
+  assert.equal(upstreamHits, 1);
+  assert.equal(budget.readManifest().spentPhysicalRequests, 1);
+
+  const modulePath = path.resolve(__dirname, '../tools/phase9-budget.cjs');
+  const code = `const b=require(${JSON.stringify(modulePath)});const m=b.readManifest();let denied=false;` +
+    `try{b.reservePhysicalRequest({owner:'host:restart',requestKind:'probe',attemptId:'after-restart',profileFingerprint:'sha256:host-profile'});}` +
+    `catch(e){denied=/hard cap/.test(e.message);}if(m.spentPhysicalRequests!==1||!denied)process.exit(2);` +
+    `process.stdout.write(JSON.stringify({spent:m.spentPhysicalRequests,denied}));`;
+  const restarted = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', code], { env: { ...process.env,
+      PHASE9_BUDGET_SCOPE_FILE: filePath, PHASE9_BUDGET_SCOPE_CAP: String(cap), PHASE9_BUDGET_SCOPE_ID: scopeId },
+      stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('exit', status => status === 0 ? resolve(stdout) : reject(new Error(`restart probe exited ${status}: ${stderr}`)));
+  });
+  assert.deepEqual(JSON.parse(restarted), { spent: 1, denied: true });
+  assert.equal(upstreamHits, 1);
+  assert.deepEqual(budget.readManifest().physicalDispatchAudit.map(row => row.status), ['completed']);
 });

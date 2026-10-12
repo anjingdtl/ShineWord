@@ -105,6 +105,57 @@ test('interaction operation replays a committed child request across commit/chec
   } finally { db.close(); }
 });
 
+test('ordinary-turn journal releases a definitively pre-dispatch refusal and permits a corrected action', async () => {
+  const { db, journal } = setup();
+  const input = { campaignId: 'c', branchId: 'b1', turnId: 'turn-0001', expectedStateVersion: 0 };
+  try {
+    await assert.rejects(journal.guardTurn(input, async () => {
+      throw new Error('local skill prerequisite is missing');
+    }), /local skill prerequisite/);
+
+    assert.equal((await journal.getOperation('play:b1:turn-0001')).status, 'failed');
+    assert.equal(db.prepare("SELECT state_version FROM branches WHERE branch_id='b1'").get().state_version, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM turns WHERE branch_id='b1'").get().n, 0);
+
+    const retried = await journal.guardTurn(input, async () => 'corrected action accepted');
+    assert.equal(retried, 'corrected action accepted');
+    assert.equal((await journal.getOperation('play:b1:turn-0001')).status, 'completed');
+  } finally { db.close(); }
+});
+
+test('ordinary-turn journal preserves a pause when provider-attempt evidence exists', async () => {
+  const { db, adapter, journal } = setup();
+  try {
+    await adapter.execute(`INSERT INTO llm_request_attempts
+      (attempt_id,logical_request_id,request_kind,branch_id,state_version,model_profile_fingerprint,
+       attempt_no,status,estimated_usage,started_at,finished_at)
+      VALUES ('attempt-1','turn-0001:Planner','planner','b1',0,'profile',1,'succeeded',0,1,2)`);
+
+    await assert.rejects(journal.guardTurn({ campaignId: 'c', branchId: 'b1', turnId: 'turn-0001', expectedStateVersion: 0 }, async () => {
+      throw new Error('provider-backed proposal rejected');
+    }), /provider-backed proposal/);
+
+    assert.equal((await journal.getOperation('play:b1:turn-0001')).status, 'paused_system');
+    assert.equal(await journal.reconcileSafePausedPlayTurnOperations('b1'), 0,
+      'a recorded Planner attempt keeps the interaction paused');
+    assert.equal((await journal.getOperation('play:b1:turn-0001')).status, 'paused_system');
+  } finally { db.close(); }
+});
+
+test('ordinary-turn reconciliation clears only an empty paused operation at the unchanged branch version', async () => {
+  const { db, adapter, journal } = setup();
+  const operationId = 'play:b1:turn-0001';
+  try {
+    await adapter.execute(`INSERT INTO interaction_operations
+      (operation_id,campaign_id,branch_id,operation_kind,status,expected_state_version,fence_token,next_step,max_steps,created_at,updated_at)
+      VALUES (?,'c','b1','play_turn','paused_system',0,1,0,32,'t','t')`, [operationId]);
+
+    assert.equal(await journal.reconcileSafePausedPlayTurnOperations('b1'), 1);
+    assert.equal((await journal.getOperation(operationId)).status, 'failed');
+    assert.equal(db.prepare("SELECT state_version FROM branches WHERE branch_id='b1'").get().state_version, 0);
+  } finally { db.close(); }
+});
+
 test('interaction operation applies the 32-action cap and yields after each four committed steps', async () => {
   const { db, adapter, journal } = setup();
   let yields = 0;

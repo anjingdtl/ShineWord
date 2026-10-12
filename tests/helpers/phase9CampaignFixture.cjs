@@ -9,6 +9,7 @@ const { SqliteSourceStore } = require('../../dist/infra/sqlite/sqliteSourceStore
 const { SqliteTurnStore } = require('../../dist/infra/sqlite/sqliteTurnStore');
 const { SqliteGameStore } = require('../../dist/infra/sqlite/sqliteGameStore');
 const { SqliteNarrativeStore } = require('../../dist/infra/sqlite/sqliteNarrativeStore');
+const { SqliteGuidanceStore } = require('../../dist/infra/sqlite/sqliteGuidanceStore');
 const { SqliteCampaignPlanStore } = require('../../dist/infra/sqlite/sqliteCampaignPlanStore');
 const { publishWorldPackage } = require('../../dist/application/worldPackage/publish');
 const { createCampaign } = require('../../dist/application/campaign/createCampaign');
@@ -152,6 +153,7 @@ async function fixture(options = {}) {
   const turns = new SqliteTurnStore(adapter);
   const game = new SqliteGameStore(adapter);
   const narratives = new SqliteNarrativeStore(adapter);
+  const guidance = options.includeGuidance ? new SqliteGuidanceStore(adapter) : undefined;
   const planStore = new SqliteCampaignPlanStore(adapter);
 
   await worlds.createWorld({ worldId: 'w', title: 'P9', sourceSha256: 'a'.repeat(64), sourceBytes: 100,
@@ -201,7 +203,7 @@ async function fixture(options = {}) {
     rawIntent: '查明青石巷的隐患', normalizedIntent: '查明并解除青石巷的隐患', goalMode: 'declared',
     protagonistBinding: { actorId: 'pc', kind: 'original', name: '旅人' },
     openingAnchor: { worldTimeOrder: 1, locationId: '青石巷' },
-    companionBindings: options.companions ?? [], lengthPreference: 'short', userConstraints: [], requestedCanonTargets: [],
+    companionBindings: options.companions ?? [], lengthPreference: options.lengthPreference ?? 'short', userConstraints: [], requestedCanonTargets: [],
     knowledgePolicy: 'anchor_projection',
     sourceCoverageBinding: { worldId: 'w', packageRevision: published.manifest.revision, coverageWorldTimeOrder: 1, packageContentHash: published.manifest.contentHash },
     createdAt: NOW,
@@ -285,13 +287,13 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
     },
   };
   const session = new CampaignSession(
-    { db: adapter, turns, game, worldStore: worlds, narratives, hashProvider: sha,
+    { db: adapter, turns, game, worldStore: worlds, narratives, ...(guidance ? { guidance } : {}), hashProvider: sha,
       random: options.random ?? { nextIntInclusive: () => 6 } },
     options.provider ?? provider,
     { endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
       capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } },
   );
-  return { db, adapter, worlds, turns, planStore, session, branchId, campaignId: 'c-t' };
+  return { db, adapter, worlds, turns, planStore, guidance, session, branchId, campaignId: 'c-t' };
 }
 
 module.exports = { fixture, candidateModel, baseEntries, SITUATION_ID, NOW };

@@ -12,13 +12,16 @@ import java.nio.charset.StandardCharsets;
 public class TextInput extends Instrumentation {
   private Bundle arguments;
   @Override public void onCreate(Bundle args) { arguments = args; start(); }
-  private AccessibilityNodeInfo find(AccessibilityNodeInfo node) {
+  private AccessibilityNodeInfo find(AccessibilityNodeInfo node, String requestedViewId) {
     if (node == null) return null;
+    String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName();
+    boolean selectedById = requestedViewId != null && (requestedViewId.equals(viewId) || viewId.endsWith("/" + requestedViewId));
+    boolean selectedByFocus = requestedViewId == null && node.isFocused();
     if ("com.shineword.app".contentEquals(node.getPackageName() == null ? "" : node.getPackageName())
         && "android.widget.EditText".contentEquals(node.getClassName() == null ? "" : node.getClassName())
-        && node.isFocused() && node.isEnabled() && !node.isPassword()) return node;
+        && (selectedByFocus || selectedById) && node.isEnabled() && !node.isPassword()) return node;
     for (int i = 0; i < node.getChildCount(); i++) {
-      AccessibilityNodeInfo found = find(node.getChild(i));
+      AccessibilityNodeInfo found = find(node.getChild(i), requestedViewId);
       if (found != null) return found;
     }
     return null;
@@ -32,9 +35,10 @@ public class TextInput extends Instrumentation {
       AccessibilityServiceInfo info = ui.getServiceInfo();
       info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
       ui.setServiceInfo(info);
-      AccessibilityNodeInfo target = find(ui.getRootInActiveWindow());
+      String requestedViewId = arguments.getString("viewId");
+      AccessibilityNodeInfo target = find(ui.getRootInActiveWindow(), requestedViewId);
       if (target == null) for (AccessibilityWindowInfo window : ui.getWindows()) {
-        target = find(window.getRoot());
+        target = find(window.getRoot(), requestedViewId);
         if (target != null) break;
       }
       if (target == null) throw new IllegalStateException("No focused non-password ShineWord text field");

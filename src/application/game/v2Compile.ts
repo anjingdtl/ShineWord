@@ -2,6 +2,7 @@ import type { RollGrade } from '../../domain/rules/types';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { outcomeSetHashFor } from '../campaignPlan/localCompile';
+import { localCompileCampaignBindingHash } from './localCompileReadiness';
 import type { ActionContract, EffectOperation } from '../../domain/turns/types';
 import type { PlannerProposal } from '../../domain/turns/proposal';
 import type { GameStateSnapshot } from '../../domain/state/types';
@@ -83,14 +84,17 @@ export interface CompileProposalInput {
   requestedIntent?: string;
   selectedBaseAction?: AllowedCandidateV1;
   /**
-   * P9 (A11/A13): stable method selected by candidate reference (player tap
-   * or planner-echoed free-input mapping). The LOCAL compiler verifies the id
-   * against the offered methods; stale ids are refused, never silently
-   * re-resolved to a different path.
+   * P9 (A11/A13): stable method selected by an explicit player tap. The LOCAL
+   * compiler verifies the id against the offered methods; stale ids are
+   * refused, never silently re-resolved to a different path. A Planner's
+   * candidateRef is only a suggestion and cannot override the proposed action
+   * shape unless that shape matches the referenced method's first step.
    */
   selectedMethodRef?: { situationId: string; methodId: string };
   /** P9: candidate reference frozen into the contract hash (player choice identity). */
   candidateRef?: string;
+  /** Hash of the currently bound campaign plan/artifacts for an L1 selection. */
+  campaignBindingHash?: string;
 }
 
 export interface CompiledAction {
@@ -160,17 +164,30 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   const methods = input.methods ?? [];
   const requestedIntent = input.requestedIntent ?? input.proposal.intent;
   const normalize = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
-  // P9: a stable selected reference wins over text matching (A11); the id
-  // must be one of the offered methods at this state, else the choice is
-  // stale and refused instead of re-resolved (A13).
-  const ref = input.selectedMethodRef ?? parseMethodRef(input.proposal.candidateRef);
+  // Only a reference explicitly selected by the player can choose the method
+  // shape. A Planner-produced candidateRef is untrusted: it may bind campaign
+  // effects only when its proposal already matches the method's action shape.
+  const explicitRef = input.selectedMethodRef;
+  const plannerRef = explicitRef ? null : parseMethodRef(input.proposal.candidateRef);
   let selected: import("../../domain/situations/types").MethodTemplateV1 | undefined;
-  if (ref) {
-    const index = methods.findIndex((method, i) => method.methodId === ref.methodId
-      && (input.methodSituations?.[i] ?? "") === ref.situationId);
+  let plannerSelectedRef: { situationId: string; methodId: string } | undefined;
+  if (explicitRef) {
+    const index = methods.findIndex((method, i) => method.methodId === explicitRef.methodId
+      && (input.methodSituations?.[i] ?? "") === explicitRef.situationId);
     if (index === -1) throw new ProposalRejectedError('所选路径已不在当前可用办法中，请刷新后重新选择。');
     selected = methods[index]!;
   } else {
+    if (plannerRef) {
+      const index = methods.findIndex((method, i) => method.methodId === plannerRef.methodId
+        && (input.methodSituations?.[i] ?? "") === plannerRef.situationId);
+      const candidate = index >= 0 ? methods[index] : undefined;
+      if (candidate && plannerProposalMatchesMethodShape(input.proposal, candidate, input.state, input.cards)) {
+        selected = candidate;
+        plannerSelectedRef = plannerRef;
+      }
+    }
+  }
+  if (!selected && !explicitRef) {
     const matching = methods.filter(method => normalize(method.firstStep.intent) === normalize(requestedIntent));
     if (matching.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
     selected = matching[0];
@@ -218,13 +235,13 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   // a Planner paraphrase must not replace it in history or recovery.
   compiled.contract.intent = requestedIntent;
   if (methods.length === 0) return compiled;
-  const selectedRef = input.selectedMethodRef ?? parseMethodRef(input.proposal.candidateRef);
+  const selectedRef = input.selectedMethodRef ?? plannerSelectedRef;
   const selectedIndex = selected && methods.includes(selected) ? methods.indexOf(selected) : -1;
   const selectedCandidateRef = selectedRef
     ? `method:${selectedRef.situationId}:${selectedRef.methodId}`
     : (input.candidateRef?.startsWith('method:') ? input.candidateRef : undefined);
   return bindSituationMethod(compiled, methods, input.methodSituations ?? [], input.cards, requestedIntent, input.state,
-    selectedIndex >= 0 ? selectedIndex : undefined, selectedCandidateRef);
+    selectedIndex >= 0 ? selectedIndex : undefined, selectedCandidateRef, input.campaignBindingHash);
 }
 
 function normalizeSkillId(skillId: string): string {
@@ -240,6 +257,45 @@ function parseMethodRef(ref: string | undefined): { situationId: string; methodI
   return { situationId: rest.slice(0, separator), methodId: rest.slice(separator + 1) };
 }
 
+/** A Planner reference may bind effects only when its proposed action already
+ * matches the published method's first-step shape. In particular, a candidate
+ * reference cannot turn a social request into a skill check or substitute a
+ * different checked skill. Explicit UI selections retain the existing local
+ * method compilation path. */
+function plannerProposalMatchesMethodShape(
+  proposal: PlannerProposal,
+  method: import("../../domain/situations/types").MethodTemplateV1,
+  state: GameStateSnapshot,
+  cards: readonly ActorCard[],
+): boolean {
+  const step = method.firstStep;
+  if (proposal.actionKind !== step.actionKind) return false;
+  if (step.actionKind === 'skill_check') {
+    if (!step.skillId || !proposal.skillId
+      || normalizeSkillId(step.skillId) !== normalizeSkillId(proposal.skillId)
+      || proposal.abilityId !== undefined || proposal.destinationId !== undefined) return false;
+  } else if (step.actionKind === 'ability') {
+    if (!step.abilityId || proposal.abilityId !== step.abilityId
+      || proposal.skillId !== undefined || proposal.destinationId !== undefined) return false;
+  } else if (step.actionKind === 'move') {
+    if (!step.destinationId || proposal.destinationId !== step.destinationId
+      || proposal.skillId !== undefined || proposal.abilityId !== undefined) return false;
+  } else if (proposal.skillId !== undefined || proposal.abilityId !== undefined
+    || proposal.destinationId !== undefined) {
+    return false;
+  }
+  if (step.targetEntryId !== undefined && proposal.targetId !== undefined) {
+    const targetId = resolveMethodActor(step.targetEntryId, state, cards);
+    const targetCard = cards.find(card => card.actorId === proposal.targetId);
+    if (!targetId || (proposal.targetId !== targetId && proposal.targetId !== step.targetEntryId
+      && targetCard?.templateId !== step.targetEntryId
+      && proposal.targetId !== `actor-${step.targetEntryId.replace(/^npc-/, '')}`)) return false;
+  } else if (step.targetEntryId === undefined && proposal.targetId !== undefined) {
+    return false;
+  }
+  return true;
+}
+
 function bindSituationMethod(
   compiled: CompiledAction,
   methods: readonly import('../../domain/situations/types').MethodTemplateV1[],
@@ -249,6 +305,7 @@ function bindSituationMethod(
   state: GameStateSnapshot,
   selectedIndex?: number,
   candidateRef?: string,
+  campaignBindingHash?: string,
 ): CompiledAction {
   const { contract } = compiled;
   const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
@@ -295,7 +352,7 @@ function bindSituationMethod(
         // Model-drift alias: campaign templates may name the protagonist
         // generically; resolve to the acting card before template lookup.
         const actingCard = cards.find(item => item.actorId === actingActorId);
-        if (actorId === 'player' || actorId === '玩家' || actorId === 'pc' || actorId === 'self'
+        if (actorId === 'player' || actorId === '玩家' || actorId === 'pc' || actorId === 'self' || actorId === '__player__'
           || (actingCard && actorId === actingCard.name)) return actingActorId;
         return resolveActorReference(actorId);
       };
@@ -330,7 +387,11 @@ function bindSituationMethod(
     const withMethod: ActionContract = {
       ...contract,
       outcomes,
-      methodRef: { situationId, methodId: method.methodId, ...(outcomeSetHash ? { outcomeSetHash } : {}) },
+      methodRef: { situationId, methodId: method.methodId, ...(outcomeSetHash ? { outcomeSetHash } : {}),
+        ...(campaignBindingHash && method.difficultyPolicy && method.evidencePolicy && method.ruleBindingHash
+          ? { campaignBindingHash }
+          : method.difficultyPolicy && method.evidencePolicy && method.ruleBindingHash
+            ? { campaignBindingHash: localCompileCampaignBindingHash(state, method) } : {}) },
       ...(candidateRef ? { candidateRef } : {}),
       ...(campaignEffects ? { campaignEffects } : {}),
     };

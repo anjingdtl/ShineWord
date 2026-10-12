@@ -5,7 +5,7 @@ import type {
   CampaignPlanV1,
 } from './types';
 import { CAMPAIGN_PLAN_COMPILER_VERSION, CAMPAIGN_PLAN_SCHEMA } from './types';
-import type { SituationCondition } from '../situations/types';
+import type { MethodTemplateV1, SituationCondition } from '../situations/types';
 import { validateConditionShape } from '../situations/conditions';
 import { committedSituationMarker, producesSituationMarker, ordinaryCompletionBeforeExit, type CompletionBaseline } from './ordinaryCompletion';
 import { actorReferenceInScope as actorInScope } from './actorReferences';
@@ -62,6 +62,57 @@ function artifactEffects(artifact: CampaignContentArtifactV1): import('./types')
 function promiseRefs(ctx: PlanValidationContext, artifact: CampaignContentArtifactV1): NonNullable<PlanValidationContext['knownPromiseRefs']> {
   return [...(ctx.knownPromiseRefs ?? []), ...artifactEffects(artifact).flatMap(e => e.template === 'promise_create'
     ? [{ situationId: e.situationId, promiseId: e.promiseId }] : [])];
+}
+
+function validateMethodCompileBinding(
+  method: MethodTemplateV1,
+  plan: CampaignPlanV1,
+  ctx: PlanValidationContext,
+  errors: string[],
+  prefix: string,
+): void {
+  const hasAny = method.difficultyPolicy !== undefined || method.evidencePolicy !== undefined
+    || method.evidenceAllowlist !== undefined || method.ruleBindingHash !== undefined;
+  if (!hasAny) return; // Historical methods remain valid and use L2.
+  if (!method.difficultyPolicy || !method.evidencePolicy || !Array.isArray(method.evidenceAllowlist)
+    || typeof method.ruleBindingHash !== 'string') {
+    errors.push(`${prefix}: compile policies, allowlist and rule binding must be present together.`);
+    return;
+  }
+  if (method.ruleBindingHash !== plan.ruleBindingHash || !/^[a-f0-9]{64}$/i.test(method.ruleBindingHash)) {
+    errors.push(`${prefix}.ruleBindingHash: must match the compiled plan rule binding.`);
+  }
+  const difficulty = method.difficultyPolicy as unknown as Record<string, unknown>;
+  if (difficulty.kind === 'fixed') {
+    if (!['simple', 'normal', 'challenging', 'peak'].includes(String(difficulty.band))
+      || Object.keys(difficulty).some(key => !['kind', 'band'].includes(key))) {
+      errors.push(`${prefix}.difficultyPolicy: invalid fixed difficulty.`);
+    }
+  } else if (difficulty.kind !== 'planner_required' || Object.keys(difficulty).some(key => key !== 'kind')) {
+    errors.push(`${prefix}.difficultyPolicy: invalid policy kind.`);
+  }
+  const allowlist = method.evidenceAllowlist;
+  if (allowlist.length > 16 || allowlist.some(id => typeof id !== 'string' || !id.trim())
+    || new Set(allowlist).size !== allowlist.length) {
+    errors.push(`${prefix}.evidenceAllowlist: must contain at most 16 unique ids.`);
+  }
+  for (const id of allowlist) {
+    if (!ctx.visibleWorldEntryIds.has(id) && !ctx.campaignKnowledgeEntryIds?.has(id)) {
+      errors.push(`${prefix}.evidenceAllowlist: ${id} is outside the visible published content.`);
+    }
+  }
+  const evidence = method.evidencePolicy as unknown as Record<string, unknown>;
+  if (evidence.kind === 'fixed') {
+    const ids = evidence.evidenceIds;
+    if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== 'string' || !id.trim())
+      || new Set(ids).size !== ids.length || Object.keys(evidence).some(key => !['kind', 'evidenceIds'].includes(key))) {
+      errors.push(`${prefix}.evidencePolicy: fixed evidenceIds must be a unique list (empty is explicit no-evidence).`);
+    } else if (ids.some(id => !allowlist.includes(String(id)))) {
+      errors.push(`${prefix}.evidencePolicy: every fixed id must be in evidenceAllowlist.`);
+    }
+  } else if (evidence.kind !== 'planner_required' || Object.keys(evidence).some(key => key !== 'kind')) {
+    errors.push(`${prefix}.evidencePolicy: invalid policy kind.`);
+  }
 }
 
 /** New current content cannot rely on a local state change with no producer.
@@ -560,6 +611,7 @@ export function validateContentArtifact(
   // Situation transitions must reference artifact or world situations only.
   for (const situation of artifact.situations) {
     for (const method of situation.definition.methods ?? []) {
+      validateMethodCompileBinding(method, plan, ctx, errors, `method ${method.methodId}`);
       if (method.requires.knowledgeEntryId && !knownKnowledge(method.requires.knowledgeEntryId)) {
         errors.push(`artifact: method ${method.methodId} requires unknown knowledge ${method.requires.knowledgeEntryId}.`);
       }

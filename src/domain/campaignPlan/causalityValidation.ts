@@ -152,6 +152,88 @@ function hasPositiveConsumer(condition: SituationCondition, effect: CampaignEffe
   return conditionLeaves(condition).some(({ leaf, positive }) => positive && effectMatchesCondition(effect, leaf));
 }
 
+function conditionConsumesEvent(condition: SituationCondition | null | undefined, eventType: string): boolean {
+  if (!condition) return false;
+  return conditionLeaves(condition).some(({ leaf, positive }) => positive
+    && leaf.kind === 'committed_event' && leaf.eventType === eventType);
+}
+
+function reachablePublicNodes(plan: CampaignPlanV1, sourceNodeId: string): Set<string> {
+  const byId = new Map(plan.nodes.map(node => [node.nodeId, node] as const));
+  const source = byId.get(sourceNodeId);
+  if (!source) return new Set();
+  const reached = new Set<string>();
+  const queue = [...source.nextNodeIds, ...source.alternativeNodeIds];
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    if (reached.has(nodeId) || nodeId === sourceNodeId) continue;
+    const node = byId.get(nodeId);
+    if (!node) continue;
+    reached.add(nodeId);
+    queue.push(...node.nextNodeIds, ...node.alternativeNodeIds);
+    queue.push(...plan.nodes.filter(candidate => candidate.statusDependencies.includes(nodeId)).map(candidate => candidate.nodeId));
+  }
+  return new Set([...reached].filter(nodeId => byId.get(nodeId)?.visibility === 'public'));
+}
+
+/**
+ * A method whose ordinary success only appends a record_event with no public
+ * campaign consumer cannot change the player's situation. Keep such methods
+ * out of generated plans and runtime guidance; otherwise they can be selected
+ * repeatedly while the campaign remains unchanged.
+ */
+export function hasUnconsumedSuccessEventMethod(
+  plan: CampaignPlanV1,
+  artifacts: readonly CampaignContentArtifactV1[],
+  situationId: string,
+  method: import('../situations/types').MethodTemplateV1,
+): boolean {
+  if ((method.successEffects?.length ?? 0) > 0 || (method.onSuccess?.length ?? 0) > 0) return false;
+  for (const grade of ['success', 'full_success'] as const) {
+    const effects = method.outcomeTemplates?.[grade]?.effects ?? [];
+    if (effects.length === 0 || effects.some(effect => effect.template !== 'record_event')) continue;
+    const eventTypes = effects.flatMap(effect => effect.template === 'record_event' ? [effect.eventType] : []);
+    if (eventTypes.length > 0 && eventTypes.some(eventType =>
+      hasUnconsumedSuccessEventType(plan, artifacts, situationId, eventType))) return true;
+  }
+  return false;
+}
+
+/** Whether a recorded event has no positive consumer in the public campaign path. */
+export function hasUnconsumedSuccessEventType(
+  plan: CampaignPlanV1,
+  artifacts: readonly CampaignContentArtifactV1[],
+  situationId: string,
+  eventType: string,
+): boolean {
+  const sourceNode = plan.nodes.find(node => node.situationRef === situationId && node.visibility === 'public');
+  const downstream = sourceNode ? reachablePublicNodes(plan, sourceNode.nodeId) : new Set<string>();
+  const downstreamNodes = plan.nodes.filter(node => downstream.has(node.nodeId));
+  const hasConsumer = Boolean(sourceNode
+    && (conditionConsumesEvent(sourceNode.completion, eventType)
+      // An authored success effect can intentionally trigger this node's
+      // failure path. That is a durable campaign transition, even though it
+      // does not satisfy a positive completion goal.
+      || conditionConsumesEvent(sourceNode.failure, eventType)
+      || downstreamNodes.some(node => (node.activation !== null && conditionConsumesEvent(node.activation, eventType))
+        || conditionConsumesEvent(node.completion, eventType)
+        || conditionConsumesEvent(node.failure, eventType))
+      || plan.possibleEndings.some(ending => conditionConsumesEvent(ending.condition, eventType))
+      || artifacts.some(artifact => artifact.consequenceTemplates.some(consequence =>
+        conditionConsumesEvent(consequence.triggerCondition, eventType)))));
+  return !hasConsumer;
+}
+
+export function validateUnconsumedSuccessEventMethods(
+  plan: CampaignPlanV1,
+  artifact: CampaignContentArtifactV1,
+): string[] {
+  return artifact.situations.flatMap(situation => situation.definition.methods.flatMap(method =>
+    hasUnconsumedSuccessEventMethod(plan, [artifact], situation.entryId, method)
+      ? [`method ${method.methodId}: an ordinary-success event must be consumed by this or a reachable public campaign goal, or accompany a durable state effect.`]
+      : []));
+}
+
 function canonical(value: unknown): string {
   const sort = (item: unknown): unknown => Array.isArray(item) ? item.map(sort)
     : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item as Record<string, unknown>)
@@ -282,6 +364,7 @@ export function validateLongCampaignConsequenceCausality(plan: CampaignPlanV1, a
 export function validateCampaignPlanCausality(plan: CampaignPlanV1, artifact: CampaignContentArtifactV1): string[] {
   return [
     ...validateLaterStageCompletionIsolation(plan),
+    ...validateUnconsumedSuccessEventMethods(plan, artifact),
     ...validateLongCampaignConsequenceCausality(plan, artifact),
   ];
 }

@@ -1,8 +1,8 @@
 /**
  * Phase 9 turn-consumption tests (P9-4): campaign methods flow through the
  * production session (playTurn → v2Compile → prepared reduction → commit).
- * Proves: stable candidate binding for taps AND paraphrased free input (A11),
- * stale-reference refusal (A13), four-grade frozen outcome templates applied
+ * Proves: stable candidate binding for taps AND shape-compatible free input (A11),
+ * stale player-reference refusal (A13), four-grade frozen outcome templates applied
  * per grade (A14), route-specific authoritative differences (A10), no_change
  * for unrelated actions, stage completion + rewards + deferred consequences
  * inside ONE commit (A16/A19).
@@ -14,9 +14,53 @@ const { DatabaseSync } = require('node:sqlite');
 const { BUILTIN_MIGRATIONS } = require('../dist/infra/sqlite/builtinMigrations');
 
 const { compileProposal } = require('../dist/application/game/v2Compile');
+const { assertNarrativeDurationFitsClock, buildNarratorWorldClock } = require('../dist/application/game/v2Turn');
 
 
 const { fixture, candidateModel, SITUATION_ID } = require('./helpers/phase9CampaignFixture.cjs');
+
+test('Narrator clock includes the full reduced action duration and outcome clock effects', () => {
+  const state = { clockSeconds: 0, clockMinutes: 0 };
+  const contract = {
+    timeCostMinutes: 10,
+    outcomes: {
+      full_success: { effects: [] },
+      success: { effects: [] },
+      failure: { effects: [{ op: 'advanceClock', minutes: 120 }] },
+      severe_failure: { effects: [] },
+    },
+  };
+  const projected = buildNarratorWorldClock(state, contract, 'failure');
+  assert.deepEqual(projected, {
+    start: '第1日 00:00', end: '第1日 02:10', elapsedSeconds: 7800, elapsedMinutes: 130,
+  }, 'without a prepared campaign projection, the frozen base cost and clock effects determine the full interval');
+
+  const prepared = { nextState: { clockSeconds: 7800, clockMinutes: 130 } };
+  assert.deepEqual(buildNarratorWorldClock(state, contract, 'failure', prepared), projected,
+    'the prepared state is authoritative when the full local reduction is available');
+});
+
+test('Narrator rejects an explicit full-day claim when the frozen turn spans only a few hours', () => {
+  const state = { clockSeconds: 17 * 60 * 60 + 50 * 60, clockMinutes: 1070 };
+  const contract = {
+    timeCostMinutes: 10,
+    outcomes: {
+      full_success: { effects: [] },
+      success: { effects: [] },
+      failure: { effects: [{ op: 'advanceClock', minutes: 240 }] },
+      severe_failure: { effects: [] },
+    },
+  };
+  const worldClock = buildNarratorWorldClock(state, contract, 'failure');
+  assert.equal(worldClock.elapsedMinutes, 250);
+  assert.throws(
+    () => assertNarrativeDurationFitsClock('我整整调查了一天，仍然没有结论。', worldClock),
+    /duration claim exceeds authoritative worldClock/,
+  );
+  assert.doesNotThrow(
+    () => assertNarrativeDurationFitsClock('我花了几个小时核对材料。', worldClock),
+  );
+});
 
 test('P9-4: paraphrased free input and exact taps bind the SAME method with identical frozen outcomes (A11/A14)', async () => {
   const h = await fixture();
@@ -90,11 +134,14 @@ test('P9-4: the alternate route resolves the stage, grants rewards and schedules
     const newProgress = idleState.campaignRuntime.recentProgressLines.filter(line => line.atStateVersion === idleState.stateVersion);
     assert.equal(newProgress.length, 0, 'irrelevant action adds no progress lines');
 
-    // Stale route: the resolved situation no longer offers the method.
-    await assert.rejects(
-      () => h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '再向林凡打听一次青石巷的情况' }),
-      /已不在当前可用办法|多个办法|局面已经变化/,
-      'asking through the stale path after resolution is refused or re-assessed, never silently re-run (A13)');
+    // A freeform repeat after resolution is re-assessed as a generic action;
+    // only a stale method the player explicitly selected must be refused.
+    const repeatedIntent = '再向林凡打听一次青石巷的情况';
+    const repeated = await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: repeatedIntent });
+    const repeatedContract = JSON.parse((await h.turns.getStagedTurn(h.branchId, repeated.turnId)).actionContractJson);
+    assert.equal(repeatedContract.intent, repeatedIntent);
+    assert.equal(repeatedContract.methodRef, undefined,
+      'a stale Planner echo cannot silently rebind a method after its situation resolved');
   } finally {
     h.db.close();
   }
@@ -131,4 +178,39 @@ test('P9-4: compile refuses a selected method id that is not offered at this sta
     methods: [{ ...method, outcomeTemplates: undefined }], methodSituations: [SITUATION_ID],
   });
   assert.equal(bound.contract.methodRef.methodId, method.methodId);
+});
+
+test('Planner candidateRef cannot replace a free-input action with another method’s skill (A11)', () => {
+  const method = candidateModel().firstSituation.methods.find(item => item.methodId === 'sweep');
+  const card = {
+    actorId: 'pc', name: '旅人', kind: 'original', controller: 'player',
+    attributes: { physique: 2, agility: 2, insight: 2, knowledge: 2, willpower: 2, social: 2 },
+    skills: { diplomacy: 'trained' }, abilities: [], preparedAbilities: [],
+    resourceMax: { stamina: 10, hp: 10 }, defense: 10, powerTier: 'ordinary',
+    rulesetId: 'shineword-core', rulesetVersion: '0.4.0', worldId: 'w', worldPackageRevision: 1, cardRevision: 1,
+  };
+  const intent = '我带着账目摘要向货运记录员申请查看公开凭据';
+  const proposal = {
+    proposalVersion: '2.0', turnId: 'turn-freeform', expectedStateVersion: 0, actorId: 'pc',
+    actionKind: 'skill_check', skillId: 'skill-diplomacy', difficultyBand: 'normal', evidenceIds: [], intent,
+    // This is a Planner suggestion, not a method the player tapped.
+    candidateRef: `method:${SITUATION_ID}:sweep`,
+  };
+  const compiled = compileProposal({
+    proposal, requestedIntent: intent, actingCard: card, cards: [card],
+    catalog: {
+      'skill-observation': { name: '观察', description: 'd', attribute: 'insight', allowUntrained: true, powerTier: 'ordinary', usage: 'knowledge' },
+      'skill-diplomacy': { name: '外交', description: 'd', attribute: 'social', allowUntrained: true, powerTier: 'ordinary', usage: 'social' },
+    },
+    abilities: new Map(), scenes: [], constraints: [],
+    state: { branchId: 'b', stateVersion: 0, clockMinutes: 0,
+      actors: { pc: { actorId: 'pc', locationId: 'l', resources: {}, conditions: [] } }, itemOwners: {}, encounters: [] },
+    methods: [method], methodSituations: [SITUATION_ID],
+  });
+
+  assert.equal(compiled.contract.actionType, 'skill_check');
+  assert.equal(compiled.contract.skillId, 'diplomacy', 'the Planner proposal shape is preserved after id normalization');
+  assert.equal(compiled.contract.intent, intent, 'the player intent remains the action being resolved');
+  assert.equal(compiled.contract.methodRef, undefined, 'mismatched Planner refs cannot import another method’s effects');
+  assert.equal(compiled.contract.campaignEffects, undefined);
 });

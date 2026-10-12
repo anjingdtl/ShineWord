@@ -39,6 +39,7 @@ import { maintainSegmentContent, getSegmentReadiness, releaseRewoundSegmentDeman
 import { tryActivateStagePackages, checkStageTriggers } from '../../../../sourceImport';
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import type { GuidanceStepView, TurnGuidanceV1 } from '../../../../../../src/application/guidance/types';
+import { resolveRecoverableGuidanceChoice } from '../../../../../../src/application/guidance/recoveredChoice';
 import type { PlayTurnOptions } from '../../../../../../src/application/campaign/session';
 import type { CampaignPlanUnknownReplayPreview } from '../../../../../../src/application/campaignPlan/unknownReplayRecovery';
 import { getPlayUiProjection } from '../../../../playProjection';
@@ -182,12 +183,15 @@ export function usePlayController(): PlayController {
   useEffect(() => {
     if (!profile || busy || recovery || !projection || replanRunning.current || !foreground.current) return;
     replanRunning.current = true;
+    setNotice('后续主线准备中…');
     void (async () => {
       try {
         const session = await createSession(profile, await buildProvider(profile));
         const status = await session.runCampaignReplan(campaignId, branchId, { automatic: true });
         if (status === 'adopted' && mounted.current && activeBranch.current === branchId) {
           setNotice('后续主线已根据最新局势准备。'); await refresh();
+        } else if (mounted.current && activeBranch.current === branchId) {
+          setNotice(status === 'stale' ? '局势已变化，本次主线准备结果已作废。' : null);
         }
       } catch {
         if (mounted.current && activeBranch.current === branchId) setNotice('后续主线准备尚未完成，可以继续探索或在主线面板恢复。');
@@ -426,16 +430,27 @@ export function usePlayController(): PlayController {
     setNotice('正在展开你的行动…');
     try {
       let draftVersion: number | null = null;
+      let pendingRecovery: PlayRecovery | null = null;
       if (!activeEncounter) {
-        const pending = await loadPlayRecovery(campaignId, branchId);
-        if (pending?.unknownAttemptIds.length) {
+        pendingRecovery = await loadPlayRecovery(campaignId, branchId);
+        if (pendingRecovery?.unknownAttemptIds.length) {
           if (!approveRecovery) throw new Error('上次生成结果未知，请使用「确认重试这一回合」恢复原行动。');
-          await acknowledgePlayReplay(campaignId, branchId, pending.expectedStateVersion, pending.unknownAttemptIds);
+          await acknowledgePlayReplay(campaignId, branchId, pendingRecovery.expectedStateVersion, pendingRecovery.unknownAttemptIds);
         }
         draftVersion = await savePlayIntentDraft(campaignId, branchId, value);
       }
+      const effectiveGuidanceChoice = guidanceChoice ?? (!approveRecovery && !activeEncounter
+        ? resolveRecoverableGuidanceChoice({
+            campaignId,
+            branchId,
+            stateVersion: projection?.stateVersion,
+            intent: value,
+            guidance,
+            recovery: pendingRecovery,
+          }) ?? undefined
+        : undefined);
       const session = await createSession(profile, await buildProvider(profile));
-      if (guidanceChoice) await session.assertGuidanceChoiceCurrent(branchId, guidanceChoice, value);
+      if (effectiveGuidanceChoice) await session.assertGuidanceChoiceCurrent(branchId, effectiveGuidanceChoice, value);
       if (activeEncounter) {
         const proposal = proposeEncounterIntent(value, activeEncounter);
         if (proposal.kind === 'clarify') {
@@ -483,10 +498,10 @@ export function usePlayController(): PlayController {
       if (projection) {
         const prepared = await maintainSegmentContent({ worldId: projection.worldId, campaignId, branchId,
           stateVersion: projection.stateVersion, locationId: projection.player?.locationId ?? null, intent: value,
-          publishedChoice: guidanceChoice });
+          publishedChoice: effectiveGuidanceChoice });
         if (prepared.pending) { setNotice(prepared.message); await refresh(); return; }
       }
-      const result = await session.playTurn({ campaignId, branchId, intent: value, guidanceChoice });
+      const result = await session.playTurn({ campaignId, branchId, intent: value, guidanceChoice: effectiveGuidanceChoice });
       if (draftVersion !== null) await clearPlayIntentDraft(branchId, draftVersion);
       setIntent(previous => previous === value ? '' : previous);
       setNotice(null);

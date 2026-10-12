@@ -2,12 +2,106 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, candidateModel, NOW } = require('./helpers/phase9CampaignFixture.cjs');
 const { buildPlanningContext } = require('../dist/application/campaignPlan/planningService');
-const { buildPlanRequestMaterials } = require('../dist/application/campaignPlan/generationService');
+const { buildPlanRequestMaterials, buildStructuralRepairGuidance } = require('../dist/application/campaignPlan/generationService');
 const { compileCampaignPlan } = require('../dist/application/campaignPlan/localCompile');
 const { parseCampaignPlanCandidate } = require('../dist/application/campaignPlan/candidateModel');
 const { validateCampaignPlan, validateContentArtifact } = require('../dist/domain/campaignPlan/planValidation');
 
 const planningArgs = { anchorTitle: '开篇', playerName: '旅人', openingGoalSuggestions: [] };
+
+test('phase 9 causal repair guidance names valid distinct required-main triggers and consumers', () => {
+  const candidate = {
+    stages: [
+      { nodeId: 'stage-1', role: 'main', activation: null, dependsOn: [] },
+      { nodeId: 'stage-2', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-1' }, dependsOn: ['stage-1'] },
+      { nodeId: 'stage-3', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-2' }, dependsOn: ['stage-2'] },
+      { nodeId: 'stage-4', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-3' }, dependsOn: ['stage-3'] },
+      { nodeId: 'optional-tail', role: 'optional', activation: { kind: 'node_succeeded', nodeId: 'stage-4' }, dependsOn: ['stage-4'] },
+    ],
+    firstSituation: { methods: [{ methodId: 'opening-action', outcomes: { success: { effects: [
+      { template: 'schedule_consequence', consequenceId: 'c1' },
+      { template: 'schedule_consequence', consequenceId: 'c2' },
+    ] } } }] },
+    consequences: [
+      { consequenceId: 'c1', trigger: { kind: 'node_succeeded', nodeId: 'stage-4' },
+        effects: [{ template: 'grant_knowledge', entryId: 'knowledge-1' }] },
+      { consequenceId: 'c2', trigger: { kind: 'node_succeeded', nodeId: 'stage-4' },
+        effects: [{ template: 'grant_knowledge', entryId: 'knowledge-2' }] },
+    ],
+  };
+  const guidance = buildStructuralRepairGuidance([
+    'consequence c2: long consequences need distinct triggers.',
+    'consequence c1: no later stage or ending consumes its authoritative effect.',
+    'consequence c2: no later stage or ending consumes its authoritative effect.',
+    'consequence c1: trigger must wait for a required main stage at least two stages after its scheduling action on every trigger path.',
+  ], candidate);
+
+  assert.match(guidance, /consequence c2；与其重复的 consequence ID：c1/);
+  assert.match(guidance, /当前可用的不同 trigger nodeId：stage-3/);
+  assert.doesNotMatch(guidance, /不同 trigger nodeId：[^。]*stage-2/);
+  assert.match(guidance, /新增 role="main"/);
+  assert.match(guidance, /dependsOn 硬依赖 trigger 节点/);
+  assert.match(guidance, /knowledge_known/);
+  assert.match(guidance, /required main nodeId（距排程节点至少两段）：stage-3, stage-4/);
+  assert.doesNotMatch(guidance, /距排程节点至少两段）：[^。]*optional-tail/);
+});
+
+test('phase 9 co-scheduling repair guidance joins mutually exclusive schedulers on one success path', () => {
+  const candidate = {
+    firstSituation: { methods: [
+      { methodId: 'method-a', outcomes: { success: { effects: [{ template: 'schedule_consequence', consequenceId: 'c1' }] } } },
+      { methodId: 'method-b', outcomes: { success: { effects: [{ template: 'schedule_consequence', consequenceId: 'c2' }] } } },
+    ] },
+    consequences: [{ consequenceId: 'c1' }, { consequenceId: 'c2' }],
+  };
+  const guidance = buildStructuralRepairGuidance([
+    'long plan: at least two delayed consequences must be co-schedulable in one journey (the same successful outcome or sequentially reachable required main stages); alternative methods or outcome grades cannot jointly schedule them.',
+  ], candidate);
+  assert.match(guidance, /c1, c2/);
+  assert.match(guidance, /同一个 firstSituation method 的同一个 success 或 full_success effects 数组/);
+  assert.match(guidance, /不得把它们拆到互斥方法或互斥 outcome grade/);
+});
+
+test('phase 9 repair guidance maps unknown knowledge entries to bounded clue aliases', () => {
+  const candidate = { clues: [{ clueId: 'clue-ledger-proof', title: '核账线索', text: '一段已获授权的合成线索内容。' }] };
+  const guidance = buildStructuralRepairGuidance([
+    'artifact: grant_knowledge references unknown entry knowledge-offscope-a.',
+    'artifact: grant_knowledge references unknown entry knowledge-offscope-a.',
+    'consequence: grant_knowledge references unknown entry knowledge-offscope-b.',
+  ], candidate);
+
+  assert.match(guidance, /knowledge-offscope-a, knowledge-offscope-b/);
+  assert.match(guidance, /当前已声明的 clues 别名：clue-ledger-proof/);
+  assert.match(guidance, /在顶层 clues 中定义唯一 clueId/);
+  assert.match(guidance, /提示中逐字列出的目录 ID/);
+  assert.match(guidance, /不得补造世界目录 ID/);
+  assert.equal((guidance.match(/knowledge-offscope-a/g) ?? []).length, 1);
+});
+
+test('phase 9 stage-content repair does not recommend clue aliases that the projection discards', () => {
+  const candidate = { clues: [{ clueId: 'clue-stage-only', title: '阶段线索', text: '仅用于完整候选的线索。' }] };
+  const guidance = buildStructuralRepairGuidance([
+    'artifact: grant_knowledge references unknown entry knowledge-stage-only.',
+  ], candidate, { authoredCluesAllowed: false });
+
+  assert.match(guidance, /单阶段内容生成/);
+  assert.match(guidance, /顶层 clues 会被裁剪且不会保存/);
+  assert.match(guidance, /冻结资料中逐字列出的目录 ID/);
+  assert.match(guidance, /移除该 grant_knowledge 效果/);
+  assert.doesNotMatch(guidance, /定义唯一 clueId/);
+  assert.doesNotMatch(guidance, /clue-stage-only/);
+});
+
+test('phase 9 repair guidance resolves out-of-scope action targets from the current actor whitelist', () => {
+  const guidance = buildStructuralRepairGuidance([
+    'method inspect-gate: target actor-offscreen-npc not in the opening scope.',
+  ], { firstSituation: { methods: [{ methodId: 'inspect-gate' }] } });
+
+  assert.match(guidance, /当前行动对象范围内/);
+  assert.match(guidance, /当前在场人物.*白名单/);
+  assert.match(guidance, /删除 firstStep\.targetEntryId/);
+  assert.match(guidance, /不得猜测、补造/);
+});
 
 function validationContext(ctx, artifact) {
   return {
@@ -36,6 +130,11 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
   try {
     const { intent } = await h.planStore.getSetup('setup-t');
     const planning = await buildPlanningContext({ worldStore: h.worlds, intent, protagonistSkills: ['skill-observation'] });
+    const openingScene = planning.visibleEntries.find(entry => entry.entryId === 'scene-alley');
+    assert.ok(openingScene);
+    openingScene.definition.clues = ['clue-opening-visible'];
+    planning.visibleEntries.push({ ...openingScene, entryId: 'scene-offstage',
+      definition: { ...openingScene.definition, locationId: '别处', clues: ['clue-offstage'] } });
     const materials = buildPlanRequestMaterials({ intent, ctx: planning.ctx, visibleEntries: planning.visibleEntries,
       worldTitle: planning.worldTitle, ...planningArgs });
     assert.match(materials.system, /\{"kind":"node_succeeded","nodeId":"stage-2"\}/);
@@ -48,6 +147,7 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /事实 ID 与目录条目 ID 是两个独立命名空间/);
     assert.match(materials.system, /把 factId 当 entryId/);
     assert.match(materials.system, /初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实/);
+    assert.match(materials.system, /evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选/);
     assert.match(materials.system, /至少设计两个 trigger 和权威效果各不相同、且能在同一条可达玩家旅程中被排程的持续后果/);
     assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
     assert.match(materials.system, /trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功/);
@@ -61,6 +161,9 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /不得把被关押人物写成酒馆交谈对象/);
     assert.match(materials.user, /唯一允许填写到 stages\/clues\.provenance\.sourceFactIds 的原著事实 ID/);
     assert.match(materials.user, /唯一允许填写到 clues\.sourceEntryIds 的世界目录条目 ID/);
+    assert.match(materials.user, /当前开局场景可绑定的证据 ID/);
+    assert.ok(materials.user.includes('["clue-opening-visible"]'), 'prompt gives exact evidence IDs from the current opening scene');
+    assert.equal(materials.user.includes('clue-offstage'), false, 'prompt excludes evidence from other scenes');
     assert.deepEqual([...planning.ctx.availableFactIds].sort(), planning.ctx.openingFacts.map(fact => fact.factId).sort(),
       'the compiler must accept only source facts actually included in the frozen model input');
     for (const entry of planning.visibleEntries) assert.ok(materials.user.includes(entry.entryId), `catalog id must be explicit: ${entry.entryId}`);

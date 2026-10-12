@@ -156,11 +156,13 @@ export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidance
 
   // Fill from local candidates so the player always has real choices.
   if (packet) {
-    // Keep a currently executable mainline route visible even when all model
-    // suggestions discuss generic exploration. Assessment remains local.
-    const mainline = packet.preferredSituationId && packet.allowedCandidates.find(candidate =>
-      candidate.situationId === packet.preferredSituationId && candidate.availability === 'available');
-    if (mainline && !steps.some(step => step.situationId === packet.preferredSituationId && step.availability === 'available')) {
+    // Keep the locally preferred mainline route visible, including its
+    // preparation blockers, even when model suggestions fill the display cap.
+    const mainline = packet.allowedCandidates.find(candidate =>
+      candidate.ref === packet.preferredCandidateRef)
+      ?? (packet.preferredSituationId && packet.allowedCandidates.find(candidate =>
+        candidate.situationId === packet.preferredSituationId && candidate.availability === 'available'));
+    if (mainline && !steps.some(step => step.candidateRef === mainline.ref)) {
       const outcome = validateLlmStep({ candidateRef: mainline.ref, title: mainline.title,
         rationale: mainline.goal, tradeoffs: mainline.tradeoffs, firstStepIntent: mainline.firstStepIntent }, packet, input.blockedNames);
       if (outcome) {
@@ -189,6 +191,11 @@ export function assembleTurnGuidance(input: GuidanceAssemblyInput): TurnGuidance
         ...(allowed.blockers.length > 0 ? { blockers: allowed.blockers } : {}),
       });
     }
+  }
+  if (packet && steps.length > 1 && (packet.preferredCandidateRef || packet.failedCandidateRef)) {
+    const rank = (step: GuidanceStepView): number => step.candidateRef === packet.preferredCandidateRef ? 0
+      : step.candidateRef === packet.failedCandidateRef ? 2 : 1;
+    steps.sort((a, b) => rank(a) - rank(b));
   }
   if (steps.length === 0) {
     degraded = true;

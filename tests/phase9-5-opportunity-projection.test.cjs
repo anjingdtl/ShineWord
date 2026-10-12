@@ -4,8 +4,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, baseEntries, SITUATION_ID } = require('./helpers/phase9CampaignFixture.cjs');
 const { projectNarrativeOpportunities } = require('../dist/application/campaignPlan/opportunityProjection');
+const { validateUnconsumedSuccessEventMethods } = require('../dist/domain/campaignPlan/causalityValidation');
 const { campaignSituationEntries } = require('../dist/application/campaignPlan/contentResolver');
 const { collectAllowedCandidates } = require('../dist/application/guidance/candidates');
+const { buildSituationPacket } = require('../dist/application/guidance/packet');
+const { assembleTurnGuidance } = require('../dist/application/guidance/validate');
 
 async function projectionContext(h) {
   const state = await h.turns.getState(h.branchId);
@@ -46,6 +49,158 @@ test('M2 projection discovers the active public node and preserves all authored 
   assert.deepEqual(opportunity.routes.map(route => route.methodId), ['sweep', 'ask-lin']);
   assert.equal(opportunity.routes.every(route => route.available), true);
   assert.equal(JSON.stringify(context.state), before, 'projection is read-only');
+});
+
+test('M2 projection retains a bound situation artifact across a plan-only replan revision', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const plan = structuredClone(context.plan);
+  plan.revision += 1;
+  plan.contentHash = 'replanned-content-hash';
+  state.campaignRuntime.planBinding = {
+    ...state.campaignRuntime.planBinding,
+    revision: plan.revision,
+    contentHash: plan.contentHash,
+  };
+
+  const projection = projectNarrativeOpportunities({ ...context, state, plan });
+
+  assert.equal(context.artifacts[0].planRevision, plan.revision - 1,
+    'the retained authored content belongs to its immutable source revision');
+  assert.ok(plan.contentArtifactRefs.includes(context.artifacts[0].artifactId),
+    'the new plan revision explicitly retains the artifact reference');
+  assert.equal(projection.status, 'ready');
+  assert.equal(projection.primarySituationId, SITUATION_ID);
+  assert.equal(projection.opportunities[0].routes.length, 2);
+});
+
+test('M2 projection retains a bound active-node artifact when replanning changes plan id', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const plan = structuredClone(context.plan);
+  plan.planId = 'plan-replan-with-retained-active-node';
+  plan.revision += 1;
+  plan.contentHash = 'replanned-content-hash-with-new-id';
+  state.campaignRuntime.planBinding = {
+    ...state.campaignRuntime.planBinding,
+    planId: plan.planId,
+    revision: plan.revision,
+    contentHash: plan.contentHash,
+  };
+
+  const projection = projectNarrativeOpportunities({ ...context, state, plan });
+
+  assert.notEqual(context.artifacts[0].planId, plan.planId,
+    'retained authored content keeps the plan id of its immutable source revision');
+  assert.ok(plan.contentArtifactRefs.includes(context.artifacts[0].artifactId),
+    'the new plan explicitly retains the source artifact');
+  assert.equal(projection.status, 'ready');
+  assert.equal(projection.primarySituationId, SITUATION_ID);
+  assert.equal(projection.opportunities[0].routes.length, 2);
+});
+
+test('M2 keeps a completion route visible when blockers hide it from the full guidance list', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const plan = structuredClone(context.plan);
+  const externalSituationId = 'situation-required-by-stage-completion';
+  state.situations.push({ ...structuredClone(state.situations[0]), situationId: externalSituationId });
+  const completion = plan.nodes.find(node => node.nodeId === 'stage-1').completion;
+  completion.of.find(condition => condition.kind === 'situation_status').situationId = externalSituationId;
+  const artifacts = structuredClone(context.artifacts);
+  const definition = artifacts[0].situations[0].definition;
+  const closeRoute = definition.methods.find(method => method.methodId === 'ask-lin');
+  closeRoute.requires.knowledgeEntryId = 'lore-crates';
+  for (const grade of ['success', 'full_success']) {
+    closeRoute.outcomeTemplates[grade].effects.find(effect => effect.template === 'situation_status')
+      .situationId = externalSituationId;
+  }
+  const counterRoutes = [1, 2, 3].map(index => ({
+    ...structuredClone(definition.methods.find(method => method.methodId === 'sweep')),
+    methodId: `counter-route-${index}`,
+    title: `查看现场 ${index}`,
+    goal: '从现场获取更多信息',
+  }));
+  definition.methods = [...counterRoutes, ...definition.methods];
+  const situationDefinitions = context.situationDefinitions.map(item => item.situationId === SITUATION_ID
+    ? { ...item, definition } : item);
+
+  const projection = projectNarrativeOpportunities({ ...context, state, plan, artifacts, situationDefinitions });
+  const closeRef = `method:${SITUATION_ID}:ask-lin`;
+  const closeProjection = projection.opportunities[0].routes.find(route => route.candidateRef === closeRef);
+  assert.equal(closeProjection.available, false, 'the closure method is visible with its unmet knowledge prerequisite');
+  assert.deepEqual(projection.preferredCandidateRef, closeRef,
+    'the method that supplies a missing resolved status in the node completion condition outranks counter-only routes');
+
+  const prepared = { branchId: h.branchId, nextState: state, domainEvents: [], lifeEvents: [], extraEvents: [] };
+  const summary = await h.session.getSummary(h.campaignId, h.branchId);
+  const packet = buildSituationPacket({ prepared, situationDefinitions, playerCard: context.playerCard,
+    visibleActorNames: new Map(), cards: summary.cards, entries: context.entries, opportunityProjection: projection });
+  const modelSuggestions = counterRoutes.slice(0, 3).map(method => {
+    const candidate = packet.allowedCandidates.find(item => item.ref === `method:${SITUATION_ID}:${method.methodId}`);
+    assert.ok(candidate);
+    return { candidateRef: candidate.ref, title: candidate.title, rationale: candidate.goal,
+      tradeoffs: candidate.tradeoffs, firstStepIntent: candidate.firstStepIntent };
+  });
+  const guidance = assembleTurnGuidance({ prepared, contract: { turnId: 'local' }, grade: 'success',
+    llmSteps: modelSuggestions, llmSummary: null, packet, campaignId: h.campaignId, playerActorId: 'pc',
+    blockedNames: [], situationDefinitions, playerCard: context.playerCard, visibleActorNames: new Map(),
+    contentBindingHash: 'h', knowledgeHash: 'k', contextHash: 'c' });
+  assert.equal(guidance.steps.length, 3);
+  assert.equal(guidance.steps[0].candidateRef, closeRef);
+  assert.equal(guidance.steps[0].availability, 'needs_preparation');
+  assert.ok(guidance.steps[0].blockers.some(blocker => blocker.includes('线索')));
+});
+
+test('M2 prioritizes an authored event-producing route required by the active stage', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const plan = structuredClone(context.plan);
+  plan.nodes.find(node => node.nodeId === 'stage-1').completion = {
+    kind: 'committed_event', eventType: 'stage_work_completed',
+  };
+  const artifacts = structuredClone(context.artifacts);
+  const definition = artifacts[0].situations[0].definition;
+  const completionRoute = definition.methods.find(method => method.methodId === 'ask-lin');
+  completionRoute.requires.knowledgeEntryId = 'lore-crates';
+  for (const grade of ['success', 'full_success']) completionRoute.outcomeTemplates[grade].effects.push({
+    template: 'record_event', eventType: 'stage_work_completed', summary: '阶段所需事件',
+  });
+  const counterRoutes = [1, 2, 3].map(index => ({
+    ...structuredClone(definition.methods.find(method => method.methodId === 'sweep')),
+    methodId: `event-decoy-${index}`,
+    title: `现场行动 ${index}`,
+  }));
+  definition.methods = [...counterRoutes, ...definition.methods];
+  const situationDefinitions = context.situationDefinitions.map(item => item.situationId === SITUATION_ID
+    ? { ...item, definition } : item);
+  const projection = projectNarrativeOpportunities({ ...context, plan, artifacts, situationDefinitions });
+  const completionRef = `method:${SITUATION_ID}:ask-lin`;
+  assert.equal(projection.preferredCandidateRef, completionRef);
+
+  const prepared = { branchId: h.branchId, nextState: context.state, domainEvents: [], lifeEvents: [], extraEvents: [] };
+  const summary = await h.session.getSummary(h.campaignId, h.branchId);
+  const packet = buildSituationPacket({ prepared, situationDefinitions, playerCard: context.playerCard,
+    visibleActorNames: new Map(), cards: summary.cards, entries: context.entries, opportunityProjection: projection });
+  const modelSuggestions = counterRoutes.map(method => {
+    const candidate = packet.allowedCandidates.find(item => item.ref === `method:${SITUATION_ID}:${method.methodId}`);
+    assert.ok(candidate);
+    return { candidateRef: candidate.ref, title: candidate.title, rationale: candidate.goal,
+      tradeoffs: candidate.tradeoffs, firstStepIntent: candidate.firstStepIntent };
+  });
+  const guidance = assembleTurnGuidance({ prepared, contract: { turnId: 'local-event' }, grade: 'success',
+    llmSteps: modelSuggestions, llmSummary: null, packet, campaignId: h.campaignId, playerActorId: 'pc',
+    blockedNames: [], situationDefinitions, playerCard: context.playerCard, visibleActorNames: new Map(),
+    contentBindingHash: 'h', knowledgeHash: 'k', contextHash: 'c' });
+  assert.equal(guidance.steps.length, 3);
+  assert.equal(guidance.steps[0].candidateRef, completionRef);
 });
 
 test('M2 projection applies the current item, ability, knowledge, relationship, actor, and skill gates', async t => {
@@ -175,6 +330,7 @@ test('M2 reports content shortage and natural endings without inventing progress
 
 test('M2 puts a legal authored alternative first after failure and reports the unprepared successor', async t => {
   const requests = [];
+  let narratorSuggestions = [];
   const provider = {
     async complete(request) {
       requests.push(request.role);
@@ -190,6 +346,16 @@ test('M2 puts a legal authored alternative first after failure and reports the u
           candidateRef: `method:${SITUATION_ID}:${talk ? 'ask-lin' : 'sweep'}`,
         }) };
       }
+      const candidates = value.situationPacket?.allowedCandidates ?? [];
+      if (narratorSuggestions.length === 0) {
+        const failed = candidates.find(candidate => candidate.ref === `method:${SITUATION_ID}:sweep`);
+        const alternate = candidates.find(candidate => candidate.ref === `method:${SITUATION_ID}:ask-lin`);
+        assert.ok(failed && alternate, 'both the failed and alternate methods reach the Narrator packet');
+        narratorSuggestions = [failed.ref, alternate.ref];
+        return { text: JSON.stringify({ turnId: value.turnId, outcomeGrade: value.outcomeGrade, text: '受控叙事桩',
+          nextSteps: [failed, alternate].map(candidate => ({ candidateRef: candidate.ref, title: candidate.title,
+            rationale: candidate.goal, tradeoffs: candidate.tradeoffs, firstStepIntent: candidate.firstStepIntent })) }) };
+      }
       return { text: JSON.stringify({ turnId: value.turnId, outcomeGrade: value.outcomeGrade, text: '受控叙事桩' }) };
     },
   };
@@ -199,6 +365,8 @@ test('M2 puts a legal authored alternative first after failure and reports the u
   const failed = await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
     intent: '仔细查看青石巷现场，寻找值得注意的细节与线索' });
   assert.equal(failed.grade, 'severe_failure');
+  assert.deepEqual(narratorSuggestions, [`method:${SITUATION_ID}:sweep`, `method:${SITUATION_ID}:ask-lin`],
+    'the Narrator deliberately suggests the failed path first');
   assert.equal(failed.guidance.steps[0].candidateRef, `method:${SITUATION_ID}:ask-lin`);
   assert.equal(failed.guidance.steps.some(step => step.candidateRef === `method:${SITUATION_ID}:sweep`), true,
     'the failed route remains visible after an alternate, rather than becoming a permanent lockout');
@@ -271,4 +439,132 @@ test('M2 keeps distinct route consequences after two authored paths converge on 
     'same converged node status does not overwrite route-specific relationship state');
   assert.notDeepEqual(sweepState.campaignRuntime.deferredConsequences, askState.campaignRuntime.deferredConsequences,
     'the projection leaves each branch’s deferred consequences intact');
+});
+
+test('M2 blocks event-only success routes without a public consumer before turn journaling', async t => {
+  const requests = [];
+  const provider = { async complete(request) {
+    requests.push(request.role);
+    throw new Error('the blocked event-only route must not reach a provider');
+  } };
+  const h = await fixture({ provider, includeGuidance: true });
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const originalLoad = h.session.loadCampaignPlanForState.bind(h.session);
+  const withOrphanMethod = content => {
+    if (!content) return content;
+    const artifacts = structuredClone(content.artifacts);
+    const authored = artifacts[0].situations.find(situation => situation.entryId === SITUATION_ID);
+    const source = authored.definition.methods.find(method => method.methodId === 'sweep');
+    const orphan = {
+      ...structuredClone(source),
+      methodId: 'compile-testimony',
+      title: '整理街坊证言',
+      goal: '汇总邻里的说法',
+      firstStep: { ...source.firstStep, intent: '整理已听到的街坊证言', actionKind: 'observe' },
+      successEffects: [],
+      onSuccess: [],
+      outcomeTemplates: {
+        ...source.outcomeTemplates,
+        success: { ...source.outcomeTemplates.success, effects: [
+          { template: 'record_event', eventType: 'unused_testimony_compiled', summary: 'fixture-only event' },
+        ] },
+        full_success: { ...source.outcomeTemplates.full_success, effects: [
+          { template: 'record_event', eventType: 'unused_testimony_compiled', summary: 'fixture-only event' },
+        ] },
+      },
+    };
+    authored.definition.methods.push(orphan);
+    return { ...content, artifacts };
+  };
+  const withOrphan = withOrphanMethod({ plan: context.plan, artifacts: context.artifacts });
+  const situationDefinitions = withOrphan.artifacts.flatMap(artifact => artifact.situations.map(situation => ({
+    situationId: situation.entryId, definition: situation.definition,
+  })));
+  const errors = validateUnconsumedSuccessEventMethods(context.plan, withOrphan.artifacts[0]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /public campaign goal|durable state effect/);
+
+  const projection = projectNarrativeOpportunities({
+    ...context, artifacts: withOrphan.artifacts, situationDefinitions,
+  });
+  const orphanRoute = projection.opportunities[0].routes.find(route => route.methodId === 'compile-testimony');
+  assert.equal(orphanRoute.available, false);
+  assert.match(orphanRoute.blockers.join(' '), /未被后续主线使用/);
+  assert.equal(projection.opportunities[0].routes.find(route => route.methodId === 'sweep').available, true,
+    'a separate route with a durable counter effect remains available');
+
+  h.session.loadCampaignPlanForState = async (...args) => withOrphanMethod(await originalLoad(...args));
+  await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: '整理已听到的街坊证言' }), /未被后续主线使用/);
+  assert.deepEqual(requests, [], 'the route is refused before any Planner or Narrator request');
+  assert.equal(await h.adapter.queryOne('SELECT operation_id FROM interaction_operations WHERE branch_id=? LIMIT 1', [h.branchId]), null,
+    'no interaction operation is opened');
+  assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
+    'no frozen turn or dice record is created');
+});
+
+test('M2 blocks an unused event route when its only other ordinary-success effect is already-known knowledge', async t => {
+  const requests = [];
+  const provider = { async complete(request) {
+    requests.push(request.role);
+    throw new Error('the no-effect route must not reach a provider');
+  } };
+  const h = await fixture({ provider, includeGuidance: true });
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const state = structuredClone(context.state);
+  const playerActorId = state.party.find(member => member.controller === 'player').actorId;
+  const alreadyKnownEntryId = 'fixture-known-testimony-clue';
+  state.discoveries ??= [];
+  state.discoveries.push({ entryId: alreadyKnownEntryId, actorId: playerActorId,
+    knownAtStateVersion: state.stateVersion, sourceTurnId: 'fixture-prior-discovery', knownVia: 'told' });
+
+  const artifacts = structuredClone(context.artifacts);
+  const authored = artifacts[0].situations.find(situation => situation.entryId === SITUATION_ID);
+  const source = authored.definition.methods.find(method => method.methodId === 'sweep');
+  authored.definition.methods.push({
+    ...structuredClone(source),
+    methodId: 'compile-known-testimony',
+    title: '整理已知证言',
+    goal: '再次汇总已经掌握的说法',
+    firstStep: { ...source.firstStep, intent: '再次整理已知街坊证言', actionKind: 'observe' },
+    successEffects: [],
+    onSuccess: [],
+    outcomeTemplates: {
+      ...source.outcomeTemplates,
+      success: { ...source.outcomeTemplates.success, effects: [
+        { template: 'grant_knowledge', entryId: alreadyKnownEntryId },
+        { template: 'record_event', eventType: 'unused_testimony_compiled', summary: 'fixture-only event' },
+      ] },
+      full_success: { ...source.outcomeTemplates.full_success, effects: [
+        { template: 'grant_knowledge', entryId: alreadyKnownEntryId },
+        { template: 'record_event', eventType: 'unused_testimony_compiled', summary: 'fixture-only event' },
+      ] },
+    },
+  });
+  const situationDefinitions = artifacts.flatMap(artifact => artifact.situations.map(situation => ({
+    situationId: situation.entryId, definition: situation.definition,
+  })));
+  const projection = projectNarrativeOpportunities({ ...context, state, artifacts, situationDefinitions });
+  const route = projection.opportunities[0].routes.find(item => item.methodId === 'compile-known-testimony');
+  assert.equal(route.available, false);
+  assert.ok(route.blockerCodes.length > 0);
+  assert.match(route.blockers.join(' '), /不会产生新的线索或状态变化/);
+  assert.equal(projection.opportunities[0].routes.find(item => item.methodId === 'sweep').available, true);
+
+  h.session.loadCampaignPlanForState = async () => ({ plan: context.plan, artifacts });
+  h.turns.getState = async () => structuredClone(state);
+  const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId,
+    branchId: h.branchId, sourceTurnId: 'refresh-current', localOnly: true });
+  assert.ok(guidance);
+  assert.equal(guidance.steps.some(step => step.candidateRef === route.candidateRef), false,
+    'hard-blocked methods are omitted from player guidance, including after a refresh');
+  await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: '再次整理已知街坊证言' }), /不会产生新的线索或状态变化/);
+  assert.deepEqual(requests, [], 'the blocked route is refused before any provider call');
+  assert.equal(await h.adapter.queryOne('SELECT operation_id FROM interaction_operations WHERE branch_id=? LIMIT 1', [h.branchId]), null,
+    'no interaction operation is opened');
+  assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
+    'no frozen turn or dice record is created');
 });

@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.shineword.qa.secret">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <application android:label="ShineWord QA Secret Input" android:debuggable="true" android:usesCleartextTraffic="true" />
+  <instrumentation android:name="com.shineword.qa.secret.PrivateSecretInput" android:targetPackage="com.shineword.qa.secret" android:functionalTest="true" />
+</manifest>

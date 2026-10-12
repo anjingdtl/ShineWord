@@ -166,8 +166,22 @@ function compileMethods(
   const skillIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'skill').flatMap(entry => [entry.entryId, entry.entryId.replace(/^skill-/, '')]));
   const abilityIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'ability').flatMap(entry => [entry.entryId, entry.entryId.replace(/^ability-/, '')]));
   const itemIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'item').map(entry => entry.entryId));
+  const openingSceneEvidenceIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'scene'
+    && (entry.definition as { locationId?: string }).locationId === ctx.openingLocationId)
+    .flatMap(entry => (entry.definition as { clues?: readonly string[] }).clues ?? []));
   const methods: MethodTemplateV1[] = [];
   for (const method of model.firstSituation.methods) {
+    const hasDifficultyPolicy = method.difficultyPolicy !== undefined;
+    const hasEvidencePolicy = method.evidencePolicy !== undefined;
+    const hasEvidenceAllowlist = method.evidenceAllowlist !== undefined;
+    if (hasDifficultyPolicy !== hasEvidencePolicy || hasDifficultyPolicy !== hasEvidenceAllowlist) {
+      errors.push(`method ${method.methodId}: compile policies must be complete.`);
+      continue;
+    }
+    if (method.evidenceAllowlist?.some(id => !openingSceneEvidenceIds.has(id))) {
+      errors.push(`method ${method.methodId}: evidenceAllowlist must use clues from the visible opening scene.`);
+      continue;
+    }
     if (method.firstStep.skillId && !skillIds.has(method.firstStep.skillId) && !skillIds.has(method.firstStep.skillId.replace(/^skill-/, ''))) {
       errors.push(`method ${method.methodId}: skill ${method.firstStep.skillId} not visible at the anchor.`);
       continue;
@@ -209,6 +223,14 @@ function compileMethods(
       },
       tradeoffs: method.tradeoffs,
       preparation: method.preparation,
+      ...(method.difficultyPolicy && method.evidencePolicy && method.evidenceAllowlist
+        ? {
+          difficultyPolicy: method.difficultyPolicy,
+          evidencePolicy: method.evidencePolicy,
+          evidenceAllowlist: [...method.evidenceAllowlist].sort(),
+          ruleBindingHash: ctx.ruleBindingHash,
+        }
+        : {}),
       outcomeTemplates,
     });
   }
@@ -438,5 +460,17 @@ export function compileCampaignPlan(input: {
 
 /** Stable outcome-set identity frozen into contracts (A14/A22). */
 export function outcomeSetHashFor(method: MethodTemplateV1): string {
-  return sha256HexOf(canonicalJsonOf((method.outcomeTemplates ?? {}) as unknown as Record<string, unknown>)).slice(0, 32);
+  const outcomes = (method.outcomeTemplates ?? {}) as unknown as Record<string, unknown>;
+  const hasCompileBinding = method.difficultyPolicy !== undefined || method.evidencePolicy !== undefined
+    || method.evidenceAllowlist !== undefined || method.ruleBindingHash !== undefined;
+  // Preserve the historical digest byte-for-byte for every pre-L1 artifact.
+  if (!hasCompileBinding) return sha256HexOf(canonicalJsonOf(outcomes)).slice(0, 32);
+  return sha256HexOf(canonicalJsonOf({
+    outcomes,
+    firstStep: method.firstStep,
+    difficultyPolicy: method.difficultyPolicy ?? null,
+    evidencePolicy: method.evidencePolicy ?? null,
+    evidenceAllowlist: [...(method.evidenceAllowlist ?? [])].sort(),
+    ruleBindingHash: method.ruleBindingHash ?? null,
+  })).slice(0, 32);
 }

@@ -154,6 +154,10 @@ test('P9-5: adoptReplanCandidate refuses while a turn is in flight and stales ag
       plan: nextPlan, artifact,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
+    const readyProgress = await h.session.getCampaignProgress(h.campaignId, h.branchId);
+    assert.equal(readyProgress.replanCandidateReady, true, 'a validated candidate is exposed for adoption');
+    assert.equal(readyProgress.replanPending, false, 'ready means generation is finished, not still running');
+
     // In-flight turn on the branch ⇒ adoption refuses (stable boundary).
     await h.adapter.execute(
       "INSERT INTO turns (branch_id, turn_id, expected_state_version, committed_state_version, status, outcome_grade, public_summary, effects_json, action_contract_json, action_contract_hash, created_at) VALUES (?, 'turn-stale', 0, NULL, 'Planned', NULL, '', '[]', '{}', 'x', ?)",
@@ -166,6 +170,14 @@ test('P9-5: adoptReplanCandidate refuses while a turn is in flight and stales ag
     assert.match(refused.reason, /in-flight/);
     await h.adapter.execute('DELETE FROM turns WHERE branch_id=? AND turn_id=?', [h.branchId, 'turn-stale']);
 
+    // A pre-dispatch local refusal can leave an empty paused ordinary-turn
+    // row. Adoption safely clears it, while retaining the unchanged game version.
+    const emptyOperationId = `play:${h.branchId}:turn-empty`;
+    await h.adapter.execute(`INSERT INTO interaction_operations
+      (operation_id,campaign_id,branch_id,operation_kind,status,expected_state_version,fence_token,next_step,max_steps,created_at,updated_at)
+      VALUES (?,?,?,'play_turn','paused_system',0,1,0,32,?,?)`,
+      [emptyOperationId, h.campaignId, h.branchId, new Date().toISOString(), new Date().toISOString()]);
+
     // Clean boundary with matching base bindings ⇒ adoption commits a new
     // revision and switches the runtime binding in ONE management commit.
     const adopted = await adoptReplanCandidate({
@@ -173,6 +185,7 @@ test('P9-5: adoptReplanCandidate refuses while a turn is in flight and stales ag
       campaignId: h.campaignId, branchId: h.branchId, candidateId,
     });
     assert.equal(adopted.outcome, 'adopted', JSON.stringify(adopted));
+    assert.equal((await h.adapter.queryOne('SELECT status FROM interaction_operations WHERE operation_id=?', [emptyOperationId])).status, 'failed');
     assert.equal(adopted.revision, 2);
     const state = await h.turns.getState(h.branchId);
     assert.equal(state.campaignRuntime.planBinding.revision, 2, 'runtime switched to the adopted revision');

@@ -66,6 +66,56 @@ function downstreamMainStageIds(candidate: unknown, triggerNodeIds: readonly str
   });
 }
 
+function candidateRequiredMainStageDistance(candidate: unknown, startNodeId: string, targetNodeId: string): number | undefined {
+  const root = asRecord(candidate);
+  const stages = Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [];
+  const stageById = new Map(stages.flatMap(stage => typeof stage.nodeId === 'string' ? [[stage.nodeId, stage] as const] : []));
+  const memo = new Map<string, number>([[startNodeId, 0]]);
+  const visiting = new Set<string>();
+  const distance = (nodeId: string): number | undefined => {
+    if (memo.has(nodeId)) return memo.get(nodeId);
+    if (visiting.has(nodeId)) return undefined;
+    const stage = stageById.get(nodeId);
+    if (!stage) return undefined;
+    visiting.add(nodeId);
+    const dependencies = Array.isArray(stage.dependsOn) ? stage.dependsOn.filter((id): id is string => typeof id === 'string') : [];
+    const prerequisiteDistances = dependencies.map(distance).filter((value): value is number => value !== undefined);
+    visiting.delete(nodeId);
+    if (prerequisiteDistances.length === 0) return undefined;
+    const result = Math.max(...prerequisiteDistances) + (stage.role === 'main' ? 1 : 0);
+    memo.set(nodeId, result);
+    return result;
+  };
+  return distance(targetNodeId);
+}
+
+function candidateMainScheduleSourceIds(candidate: unknown): string[] {
+  const root = asRecord(candidate);
+  const stages = Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [];
+  return stages.flatMap(stage => stage.role === 'main' && stage.activation === null && typeof stage.nodeId === 'string'
+    ? [stage.nodeId] : []);
+}
+
+function candidateConsequenceScheduleSourceIds(candidate: unknown, consequenceId: string): string[] {
+  const root = asRecord(candidate);
+  const openingSituation = asRecord(root?.firstSituation);
+  const scheduledByOpeningSituation = (Array.isArray(openingSituation?.methods)
+    ? openingSituation.methods.map(asRecord).filter((method): method is JsonRecord => method !== null) : [])
+    .some(method => (['success', 'full_success'] as const).some(grade => {
+      const outcome = asRecord(asRecord(method.outcomes)?.[grade]);
+      return (Array.isArray(outcome?.effects) ? outcome.effects.map(asRecord).filter((effect): effect is JsonRecord => effect !== null) : [])
+        .some(effect => effect.template === 'schedule_consequence' && effect.consequenceId === consequenceId);
+    }));
+  return scheduledByOpeningSituation ? candidateMainScheduleSourceIds(candidate) : [];
+}
+
+function canonicalCandidateValue(value: unknown): string {
+  const sort = (item: unknown): unknown => Array.isArray(item) ? item.map(sort)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b)).map(([key, nested]) => [key, sort(nested)])) : item;
+  return JSON.stringify(sort(value));
+}
+
 function consequenceEffectConsumerExamples(candidate: unknown, consequenceId: string): string[] {
   const root = asRecord(candidate);
   const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord) : [];
@@ -91,8 +141,93 @@ function consequenceEffectConsumerExamples(candidate: unknown, consequenceId: st
 }
 
 /** Add machine-shaped, candidate-specific directions for the strict causal gate. */
-function structuralRepairGuidance(errors: readonly string[], candidate: unknown): string {
-  const guidance = errors.flatMap(error => {
+export function buildStructuralRepairGuidance(
+  errors: readonly string[],
+  candidate: unknown,
+  options: { authoredCluesAllowed?: boolean } = {},
+): string {
+  const root = asRecord(candidate);
+  // Local compile/replan can aggregate several strict validator errors into
+  // one semicolon-separated error. Match each diagnostic independently.
+  errors = errors.flatMap(error => error.split(/;\s*(?=(?:consequence |artifact:|method |clue |long plan:))/));
+  const authoredCluesAllowed = options.authoredCluesAllowed ?? true;
+  const unknownKnowledgeIds = [...new Set(errors.flatMap(error => {
+    const match = /^(?:artifact|consequence): grant_knowledge references unknown entry (.+)\.$/.exec(error.trim());
+    return match?.[1] ? [match[1]] : [];
+  }))];
+  const declaredClueIds = (Array.isArray(root?.clues) ? root.clues.map(asRecord).filter((clue): clue is JsonRecord => clue !== null) : [])
+    .flatMap(clue => typeof clue.clueId === 'string' ? [clue.clueId] : []);
+  const unknownKnowledgeGuidance = unknownKnowledgeIds.length === 0 ? [] : authoredCluesAllowed
+    ? [`- grant_knowledge 引用的 entryId 不在冻结资料目录或当前候选的 clues 别名中：${unknownKnowledgeIds.join(', ')}。逐个修复：若它表示本战役新线索，在顶层 clues 中定义唯一 clueId、可公开的线索内容和合法 provenance，再把 grant_knowledge.entryId 改为该 clueId；若对应已有资料，只能改用提示中逐字列出的目录 ID；若无合法知识来源，移除这条无效效果。${declaredClueIds.length > 0 ? `当前已声明的 clues 别名：${declaredClueIds.join(', ')}。` : '当前没有已声明的 clues 别名。'}不得补造世界目录 ID、使用原著事实 ID 冒充 entryId，或放宽本地校验。`]
+    : [`- grant_knowledge 引用的 entryId 不在冻结资料目录中：${unknownKnowledgeIds.join(', ')}。本次是单阶段内容生成，顶层 clues 会被裁剪且不会保存；不要新增 clue 或引用候选 clues 别名。逐个改用本请求冻结资料中逐字列出的目录 ID；如果没有合适的合法条目，就从 firstSituation 各 outcome 的 effects 中移除该 grant_knowledge 效果。不得补造目录 ID、改用 sourceFactId、或放宽本地校验。`];
+  const guidance = [...unknownKnowledgeGuidance, ...errors.flatMap(error => {
+    const eventMatch = /^method ([^:]+): an ordinary-success event must be consumed by this or a reachable public campaign goal, or accompany a durable state effect\.$/.exec(error.trim());
+    if (eventMatch) {
+      const methodId = eventMatch[1]!;
+      const situation = asRecord(root?.firstSituation);
+      const methods = (Array.isArray(situation?.methods) ? situation.methods : []).map(asRecord)
+        .filter((m): m is JsonRecord => m !== null);
+      const method = methods.find(m => m.methodId === methodId);
+      const events = [...new Set((['success', 'full_success'] as const).flatMap(grade => {
+        const effects = asRecord(asRecord(method?.outcomes)?.[grade])?.effects;
+        return (Array.isArray(effects) ? effects : []).map(asRecord)
+          .flatMap(e => e?.template === 'record_event' && typeof e.eventType === 'string' ? [e.eventType] : []);
+      }))];
+      const alternatives = methods.flatMap(m => m.methodId !== methodId && typeof m.methodId === 'string' ? [m.methodId] : []);
+      return [`- method ${methodId} 的成功事件（${events.join(', ')}）没有可达用途。若该事件确已完成公开目标，让对应阶段 completion 以匹配 committed_event 消费；若只是问路、搜集信息或准备，保留真实行动范围，在普通 success 和 full_success 提供合法 grant_knowledge 或有明确事实单位的 situation_counter，并让另一办法（候选：${alternatives.join(', ')}）的 requires.condition 正向消费它后执行独立推进。首次准备不得关闭局面或宣称远期目标已完成，不得凭空补造世界条目、提高计数或删除既有门槛；保留至少一个当前可执行办法和完整四档合同，输出正式新候选。`];
+    }
+    const ordinaryMatch = /^artifact: current stage (\S+) (?:has no ordinary success producer|cannot supply an ordinary completion route)/.exec(error.trim());
+    if (ordinaryMatch) {
+      const methods = (Array.isArray(asRecord(root?.firstSituation)?.methods)
+        ? asRecord(root?.firstSituation)!.methods as unknown[] : []).map(asRecord).filter((m): m is JsonRecord => m !== null);
+      const names = methods.flatMap(m => typeof m.methodId === 'string' ? [m.methodId] : []);
+      return [`- stage ${ordinaryMatch[1]} 的普通 success 链未闭合；逐个核对当前 methods（${names.join(', ')}）的 success.effects 与 completion 的状态、事件、承诺及计数叶。为未满足的叶提供普通成功生产者：先用不会关闭局面的独立准备方法产生所需事实，再以 requires.condition 消费准备事实的兑现方法写入 resolved/履约/完成事件。计数到达门槛仍无 resolved 或旧承诺仅在 full_success 兑现时，必须重写这条普通成功链；不要提高计数、降低门槛或复制大成功额外奖励。风险失败用冻结目录允许的真实代价或新线索，并保留一个条件匹配的替代方法消费它；重复动作、空 effects 和无人消费的 counter 不算恢复路线。保留其它合法合同，输出新候选，禁止改写已采用工件。`];
+    }
+    const actorTargetMatch = /^method ([^:]+): target (.+) not in the opening scope\.$/.exec(error.trim());
+    if (actorTargetMatch) {
+      const [, methodId, targetId] = actorTargetMatch;
+      return [`- method ${methodId} 的 firstStep.targetEntryId ${targetId} 不在当前行动对象范围内。只可逐字选择本请求“当前在场人物”白名单中的 actor ID；如果该办法面向未具名人物、现场或其它没有白名单人物的场景，就删除 firstStep.targetEntryId。保留行动意图和其它合法字段，不得猜测、补造或替换为世界人物模板 ID。`];
+    }
+    const duplicateTriggerMatch = /^consequence ([^:]+): long consequences need distinct triggers\.$/.exec(error.trim());
+    if (duplicateTriggerMatch) {
+      const consequenceId = duplicateTriggerMatch[1]!;
+      const root = asRecord(candidate);
+      const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord).filter((item): item is JsonRecord => item !== null) : [];
+      const current = consequences.find(item => item.consequenceId === consequenceId);
+      const signature = current ? canonicalCandidateValue(current.trigger) : null;
+      const peers = signature === null ? [] : consequences.filter(item => item.consequenceId !== consequenceId
+        && canonicalCandidateValue(item.trigger) === signature)
+        .flatMap(item => typeof item.consequenceId === 'string' ? [item.consequenceId] : []);
+      const peerText = peers.length > 0 ? `；与其重复的 consequence ID：${peers.join(', ')}` : '';
+      const existingTriggerNodes = collectSucceededNodeIds(current?.trigger);
+      const scheduleSources = candidateConsequenceScheduleSourceIds(candidate, consequenceId);
+      const stages = Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [];
+      const alternatives = stages.filter(stage => stage.role === 'main' && typeof stage.nodeId === 'string'
+        && !existingTriggerNodes.includes(stage.nodeId)
+        && scheduleSources.some(source => (candidateRequiredMainStageDistance(candidate, source, stage.nodeId as string) ?? -1) >= 2))
+        .flatMap(stage => typeof stage.nodeId === 'string' ? [stage.nodeId] : []);
+      const alternativeText = alternatives.length > 0
+        ? `当前可用的不同 trigger nodeId：${alternatives.join(', ')}。`
+        : '当前候选中没有找到不同且延迟足够的节点；先补出排程点之后至少两段的 required main 硬依赖链，再选择与其它 consequence 不同的成功节点。';
+      return [`- consequence ${consequenceId}${peerText}：这些长期后果必须使用不同的 trigger condition。${alternativeText}trigger 必须在该 consequence 的排程成功之后至少经过两段 required main 阶段，并且在 trigger 之后保留必做阶段或 ending 消费效果；不能只换描述、复用相同 node_succeeded，或把后果挪到互斥方法/等级。`];
+    }
+    const delayMatch = /^consequence ([^:]+): trigger must wait for a required main stage at least two stages after its scheduling action on every trigger path\.$/.exec(error.trim());
+    if (delayMatch) {
+      const consequenceId = delayMatch[1]!;
+      const root = asRecord(candidate);
+      const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord).filter((item): item is JsonRecord => item !== null) : [];
+      const consequence = consequences.find(item => item?.consequenceId === consequenceId);
+      const triggerNodes = collectSucceededNodeIds(consequence?.trigger);
+      const scheduleSources = candidateConsequenceScheduleSourceIds(candidate, consequenceId);
+      const eligible = (Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [])
+        .filter(stage => stage.role === 'main' && typeof stage.nodeId === 'string'
+          && scheduleSources.some(source => (candidateRequiredMainStageDistance(candidate, source, stage.nodeId as string) ?? -1) >= 2))
+        .flatMap(stage => typeof stage.nodeId === 'string' ? [stage.nodeId] : []);
+      const target = eligible.length > 0
+        ? `可作为合法 trigger 的 required main nodeId（距排程节点至少两段）：${eligible.join(', ')}。`
+        : '当前没有距排程节点至少两段的 required main 阶段；先通过硬 dependsOn 建立不少于两段的 required main 阶段链，再把 trigger 绑定到链上的后续 node_succeeded。';
+      return [`- consequence ${consequenceId}：trigger 的每条成立路径都必须在排程成功之后经过至少两段 required main 成功。当前 trigger node 数=${triggerNodes.length}；${target}保留真实的阶段依赖，不要用世界时间、同回合事件或可选阶段替代。修正 trigger 后，按新的 trigger 节点重新选择硬依赖它的后续消费者；旧 trigger 的消费者位置不能直接沿用。`];
+    }
     const match = /^consequence ([^:]+): no later stage or ending consumes its authoritative effect\.$/.exec(error.trim());
     if (match) {
       const consequenceId = match[1]!;
@@ -102,8 +237,9 @@ function structuralRepairGuidance(errors: readonly string[], candidate: unknown)
       const triggerNodes = collectSucceededNodeIds(consequence?.trigger);
       const downstream = downstreamMainStageIds(candidate, triggerNodes);
       const effectConditions = consequenceEffectConsumerExamples(candidate, consequenceId);
-      const target = downstream.length > 0 ? `可用的后续必做 main 阶段 nodeId：${downstream.join(', ')}。` :
-        '未能从 dependsOn 找到合格的后续必做 main 阶段；先补出真实、可达的硬依赖阶段，再设置消费者。';
+      const target = downstream.length > 0
+        ? `可用的后续必做 main 阶段 nodeId：${downstream.join(', ')}。把正向消费者放入这些阶段的 completion/activation，或放入同时要求 trigger 节点成功的有效 ending.condition。`
+        : '当前 trigger 后没有必做 main 消费者。新增 role="main" 且通过 dependsOn 硬依赖 trigger 节点的阶段，并把正向效果消费者放入该阶段的 completion/activation；若由 ending 消费，ending.condition 必须同时证明 trigger 节点成功和该效果已消费。不要只加 optional stage。';
       const examples = effectConditions.length > 0
         ? `该 consequence 的权威效果可对应这些正向条件叶：${effectConditions.join(' 或 ')}。`
         : '检查该 consequence.effects 中每个权威效果，使用与效果字段完全一致且当前 schema 支持的正向条件叶。';
@@ -114,8 +250,23 @@ function structuralRepairGuidance(errors: readonly string[], candidate: unknown)
       const [, clueId, sourceId] = clueMatch;
       return [`- clue ${clueId}：sourceEntryIds 中被拒绝的目录 ID 是 ${sourceId}。从该 clue 的 sourceEntryIds 删除这个被拒绝值；若仍有其它错误，逐项删除相应被拒绝值，只保留冻结资料目录里逐字存在的条目 ID；没有合法条目时使用 []。sourceFactIds 是不同命名空间：不要把被拒绝值迁移、改写或补造到 provenance.sourceFactIds，也不要修改已有且合法的 provenance.sourceFactIds。此修复同时消除由该 sourceEntryIds 派生的 artifact 目录依赖错误；保留线索正文和其它合法字段。`];
     }
+    if (/^long plan: at least two delayed consequences must be co-schedulable/.test(error.trim())) {
+      const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord).filter((item): item is JsonRecord => item !== null) : [];
+      const ids = consequences.flatMap(item => typeof item.consequenceId === 'string' ? [item.consequenceId] : []);
+      const openingSituation = asRecord(root?.firstSituation);
+      const scheduledTogether = (Array.isArray(openingSituation?.methods) ? openingSituation.methods.map(asRecord).filter((item): item is JsonRecord => item !== null) : [])
+        .some(method => (['success', 'full_success'] as const).some(grade => {
+          const outcome = asRecord(asRecord(method.outcomes)?.[grade]);
+          const scheduled = new Set((Array.isArray(outcome?.effects) ? outcome.effects.map(asRecord).filter((item): item is JsonRecord => item !== null) : [])
+            .filter(effect => effect.template === 'schedule_consequence').flatMap(effect => typeof effect.consequenceId === 'string' ? [effect.consequenceId] : []));
+          return ids.length >= 2 && ids.filter(id => scheduled.has(id)).length >= 2;
+        }));
+      if (!scheduledTogether && ids.length >= 2) {
+        return [`- long plan：将这两项 consequence（${ids.slice(0, 2).join(', ')}）同时放入同一个 firstSituation method 的同一个 success 或 full_success effects 数组，保证一条实际可达的普通成功路径能共同排程。不得把它们拆到互斥方法或互斥 outcome grade；各自的 trigger 和 authoritative effect 仍须不同，并各自有后续消费者。`];
+      }
+    }
     return [];
-  });
+  })];
   return guidance.length > 0 ? `\n\n因果校验的定点修复要求（必须执行）：\n${guidance.join('\n')}` : '';
 }
 
@@ -139,6 +290,11 @@ export function buildPlanRequestMaterials(input: {
       const definition = entry.definition as { name?: string; locationId?: string; actors?: string[] };
       return `${definition.locationId ?? '?'}:${definition.name ?? ''}${definition.actors?.length ? `（在场:${definition.actors.slice(0, 4).join(',')}）` : ''}`;
     });
+  const openingSceneEvidenceIds = [...new Set(input.visibleEntries
+    .filter(entry => entry.kind === 'scene'
+      && (entry.definition as { locationId?: string }).locationId === ctx.openingLocationId)
+    .flatMap(entry => ((entry.definition as { clues?: readonly unknown[] }).clues ?? [])
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)))].sort();
   const npcs = [...ctx.openingTemplateIds].slice(0, 10);
   const items = input.visibleEntries.filter(entry => entry.kind === 'item').slice(0, 10)
     .map(entry => entry.entryId);
@@ -163,7 +319,7 @@ export function buildPlanRequestMaterials(input: {
     '  "proposal": {"title","longTermGoal","publicPitch","gmPremise","tone"},',
     '  "stages": [{"nodeId","role":"main|optional","title","publicObjective","gmPurpose","coverage":"concrete|provisional","activation","completion","failure","cancellation","dependsOn":[],"alternatives":[],"next":[],"provenance":{"kind":"design_fill|canon_inspired","sourceFactIds":[],"rationale"}}],',
     '  "endings": [{"endingId","title","publicDescription","outcomeKind":"success|pyrrhic|failure|open","condition"}],',
-    '  "firstSituation": {"situationTitle","summary","gmBrief","pressureDescription","deadlineClockSeconds","signs":[{"text"}],"methods":[...]},',
+    '  "firstSituation": {"situationTitle","summary","gmBrief","pressureDescription","deadlineClockSeconds","signs":[{"text"}],"methods":[{"methodId","title","goal","firstStep","requires","tradeoffs","preparation","difficultyPolicy","evidencePolicy","evidenceAllowlist","outcomes"}]},',
     '  "consequences": [{"consequenceId":"stable-id","description":"后续反应","trigger":{"kind":"committed_event","eventType":"later_supported_event"},"effects":[{"template":"record_event","eventType":"reaction_recorded","summary":"实际回应"}],"visibility":"public"}],',
     '  "rewards": [],',
     '  "clues": [{"clueId":"local-clue-alias","title":"线索标题","text":"发现后才能公开的线索内容","sourceEntryIds":[],"provenance":{"kind":"design_fill|canon_inspired","sourceFactIds":[],"rationale":"来源说明"}}]',
@@ -175,6 +331,8 @@ export function buildPlanRequestMaterials(input: {
     '- 只有当前第一阶段 activation=null。后续阶段用 node_succeeded 与 dependsOn 引用前驱；firstSituation 仅服务当前第一阶段，远期不得用 self 的同一计数冒充独立问题。短篇每阶段约 2-5 次有意义的决定，不用反复交谈/观察刷 10/30 次计数；完成条件对应取得证据、达成承诺或解除具体阻碍。',
     '- 第一个 concrete 阶段必须完整可玩：endings 之前先由 firstSituation 给出 2-4 个办法（methods），办法之间机制不同（不同技能/不同行动类型/不同对象），至少一个办法的 firstStep 只用下面列出的技能且不需要准备；',
     '- 每个 method 的 outcomes 必须给出 full_success/success/failure/severe_failure 四档，各档 resultFact 一句玩家可读事实，effects 从效果模板白名单选择；',
+    '- 每个新 method 都要显式给出 difficultyPolicy、evidencePolicy、evidenceAllowlist。difficultyPolicy 用 {"kind":"fixed","band":"simple|normal|challenging|peak"}，无法在本地闭合时用 {"kind":"planner_required"}；evidencePolicy 用 {"kind":"fixed","evidenceIds":[]}（空数组明确表示不使用证据），或 {"kind":"planner_required"}。',
+    '- evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选；列表为空时写 []。不得从世界目录、可引用线索、原著 factId 或远期内容复制 ID，也不得猜造。fixed evidenceIds 必须逐字包含在 evidenceAllowlist 中。ruleBindingHash 由本地编译器写入，模型不要输出。',
     '- 每种办法必须至少有一个成功档以权威 effects 推进该阶段 completion；有风险的失败要提供改变局面的代价或新机会。日常观察、无风险交谈可使用 observe/talk/interact，不必强制 skill_check。',
     '- 至少一条当前可执行路线必须能通过不同、有因果关系的普通 success 决定完成阶段，不能让所有完成路线都只等待 full_success。大成功可给捷径或额外收益。普通成功已经创建承诺、发现知识之后，后续办法应消费这些已提交事实；重复创建同一承诺或重复授予同一知识不算新进展。累计计数达到门槛的成功路径不能仍强制等待大成功才写入 resolved。',
     '- 中长篇阶段应包含准备、取得实绩、兑现或选择后续方向等不同问题，避免首步一次普通成功就跳过所有过程，也不要通过重复同一步骤凑篇幅。修订时先核对已有开放承诺、已知知识、关系和实际失败代价，再提供当前角色能执行的下一步。',
@@ -235,6 +393,7 @@ export function buildPlanRequestMaterials(input: {
     '可用技能：', skills.join('、') || '无',
     '可用能力：', abilities.join('、') || '无',
     '可进入场景：', scenes.join('；') || '无',
+    '当前开局场景可绑定的证据 ID（仅允许从此列表复制到 method.evidenceAllowlist；没有则保持空数组）：', JSON.stringify(openingSceneEvidenceIds),
     '当前在场人物（仅这些可以作为当前行动对象）：', (ctx.presentActorRefs ?? []).join('、') || '无',
     '世界人物模板（可能在别处，不代表当前在场）：', npcs.join('、') || '无',
     '策划可用人物资料（公开文案仍需过滤隐藏动机）：', JSON.stringify(ctx.actorMaterials ?? []),
@@ -279,6 +438,8 @@ export async function generateCampaignPlanCandidate(input: {
   physicalRequestBudget?: number;
   /** Scope-specific parsing defaults; raw provider responses stay untouched in the audit store. */
   normalizeCandidate?: (candidate: unknown) => unknown;
+  /** Stage-content projections discard authored clues, so repair must not rely on them. */
+  allowAuthoredCluesOnRepair?: boolean;
   /** Feedback selected at material freeze, never from live history on restore. */
   reasoningPolicy?: ReasoningPolicySelection;
   /** Resume a known output-exhausted attempt under the original aggregate cap. */
@@ -324,7 +485,7 @@ export async function generateCampaignPlanCandidate(input: {
     role: 'WorldMapper',
     system: input.materials.system,
     user: repairErrors === null ? input.materials.user
-      : `${input.materials.user}\n\n上一次输出未通过校验，错误如下：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON（保持相同结构与玩家意图，不要删除必需字段）。${structuralRepairGuidance(repairErrors, repairCandidate)}`,
+      : `${input.materials.user}\n\n上一次输出未通过校验，错误如下：\n- ${repairErrors.join('\n- ')}\n请输出修正后的完整 JSON（保持相同结构与玩家意图，不要删除必需字段）。${buildStructuralRepairGuidance(repairErrors, repairCandidate, { authoredCluesAllowed: input.allowAuthoredCluesOnRepair })}`,
     maxOutputTokens: plan.wireOutputTokens,
     maxPhysicalRequests: 1,
     jsonMode: input.profile.capabilities.supportsJson,

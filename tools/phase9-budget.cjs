@@ -21,6 +21,13 @@ function renameWithRetry(sourcePath, targetPath) {
   }
 }
 
+function isExclusiveLockBusy(error) {
+  // Windows can report a concurrent exclusive-create/unlink window as access
+  // denied instead of EEXIST. Retrying those codes preserves the lock's
+  // fail-closed behavior while allowing cross-process reservations to queue.
+  return ['EEXIST', 'EACCES', 'EPERM'].includes(error?.code);
+}
+
 function readManifestSnapshot(filePath = manifestPath) {
   const resolvedPath = path.resolve(filePath);
   let manifest;
@@ -45,7 +52,7 @@ function createPhysicalBudget({ filePath = manifestPath, now = () => new Date().
     for (let i = 0; i < 1200; i++) {
       try { lock = fs.openSync(lockPath, 'wx'); break; }
       catch (error) {
-        if (error.code !== 'EEXIST') throw new Error('Phase 9 authoritative manifest unavailable; refusing dispatch.');
+        if (!isExclusiveLockBusy(error)) throw new Error('Phase 9 authoritative manifest unavailable; refusing dispatch.');
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
@@ -189,6 +196,74 @@ function initializeScopedBudgetManifest({ filePath, scopeId, capPhysicalRequests
   return manifest;
 }
 
+/**
+ * Correct a profile binding discovered during emulator setup, before any
+ * physical reservation or dispatch. The scope id and request cap stay fixed;
+ * the correction is single-use, compare-and-swap guarded, and recorded in the
+ * same manifest. This is deliberately narrower than a general manifest edit.
+ */
+function correctScopedProfileBindingBeforeDispatch({ filePath, expectedScopeId, expectedCapPhysicalRequests,
+  expectedFingerprint, profile, reason, now = () => new Date().toISOString(), id = () => crypto.randomUUID() } = {}) {
+  if (typeof filePath !== 'string' || !filePath.trim()) throw new Error('A scoped Phase 9 budget path is required.');
+  if (typeof expectedScopeId !== 'string' || !expectedScopeId.trim()) throw new Error('A scoped Phase 9 budget id is required.');
+  if (!Number.isInteger(expectedCapPhysicalRequests) || expectedCapPhysicalRequests < 1) throw new Error('A pinned scoped Phase 9 request cap is required.');
+  if (typeof expectedFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedFingerprint)) throw new Error('The expected profile fingerprint is invalid.');
+  if (typeof reason !== 'string' || reason.trim().length < 12 || reason.trim().length > 240 || /[\r\n]/.test(reason)) {
+    throw new Error('A concise pre-dispatch correction reason is required.');
+  }
+  const { llmModelProfileFingerprint } = require('../dist/application/llm/profileFingerprint');
+  const actualFingerprint = llmModelProfileFingerprint(profile);
+  if (actualFingerprint === expectedFingerprint) throw new Error('The scoped profile binding already matches; no correction is needed.');
+
+  const resolvedPath = path.resolve(filePath);
+  const lockPath = `${resolvedPath}.lock`;
+  let lock;
+  for (let attempt = 0; attempt < 1200; attempt++) {
+    try { lock = fs.openSync(lockPath, 'wx'); break; }
+    catch (error) {
+      if (!isExclusiveLockBusy(error)) throw new Error('Scoped Phase 9 budget unavailable; refusing profile correction.');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  if (lock === undefined) throw new Error('Scoped Phase 9 budget lock unavailable; refusing profile correction.');
+  try {
+    const manifest = readScopedBudgetManifest(resolvedPath);
+    if (manifest.scopeId !== expectedScopeId) throw new Error('Scoped Phase 9 budget id differs from its pinned launch configuration.');
+    if (manifest.capPhysicalRequests !== expectedCapPhysicalRequests) throw new Error('Scoped Phase 9 request cap differs from its pinned launch configuration.');
+    if (manifest.spentPhysicalRequests !== 0 || manifest.physicalDispatchAudit.length !== 0) {
+      throw new Error('Scoped profile binding can only be corrected before any physical reservation or dispatch.');
+    }
+    if (manifest.inputs?.profileFingerprint !== expectedFingerprint) throw new Error('Scoped profile binding changed since preflight; refusing correction.');
+    if (Array.isArray(manifest.preDispatchProfileCorrections) && manifest.preDispatchProfileCorrections.length > 0) {
+      throw new Error('Scoped profile binding already received its single pre-dispatch correction.');
+    }
+    const pinned = manifest.inputs?.llm;
+    if (!pinned || profile?.endpoint !== pinned.clientEndpoint || profile?.model !== pinned.model) {
+      throw new Error('Actual UI profile endpoint or model differs from the scoped launch configuration.');
+    }
+    for (const [key, value] of Object.entries(pinned.capabilities ?? {})) {
+      if (profile.capabilities?.[key] !== value) throw new Error(`Actual UI profile capability ${key} differs from the scoped launch configuration.`);
+    }
+    manifest.preDispatchProfileCorrections = [{
+      at: now(), kind: 'profile_fingerprint', from: expectedFingerprint, to: actualFingerprint,
+      profileId: profile.id, reason: reason.trim(),
+    }];
+    manifest.inputs.profileFingerprint = actualFingerprint;
+    const temporary = `${resolvedPath}.${process.pid}.${id()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), { encoding: 'utf8', mode: 0o600 });
+      renameWithRetry(temporary, resolvedPath);
+    } catch (error) {
+      try { fs.unlinkSync(temporary); } catch { /* preserve the primary failure */ }
+      throw error;
+    }
+    return { profileFingerprint: actualFingerprint, correction: manifest.preDispatchProfileCorrections[0] };
+  } finally {
+    fs.closeSync(lock);
+    try { fs.unlinkSync(lockPath); } catch { /* retain the primary result */ }
+  }
+}
+
 function readScopedBudgetManifest(filePath) {
   let manifest;
   try { manifest = JSON.parse(fs.readFileSync(path.resolve(filePath), 'utf8')); }
@@ -224,7 +299,7 @@ function createScopedPhysicalBudget({ filePath, expectedCapPhysicalRequests, exp
     for (let i = 0; i < 1200; i++) {
       try { lock = fs.openSync(lockPath, 'wx'); break; }
       catch (error) {
-        if (error.code !== 'EEXIST') throw new Error('Scoped Phase 9 budget unavailable; refusing dispatch.');
+        if (!isExclusiveLockBusy(error)) throw new Error('Scoped Phase 9 budget unavailable; refusing dispatch.');
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
@@ -321,8 +396,9 @@ function createScopedPhysicalBudget({ filePath, expectedCapPhysicalRequests, exp
       if (typeof result?.failureClass === 'string') row.failureClass = result.failureClass.slice(0, 80);
     });
   }
-  // Scoped run inputs and caps are frozen at initialization. Only lifecycle
-  // operations may mutate this file; callers cannot rewrite spent/audit fields.
+  // Scope id and cap are frozen at initialization. One audited profile binding
+  // correction is allowed before any physical reservation; callers cannot
+  // rewrite spent/audit fields.
   return { manifestPath: resolvedPath, readManifest: readCurrentManifest,
     reservePhysicalRequest, markPhysicalRequestDispatched, finishPhysicalRequest };
 }
@@ -339,4 +415,4 @@ if (scopedPath) {
   authority = createScopedPhysicalBudget({ filePath: scopedPath, expectedCapPhysicalRequests, expectedScopeId });
 } else authority = createPhysicalBudget();
 module.exports = { ...authority, createPhysicalBudget, readManifestSnapshot, manifestPath, hardStop: HARD_STOP,
-  initializeScopedBudgetManifest, readScopedBudgetManifest, createScopedPhysicalBudget, scopedSchema: SCOPED_SCHEMA };
+  initializeScopedBudgetManifest, correctScopedProfileBindingBeforeDispatch, readScopedBudgetManifest, createScopedPhysicalBudget, scopedSchema: SCOPED_SCHEMA };

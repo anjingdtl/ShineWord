@@ -162,6 +162,9 @@ export function validateActionContract(contract: ActionContract, origin: Contrac
     if (contract.methodRef.outcomeSetHash !== undefined && !/^[a-f0-9]{16,64}$/i.test(contract.methodRef.outcomeSetHash)) {
       errors.push('methodRef.outcomeSetHash must be a hex digest.');
     }
+    if (contract.methodRef.campaignBindingHash !== undefined && !/^[a-f0-9]{64}$/i.test(contract.methodRef.campaignBindingHash)) {
+      errors.push('methodRef.campaignBindingHash must be a SHA-256 digest.');
+    }
   }
   if (!nonEmpty(contract.turnId)) errors.push('turnId is required.');
   if (!Number.isInteger(contract.expectedStateVersion) || contract.expectedStateVersion < 0) {

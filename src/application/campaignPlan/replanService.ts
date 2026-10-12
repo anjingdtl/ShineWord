@@ -18,6 +18,7 @@ import { settleCampaignProgress, readCampaignEventHistory } from './settlement';
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { stagePreparationTargetId, stagePreparationReasons } from './stagePreparation';
+import { SqliteInteractionOperationJournal } from '../campaign/interactionOrchestrator';
 
 /**
  * Campaign replanning (plan §10). Triggers are evaluated LOCALLY after each
@@ -226,6 +227,10 @@ export async function adoptReplanCandidate(input: AdoptReplanInput): Promise<
   };
   // 1. Stable boundary: no uncommitted turns, no running interaction, no
   // unsettled physical requests for this branch.
+  // A local pre-dispatch refusal may have left an empty paused ordinary-turn
+  // row. Reconcile only rows whose version and durable evidence prove that
+  // no turn, roll, request, freeze or operation step was written.
+  await new SqliteInteractionOperationJournal(input.db).reconcileSafePausedPlayTurnOperations(input.branchId);
   const pending = await input.db.queryOne<{ n: number }>(
     `SELECT COUNT(*) n FROM turns WHERE branch_id=? AND status<>'Committed'`, [input.branchId]);
   if ((pending?.n ?? 0) > 0) return { outcome: 'stale', reason: 'branch has an in-flight turn' };

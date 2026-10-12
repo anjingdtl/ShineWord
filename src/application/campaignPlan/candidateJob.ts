@@ -312,6 +312,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         ? { reasoningReserveMultiplier: REASONING_ONLY_RESERVE_MULTIPLIER,
           previousWireOutputTokens: lastAttempt.wire_output_tokens,
           observedReasoningTokens: lastAttempt.estimated_usage === 0 ? lastAttempt.reasoning_tokens : null } : {}),
+      allowAuthoredCluesOnRepair: !frozen!.preparedNodeId,
       normalizeCandidate: candidate => {
         const preparedNodeId = frozen!.preparedNodeId;
         if (!preparedNodeId || !frozen!.basePlan || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;

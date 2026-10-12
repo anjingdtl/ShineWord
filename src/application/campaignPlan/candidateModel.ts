@@ -1,6 +1,6 @@
 import type { CampaignEffectSpec } from '../../domain/campaignPlan/types';
 import { CAMPAIGN_EFFECT_TEMPLATES } from '../../domain/campaignPlan/types';
-import type { SituationTransitionOp } from '../../domain/situations/types';
+import type { MethodDifficultyPolicyV1, MethodEvidenceBindingV1, SituationTransitionOp } from '../../domain/situations/types';
 import { SKILL_RANKS, type SkillRank } from '../../domain/rules/types';
 
 /**
@@ -74,6 +74,10 @@ export interface MethodSpec {
   };
   tradeoffs: string;
   preparation: string;
+  /** Absent only for pre-L1-compatible candidates; no defaults are inferred. */
+  difficultyPolicy?: MethodDifficultyPolicyV1;
+  evidencePolicy?: MethodEvidenceBindingV1;
+  evidenceAllowlist?: string[];
   outcomes: Readonly<Record<'full_success' | 'success' | 'failure' | 'severe_failure', OutcomeTemplateSpec>>;
 }
 
@@ -494,6 +498,56 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
   }
   const requires = parseRequirements(m.requires, errors, `${prefix}.requires`);
   if (!requires) return null;
+  if (m.ruleBindingHash !== undefined) {
+    errors.push(`${prefix}.ruleBindingHash: the local compiler owns this binding.`); return null;
+  }
+  const hasDifficultyPolicy = Object.prototype.hasOwnProperty.call(m, 'difficultyPolicy');
+  const hasEvidencePolicy = Object.prototype.hasOwnProperty.call(m, 'evidencePolicy');
+  const hasEvidenceAllowlist = Object.prototype.hasOwnProperty.call(m, 'evidenceAllowlist');
+  if (hasDifficultyPolicy !== hasEvidencePolicy || hasDifficultyPolicy !== hasEvidenceAllowlist) {
+    errors.push(`${prefix}: difficultyPolicy, evidencePolicy and evidenceAllowlist must be supplied together.`); return null;
+  }
+  let difficultyPolicy: MethodDifficultyPolicyV1 | undefined;
+  let evidencePolicy: MethodEvidenceBindingV1 | undefined;
+  let evidenceAllowlist: string[] | undefined;
+  if (hasDifficultyPolicy) {
+    const rawDifficulty = m.difficultyPolicy;
+    if (!isRecord(rawDifficulty) || (rawDifficulty.kind === 'fixed'
+      ? !isOneOf(rawDifficulty.band, ['simple', 'normal', 'challenging', 'peak'])
+        || Object.keys(rawDifficulty).some(key => !['kind', 'band'].includes(key))
+      : rawDifficulty.kind === 'planner_required'
+        ? Object.keys(rawDifficulty).some(key => key !== 'kind')
+        : true)) {
+      errors.push(`${prefix}.difficultyPolicy: fixed band simple|normal|challenging|peak or planner_required required.`); return null;
+    }
+    difficultyPolicy = rawDifficulty.kind === 'fixed'
+      ? { kind: 'fixed', band: rawDifficulty.band as Extract<MethodDifficultyPolicyV1, { kind: 'fixed' }>['band'] }
+      : { kind: 'planner_required' };
+
+    const rawEvidence = m.evidencePolicy;
+    if (!isRecord(rawEvidence) || (rawEvidence.kind === 'fixed'
+      ? !Array.isArray(rawEvidence.evidenceIds) || rawEvidence.evidenceIds.length > 16
+        || !rawEvidence.evidenceIds.every(isReference)
+        || new Set(rawEvidence.evidenceIds).size !== rawEvidence.evidenceIds.length
+        || Object.keys(rawEvidence).some(key => !['kind', 'evidenceIds'].includes(key))
+      : rawEvidence.kind === 'planner_required'
+        ? Object.keys(rawEvidence).some(key => key !== 'kind')
+        : true)) {
+      errors.push(`${prefix}.evidencePolicy: fixed evidenceIds (including explicit []) or planner_required required.`); return null;
+    }
+    if (!Array.isArray(m.evidenceAllowlist) || m.evidenceAllowlist.length > 16
+      || !m.evidenceAllowlist.every(isReference) || new Set(m.evidenceAllowlist).size !== m.evidenceAllowlist.length) {
+      errors.push(`${prefix}.evidenceAllowlist: an explicit unique list of up to 16 stable ids is required.`); return null;
+    }
+    evidenceAllowlist = [...m.evidenceAllowlist as string[]].sort();
+    evidencePolicy = rawEvidence.kind === 'fixed'
+      ? { kind: 'fixed', evidenceIds: [...rawEvidence.evidenceIds as string[]].sort() }
+      : { kind: 'planner_required' };
+    if (evidencePolicy.kind === 'fixed'
+      && evidencePolicy.evidenceIds.some(id => !evidenceAllowlist!.includes(id))) {
+      errors.push(`${prefix}.evidencePolicy.evidenceIds: each fixed evidence id must be in evidenceAllowlist.`); return null;
+    }
+  }
   // Model-drift adapter: outcomes may arrive as an ARRAY of
   // {tier, resultFact, effects} — normalize to the per-grade record.
   let outcomes = m.outcomes as Record<string, unknown> | undefined;
@@ -536,6 +590,8 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
     requires,
     tradeoffs: clampedTradeoffs,
     preparation: clampedPreparation,
+    ...(difficultyPolicy && evidencePolicy && evidenceAllowlist
+      ? { difficultyPolicy, evidencePolicy, evidenceAllowlist } : {}),
     outcomes: parsedOutcomes as MethodSpec['outcomes'],
   };
 }

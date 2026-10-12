@@ -5,6 +5,7 @@ import type { CampaignContentArtifactV1, CampaignPlanV1 } from '../../domain/cam
 import type { SituationDefinitionV1 } from '../../domain/situations/types';
 import { assessMethod } from '../guidance/candidates';
 import type { AllowedCandidateV1 } from '../guidance/types';
+import { campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, methodCanSatisfyCompletion } from './routeReadiness';
 
 export type OpportunityProjectionStatus =
   | 'no_campaign'
@@ -25,6 +26,8 @@ export interface ProjectedOpportunityRoute {
   actionKind: AllowedCandidateV1['actionKind'];
   available: boolean;
   blockers: readonly string[];
+  /** Machine-readable hard blockers used to keep unsafe routes out of cached player guidance. */
+  blockerCodes: readonly string[];
   /** Same signature means one displayed action can lead to several authored routes. */
   actionSignature: string;
 }
@@ -80,6 +83,9 @@ export function projectNarrativeOpportunities(
   input: ProjectNarrativeOpportunitiesInput,
 ): NarrativeOpportunityProjection {
   const { state, plan, playerCard } = input;
+  const preparableActorTemplateIds = new Set(campaignActorPreparationTemplates({
+    state, artifacts: input.artifacts ?? [], entries: input.entries,
+  }).map(entry => entry.entryId));
   const runtime = state.campaignRuntime;
   if (!runtime || !plan) return { status: 'no_campaign', opportunities: [] };
   if (runtime.planBinding.planId !== plan.planId
@@ -98,8 +104,11 @@ export function projectNarrativeOpportunities(
   }
 
   const boundIds = new Set(state.campaignContentBinding?.artifactIds ?? plan.contentArtifactRefs);
+  const referencedIds = new Set(plan.contentArtifactRefs);
   const artifacts = (input.artifacts ?? []).filter(artifact => boundIds.has(artifact.artifactId)
-    && artifact.planId === plan.planId && artifact.planRevision === plan.revision);
+    && referencedIds.has(artifact.artifactId)
+    && (artifact.planId === plan.planId || artifact.situations.some(situation => plan.nodes.some(node =>
+      node.nodeId === situation.nodeId && node.situationRef === situation.entryId))));
   const artifactSituation = new Map(artifacts.flatMap(artifact => artifact.situations.map(situation => [
     situation.entryId,
     { nodeId: situation.nodeId, artifactId: artifact.artifactId },
@@ -122,6 +131,8 @@ export function projectNarrativeOpportunities(
   };
 
   const opportunities: ProjectedNarrativeOpportunity[] = [];
+  const completionRouteRefs = new Set<string>();
+  const unusableCompletionRouteRefs = new Set<string>();
   let activeNodeMissingContent = false;
   let blockedByCurrentState = false;
   for (const node of active) {
@@ -153,6 +164,13 @@ export function projectNarrativeOpportunities(
     const routes = definition.methods.flatMap(method => {
       const assessed = assessMethod(node.situationRef!, method, methodContext);
       if (!assessed.visible) return [];
+      const closesNode = methodCanSatisfyCompletion(method, node.completion, situationStatuses);
+      if (closesNode) completionRouteRefs.add(assessed.ref);
+      const completionBlocker = campaignCompletionRewardBlocker({
+        state, plan, artifacts, situationId: node.situationRef!, method, preparableActorTemplateIds,
+      });
+      const eventBlocker = campaignMethodEventConsumerBlocker({ state, plan, artifacts, situationId: node.situationRef!, method });
+      if ((completionBlocker || eventBlocker) && closesNode) unusableCompletionRouteRefs.add(assessed.ref);
       return [{
         candidateRef: assessed.ref,
         situationId: node.situationRef!,
@@ -161,8 +179,13 @@ export function projectNarrativeOpportunities(
         goal: method.goal,
         firstStepIntent: method.firstStep.intent,
         actionKind: method.firstStep.actionKind,
-        available: assessed.eligible,
-        blockers: [...assessed.blockers],
+        available: assessed.eligible && !completionBlocker && !eventBlocker,
+        blockerCodes: [completionBlocker, eventBlocker].filter((code): code is string => Boolean(code)),
+        blockers: [
+          ...assessed.blockers,
+          ...(completionBlocker ? ['该收尾路线所需的人物尚未加入当前战局，暂不可完成此阶段。'] : []),
+          ...(eventBlocker ? ['该路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。'] : []),
+        ],
         actionSignature: actionSignature(method.firstStep),
       } satisfies ProjectedOpportunityRoute];
     });
@@ -185,8 +208,10 @@ export function projectNarrativeOpportunities(
   }
 
   opportunities.sort((a, b) => a.priority - b.priority || a.nodeId.localeCompare(b.nodeId));
-  const preferred = opportunities.flatMap(opportunity => opportunity.routes)
-    .find(route => route.available)?.candidateRef;
+  const allRoutes = opportunities.flatMap(opportunity => opportunity.routes);
+  const preferred = allRoutes.find(route => completionRouteRefs.has(route.candidateRef)
+    && !unusableCompletionRouteRefs.has(route.candidateRef))?.candidateRef
+    ?? allRoutes.find(route => route.available)?.candidateRef;
   if (opportunities.length > 0 && preferred) {
     return {
       status: opportunities.some(item => item.routes.some(route => route.available)) ? 'ready' : 'blocked',

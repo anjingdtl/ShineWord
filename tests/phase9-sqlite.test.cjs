@@ -146,6 +146,33 @@ test('P9G5: job single-flight merges duplicate triggers for the same branch+kind
   assert.equal((await store.getJob('job-r2')), null, 'no second job was created');
 });
 
+test('P9G5: an identical trigger queues fresh work after its previous replan became stale', async () => {
+  const adapter = new NodeSqliteAdapter(freshDb());
+  const store = new SqliteCampaignPlanStore(adapter);
+  const reasons = ['stage_content_prepared_ahead', 'stage_content_target:stage-2'];
+  const stale = {
+    jobId: 'job-stale', setupId: 'setup-1', campaignId: 'camp-1', branchId: 'b1', jobKind: 'replan',
+    triggerReasons: reasons, baseStateVersion: 9, basePlanId: 'plan-1', basePlanRevision: 1,
+    intentHash: 'i'.repeat(64), contentManifestHash: 'old-binding', knowledgePolicyHash: null, triggerEventRefs: [],
+    status: 'stale', leaseOwner: null, leaseExpiresAt: null, fencingToken: 1, attemptCount: 1,
+    nextRetryAt: null, physicalRequestBudget: 2, freezeRootId: 'freeze-old', lastError: 'binding changed',
+    createdAt: NOW, updatedAt: NOW,
+  };
+  await store.insertJob(stale);
+
+  const requeued = await store.enqueueJobMergingTriggers({
+    ...stale, jobId: 'job-fresh', baseStateVersion: 10, contentManifestHash: 'current-binding',
+    status: 'queued', fencingToken: 0, attemptCount: 0, freezeRootId: null, lastError: null,
+    createdAt: '2026-10-06T00:01:00.000Z', updatedAt: '2026-10-06T00:01:00.000Z',
+  }, reasons, '2026-10-06T00:01:00.000Z');
+
+  assert.equal(requeued.merged, false, 'stale work cannot absorb a fresh trigger');
+  assert.equal(requeued.jobId, 'job-fresh');
+  assert.equal((await store.getJob('job-stale')).status, 'stale', 'the old failure evidence is preserved');
+  assert.equal((await store.getJob('job-fresh')).status, 'queued');
+  assert.equal((await store.getJob('job-fresh')).baseStateVersion, 10);
+});
+
 test('P9G5: claim/transition are fenced — a stale worker cannot finish or overwrite', async () => {
   const adapter = new NodeSqliteAdapter(freshDb());
   const store = new SqliteCampaignPlanStore(adapter);

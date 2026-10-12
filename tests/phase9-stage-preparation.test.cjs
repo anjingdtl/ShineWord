@@ -238,6 +238,27 @@ test('P9-O1: two failed preparations of one node stop automatic scheduling and e
   } finally { h.db.close(); }
 });
 
+test('P9-O1: pending stage preparation is visible and a failed job remains retryable', async () => {
+  const h = await fixture();
+  try {
+    const job = await queued(h);
+    const claimed = await h.planStore.claimJob(job.jobId, 'fixture', '2099-01-01T00:00:00.000Z', new Date().toISOString());
+    assert.ok(claimed);
+
+    const pending = await h.session.getCampaignProgress(h.campaignId, h.branchId);
+    assert.equal(pending.preparationPending, true);
+    assert.equal(pending.replanPending, true);
+    assert.match(pending.preparationNotice, /正在准备中/);
+
+    await h.planStore.transitionJob(job.jobId, claimed.fencingToken, 'invalid', { lastError: 'fixture failure' });
+    const failed = await h.session.getCampaignProgress(h.campaignId, h.branchId);
+    assert.equal(failed.preparationPending, false);
+    assert.equal(failed.replanPending, false);
+    assert.match(failed.preparationNotice, /准备失败/);
+    assert.equal(failed.replanOutcomeUnknown, false);
+  } finally { h.db.close(); }
+});
+
 test('P9-O1: an already prepared nearest successor, pause or terminal campaign does not expand distant nodes', async () => {
   const h = await fixture();
   try {

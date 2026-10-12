@@ -120,10 +120,10 @@ if (require.main === module) {
     log: metric => console.log(JSON.stringify(metric)) });
   const port = Number(process.env.PHASE9_PROXY_PORT || 18591);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Phase 9 QA proxy port is invalid.');
-  server.listen(port, '0.0.0.0', () => {
+  server.listen(port, '127.0.0.1', () => {
     const current = budgetModule.readManifest();
     const used = current.spentPhysicalRequests ?? current.budget?.spent;
     const cap = current.capPhysicalRequests ?? current.budget?.hardStop;
-    console.log(`Phase9 QA proxy ready on port ${port}; scoped requests ${used}/${cap}; credentials and request content are never logged.`);
+    console.log(`Phase9 QA proxy ready on 127.0.0.1:${port}; scoped requests ${used}/${cap}; credentials and request content are never logged.`);
   });
 }

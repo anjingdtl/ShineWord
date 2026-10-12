@@ -897,7 +897,7 @@ for (const companion of [false, true]) test(`closeout: template-addressed reward
   } finally { h.db.close(); }
 });
 
-test('closeout: a reward cannot commit knowledge to a scoped template with no instantiated owner', async () => {
+test('closeout: settlement rejects an absent owner; a new action prepares its adopted participant before granting knowledge', async () => {
   const model = candidateModel();
   model.stages[0].completion = { kind: 'counter_at_least', situationId: 'self', counterId: 'evidence', minimum: 1 };
   model.rewards[0].rewards.push({ kind: 'knowledge', targetId: 'lore-crates', toActorId: 'tpl-lin' });
@@ -906,10 +906,20 @@ test('closeout: a reward cannot commit knowledge to a scoped template with no in
   const h = await fixture({ model, entries });
   try {
     const before = await h.turns.getState(h.branchId);
-    await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看现场' }),
-      /人物.*未实例化或有歧义/);
+    const content = await h.session.loadCampaignPlanForState(h.campaignId, before);
+    const invalidPrepared = structuredClone(before);
+    invalidPrepared.situations[0].counters.evidence = 1;
+    assert.throws(() => require('../dist/application/campaignPlan/settlement').settleCampaignProgress({
+      nextState: invalidPrepared, turnId: 'offline-absent-owner', nextStateVersion: before.stateVersion + 1,
+      plan: content.plan, artifacts: content.artifacts, transactionEvents: [], historyEvents: [],
+    }), /人物.*未实例化或有歧义/);
     assert.deepEqual(await h.turns.getState(h.branchId), before, 'atomic failure retains the snapshot and reward grant keys');
     assert.equal((await h.turns.getState(h.branchId)).discoveries.some(d => d.actorId === 'tpl-lin'), false);
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看现场' });
+    const after = await h.turns.getState(h.branchId);
+    assert.ok(after.actors['npc-tpl-lin']);
+    assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates' && d.actorId === 'npc-tpl-lin'));
+    assert.equal(after.discoveries.some(d => d.actorId === 'tpl-lin'), false, 'no phantom template owner is written');
   } finally { h.db.close(); }
 });
 

@@ -58,7 +58,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const [progressExpanded, setProgressExpanded] = useState(false);
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
-  const campaignProgress = useCampaignProgress(campaignId, branchId, view?.stateVersion);
+  const campaignProgress = useCampaignProgress(campaignId, branchId, view?.stateVersion, notice);
   const guideHidden = turns.length > 0;
   const closeProgress = (): void => {
     Keyboard.dismiss();
@@ -193,14 +193,28 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
           <CampaignProgressCard
             progress={campaignProgress}
             expanded={false}
+            preparing={notice?.startsWith('后续主线准备中') ?? false}
             onToggle={() => { Keyboard.dismiss(); setProgressExpanded(true); }} />
         </View>
       ) : null}
       <PlayPanel visible={progressExpanded} title="战役主线" onClose={closeProgress}>
         <CampaignProgressCard progress={campaignProgress} expanded onToggle={closeProgress} busy={busy || recoveryLocked}
+          preparing={notice?.startsWith('后续主线准备中') ?? false}
           onPauseResume={() => void partyCall(async session => { await session.setCampaignStatus({ campaignId, branchId, status: campaignProgress?.status === 'paused' ? 'active' : 'paused' }); })}
           onAdjustGoal={() => setGoalDraft(campaignProgress?.currentObjective ?? '')}
-          onReplan={() => void partyCall(async session => { const status = await session.runCampaignReplan(campaignId, branchId); controller.setNotice(status === 'no_change' ? '当前没有需要处理的主线修订。' : '后续主线已准备。'); })}
+          onReplan={() => {
+            controller.setNotice('后续主线准备中…');
+            void partyCall(async session => {
+              try {
+                const status = await session.runCampaignReplan(campaignId, branchId);
+                controller.setNotice(status === 'no_change' ? '当前没有需要处理的主线修订。'
+                  : status === 'stale' ? '局势已变化，本次主线准备结果已作废。' : '后续主线已准备。');
+              } catch (error) {
+                controller.setNotice('后续主线准备尚未完成，请在主线面板查看状态后重试。');
+                throw error;
+              }
+            });
+          }}
           onResumeUnknownReplan={confirmUnknownReplan} />
         {goalDraft !== null ? <View style={{ gap: theme.space.sm }}>
           <TextField label="这次想做什么" value={goalDraft} onChangeText={setGoalDraft} multiline disabled={busy} />

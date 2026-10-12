@@ -60,6 +60,15 @@ export interface MethodFirstStep {
   destinationId?: string;
 }
 
+/** Optional, typed compile policies added after historical campaign artifacts. */
+export type MethodDifficultyPolicyV1 =
+  | { kind: 'fixed'; band: 'simple' | 'normal' | 'challenging' | 'peak' }
+  | { kind: 'planner_required' };
+
+export type MethodEvidenceBindingV1 =
+  | { kind: 'fixed'; evidenceIds: readonly string[] }
+  | { kind: 'planner_required' };
+
 export interface MethodTemplateV1 {
   methodId: string;
   title: string;
@@ -80,6 +89,14 @@ export interface MethodTemplateV1 {
   /** Situation transitions applied by the local reducer on success/failure. */
   onSuccess?: readonly SituationTransitionOp[];
   onFailure?: readonly SituationTransitionOp[];
+  /**
+   * Additive L1 policies. Historical methods omit all four fields and stay on
+   * the Planner path; an explicit empty evidence list means no evidence.
+   */
+  difficultyPolicy?: MethodDifficultyPolicyV1;
+  evidencePolicy?: MethodEvidenceBindingV1;
+  evidenceAllowlist?: readonly string[];
+  ruleBindingHash?: string;
   /**
    * P9 (plan §8.2): full four-grade outcome templates for important campaign
    * methods. Authored ONLY by the campaign content compiler (never by the

@@ -82,7 +82,13 @@ export interface ActionContract {
    * the contract hash; the planner channel can never author it. Situation
    * transitions bound to the method apply only through the local reducer.
    */
-  methodRef?: { situationId: string; methodId: string; outcomeSetHash?: string };
+  methodRef?: {
+    situationId: string;
+    methodId: string;
+    outcomeSetHash?: string;
+    /** Plan + full campaign-artifact binding for newly compiled methods. */
+    campaignBindingHash?: string;
+  };
   /**
    * P9 (A11/A13): the stable candidate reference the player selected (or the
    * mapped free-input candidate). Frozen into the contract hash so history

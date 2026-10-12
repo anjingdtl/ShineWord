@@ -204,8 +204,12 @@ export class SqliteCampaignPlanStore {
             return { jobId: existing.jobId, merged: true };
           }
           const mergedReasons = [...new Set([...existing.triggerReasons, ...newReasons])];
+          const sameTrigger = newReasons.every(reason => existing.triggerReasons.includes(reason));
+          // A stale candidate is no longer in flight and cannot satisfy a new
+          // preparation trigger. Reusing it here would strand the same stage
+          // forever after its frozen content/state binding changed.
           if (sameIntent && samePlan && (['queued','running','candidate_ready','retryable_failed','outcome_unknown'].includes(existing.status)
-            || newReasons.every(reason => existing.triggerReasons.includes(reason)))) {
+            || (existing.status !== 'stale' && sameTrigger))) {
             if (existing.status === 'queued') await tx.execute(
               'UPDATE campaign_plan_jobs SET trigger_reasons_json=?,base_state_version=?,updated_at=? WHERE job_id=?',
               [JSON.stringify(mergedReasons), job.baseStateVersion, now, existing.jobId]);

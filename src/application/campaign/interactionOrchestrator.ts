@@ -75,9 +75,80 @@ export class SqliteInteractionOperationJournal {
         WHERE operation_id=? AND fence_token=?`, [this.nowIso(),operation.operationId,operation.fenceToken]);
       return result;
     } catch (error) {
-      await this.pause(operation,'system');
+      // A local refusal can happen after the ordinary-turn fence opens but
+      // before the game loop stages a turn or dispatches any provider work.
+      // Release only when the database proves that no part of the action was
+      // persisted and the branch is still at the original version. Any
+      // durable or ambiguous evidence keeps the operation resumable/paused.
+      const failedSafely = await this.failTurnIfNoDurableEvidence(operation, input.turnId, 'running');
+      if (!failedSafely) await this.pause(operation,'system');
       throw error;
     }
+  }
+
+  /**
+   * Clears only paused ordinary-turn rows that are provably empty. This is
+   * used at a stable management boundary so a rejected local action cannot
+   * strand an already-ready campaign-plan candidate.
+   */
+  async reconcileSafePausedPlayTurnOperations(branchId: string): Promise<number> {
+    const rows = await this.db.queryAll<OperationRow>(
+      `SELECT * FROM interaction_operations WHERE branch_id = ?
+        AND operation_kind = 'play_turn' AND status = 'paused_system' ORDER BY updated_at`, [branchId],
+    );
+    const prefix = `play:${branchId}:`;
+    let reconciled = 0;
+    for (const row of rows) {
+      if (!row.operation_id.startsWith(prefix)) continue;
+      const operation = operationFromRow(row);
+      if (await this.failTurnIfNoDurableEvidence(operation, row.operation_id.slice(prefix.length), 'paused_system')) {
+        reconciled += 1;
+      }
+    }
+    return reconciled;
+  }
+
+  private async failTurnIfNoDurableEvidence(
+    operation: InteractionOperation,
+    turnId: string,
+    expectedStatus: 'running' | 'paused_system',
+  ): Promise<boolean> {
+    return this.db.transaction(async tx => {
+      const current = await tx.queryOne<{ status: string; fence_token: number; expected_state_version: number }>(
+        'SELECT status, fence_token, expected_state_version FROM interaction_operations WHERE operation_id = ?',
+        [operation.operationId],
+      );
+      if (!current || current.status !== expectedStatus || current.fence_token !== operation.fenceToken
+        || current.expected_state_version !== operation.expectedStateVersion) return false;
+
+      const branch = await tx.queryOne<{ state_version: number }>(
+        'SELECT state_version FROM branches WHERE branch_id = ?', [operation.branchId],
+      );
+      if (!branch || branch.state_version !== operation.expectedStateVersion) return false;
+
+      const evidenceQueries: Array<{ sql: string; params: unknown[] }> = [
+        { sql: 'SELECT 1 AS found FROM turns WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM roll_records WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM llm_requests WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM frozen_turn_material_roots WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM frozen_turn_postprocess_outbox WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM branch_events WHERE branch_id = ? AND turn_id = ? LIMIT 1', params: [operation.branchId, turnId] },
+        { sql: 'SELECT 1 AS found FROM interaction_operation_steps WHERE operation_id = ? LIMIT 1', params: [operation.operationId] },
+        // Attempts do not carry turn_id. Retain the fence if a Planner or
+        // Narrator request was recorded for this player-action version.
+        { sql: `SELECT 1 AS found FROM llm_request_attempts
+          WHERE branch_id = ? AND state_version = ? AND LOWER(request_kind) IN ('planner', 'narrator') LIMIT 1`,
+          params: [operation.branchId, operation.expectedStateVersion] },
+      ];
+      for (const query of evidenceQueries) {
+        if (await tx.queryOne(query.sql, query.params)) return false;
+      }
+
+      const changed = await tx.execute(`UPDATE interaction_operations SET status = 'failed', updated_at = ?
+        WHERE operation_id = ? AND status = ? AND fence_token = ?`,
+      [this.nowIso(), operation.operationId, expectedStatus, operation.fenceToken]);
+      return changed === 1;
+    });
   }
 
   async run<TAction>(input: InteractionOperationRunInput<TAction>): Promise<InteractionOperationRunResult> {

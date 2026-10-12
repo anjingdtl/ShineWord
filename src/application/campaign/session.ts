@@ -38,6 +38,7 @@ import { buildPendingBridge, renderPendingBridge } from '../memory/pendingBridge
 import { compileMemoryMaterialCandidates } from '../memory/storyMemoryCompiler';
 import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
+import { evaluateLocalCompileReadiness } from '../game/localCompileReadiness';
 import { TurnPostProcessingCoordinator } from '../game/turnPostProcessing';
 import { packageIndexes, ProposalRejectedError } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
@@ -99,6 +100,7 @@ import { commitResolvedTurn, prepareTurnResolution, type PreparedTurnResolution 
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
 import { projectPlayableSituations } from '../campaignPlan/contentResolver';
 import { projectNarrativeOpportunities } from '../campaignPlan/opportunityProjection';
+import { campaignActorPreparationTemplates, campaignCompletionRewardBlocker, campaignMethodEventConsumerBlocker, CAMPAIGN_COMPLETION_REWARD_ACTOR_UNAVAILABLE, CAMPAIGN_METHOD_EVENT_UNCONSUMED } from '../campaignPlan/routeReadiness';
 import { loadCampaignContentCatalog } from './contentCatalog';
 import { readBoundCampaignArtifacts } from '../campaignPlan/boundArtifacts';
 import { SqliteCampaignPlanStore } from '../../infra/sqlite/sqliteCampaignPlanStore';
@@ -344,6 +346,9 @@ export class CampaignSession {
     recentProgress: Array<{ text: string; atStateVersion: number }>;
     pendingConsequences: string[];
     preparationNotice: string | null;
+    preparationPending: boolean;
+    replanPending: boolean;
+    replanCandidateReady: boolean;
     replanOutcomeUnknown: boolean;
     ending: { title: string; outcomeKind: string } | null;
   } | null> {
@@ -376,8 +381,15 @@ export class CampaignSession {
       "SELECT status FROM campaign_plan_jobs WHERE campaign_id=? AND branch_id=? AND job_kind='replan' ORDER BY created_at DESC, rowid DESC LIMIT 1",
       [campaignId, branchId]);
     const replanOutcomeUnknown = latestReplan?.status === 'outcome_unknown';
+    const pendingStatuses = ['queued', 'running', 'candidate_ready'];
+    const preparationPending = !!preparation && pendingStatuses.includes(preparation.status);
+    const replanCandidateReady = latestReplan?.status === 'candidate_ready';
+    const replanPending = !!latestReplan && ['queued', 'running'].includes(latestReplan.status);
     const preparationNotice = replanOutcomeUnknown ? '后续主线规划结果未知，恢复前需要核对冻结材料和请求记录。'
       : preparation?.status === 'outcome_unknown' ? '后续内容请求结果未知，请先处理请求账本。'
+      : preparationPending ? '后续阶段内容正在准备中；当前已就绪的场景仍可继续，准备完成后会显示新内容。'
+      : replanCandidateReady ? '后续主线已就绪；到达稳定边界后可采用。'
+      : replanPending ? '后续主线正在准备中；当前状态已保留，请等待结果。'
       : preparation && ['invalid', 'retryable_failed'].includes(preparation.status) ? '后续内容准备失败，请在主线面板处理后再继续准备。' : null;
     return {
       status: runtime.campaignStatus,
@@ -387,6 +399,9 @@ export class CampaignSession {
       recentProgress: runtime.recentProgressLines.map(line => ({ text: line.text, atStateVersion: line.atStateVersion })),
       pendingConsequences: runtime.deferredConsequences.filter(item => item.status === 'pending' && item.visibility === 'public').map(item => item.description),
       preparationNotice,
+      preparationPending,
+      replanPending,
+      replanCandidateReady,
       replanOutcomeUnknown,
       ending: runtime.ending ? { title: runtime.ending.title, outcomeKind: runtime.ending.outcomeKind } : null,
     };
@@ -2409,6 +2424,7 @@ export class CampaignSession {
       }
       const state = await this.deps.turns.getState(options.branchId);
       if (!state) throw new Error('Unknown branch.');
+      await this.assertCampaignMethodRouteReady(options, state);
       const turnId = options.turnIdOverride ?? await this.nextPlayerTurnId(options.branchId, state.stateVersion);
       return await new SqliteInteractionOperationJournal(this.deps.db).guardTurn({ ...options, turnId,
         expectedStateVersion: state.stateVersion }, fence => this.playTurnInForeground({ ...options, turnIdOverride: turnId, coordinationFence: fence }));
@@ -2418,30 +2434,71 @@ export class CampaignSession {
     }
   }
 
+  /** Reject a stale or typed closure route before the operation journal opens. */
+  private async assertCampaignMethodRouteReady(options: PlayTurnOptions, state: GameStateSnapshot): Promise<void> {
+    const content = await this.loadCampaignPlanForState(options.campaignId, state);
+    if (!content) return;
+    const candidateRef = options.guidanceChoice?.candidateRef;
+    const candidate = candidateRef?.startsWith('method:') ? candidateRef.slice('method:'.length) : undefined;
+    const separator = candidate?.lastIndexOf(':') ?? -1;
+    const selectedSituationId = separator >= 0 ? candidate!.slice(0, separator) : undefined;
+    const selectedMethodId = separator >= 0 ? candidate!.slice(separator + 1) : undefined;
+    const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+    const typedIntent = normalizeIntent(options.intent);
+    const activeSituationIds = new Set((state.situations ?? [])
+      .filter(item => item.status === 'active').map(item => item.situationId));
+    const playerActorId = state.party?.find(member => member.controller === 'player')?.actorId;
+    const playerLocationId = playerActorId ? state.actors[playerActorId]?.locationId : undefined;
+    for (const authored of content.artifacts.flatMap(artifact => artifact.situations)) {
+      if (!activeSituationIds.has(authored.entryId)) continue;
+      if (authored.definition.locationId && authored.definition.locationId !== playerLocationId) continue;
+      for (const method of authored.definition.methods) {
+        const isSelected = selectedSituationId !== undefined
+          ? authored.entryId === selectedSituationId && method.methodId === selectedMethodId
+          : normalizeIntent(method.firstStep.intent) === typedIntent;
+        if (!isSelected) continue;
+        const blocker = campaignCompletionRewardBlocker({
+          state, plan: content.plan, artifacts: content.artifacts,
+          situationId: authored.entryId, method,
+        });
+        if (blocker) {
+          throw new Error('此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
+        }
+        const eventBlocker = campaignMethodEventConsumerBlocker({
+          state, plan: content.plan, artifacts: content.artifacts, situationId: authored.entryId, method,
+        });
+        if (eventBlocker === CAMPAIGN_METHOD_EVENT_UNCONSUMED) {
+          throw new Error('此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
+        }
+      }
+    }
+  }
+
   /** Materialize adopted scene templates only at a new player-action boundary.
    * Background publication/adoption never writes cards or actor state. */
   private async prepareAdoptedSceneActors(options: PlayTurnOptions): Promise<boolean> {
-    if (!this.deps.segmentContent) return false;
     const pending = await this.deps.db.queryOne(`SELECT turn_id FROM turns WHERE branch_id=? AND status<>'Committed' LIMIT 1`, [options.branchId]);
     const operation = await this.deps.db.queryOne(`SELECT operation_id FROM interaction_operations WHERE branch_id=? AND status IN ('running','paused_system') LIMIT 1`, [options.branchId]);
     if (pending || operation) return false;
     const summary = await this.getSummary(options.campaignId, options.branchId);
-    if (!summary.state.segmentContentBinding) return false;
     const player = summary.cards.find(card => card.controller === 'player');
     const playerState = player && summary.state.actors[player.actorId];
     if (!player || !playerState?.locationId || playerState.lifeStatus === 'dead' || playerState.lifeStatus === 'critical') return false;
     await this.assertNoActiveEncounter(options.branchId);
     const { worldTimeOrder } = await this.campaignAnchor(options.campaignId);
-    const catalog = await this.deps.segmentContent.loadEffectiveCatalog({ campaignId: options.campaignId, branchId: options.branchId, binding: summary.state.segmentContentBinding });
+    const entries = await this.loadPackageEntries(summary.worldId, summary.packageRevision,
+      { campaignId: options.campaignId, state: summary.state });
     const facts = await this.deps.worldStore.listFacts(summary.worldId);
     const known = new Set((summary.state.discoveries ?? []).filter(d => d.actorId === player.actorId).map(d => d.entryId));
-    const visible = projectPlayerEntriesAtAnchor(catalog.entries, facts, worldTimeOrder, known);
-    const scenes = visible.filter(entry => entry.kind === 'scene' && (entry.definition as SceneDefinition).locationId === playerState.locationId);
-    const templateIds = new Set(scenes.flatMap(entry => (entry.definition as SceneDefinition).actors));
+    const order = Math.max(worldTimeOrder, summary.state.causalWorldTimeOrder ?? 0);
+    const visible = projectPlayerEntriesAtAnchor(entries, facts, order, known);
+    const content = await this.loadCampaignPlanForState(options.campaignId, summary.state);
+    const templates = campaignActorPreparationTemplates({ state: summary.state,
+      artifacts: content?.artifacts ?? [], entries: visible, worldTimeOrder: order });
     const existing = await this.loadAllCards(options.branchId);
-    const cards = visible.filter(entry => entry.kind === 'actor_template' && templateIds.has(entry.entryId)
-      && isTemplateValidAtAnchor(entry, worldTimeOrder)
-      && !existing.some(card => card.templateId === entry.entryId || card.name === (entry.definition as ActorTemplateDefinition).name))
+    const resolveExistingActor = createActorReferenceResolver({ actors: summary.state.actors, cards: existing });
+    const cards = templates.filter(entry => !existing.some(card => card.templateId === entry.entryId)
+      && !summary.state.actors[resolveExistingActor(entry.entryId)])
       .map(entry => createTemplateCard({ actorId: `npc-${entry.entryId}`, worldId: summary.worldId, worldPackageRevision: summary.packageRevision,
         templateId: entry.entryId, definition: entry.definition as ActorTemplateDefinition, controller: 'gm', kind: 'npc' }));
     if (!cards.length) return false;
@@ -2591,6 +2648,8 @@ export class CampaignSession {
       .map(entry => [entry.situationId, entry] as const));
     const activeMethods: MethodTemplateV1[] = [];
     const activeMethodSituations: string[] = [];
+    const blockedMethodRefs = new Set<string>();
+    const blockedMethodMessages = new Map<string, string>();
     for (const situation of playableSituations) {
       if (situation.definition.locationId && situation.definition.locationId !== playerState.locationId) continue;
       if (situationStatusById.get(situation.situationId)?.status === 'active') {
@@ -2601,6 +2660,34 @@ export class CampaignSession {
             situationStatuses: situationStatusById, causalWorldTimeOrder: worldTimeOrder,
           });
           if (!assessed.visible) continue;
+          const rewardBlocker = campaignCompletionRewardBlocker({
+            state: summary.state, plan: campaignContent?.plan, artifacts: campaignContent?.artifacts ?? [],
+            situationId: situation.situationId, method,
+          });
+          if (rewardBlocker) {
+            const methodRef = `method:${situation.situationId}:${method.methodId}`;
+            blockedMethodRefs.add(methodRef);
+            blockedMethodMessages.set(methodRef, '此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
+            if (options.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')
+              === method.firstStep.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')) {
+              throw new Error('此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
+            }
+            continue;
+          }
+          const eventBlocker = campaignMethodEventConsumerBlocker({
+            state: summary.state, plan: campaignContent?.plan, artifacts: campaignContent?.artifacts ?? [],
+            situationId: situation.situationId, method,
+          });
+          if (eventBlocker) {
+            const methodRef = `method:${situation.situationId}:${method.methodId}`;
+            blockedMethodRefs.add(methodRef);
+            blockedMethodMessages.set(methodRef, '此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
+            if (options.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')
+              === method.firstStep.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')) {
+              throw new Error('此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。');
+            }
+            continue;
+          }
           if (!assessed.eligible) {
             const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
             if (normalizeIntent(options.intent) === normalizeIntent(method.firstStep.intent)) {
@@ -2873,8 +2960,44 @@ export class CampaignSession {
         const methodId = rest.slice(separator + 1);
         const offered = activeMethodSituations.some((owner, index) =>
           owner === situationId && activeMethods[index]?.methodId === methodId);
-        if (!offered) throw new Error('所选路径已不在当前可用办法中，请刷新后重新选择。');
+        if (!offered) {
+          const blockerMessage = blockedMethodMessages.get(selectedCandidateRef);
+          if (blockerMessage) {
+            throw new Error(blockerMessage);
+          }
+          if (blockedMethodRefs.has(selectedCandidateRef)) throw new Error('所选路径当前不可用，请刷新局面后重新选择。');
+          throw new Error('所选路径已不在当前可用办法中，请刷新后重新选择。');
+        }
         selectedCandidate = { selectedMethodRef: { situationId, methodId }, candidateRef: selectedCandidateRef };
+      }
+      let localCompileSelection: import('../game/localCompileReadiness').LocalCompileSelectionV1 | undefined;
+      let campaignBindingHash: string | undefined;
+      if (selectedCandidate) {
+        const readiness = evaluateLocalCompileReadiness({
+          state: summary.state,
+          plan: campaignContent?.plan ?? null,
+          artifacts: campaignContent?.artifacts ?? [],
+          situationDefinitions: playableSituations,
+          selectedMethods: activeMethods.map((method, index) => ({
+            situationId: activeMethodSituations[index]!, method,
+          })),
+          selectedMethodRef: selectedCandidate.selectedMethodRef,
+          candidateRef: selectedCandidate.candidateRef,
+          turnId,
+          playerIntent: options.intent,
+          playerCard,
+          cards: plannerCards,
+          entries,
+        });
+        if (readiness.kind === 'refused') {
+          throw new Error('所选路径的本地绑定已变化，请刷新局面后重新选择。');
+        }
+        if (readiness.kind === 'ready') {
+          localCompileSelection = readiness.selection;
+          campaignBindingHash = readiness.selection.campaignBindingHash;
+        } else if (readiness.kind === 'planner_required') {
+          campaignBindingHash = readiness.campaignBindingHash;
+        }
       }
       result = await runV2Turn({
         provider: this.provider,
@@ -2887,6 +3010,8 @@ export class CampaignSession {
         // P9 (A11/A13): the player's tap carries a stable candidate reference;
         // compile binds THAT method id, refusing stale choices.
         ...(selectedCandidate ? selectedCandidate : {}),
+        ...(localCompileSelection ? { localCompileSelection } : {}),
+        ...(campaignBindingHash ? { campaignBindingHash } : {}),
         worldContext: plannerWorldContext,
         plannerWireOutputTokens: turnBundle.plannerWireOutputTokens,
         plannerFinalWire: turnBundle.plannerFinalWire,
@@ -2984,6 +3109,7 @@ export class CampaignSession {
               keyItemIds,
               entries, cards: plannerCards,
               opportunityProjection: opportunityProjectionFor(prepared.nextState, failedMethodRef),
+              failedCandidateRef: failedMethodRef,
             });
           },
           buildGuidance: async ({
@@ -2997,6 +3123,7 @@ export class CampaignSession {
               prepared, situationDefinitions: playableSituationsFor(prepared.nextState), playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
               preferredSituationId: preferredSituationFor(prepared.nextState),
               opportunityProjection,
+              failedCandidateRef: failedMethodRef,
             });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
               [...new Set((prepared.nextState.discoveries ?? []).filter(d => d.actorId === playerCard.actorId).map(d => d.entryId))].sort().join('\n'));

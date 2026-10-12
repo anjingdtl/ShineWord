@@ -51,6 +51,10 @@ export interface AllowedCandidateV1 {
 export interface PublicSituationPacketV1 {
   /** Locally bound current mainline; never supplied by the model. */
   preferredSituationId?: string;
+  /** Locally projected first route after a failed path. */
+  preferredCandidateRef?: string;
+  /** The failed route stays available for retry but is presented last. */
+  failedCandidateRef?: string;
   changes: string[];
   opportunities: ReadonlyArray<{ text: string; situationId?: string }>;
   pressures: ReadonlyArray<{ text: string; deadlineClockSeconds?: number }>;

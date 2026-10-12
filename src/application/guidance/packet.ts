@@ -58,6 +58,7 @@ export interface BuildSituationPacketInput {
   cards?: readonly ActorCard[];
   allowedCandidates?: readonly AllowedCandidateV1[];
   preferredCandidateRef?: string;
+  failedCandidateRef?: string;
   preferredSituationId?: string;
   opportunityProjection?: NarrativeOpportunityProjection;
 }
@@ -135,15 +136,25 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
   };
   const preferredSituationId = input.opportunityProjection?.primarySituationId ?? input.preferredSituationId;
   const preferredCandidateRef = input.preferredCandidateRef ?? input.opportunityProjection?.preferredCandidateRef;
+  const failedCandidateRef = input.failedCandidateRef;
   const prioritizedDefinitions = [...situationDefinitions].sort((a, b) =>
     Number(b.situationId === preferredSituationId) - Number(a.situationId === preferredSituationId));
-  const candidates = [...(input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions: prioritizedDefinitions, context }))];
-  candidates.sort((a, b) => Number(b.situationId === preferredSituationId) - Number(a.situationId === preferredSituationId));
-  if (preferredCandidateRef) candidates.sort((a, b) => Number(b.ref === preferredCandidateRef) - Number(a.ref === preferredCandidateRef));
+  const hardBlockedRefs = new Set((input.opportunityProjection?.opportunities ?? [])
+    .flatMap(opportunity => opportunity.routes
+      .filter(route => route.blockerCodes.length > 0)
+      .map(route => route.candidateRef)));
+  const candidates = [...(input.allowedCandidates ?? collectAllowedCandidates({ situationDefinitions: prioritizedDefinitions, context }))]
+    .filter(candidate => !hardBlockedRefs.has(candidate.ref));
+  const compareCandidatePriority = (a: AllowedCandidateV1, b: AllowedCandidateV1): number =>
+    Number(b.ref === preferredCandidateRef) - Number(a.ref === preferredCandidateRef)
+    || Number(a.ref === failedCandidateRef) - Number(b.ref === failedCandidateRef)
+    || Number(preferredSituationId !== undefined && b.situationId === preferredSituationId)
+      - Number(preferredSituationId !== undefined && a.situationId === preferredSituationId);
+  candidates.sort(compareCandidatePriority);
   // Bound model input even after many regions have been built. Keep current
   // situation methods and legal base actions within a fixed public envelope.
   const allowedCandidates = [...candidates.filter(c => c.methodId).slice(0, 8), ...candidates.filter(c => !c.methodId).slice(0, 4)];
-  if (preferredCandidateRef) allowedCandidates.sort((a, b) => Number(b.ref === preferredCandidateRef) - Number(a.ref === preferredCandidateRef));
+  allowedCandidates.sort(compareCandidatePriority);
   if (allowedCandidates.length === 0 && situationDefinitions.length === 0 && !input.opportunityProjection?.feedback) return null;
 
   const opportunities: Array<{ text: string; situationId?: string }> = [];
@@ -198,6 +209,8 @@ export function buildSituationPacket(input: BuildSituationPacketInput): PublicSi
 
   return {
     ...(preferredSituationId ? { preferredSituationId } : {}),
+    ...(preferredCandidateRef ? { preferredCandidateRef } : {}),
+    ...(failedCandidateRef ? { failedCandidateRef } : {}),
     changes: summarizeChanges(prepared, new Map([...input.visibleActorNames, [playerCard.actorId, playerCard.name]])),
     opportunities: opportunities.slice(0, 5),
     pressures: pressures.slice(0, 5),

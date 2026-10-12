@@ -19,12 +19,15 @@ export interface CampaignProgressData {
   recentProgress: Array<{ text: string; atStateVersion: number }>;
   pendingConsequences: string[];
   preparationNotice?: string | null;
+  preparationPending?: boolean;
+  replanPending?: boolean;
+  replanCandidateReady: boolean;
   replanOutcomeUnknown: boolean;
   ending: { title: string; outcomeKind: string } | null;
 }
 
 /** Loads the progress projection whenever the committed version changes. */
-export function useCampaignProgress(campaignId: string, branchId: string, stateVersion: number | undefined): CampaignProgressData | null {
+export function useCampaignProgress(campaignId: string, branchId: string, stateVersion: number | undefined, refreshKey?: string | null): CampaignProgressData | null {
   const [progress, setProgress] = useState<CampaignProgressData | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -38,8 +41,7 @@ export function useCampaignProgress(campaignId: string, branchId: string, stateV
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId, branchId, stateVersion]);
+  }, [campaignId, branchId, stateVersion, refreshKey]);
   return progress;
 }
 
@@ -52,10 +54,13 @@ export function CampaignProgressCard(props: {
   onAdjustGoal?: () => void;
   onReplan?: () => void;
   onResumeUnknownReplan?: () => void;
+  preparing?: boolean;
 }): React.JSX.Element | null {
   const { theme } = useTheme();
   const progress = props.progress;
   if (!progress) return null;
+  const planningPending = !!props.preparing || !!progress.preparationPending || !!progress.replanPending;
+  const canAdoptReadyPlan = progress.replanCandidateReady && !props.preparing && !progress.preparationPending;
   const latest = progress.recentProgress[progress.recentProgress.length - 1];
   return (
     <View
@@ -73,7 +78,9 @@ export function CampaignProgressCard(props: {
       {latest ? (
         <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)} numberOfLines={2}>最近进展：{latest.text}</Text>
       ) : null}
-      {progress.preparationNotice ? <Text style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>{progress.preparationNotice}</Text> : null}
+      {props.preparing ? <Text testID="campaign-preparation-status" style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>后续主线正在准备中；当前已就绪的场景仍可继续。</Text>
+        : progress.preparationNotice ? <Text testID="campaign-preparation-status" style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>{progress.preparationNotice}</Text>
+          : planningPending ? <Text testID="campaign-preparation-status" style={textStyle(theme, theme.type.caption, theme.onRaised.secondary)}>后续主线正在准备中；当前已就绪的场景仍可继续。</Text> : null}
       {props.expanded && progress.replanOutcomeUnknown ? <Button label="核对并确认恢复未知规划" variant="secondary"
         disabled={props.busy} onPress={props.onResumeUnknownReplan} testID="campaign-confirm-unknown-replan" /> : null}
       {props.expanded ? (
@@ -101,7 +108,9 @@ export function CampaignProgressCard(props: {
           {['active','paused'].includes(progress.status) ? <View style={{ gap: theme.space.sm }}>
             <Button label={progress.status === 'paused' ? '继续主线' : '暂时搁置主线'} variant="secondary" disabled={props.busy} onPress={props.onPauseResume} testID="campaign-pause-resume" />
             <Button label="调整冒险目标" variant="secondary" disabled={props.busy} onPress={props.onAdjustGoal} testID="campaign-change-goal" />
-            <Button label="准备后续主线" variant="secondary" disabled={props.busy} onPress={props.onReplan} testID="campaign-replan" />
+            <Button label={canAdoptReadyPlan ? '采用已就绪主线' : planningPending ? '准备中…' : '准备后续主线'}
+              variant="secondary" disabled={props.busy || (planningPending && !canAdoptReadyPlan)}
+              onPress={props.onReplan} testID="campaign-replan" />
           </View> : null}
         </View>
       ) : null}

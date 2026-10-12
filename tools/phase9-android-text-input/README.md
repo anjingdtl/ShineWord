@@ -11,7 +11,7 @@ Build and install from the repository root:
 Focus the intended field using a fresh UI hierarchy first. Encode the non-secret text as UTF-8 Base64, then invoke:
 
 ```text
-adb -s emulator-5556 shell am instrument -w -e textBase64 BASE64_TEXT com.shineword.qa.input/com.shineword.qa.input.TextInput
+    adb -s emulator-5556 shell am instrument -w -e textBase64 BASE64_TEXT com.shineword.qa.input/com.shineword.qa.input.TextInput
 ```
 
-To clear the focused field, use `-e clear true` instead of `-e textBase64`. Require `textMatches=true`, no `error`, and an exact text match in a fresh UI hierarchy before saving or submitting. Do not use this helper for credentials. The APK and test signing key remain under ignored `.tmp/phase9/ui-text-helper`.
+To clear the focused field, use `-e clear true` instead of `-e textBase64`. If focus is unreliable, `-e viewId quick-opening-name` targets one exact accessibility resource id; the helper still rejects password fields. Require `textMatches=true`, no `error`, and an exact text match in a fresh UI hierarchy before saving or submitting. Do not use this helper for credentials. The APK and test signing key remain under ignored `.tmp/phase9/ui-text-helper`.

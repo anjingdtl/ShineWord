@@ -27,6 +27,10 @@ import { resolveOrReuseRoll } from '../turns/resolveOrReuseRoll';
 import type { ActorCard, SkillCatalog } from '../../domain/characters/card';
 import type { AbilityDefinition, ConstraintDefinition, SceneDefinition } from '../../domain/content/types';
 import { compileProposal, type CompiledAction } from './v2Compile';
+import { outcomeSetHashFor } from '../campaignPlan/localCompile';
+import { localCompileCampaignBindingHash, type LocalCompileSelectionV1 } from './localCompileReadiness';
+import { canonicalJsonOf, sha256HexOf } from '../campaignPlan/hashing';
+import { resolveMethodActor } from '../guidance/candidates';
 import { contentDependencyBinding } from '../worldPackage/contentManifest';
 import { describeWorldClock } from '../../domain/state/worldClock';
 import { fitGuidanceNarratorRequest } from '../guidance/requestBudget';
@@ -88,6 +92,10 @@ export interface RunV2TurnInput {
   selectedBaseAction?: import('../guidance/types').AllowedCandidateV1;
   /** P9: player-selected stable method reference (guidance candidate tap). */
   selectedMethodRef?: { situationId: string; methodId: string };
+  /** L1 fixed method proposal; bypasses Planner only after the local gate succeeds. */
+  localCompileSelection?: LocalCompileSelectionV1;
+  /** Bound plan + artifact identity stamped into a selected new-method contract. */
+  campaignBindingHash?: string;
   /** P9: candidate reference string frozen into the contract. */
   candidateRef?: string;
   narratorBudget?: { capabilities: import('../llm/requestPlan').FrozenModelCapabilities; reasoningPolicy: import('../llm/reasoningPolicy').ReasoningPolicySelection };
@@ -197,7 +205,7 @@ function narratorSystem(withGuidance: boolean): string {
     'styleExpression controls expression only. It is subordinate to the frozen outcome, rules, facts and player-known world context. It cannot authorize new facts, knowledge, rewards or changes to dice and state.',
     'Output exactly JSON: {"turnId":string,"outcomeGrade":string,"text":string}.',
     'Do not change the supplied outcome grade and do not add rewards or state changes outside the frozen contract.',
-    'The supplied worldClock is authoritative. Keep lighting and time of day within this turn interval; it overrides inconsistent time descriptions in earlier story text. Do not invent a time skip.',
+    'The supplied worldClock is authoritative. elapsedSeconds and elapsedMinutes give the total time spent on this action, including every effect. Any duration you narrate must fit within that interval. If elapsedMinutes is under 60, do not say an hour or more passed. If elapsedMinutes is under 360, do not say a whole night passed. If elapsedMinutes is under 720, do not say a full day passed (for example, “一整天”, “整整一天”, “从早到晚”, or “all day”). Keep lighting and time of day within this turn interval; it overrides inconsistent time descriptions in earlier story text. Do not invent a time skip.',
   ];
   if (!withGuidance) return base.join(' ');
   return [
@@ -211,10 +219,72 @@ function narratorSystem(withGuidance: boolean): string {
   ].join(' ');
 }
 
+/**
+ * The Narrator receives the clock after the complete deterministic reduction,
+ * including outcome effects such as advanceClock. Without a prepared state,
+ * project the same clock delta from the frozen outcome contract.
+ */
+export interface NarratorWorldClock {
+  start: string;
+  end: string;
+  elapsedSeconds: number;
+  elapsedMinutes: number;
+}
+
+export function buildNarratorWorldClock(
+  state: Pick<import('../../domain/state/types').GameStateSnapshot, 'clockSeconds' | 'clockMinutes'>,
+  contract: ActionContract,
+  grade: RollGrade,
+  prepared?: Pick<PreparedTurnResolution, 'nextState'>,
+): NarratorWorldClock {
+  const startSeconds = state.clockSeconds ?? state.clockMinutes * 60;
+  const effectMinutes = contract.outcomes[grade].effects.reduce(
+    (total, effect) => total + (effect.op === 'advanceClock' ? effect.minutes : 0),
+    0,
+  );
+  const projectedEndSeconds = startSeconds + (contract.timeCostMinutes + effectMinutes) * 60;
+  const endSeconds = prepared
+    ? prepared.nextState.clockSeconds ?? prepared.nextState.clockMinutes * 60
+    : projectedEndSeconds;
+  const elapsedSeconds = Math.max(0, endSeconds - startSeconds);
+  return {
+    start: describeWorldClock(startSeconds),
+    end: describeWorldClock(endSeconds),
+    elapsedSeconds,
+    elapsedMinutes: Math.floor(elapsedSeconds / 60),
+  };
+}
+
+/** Reject clear duration claims that exceed the frozen action's authoritative interval. */
+export function assertNarrativeDurationFitsClock(text: string, worldClock: NarratorWorldClock): void {
+  const claims: Array<{ label: string; minimumMinutes: number; pattern: RegExp }> = [
+    {
+      label: 'a full day',
+      minimumMinutes: 720,
+      pattern: /一整天|整整一天|整整一日|一整日|整个白天|一整个白天|整天|整日|从早到晚|整整.{0,12}(?:一天|一日)|(?:花|耗|忙|工作|调查|核对|查找|翻|走|等)了?(?:一整天|整整一天|一天|整天)|all day(?: long)?|the whole day|the entire day|from dawn to dusk/iu,
+    },
+    {
+      label: 'a whole night',
+      minimumMinutes: 360,
+      pattern: /一整夜|整整一夜|整夜|通宵|一宿|整宿|整晚|all night(?: long)?|the whole night|the entire night|overnight/iu,
+    },
+    {
+      label: 'an hour or more',
+      minimumMinutes: 60,
+      pattern: /(?:一个小时|一小时|数小时|几小时|好几小时|数个钟头|几个钟头|several hours|a few hours|an hour|hours passed)/iu,
+    },
+  ];
+  const exceeded = claims.find(claim => worldClock.elapsedMinutes < claim.minimumMinutes && claim.pattern.test(text));
+  if (exceeded) {
+    throw new Error(`Narrator duration claim exceeds authoritative worldClock: ${exceeded.label} in ${worldClock.elapsedMinutes} minutes.`);
+  }
+}
+
 function validateNarrative(
   candidate: NarrativeCandidate,
   turnId: string,
   grade: RollGrade,
+  worldClock?: NarratorWorldClock,
 ): void {
   if (typeof candidate.turnId !== 'string' || candidate.turnId !== turnId) {
     throw new Error('Narrator turnId mismatch.');
@@ -226,6 +296,7 @@ function validateNarrative(
     throw new Error('Narrator returned empty story text.');
   }
   if (candidate.text.length > 12_000) throw new Error('Narrator story text exceeds safety limit.');
+  if (worldClock) assertNarrativeDurationFitsClock(candidate.text, worldClock);
 }
 
 /** Extract usable guidance fields without ever failing the narrative itself. */
@@ -312,6 +383,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   let resumed = false;
   const state = await input.store.getState(input.branchId);
   if (!state) throw new Error(`Unknown branch: ${input.branchId}.`);
+  if (input.localCompileSelection) assertLocalCompileSelectionCurrent(input, state);
   const staged = await input.journal.getStagedTurn(input.branchId, input.turnId);
   let compiled: CompiledAction;
   let contractHash: string;
@@ -324,6 +396,15 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       staged.actionContractJson,
       'persisted ActionContract',
     );
+    if (contract.methodRef?.campaignBindingHash) {
+      const method = input.methods?.find((item, index) => item.methodId === contract.methodRef!.methodId
+        && input.methodSituations?.[index] === contract.methodRef!.situationId);
+      if (!method || !state.campaignRuntime || !state.campaignContentBinding
+        || contract.methodRef.outcomeSetHash !== outcomeSetHashFor(method)
+        || contract.methodRef.campaignBindingHash !== localCompileCampaignBindingHash(state, method)) {
+        throw new Error('Frozen campaign method binding changed; refusing recovery.');
+      }
+    }
     const currentBinding = state.segmentContentBinding ?? (state.contentManifest ? contentDependencyBinding(state.contentManifest) : undefined);
     if (await hashActionContract(contract, input.hashProvider) !== staged.actionContractHash) throw new Error('Frozen action contract hash mismatch; refusing dispatch.');
     if (state.ruleConfiguration && stableFingerprint(contract.ruleBinding) !== stableFingerprint(requireCompiledRules(state.ruleConfiguration).binding)) throw new Error('Frozen rule binding mismatch; refusing dispatch.');
@@ -419,13 +500,24 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         fieldAliases: ACTION_FIELD_ALIASES,
       }).value;
     };
-    let proposal = await requestPlanner();
-    try {
-      assertValidPlannerProposal(proposal);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      proposal = await requestPlanner([message.replace(/\n/g, ' ').slice(0, 400)]);
-      assertValidPlannerProposal(proposal);
+    let proposal: PlannerProposal;
+    if (input.localCompileSelection) {
+      proposal = input.localCompileSelection.proposal;
+    } else {
+      const selectedMethod = input.selectedMethodRef && input.methods?.find((method, index) =>
+        method.methodId === input.selectedMethodRef!.methodId
+        && input.methodSituations?.[index] === input.selectedMethodRef!.situationId);
+      if (selectedMethod?.difficultyPolicy?.kind === 'fixed' && selectedMethod.evidencePolicy?.kind === 'fixed') {
+        throw new Error('L1 selection is missing its local compile binding; refusing Planner fallback.');
+      }
+      proposal = await requestPlanner();
+      try {
+        assertValidPlannerProposal(proposal);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        proposal = await requestPlanner([message.replace(/\n/g, ' ').slice(0, 400)]);
+        assertValidPlannerProposal(proposal);
+      }
     }
     if (proposal.turnId !== input.turnId) throw new Error('Planner turnId mismatch.');
     if (proposal.expectedStateVersion !== state.stateVersion) {
@@ -448,6 +540,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       scenes: input.scenes,
       constraints: input.constraints,
       state,
+      ...(input.campaignBindingHash ? { campaignBindingHash: input.campaignBindingHash } : {}),
       ...(input.methods ? { methods: input.methods } : {}),
       ...(input.methodSituations ? { methodSituations: input.methodSituations } : {}),
     });
@@ -509,6 +602,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   };
   if (!narrative) {
     budget.consume('Narrator');
+    const narratorWorldClock = buildNarratorWorldClock(state, contract, grade, prepared);
     const makeNarratorRequest = (
       worldContext: string,
       maxOutputTokens: number,
@@ -521,10 +615,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         playerIntent: input.playerIntent,
         outcomeGrade: grade,
         frozenOutcome: contract.outcomes[grade],
-        worldClock: {
-          start: describeWorldClock(state.clockSeconds ?? state.clockMinutes * 60),
-          end: describeWorldClock((state.clockSeconds ?? state.clockMinutes * 60) + contract.timeCostMinutes * 60),
-        },
+        worldClock: narratorWorldClock,
         worldContext,
         ...(packet ? { situationPacket: packet } : {}),
         ...(contract.styleSnapshot ? { styleExpression: contract.styleSnapshot.compiledText } : {}),
@@ -618,7 +709,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     recordUsage(input, 'Narrator', narrated);
     const parseCandidate = (text: string): NarrativeCandidate => {
       const value = parseStructuredOutput<NarrativeCandidate>(text, { label: 'Narrator candidate' }).value;
-      validateNarrative(value, input.turnId, grade);
+      validateNarrative(value, input.turnId, grade, narratorWorldClock);
       return value;
     };
     let candidate: NarrativeCandidate;
@@ -650,6 +741,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       { turnId: narrative.turnId, outcomeGrade: narrative.outcomeGrade, text: narrative.text },
       input.turnId,
       grade,
+      buildNarratorWorldClock(state, contract, grade, prepared),
     );
     resumed = true;
   }
@@ -710,6 +802,58 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     requestCount: budget.used(),
     ...(guidance ? { guidance } : {}),
   };
+}
+
+function assertLocalCompileSelectionCurrent(
+  input: RunV2TurnInput,
+  state: import('../../domain/state/types').GameStateSnapshot,
+): void {
+  const selection = input.localCompileSelection!;
+  const methodRef = input.selectedMethodRef;
+  const candidateRef = input.candidateRef;
+  if (!methodRef || !candidateRef
+    || methodRef.situationId !== selection.selectedMethodRef.situationId
+    || methodRef.methodId !== selection.selectedMethodRef.methodId
+    || candidateRef !== selection.candidateRef
+    || selection.candidateRef !== `method:${methodRef.situationId}:${methodRef.methodId}`
+    || selection.expectedStateVersion !== state.stateVersion
+    || selection.proposal.expectedStateVersion !== state.stateVersion
+    || selection.proposal.turnId !== input.turnId
+    || selection.proposal.intent !== input.playerIntent
+    || selection.proposal.actorId !== input.actingCard.actorId) {
+    throw new Error('Local compile selection is stale; refresh the selected path.');
+  }
+  const methods = input.methods ?? [];
+  const methodSituations = input.methodSituations ?? [];
+  const matches = methods.map((method, index) => ({ method, situationId: methodSituations[index] }))
+    .filter(item => item.situationId === methodRef.situationId && item.method.methodId === methodRef.methodId);
+  if (matches.length !== 1) throw new Error('Selected local compile method is no longer offered.');
+  const method = matches[0]!.method;
+  if (method.difficultyPolicy?.kind !== 'fixed' || method.evidencePolicy?.kind !== 'fixed'
+    || !method.ruleBindingHash
+    || outcomeSetHashFor(method) !== selection.methodOutcomeSetHash
+    || selection.campaignBindingHash !== localCompileCampaignBindingHash(state, method)
+    || input.campaignBindingHash !== selection.campaignBindingHash) {
+    throw new Error('Selected local compile binding changed; refusing Planner fallback.');
+  }
+  if (!state.ruleConfiguration) throw new Error('Current rules are missing; refusing local compile.');
+  const ruleBindingHash = sha256HexOf(canonicalJsonOf(requireCompiledRules(state.ruleConfiguration).binding));
+  if (method.ruleBindingHash !== ruleBindingHash) throw new Error('Current rule binding changed; refusing local compile.');
+  const step = method.firstStep;
+  const targetId = step.targetEntryId ? resolveMethodActor(step.targetEntryId, state, input.cards) : undefined;
+  const proposal = selection.proposal;
+  const sameEvidence = JSON.stringify(proposal.evidenceIds) === JSON.stringify(method.evidencePolicy.evidenceIds);
+  if (!sameEvidence || proposal.actionKind !== step.actionKind
+    || (proposal.actionKind === 'skill_check' && (proposal.skillId?.replace(/^skill-/, '') !== step.skillId?.replace(/^skill-/, '')
+      || proposal.difficultyBand !== method.difficultyPolicy.band))
+    || (proposal.actionKind !== 'skill_check' && proposal.difficultyBand !== undefined)
+    || proposal.abilityId !== step.abilityId
+    || proposal.destinationId !== step.destinationId
+    || proposal.targetId !== targetId
+    || proposal.candidateRef !== selection.candidateRef) {
+    throw new Error('Local proposal no longer exactly matches its selected method.');
+  }
+  assertValidPlannerProposal(proposal);
 }
 
 /**
