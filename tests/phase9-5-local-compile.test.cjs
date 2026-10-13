@@ -14,6 +14,8 @@ const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPl
 const { packageIndexes, compileProposal } = require('../dist/application/game/v2Compile');
 const { campaignCompletionRewardBlocker } = require('../dist/application/campaignPlan/routeReadiness');
 const { projectNarrativeOpportunities } = require('../dist/application/campaignPlan/opportunityProjection');
+const { settleCampaignProgress } = require('../dist/application/campaignPlan/settlement');
+const { applySituationTransitions } = require('../dist/domain/situations/transitions');
 
 function modelWithPolicy(policy = { kind: 'fixed', band: 'challenging' }, evidenceIds = ['lore-crates']) {
   const model = candidateModel();
@@ -135,6 +137,102 @@ test('L1 typed selection binds exact fixed difficulty and non-empty visible evid
   assert.deepEqual(['full_success', 'success', 'failure', 'severe_failure'].map(grade => contract.outcomes[grade]),
     ['full_success', 'success', 'failure', 'severe_failure'].map(grade => equivalentL2.contract.outcomes[grade]),
     'all four frozen grade clauses match the equivalent L2 proposal compile');
+});
+
+test('promise side rewards are frozen, claimed on settlement, and suppressed on a new turn across asymmetric grades', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const input = await readinessInput(h);
+  const state = structuredClone(input.state);
+  const method = structuredClone(input.selectedMethods.find(item => item.method.methodId === 'sweep').method);
+  const promiseId = 'one-use-knowledge-promise';
+  state.situations.find(item => item.situationId === SITUATION_ID).promises = [{
+    promiseId, promisorActorId: 'npc-tpl-lin', promiseeActorId: 'pc', description: 'one-use fixture', status: 'open',
+    createdAtVersion: state.stateVersion, sourceTurnId: 'fixture-create', idempotencyKey: 'fixture-create:promise',
+  }];
+  const bundled = [
+    { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'one_use_reward', delta: 10 },
+    { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
+    { template: 'grant_knowledge', entryId: 'new-legal-clue', actorId: 'pc' },
+  ];
+  method.outcomeTemplates.success = { ...method.outcomeTemplates.success, effects: [
+    { template: 'promise_fulfill', situationId: SITUATION_ID, promiseId }, ...bundled,
+  ] };
+  method.outcomeTemplates.full_success = { ...method.outcomeTemplates.full_success, effects: structuredClone(bundled) };
+  const indexes = packageIndexes([...input.entries, ...input.artifacts.flatMap(campaignSituationEntries)]);
+  const compile = version => compileProposal({
+    proposal: { proposalVersion: '2.0', turnId: `promise-turn-${version}`,
+      expectedStateVersion: version === 1 ? state.stateVersion : nextState.stateVersion,
+      actorId: input.playerCard.actorId, actionKind: 'skill_check', skillId: 'skill-observation', difficultyBand: 'normal',
+      evidenceIds: [], intent: method.firstStep.intent, candidateRef: `method:${SITUATION_ID}:${method.methodId}` },
+    requestedIntent: method.firstStep.intent, selectedMethodRef: { situationId: SITUATION_ID, methodId: method.methodId },
+    candidateRef: `method:${SITUATION_ID}:${method.methodId}`, actingCard: input.playerCard, cards: input.cards,
+    catalog: indexes.catalog, abilities: indexes.abilities, scenes: indexes.scenes, constraints: indexes.constraints,
+    state: version === 1 ? state : nextState, methods: [method], methodSituations: [SITUATION_ID],
+  }).contract;
+  const first = compile(1);
+  assert.equal(first.campaignEffects.success.promiseEffectClaims.length, 2, 'counter and relationship identities are frozen before settlement');
+  assert.equal(first.campaignEffects.full_success.transitions.some(op => op.kind === 'situation_counter'), false,
+    'a grade cannot award promise-bundled supply while omitting the promise fact');
+  const nextState = structuredClone(state);
+  const firstTransitions = applySituationTransitions({ situations: nextState.situations,
+    ops: first.campaignEffects.success.transitions, eventKey: 'one-use-first-commit', sourceTurnId: first.turnId,
+    stateVersion: state.stateVersion + 1, clockSeconds: state.clockSeconds });
+  nextState.situations = firstTransitions.situations;
+  nextState.stateVersion = state.stateVersion + 1;
+  settleCampaignProgress({ nextState, turnId: first.turnId, nextStateVersion: state.stateVersion + 1,
+    action: { contract: first, grade: 'success' }, transactionEvents: [], plan: input.plan, artifacts: input.artifacts, historyEvents: [] });
+  const firstSituation = nextState.situations.find(item => item.situationId === SITUATION_ID);
+  assert.equal(firstSituation.counters.one_use_reward, 10);
+  assert.equal(firstSituation.promises.find(item => item.promiseId === promiseId).status, 'fulfilled');
+  assert.ok(nextState.discoveries.some(item => item.entryId === 'new-legal-clue' && item.actorId === 'pc'),
+    'the first legal knowledge fact commits with the promise');
+  assert.equal(nextState.campaignRuntime.grantedRewardKeys.filter(key => key.startsWith('campaign-promise-effect:v1:')).length, 2);
+
+  const repeated = compile(2);
+  assert.equal(repeated.campaignEffects.success.transitions.some(op => op.kind === 'situation_counter'), false);
+  assert.equal(repeated.campaignEffects.full_success.transitions.some(op => op.kind === 'situation_counter'), false,
+    'asymmetric full_success cannot bypass the success-grade claim');
+  assert.equal(repeated.campaignEffects.success.relationshipShifts.length, 0);
+  const repeatedState = structuredClone(nextState);
+  const repeatedTransitions = applySituationTransitions({ situations: repeatedState.situations,
+    ops: repeated.campaignEffects.success.transitions, eventKey: 'one-use-repeat-commit', sourceTurnId: repeated.turnId,
+    stateVersion: repeatedState.stateVersion + 1, clockSeconds: repeatedState.clockSeconds });
+  repeatedState.situations = repeatedTransitions.situations;
+  settleCampaignProgress({ nextState: repeatedState, turnId: repeated.turnId, nextStateVersion: repeatedState.stateVersion + 1,
+    action: { contract: repeated, grade: 'success' }, transactionEvents: [], plan: input.plan, artifacts: input.artifacts, historyEvents: [] });
+  assert.equal(repeatedState.situations.find(item => item.situationId === SITUATION_ID).counters.one_use_reward, 10);
+  assert.deepEqual(repeatedState.relationships, nextState.relationships);
+
+  // A resolved promise must not make a new, independent fact or an ordinary
+  // stage-closing effect disappear from the same otherwise-valid method.
+  method.outcomeTemplates.success = { ...method.outcomeTemplates.success, effects: [
+    { template: 'promise_fulfill', situationId: SITUATION_ID, promiseId },
+    { template: 'grant_knowledge', entryId: 'new-clue-after-promise-resolution', actorId: 'pc' },
+    { template: 'situation_status', situationId: SITUATION_ID, status: 'resolved' },
+  ] };
+  const closing = compile(3);
+  assert.ok(closing.campaignEffects.success.transitions.some(op => op.kind === 'promise_fulfill'),
+    'the archived promise transition can remain idempotent on an otherwise-valid method');
+  assert.ok(closing.campaignEffects.success.transitions.some(op => op.kind === 'set_situation_status' && op.status === 'resolved'),
+    'a previously resolved promise does not block an ordinary stage-closing fact');
+  assert.ok(closing.campaignEffects.success.knowledgeGrants.some(grant => grant.entryId === 'new-clue-after-promise-resolution'),
+    'a previously resolved promise does not block newly acquired knowledge');
+  const closingState = structuredClone(nextState);
+  const closingTransitions = applySituationTransitions({ situations: closingState.situations,
+    ops: closing.campaignEffects.success.transitions, eventKey: 'one-use-close-after-resolution', sourceTurnId: closing.turnId,
+    stateVersion: closingState.stateVersion + 1, clockSeconds: closingState.clockSeconds });
+  closingState.situations = closingTransitions.situations;
+  closingState.stateVersion += 1;
+  settleCampaignProgress({ nextState: closingState, turnId: closing.turnId, nextStateVersion: closingState.stateVersion,
+    action: { contract: closing, grade: 'success' }, transactionEvents: [], plan: input.plan, artifacts: input.artifacts, historyEvents: [] });
+  assert.equal(closingState.situations.find(item => item.situationId === SITUATION_ID).status, 'resolved');
+  assert.ok(closingState.discoveries.some(item => item.entryId === 'new-clue-after-promise-resolution' && item.actorId === 'pc'));
+
+  method.methodId = 'ask-lin-revised-artifact';
+  const revised = compile(4);
+  assert.equal(revised.campaignEffects.success.transitions.some(op => op.kind === 'situation_counter'), false,
+    'a same-method historical revision cannot release the branch-local reward claim');
 });
 
 test('a recovered exact guidance draft restores its current L1 route binding and skips Planner', async t => {

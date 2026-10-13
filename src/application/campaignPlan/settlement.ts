@@ -77,6 +77,18 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
   // 1. Per-grade campaign outcome extensions frozen in the contract.
   const extension = input.action?.contract.campaignEffects?.[input.action.grade];
   if (extension) {
+    for (const claim of extension.promiseEffectClaims ?? []) {
+      const promise = nextState.situations?.find(situation => situation.situationId === claim.situationId)
+        ?.promises.find(item => item.promiseId === claim.promiseId);
+      const factCommitted = claim.requires === 'exists' ? Boolean(promise)
+        : promise?.status === 'fulfilled' || promise?.status === 'broken';
+      if (factCommitted && !runtime.grantedRewardKeys.includes(claim.key)) {
+        runtime.grantedRewardKeys.push(claim.key);
+        events.push({ eventType: 'campaign_promise_effect_claimed', payload: {
+          key: claim.key, situationId: claim.situationId, promiseId: claim.promiseId,
+        } });
+      }
+    }
     for (const grant of extension.knowledgeGrants) {
       const actorId = campaignActor(grant.actorId);
       nextState.discoveries = [...(nextState.discoveries ?? [])];

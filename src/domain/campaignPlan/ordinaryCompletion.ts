@@ -67,16 +67,23 @@ export function ordinaryCompletionBeforeExit(
   const closes = (m: MethodTemplateV1) => (m.outcomeTemplates?.success.effects ?? []).some(e =>
     e.template === 'situation_status' && e.situationId === sid && ['resolved', 'suppressed'].includes(e.status));
   const repeatable: CampaignEffectSpec[] = [];
+  // A resolution/creation and the outcome bundled with it are a finite fact.
+  // The validator may count that fact once, but must not turn an idempotent
+  // promise transition into an unlimited counter or relationship source.
+  const oneTimeSupply: CampaignEffectSpec[] = [];
+  const oneShotOutcome = (effects: readonly CampaignEffectSpec[]): boolean => effects.some(effect =>
+    effect.template === 'promise_create' || effect.template === 'promise_fulfill'
+    || effect.template === 'promise_break' || effect.template === 'grant_knowledge');
   const possible = (c: SituationCondition, once: readonly CampaignEffectSpec[] = []): boolean => {
     if (c.kind === 'all') return c.of.every(child => possible(child, once));
     if (c.kind === 'any') return c.of.some(child => possible(child, once));
     // Negative and externally supplied facts cannot be disproved here.
     if (c.kind === 'not') return true;
-    const available = [...repeatable, ...once];
+    const available = [...repeatable, ...oneTimeSupply, ...once];
     if (c.kind === 'relationship_at_least') {
       if (!allEffects.some(e => sameRelationship(e, c))) return true;
       if (repeatable.some(e => sameRelationship(e, c) && e.template === 'relationship_shift' && e.delta > 0)) return c.closeness <= 100;
-      const gain = once.reduce((sum, e) => sum + (sameRelationship(e, c) && e.template === 'relationship_shift' ? Math.max(0, e.delta) : 0), 0);
+      const gain = [...oneTimeSupply, ...once].reduce((sum, e) => sum + (sameRelationship(e, c) && e.template === 'relationship_shift' ? Math.max(0, e.delta) : 0), 0);
       return Math.min(100, initialCloseness(c) + gain) >= c.closeness;
     }
     if (c.kind === 'knowledge_known') {
@@ -99,7 +106,7 @@ export function ordinaryCompletionBeforeExit(
       const repeats = repeatable.filter((e): e is Extract<CampaignEffectSpec, { template: 'situation_counter' }> =>
         e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId);
       if (repeats.some(e => e.delta > 0)) return true;
-      const changes = once.filter((e): e is Extract<CampaignEffectSpec, { template: 'situation_counter' }> =>
+      const changes = [...oneTimeSupply, ...once].filter((e): e is Extract<CampaignEffectSpec, { template: 'situation_counter' }> =>
         e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId);
       const initial = baseline.situations?.find(s => s.situationId === c.situationId)?.counters[c.counterId] ?? 0;
       return initial + changes.reduce((sum, e) => sum + Math.max(0, e.delta), 0) >= c.minimum;
@@ -111,7 +118,7 @@ export function ordinaryCompletionBeforeExit(
     let changed = false;
     for (const c of artifact.consequenceTemplates) {
       if (!consumed.has(c.consequenceId)
-        && [...repeatable, ...once].some(e => e.template === 'schedule_consequence' && e.consequenceId === c.consequenceId)
+        && [...repeatable, ...oneTimeSupply, ...once].some(e => e.template === 'schedule_consequence' && e.consequenceId === c.consequenceId)
         && possible(c.triggerCondition, once)) {
         consumed.add(c.consequenceId); once.push(...c.effectSpecs); changed = true;
       }
@@ -123,7 +130,7 @@ export function ordinaryCompletionBeforeExit(
     const prefix: CampaignEffectSpec[] = [];
     for (const effect of m.outcomeTemplates?.success.effects ?? []) {
       if ((effect.template === 'promise_fulfill' || effect.template === 'promise_break') && effect.situationId === sid
-        && ![...repeatable, ...prefix].some(e => e.template === 'promise_create' && e.situationId === sid && e.promiseId === effect.promiseId)) return false;
+        && ![...repeatable, ...oneTimeSupply, ...prefix].some(e => e.template === 'promise_create' && e.situationId === sid && e.promiseId === effect.promiseId)) return false;
       prefix.push(effect);
     }
     return true;
@@ -132,12 +139,15 @@ export function ordinaryCompletionBeforeExit(
   for (let pass = 0; pass < methods.length + artifact.consequenceTemplates.length; pass++) {
     let changed = false;
     for (const m of methods) if (!closes(m) && !consumedMethods.has(m) && canSupply(m)) {
-      consumedMethods.add(m); repeatable.push(...(m.outcomeTemplates?.success.effects ?? [])); changed = true;
+      consumedMethods.add(m);
+      const effects = m.outcomeTemplates?.success.effects ?? [];
+      (oneShotOutcome(effects) ? oneTimeSupply : repeatable).push(...effects);
+      changed = true;
     }
     const deferred: CampaignEffectSpec[] = [];
-    // Treat deferred effects optimistically too: this is a necessary gate,
-    // not an assertion that every combination can actually be played.
-    if (addConsequences(deferred, consumedConsequences)) { repeatable.push(...deferred); changed = true; }
+    // A scheduled consequence can discharge once. Its effects are finite even
+    // when the trigger itself was produced by a repeatable preparation route.
+    if (addConsequences(deferred, consumedConsequences)) { oneTimeSupply.push(...deferred); changed = true; }
     if (!changed) break;
   }
   if (possible(start.completion)) return true;

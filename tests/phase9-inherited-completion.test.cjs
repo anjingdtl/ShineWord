@@ -61,6 +61,27 @@ test('inherited completion: a known active old situation needs an ordinary resol
   } finally { h.db.close(); }
 });
 
+test('inherited completion: one ordinary promise fulfillment cannot be counted as repeatable +10 supply', async () => {
+  const h = await fixture();
+  try {
+    const { plan, artifact } = structuredClone(await h.planStore.getCandidate('cand-t'));
+    const sid = artifact.situations[0].entryId;
+    plan.nodes[0].completion = { kind: 'situation_counter_at_least', situationId: sid, counterId: 'ready', minimum: 20 };
+    const [prepare, fulfill] = artifact.situations[0].definition.methods;
+    prepare.outcomeTemplates.success.effects = [
+      { template: 'promise_create', situationId: sid, promiseId: 'single-delivery', promisorActorId: 'pc', description: '一次性履约' },
+    ];
+    fulfill.requires = {};
+    fulfill.outcomeTemplates.success.effects = [
+      { template: 'promise_fulfill', situationId: sid, promiseId: 'single-delivery' },
+      { template: 'situation_counter', situationId: sid, counterId: 'ready', delta: 10 },
+      { template: 'situation_status', situationId: artifact.situations[0].entryId, status: 'resolved' },
+    ];
+    assert.ok(validateOrdinarySuccessCompletion(plan, artifact).length > 0,
+      'a finite fulfillment outcome provides only +10 before the closing action ends the situation');
+  } finally { h.db.close(); }
+});
+
 test('inherited completion: production replan repairs the old promise path and commits ordinary fulfillment without changing archives', async () => {
   const opening = candidateModel();
   for (const grade of ['success', 'full_success']) opening.firstSituation.methods[1].outcomes[grade].effects = [

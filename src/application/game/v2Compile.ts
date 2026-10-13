@@ -1,5 +1,6 @@
 import type { RollGrade } from '../../domain/rules/types';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
+import { preparePromiseSafeOutcomes } from '../../domain/campaignPlan/promiseEffectPolicy';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { outcomeSetHashFor } from '../campaignPlan/localCompile';
 import { localCompileCampaignBindingHash } from './localCompileReadiness';
@@ -356,12 +357,15 @@ function bindSituationMethod(
           || (actingCard && actorId === actingCard.name)) return actingActorId;
         return resolveActorReference(actorId);
       };
+      const promisePolicy = preparePromiseSafeOutcomes({ state, situationId, method, resolveActor: actorResolver });
       const perGrade: Record<RollGrade, NonNullable<NonNullable<ActionContract['campaignEffects']>[RollGrade]>> = {} as never;
       outcomes = { ...contract.outcomes };
       for (const grade of ['full_success', 'success', 'failure', 'severe_failure'] as const) {
         const template = templates[grade];
         if (!template) continue;
-        const compiledSpecs = compileCampaignEffects(template.effects, { actorResolver });
+        const isSuccessGrade = grade === 'success' || grade === 'full_success';
+        const selectedSpecs = isSuccessGrade ? promisePolicy.effectsByGrade[grade] ?? template.effects : template.effects;
+        const compiledSpecs = compileCampaignEffects(selectedSpecs, { actorResolver });
         outcomes[grade] = {
           ...outcomes[grade],
           achieved: template.achieved,
@@ -373,6 +377,7 @@ function bindSituationMethod(
           knowledgeGrants: compiledSpecs.knowledgeGrants,
           relationshipShifts: compiledSpecs.relationshipShifts,
           scheduledConsequences: compiledSpecs.scheduledConsequences,
+          promiseEffectClaims: isSuccessGrade ? promisePolicy.claimsByGrade[grade] ?? [] : [],
         };
       }
       campaignEffects = perGrade;

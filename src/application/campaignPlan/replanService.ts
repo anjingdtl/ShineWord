@@ -34,6 +34,52 @@ export interface ReplanTriggerInput {
   state: GameStateSnapshot;
 }
 
+type ConditionPossibility = { canBeTrue: boolean; canBeFalse: boolean };
+
+/** Conservative reachability for a pending trigger under a proposed runtime.
+ * Non-node facts may still become true; terminal node statuses cannot move. */
+function conditionPossibility(condition: SituationCondition, statuses: ReadonlyMap<string, string>): ConditionPossibility {
+  if (condition.kind === 'all' || condition.kind === 'any') {
+    const children = condition.of.map(child => conditionPossibility(child, statuses));
+    if (condition.kind === 'all') return {
+      canBeTrue: children.every(child => child.canBeTrue),
+      canBeFalse: children.some(child => child.canBeFalse),
+    };
+    return {
+      canBeTrue: children.some(child => child.canBeTrue),
+      canBeFalse: children.every(child => child.canBeFalse),
+    };
+  }
+  if (condition.kind === 'not') {
+    const nested = conditionPossibility(condition.of, statuses);
+    return { canBeTrue: nested.canBeFalse, canBeFalse: nested.canBeTrue };
+  }
+  if (condition.kind === 'campaign_node_status') {
+    const status = statuses.get(condition.nodeId);
+    if (status && ['succeeded', 'failed', 'superseded', 'cancelled'].includes(status)) {
+      const matches = status === condition.status;
+      return { canBeTrue: matches, canBeFalse: !matches };
+    }
+  }
+  return { canBeTrue: true, canBeFalse: true };
+}
+
+/** Pending obligations already impossible in a legacy snapshot do not block
+ * unrelated adoption. Reject only a replan that newly removes every possible
+ * route to a pending trigger. */
+export function newlyOrphanedPendingConsequences(input: {
+  deferredConsequences: CampaignRuntimeV1['deferredConsequences'];
+  before: CampaignRuntimeV1['nodeStates'];
+  after: CampaignRuntimeV1['nodeStates'];
+}): string[] {
+  const statusMap = (nodes: CampaignRuntimeV1['nodeStates']) => new Map(nodes.map(node => [node.nodeId, node.status]));
+  const beforeStatuses = statusMap(input.before), afterStatuses = statusMap(input.after);
+  return input.deferredConsequences.filter(consequence => consequence.status === 'pending'
+    && conditionPossibility(consequence.triggerCondition, beforeStatuses).canBeTrue
+    && !conditionPossibility(consequence.triggerCondition, afterStatuses).canBeTrue)
+    .map(consequence => consequence.consequenceId);
+}
+
 /** Deterministic local trigger evaluation (plan §10.1 matrix). */
 export function evaluateReplanTriggers(input: ReplanTriggerInput): string[] {
   const { plan, runtime, state } = input;
@@ -303,6 +349,11 @@ export async function adoptReplanCandidate(input: AdoptReplanInput): Promise<
         nodeId: n.nodeId, status: 'planned' as const, completedEvidence: [] })),
     ],
   };
+  const newlyOrphaned = newlyOrphanedPendingConsequences({ deferredConsequences: runtime.deferredConsequences,
+    before: runtime.nodeStates, after: nextRuntime.nodeStates });
+  if (newlyOrphaned.length > 0) {
+    return invalidate('replan would make pending consequence triggers unreachable: ' + newlyOrphaned.join(','));
+  }
   const nextState: GameStateSnapshot = { ...cloneGameState(state), stateVersion: state.stateVersion + 1, campaignRuntime: nextRuntime,
     campaignContentBinding: { artifactIds, contentHash: campaignContentBindingHash(artifacts as NonNullable<typeof artifact>[]) } };
   const turnId = input.branchId + ':manage-replan:' + nextRevision;

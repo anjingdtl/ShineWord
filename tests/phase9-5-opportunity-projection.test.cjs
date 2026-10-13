@@ -9,6 +9,7 @@ const { campaignSituationEntries } = require('../dist/application/campaignPlan/c
 const { collectAllowedCandidates } = require('../dist/application/guidance/candidates');
 const { buildSituationPacket } = require('../dist/application/guidance/packet');
 const { assembleTurnGuidance } = require('../dist/application/guidance/validate');
+const { campaignMethodEventConsumerBlocker } = require('../dist/application/campaignPlan/routeReadiness');
 
 async function projectionContext(h) {
   const state = await h.turns.getState(h.branchId);
@@ -677,7 +678,6 @@ test('M2 blocks a promise-fulfillment route after its fixed promise is already r
         { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
       ] },
       full_success: { ...source.outcomeTemplates.full_success, effects: [
-        { template: 'promise_fulfill', situationId: SITUATION_ID, promiseId },
         { template: 'situation_counter', situationId: SITUATION_ID, counterId: 'supplies', delta: 10 },
         { template: 'relationship_shift', fromActorId: 'npc-tpl-lin', toActorId: 'pc', delta: 2 },
       ] },
@@ -709,4 +709,10 @@ test('M2 blocks a promise-fulfillment route after its fixed promise is already r
     'no interaction operation is opened');
   assert.equal(await h.adapter.queryOne('SELECT turn_id FROM turns WHERE branch_id=? AND status<>\'Committed\' LIMIT 1', [h.branchId]), null,
     'no frozen turn or dice record is created');
+  const validKnowledgeRoute = structuredClone(fulfilledPromiseRoute);
+  validKnowledgeRoute.methodId = 'new-clue-with-idempotent-promise';
+  validKnowledgeRoute.outcomeTemplates.success.effects.push({ template: 'grant_knowledge', entryId: 'new-clue', actorId: 'pc' });
+  validKnowledgeRoute.outcomeTemplates.full_success.effects.push({ template: 'grant_knowledge', entryId: 'new-clue', actorId: 'pc' });
+  assert.equal(campaignMethodEventConsumerBlocker({ state, plan: context.plan, artifacts, situationId: SITUATION_ID,
+    method: validKnowledgeRoute }), null, 'a new legal clue remains usable with an idempotent old promise transition');
 });

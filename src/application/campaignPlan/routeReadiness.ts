@@ -4,6 +4,7 @@ import type { CampaignContentArtifactV1, CampaignPlanV1 } from '../../domain/cam
 import type { GameStateSnapshot } from '../../domain/state/types';
 import type { MethodTemplateV1, SituationCondition, SituationStatus } from '../../domain/situations/types';
 import { hasUnconsumedSuccessEventMethod, hasUnconsumedSuccessEventType } from '../../domain/campaignPlan/causalityValidation';
+import { preparePromiseSafeOutcomes } from '../../domain/campaignPlan/promiseEffectPolicy';
 import type { ContentEntry, SceneDefinition } from '../../domain/content/types';
 import { isTemplateValidAtAnchor } from '../campaign/recruitment';
 
@@ -53,6 +54,14 @@ export function campaignMethodEventConsumerBlocker(input: {
   method: MethodTemplateV1;
 }): string | null {
   const { state, situationId, method } = input;
+  const playerActorId = state.party?.find(member => member.controller === 'player')?.actorId;
+  const cards = (state.cards ?? []).map(row => ({ ...(row.card as ActorCard), actorId: row.actorId }));
+  const resolveReference = createActorReferenceResolver({ actors: state.actors, cards });
+  const resolveMethodActor = (id: string): string => {
+    if (['pc', 'player', 'self', '__player__', '玩家'].includes(id)) return playerActorId ?? id;
+    const named = cards.find(card => card.name === id);
+    return named?.actorId ?? resolveReference(id);
+  };
   const ownerSituationId = (ref: string, fallbackSituationId = situationId): string =>
     ['self', '__self__'].includes(ref) ? fallbackSituationId : ref;
   const promiseFor = (ref: { situationId: string; promiseId: string }, fallbackSituationId = situationId) =>
@@ -69,33 +78,41 @@ export function campaignMethodEventConsumerBlocker(input: {
   ];
   const successfulGrades = ['success', 'full_success'] as const;
   const transitionsBySuccessfulGrade = successfulGrades.map(grade => successfulPromiseTransitions(method, grade));
-  const repeatedCreationsOnly = transitionsBySuccessfulGrade.every(transitions => {
-    const creates = transitions.filter(effect => effect.kind === 'promise_create');
-    return creates.length > 0 && creates.every(alreadyCreated);
-  });
-  const resolvedPromiseTransitionsOnly = transitionsBySuccessfulGrade.every(transitions => {
-    const resolutions = transitions.filter(effect => effect.kind === 'promise_fulfill' || effect.kind === 'promise_break');
-    return resolutions.length > 0 && resolutions.every(effect => {
+  const hasRepeatedCreation = transitionsBySuccessfulGrade.some(transitions =>
+    transitions.some(effect => effect.kind === 'promise_create' && alreadyCreated(effect)));
+  const hasTerminalResolution = transitionsBySuccessfulGrade.some(transitions =>
+    transitions.some(effect => {
+      if (effect.kind !== 'promise_fulfill' && effect.kind !== 'promise_break') return false;
       const status = promiseFor(effect)?.status;
       return status === 'fulfilled' || status === 'broken';
+    }));
+  const hasOpenPromiseResolution = transitionsBySuccessfulGrade.some(transitions => transitions.some(effect => {
+    if (effect.kind !== 'promise_fulfill' && effect.kind !== 'promise_break') return false;
+    return promiseFor(effect)?.status === 'open';
+  }));
+  const promisePolicy = preparePromiseSafeOutcomes({ state, situationId, method, resolveActor: resolveMethodActor });
+  const isUsefulAfterPromisePolicy = (grade: typeof successfulGrades[number]): boolean => {
+    const effects = promisePolicy.effectsByGrade[grade] ?? method.outcomeTemplates?.[grade]?.effects ?? [];
+    return effects.some(effect => {
+      if (effect.template === 'promise_create') return !alreadyCreated({
+        situationId: effect.situationId, promiseId: effect.promiseId,
+      });
+      if (effect.template === 'promise_fulfill' || effect.template === 'promise_break') {
+        const status = promiseFor({ situationId: effect.situationId, promiseId: effect.promiseId })?.status;
+        return status === 'open';
+      }
+      if (effect.template === 'grant_knowledge') {
+        const actorId = resolveMethodActor(effect.actorId ?? '__player__');
+        return !(state.discoveries ?? []).some(discovery => discovery.entryId === effect.entryId && discovery.actorId === actorId);
+      }
+      if (effect.template === 'record_event') return Boolean(input.plan
+        && !hasUnconsumedSuccessEventType(input.plan, input.artifacts, situationId, effect.eventType));
+      return true;
     });
-  });
-  const repeatedOpenPromises = transitionsBySuccessfulGrade.flatMap(transitions => transitions
-    .filter(effect => effect.kind === 'promise_create' && alreadyCreated(effect) && promiseFor(effect)?.status === 'open'));
-  const sameMethodVersions = input.artifacts.flatMap(artifact => artifact.situations
-    .flatMap(situation => situation.definition.methods
-      .filter(candidate => candidate.methodId === method.methodId)
-      .map(candidate => ({ situationId: situation.entryId, method: candidate }))));
-  const hasAnyOpenPromiseResolution = [{ situationId, method }, ...sameMethodVersions].some(version => successfulGrades.some(grade =>
-    successfulPromiseTransitions(version.method, grade).some(resolve =>
-      (resolve.kind === 'promise_fulfill' || resolve.kind === 'promise_break')
-      && repeatedOpenPromises.some(create => ownerSituationId(resolve.situationId, version.situationId)
-        === ownerSituationId(create.situationId, situationId)
-        && resolve.promiseId === create.promiseId && promiseFor(resolve, version.situationId)?.status === 'open'))));
-  if (repeatedCreationsOnly && !hasAnyOpenPromiseResolution) {
-    return CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED;
-  }
-  if (resolvedPromiseTransitionsOnly) return CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED;
+  };
+  const everySuccessfulGradeIsIdempotent = successfulGrades.every(grade => !isUsefulAfterPromisePolicy(grade));
+  if (everySuccessfulGradeIsIdempotent && hasRepeatedCreation && !hasOpenPromiseResolution) return CAMPAIGN_METHOD_PROMISE_ALREADY_CREATED;
+  if (everySuccessfulGradeIsIdempotent && hasTerminalResolution) return CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED;
 
   if (!input.plan) return null;
   const { plan, artifacts } = input;
@@ -107,12 +124,6 @@ export function campaignMethodEventConsumerBlocker(input: {
   if ((method.successEffects?.length ?? 0) > 0 || (method.onSuccess?.length ?? 0) > 0) return null;
   const effects = method.outcomeTemplates?.success?.effects ?? [];
   if (effects.length === 0) return null;
-  const playerActorId = state.party?.find(member => member.controller === 'player')?.actorId;
-  const cardsByActor = new Map<string, ActorCard>();
-  for (const card of state.cards ?? []) {
-    cardsByActor.set(card.actorId, { ...(card.card as ActorCard), actorId: card.actorId });
-  }
-  const resolveReference = createActorReferenceResolver({ actors: state.actors, cards: [...cardsByActor.values()] });
   const isKnown = (entryId: string, reference?: string): boolean => {
     const actorId = !reference || ['pc', 'player', 'self', '__player__', '玩家'].includes(reference)
       ? playerActorId : resolveReference(reference);

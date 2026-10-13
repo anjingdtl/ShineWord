@@ -216,7 +216,7 @@ export interface CampaignRuntimeV1 {
   deferredConsequences: DeferredConsequenceRecordV1[];
   /** Event keys (event seq identities) already consumed by progress evaluation. */
   processedEventKeys: string[];
-  /** Reward grants keyed `nodeId:policyId:grantIndex` — replan/rename cannot re-grant. */
+  /** Branch-local idempotency identities for node rewards and one-time promise side effects. */
   grantedRewardKeys: string[];
   lastProgressVersion: number;
   replanReasonCodes: string[];

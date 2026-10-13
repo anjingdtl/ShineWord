@@ -2449,7 +2449,15 @@ export class CampaignSession {
       .filter(item => item.status === 'active').map(item => item.situationId));
     const playerActorId = state.party?.find(member => member.controller === 'player')?.actorId;
     const playerLocationId = playerActorId ? state.actors[playerActorId]?.locationId : undefined;
-    for (const authored of content.artifacts.flatMap(artifact => artifact.situations)) {
+    // The snapshot binding is ordered with the current plan's content first;
+    // resolve duplicate situation IDs the same way as loadPackageEntries.
+    // Historical artifacts remain available to frozen contracts/consequences,
+    // but must not veto the currently selected method by reusing its methodId.
+    const authoritativeSituations = new Map<string, CampaignContentArtifactV1['situations'][number]>();
+    for (const artifact of content.artifacts) for (const situation of artifact.situations) {
+      if (!authoritativeSituations.has(situation.entryId)) authoritativeSituations.set(situation.entryId, situation);
+    }
+    for (const authored of authoritativeSituations.values()) {
       if (!activeSituationIds.has(authored.entryId)) continue;
       if (authored.definition.locationId && authored.definition.locationId !== playerLocationId) continue;
       for (const method of authored.definition.methods) {
@@ -2656,6 +2664,13 @@ export class CampaignSession {
     const activeMethodSituations: string[] = [];
     const blockedMethodRefs = new Set<string>();
     const blockedMethodMessages = new Map<string, string>();
+    const normalizeMethodIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+    const submissionSelectsMethod = (situationId: string, method: MethodTemplateV1): boolean => {
+      const selectedRef = options.guidanceChoice?.candidateRef;
+      return selectedRef
+        ? selectedRef === `method:${situationId}:${method.methodId}`
+        : normalizeMethodIntent(options.intent) === normalizeMethodIntent(method.firstStep.intent);
+    };
     for (const situation of playableSituations) {
       if (situation.definition.locationId && situation.definition.locationId !== playerState.locationId) continue;
       if (situationStatusById.get(situation.situationId)?.status === 'active') {
@@ -2674,8 +2689,7 @@ export class CampaignSession {
             const methodRef = `method:${situation.situationId}:${method.methodId}`;
             blockedMethodRefs.add(methodRef);
             blockedMethodMessages.set(methodRef, '此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
-            if (options.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')
-              === method.firstStep.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')) {
+            if (submissionSelectsMethod(situation.situationId, method)) {
               throw new Error('此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
             }
             continue;
@@ -2693,15 +2707,13 @@ export class CampaignSession {
             const methodRef = `method:${situation.situationId}:${method.methodId}`;
             blockedMethodRefs.add(methodRef);
             blockedMethodMessages.set(methodRef, blockerMessage);
-            if (options.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')
-              === method.firstStep.intent.replace(/[\s，。！？、,.!?；;：:]/g, '')) {
+            if (submissionSelectsMethod(situation.situationId, method)) {
               throw new Error(blockerMessage);
             }
             continue;
           }
           if (!assessed.eligible) {
-            const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
-            if (normalizeIntent(options.intent) === normalizeIntent(method.firstStep.intent)) {
+            if (submissionSelectsMethod(situation.situationId, method)) {
               throw new Error(`尚未掌握技能或补齐行动前提：${assessed.blockers.join('；')}`);
             }
             continue;
@@ -2733,6 +2745,8 @@ export class CampaignSession {
       // frozen outcomeSetHash pins the exact set the contract was compiled
       // against (A14) — mismatch means the published content drifted.
       if (method.outcomeTemplates) {
+        const frozen = contract.campaignEffects?.[grade];
+        if (frozen) return [...frozen.transitions];
         const specs = method.outcomeTemplates[grade]?.effects ?? [];
         return compileCampaignEffects(specs, {
           actorResolver: createActorReferenceResolver({ actors: summary.state.actors, cards: plannerCards }),

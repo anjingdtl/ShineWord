@@ -143,7 +143,7 @@ function candidateModel() {
 
 async function fixture(options = {}) {
   const entries = options.entries ?? baseEntries();
-  const db = new DatabaseSync(':memory:');
+  const db = new DatabaseSync(options.dbPath ?? ':memory:');
   for (const migration of BUILTIN_MIGRATIONS) {
     for (const sql of migration.sql.split(';').map(part => part.trim()).filter(Boolean)) db.exec(sql);
   }

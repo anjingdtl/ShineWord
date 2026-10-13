@@ -8,9 +8,28 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, candidateModel } = require('./helpers/phase9CampaignFixture.cjs');
 
-const { evaluateReplanTriggers, adoptReplanCandidate } = require('../dist/application/campaignPlan/replanService');
+const { evaluateReplanTriggers, adoptReplanCandidate, newlyOrphanedPendingConsequences } = require('../dist/application/campaignPlan/replanService');
 const { forkBranch } = require('../dist/application/branch/fork');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
+
+test('P9-5: replan reachability respects all/any/not and blocks only newly orphaned pending triggers', () => {
+  const nodes = [
+    { nodeId: 'stage-a', status: 'active', completedEvidence: [] },
+    { nodeId: 'stage-b', status: 'planned', completedEvidence: [] },
+  ];
+  const superseded = nodes.map(node => ({ ...node, status: 'superseded' }));
+  const trigger = condition => ({ consequenceId: 'pending-effect', status: 'pending', triggerCondition: condition });
+  const aSucceeded = { kind: 'campaign_node_status', nodeId: 'stage-a', status: 'succeeded' };
+  const bSucceeded = { kind: 'campaign_node_status', nodeId: 'stage-b', status: 'succeeded' };
+  assert.deepEqual(newlyOrphanedPendingConsequences({ deferredConsequences: [trigger(aSucceeded)], before: nodes, after: superseded }), ['pending-effect']);
+  assert.deepEqual(newlyOrphanedPendingConsequences({ deferredConsequences: [trigger({ kind: 'any', of: [aSucceeded, bSucceeded] })], before: nodes,
+    after: superseded.map(node => node.nodeId === 'stage-b' ? { ...node, status: 'active' } : node) }), [],
+  'one still reachable any-branch keeps the trigger possible');
+  assert.deepEqual(newlyOrphanedPendingConsequences({ deferredConsequences: [trigger({ kind: 'not', of: aSucceeded })], before: nodes, after: superseded }), [],
+    'not inverts the terminal truth value');
+  assert.deepEqual(newlyOrphanedPendingConsequences({ deferredConsequences: [trigger(aSucceeded)], before: superseded, after: superseded }), [],
+    'a pre-existing impossible legacy trigger does not block unrelated replan');
+});
 
 test('P9-5: local trigger evaluation is deterministic and never fires on idle play', async () => {
   const h = await fixture();

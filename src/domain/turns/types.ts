@@ -107,6 +107,8 @@ export interface ActionContract {
     knowledgeGrants: ReadonlyArray<{ entryId: string; actorId: string }>;
     relationshipShifts: ReadonlyArray<{ fromActorId: string; toActorId: string; delta: number }>;
     scheduledConsequences: readonly string[];
+    /** Branch-local one-time campaign effect identities, hash-frozen before rolling. */
+    promiseEffectClaims?: ReadonlyArray<import('../campaignPlan/promiseEffectPolicy').PromiseEffectClaimV1>;
   }>>>;
   /**
    * P8-6: the immutable rule binding this contract was compiled under
