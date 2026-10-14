@@ -433,7 +433,7 @@ test('M2 keeps distinct route consequences after two authored paths converge on 
   assert.ok(sweepState.relationships.find(item => item.fromActorId === 'npc-tpl-lin' && item.toActorId === 'pc')?.closeness >
     (askState.relationships.find(item => item.fromActorId === 'npc-tpl-lin' && item.toActorId === 'pc')?.closeness ?? 0));
   assert.equal(sweepState.campaignRuntime.deferredConsequences.length, 0);
-  assert.equal(askState.campaignRuntime.deferredConsequences.find(item => item.consequenceId === 'lin-favor')?.status, 'triggered');
+  assert.equal(askState.campaignRuntime.deferredConsequences.find(item => item.consequenceId === 'lin-favor')?.status, 'discharged');
   assert.equal(sweepProjection.status, 'content_gap');
   assert.equal(askProjection.status, 'content_gap');
   assert.notDeepEqual(sweepState.relationships, askState.relationships,

@@ -6,6 +6,7 @@ import type { GameStateSnapshot } from '../../domain/state/types';
 import { evaluateCampaignProgress, registerDeferredConsequence, EVENT_HISTORY_WINDOW, NODE_TRANSITION_BATCH_LIMIT, CONSEQUENCE_TRIGGER_LIMIT,
   type BranchEventRecord } from '../../domain/campaignPlan/progressReducer';
 import { compileCampaignEffects, bindCampaignResources } from '../../domain/campaignPlan/campaignEffects';
+import { dischargeAppliedConsequences, dischargeStrandedConsequences } from '../../domain/campaignPlan/consequenceLifecycle';
 import { createActorReferenceResolver } from '../../domain/characters/actorIdentity';
 import { applyEffects } from '../../domain/state/effects';
 import { applySituationRuntime, applySituationProjection } from '../situations/causalProjection';
@@ -205,6 +206,20 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
       }
       scheduleConsequences(nextState.campaignRuntime!, compiled.scheduledConsequences, consequenceOwners(consequence));
     }
+    // Effects have run: close these obligations as discharged so the runtime
+    // stops reporting them as awaiting application, and a later pass cannot
+    // re-apply the same consequence.
+    const discharged = dischargeAppliedConsequences({
+      runtime: nextState.campaignRuntime!, appliedKeys: appliedConsequences, nextStateVersion: nextVersion,
+    });
+    events.push(...discharged.events);
+    // Pending obligations whose trigger node was retired can never fire. Close
+    // them explicitly instead of leaving them 'pending' forever masquerading as
+    // future content. The trigger condition itself is never rewritten.
+    const stranded = dischargeStrandedConsequences({
+      runtime: nextState.campaignRuntime!, nextStateVersion: nextVersion,
+    });
+    events.push(...stranded.events);
     // A prepared successor stays dormant until its node becomes active. Tick
     // its board in the SAME Prepared draft as the stage transition, so the
     // next decision point has content and starts pressure at actual activation.

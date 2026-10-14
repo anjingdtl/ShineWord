@@ -34,7 +34,8 @@ test('flow: local rest triggers deferred effects, stage rewards and a replan wit
     assert.equal(calls, 0);
     assert.equal(after.stateVersion, before.stateVersion + 1);
     assert.equal(after.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-1').status, 'succeeded');
-    assert.equal(after.campaignRuntime.deferredConsequences[0].status, 'triggered');
+    assert.equal(after.campaignRuntime.deferredConsequences[0].status, 'discharged',
+      'the local rest applied the deferred effect, so the obligation is closed');
     assert.equal(after.relationships.find(r => r.fromActorId === 'npc-tpl-lin' && r.toActorId === 'pc').closeness, 1);
     assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates'));
     assert.ok(await h.planStore.findActiveJob(h.branchId, 'replan'));

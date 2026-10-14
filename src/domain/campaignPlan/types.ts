@@ -180,6 +180,12 @@ export interface DeferredConsequenceRecordV1 {
   idempotencyKey: string;
   createdAtVersion: number;
   triggeredAtVersion?: number;
+  /** Set when the obligation's effects were applied and it reached 'discharged'. */
+  dischargedAtVersion?: number;
+  /** Set when the obligation was closed without firing. */
+  cancelledAtVersion?: number;
+  /** Auditable reason a pending obligation was closed as unreachable. */
+  cancelReason?: 'trigger_node_retired';
   sourceTurnId: string;
 }
 
@@ -351,6 +357,10 @@ export type CampaignEventType =
   | 'campaign_reward_granted'
   | 'campaign_consequence_scheduled'
   | 'campaign_consequence_triggered'
+  /** Effects were applied; the obligation is closed and cannot re-apply. */
+  | 'campaign_consequence_discharged'
+  /** Closed without firing because its trigger can never become true again. */
+  | 'campaign_consequence_cancelled'
   | 'campaign_ending'
   | 'campaign_status_changed';
 

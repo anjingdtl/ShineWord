@@ -1030,7 +1030,8 @@ test('closeout: a consequence persists across two decisions and applies authorit
     assert.equal((await h.turns.getState(h.branchId)).campaignRuntime.deferredConsequences[0].status, 'pending');
     for (let i = 0; i < 2; i++) await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看现场' });
     const triggered = await h.turns.getState(h.branchId);
-    assert.equal(triggered.campaignRuntime.deferredConsequences[0].status, 'triggered');
+    assert.equal(triggered.campaignRuntime.deferredConsequences[0].status, 'discharged',
+      'its trigger fired and its effect was applied, so the obligation is closed');
     assert.equal(triggered.relationships[0].closeness, base + 1, 'effect changed the committed relationship');
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '在巷口稍作停留' });
     assert.equal((await h.turns.getState(h.branchId)).relationships[0].closeness, base + 1);

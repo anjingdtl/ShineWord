@@ -70,13 +70,14 @@ test('nested consequence closure applies four effects and leaves the fifth pendi
   try {
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '向林凡打听青石巷最近的情况' });
     const first = await h.turns.getState(h.branchId);
-    assert.equal(first.campaignRuntime.deferredConsequences.filter(c => c.status === 'triggered').length, 4);
+    assert.equal(first.campaignRuntime.deferredConsequences.filter(c => c.status === 'discharged').length, 4,
+      'the four obligations that reached their trigger also had their effects applied, so they are discharged');
     assert.equal(first.campaignRuntime.deferredConsequences.find(c => c.consequenceId === 'follow-5').status, 'pending');
     assert.equal(h.db.prepare("SELECT COUNT(*) n FROM branch_events WHERE event_type='follow_event_5'").get().n, 0);
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '环顾四周' });
     const second = await h.turns.getState(h.branchId);
     assert.equal(second.campaignRuntime.deferredConsequences.length, 6, 'the cycle back to its root dedupes');
-    assert.equal(second.campaignRuntime.deferredConsequences.filter(c => c.status === 'triggered').length, 6);
+    assert.equal(second.campaignRuntime.deferredConsequences.filter(c => c.status === 'discharged').length, 6);
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '环顾四周' });
     for (let i = 2; i <= 6; i++) assert.equal(h.db.prepare('SELECT COUNT(*) n FROM branch_events WHERE event_type=?').get(`follow_event_${i}`).n, 1);
   } finally { h.db.close(); }
@@ -133,7 +134,8 @@ test('R61: a triggered consequence retains its declared follow-up consequence', 
     await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
       intent: '向林凡打听青石巷最近的情况' });
     const state = await h.turns.getState(h.branchId);
-    assert.equal(state.campaignRuntime.deferredConsequences.find(c => c.consequenceId === 'lin-favor').status, 'triggered');
+    assert.equal(state.campaignRuntime.deferredConsequences.find(c => c.consequenceId === 'lin-favor').status, 'discharged',
+      'its trigger held and its effects were applied in this same commit, so the record is discharged');
     assert.ok(state.campaignRuntime.deferredConsequences.some(c => c.consequenceId === 'lin-followup'),
       'the accepted schedule_consequence effect must be registered, never silently discarded');
     assert.equal(h.db.prepare("SELECT COUNT(*) n FROM branch_events WHERE branch_id=? AND event_type='lin_followup_delivered'").get(h.branchId).n, 1);

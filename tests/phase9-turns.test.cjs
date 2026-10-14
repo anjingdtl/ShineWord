@@ -117,7 +117,8 @@ test('P9-4: the alternate route resolves the stage, grants rewards and schedules
     assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates'), 'knowledge reward applied (lore-crates)');
     const consequence = runtime.deferredConsequences.find(c => c.consequenceId === 'lin-favor');
     assert.ok(consequence, 'deferred consequence scheduled by the success grade');
-    assert.equal(consequence.status, 'triggered', 'its trigger condition (situation resolved) already holds');
+    assert.equal(consequence.status, 'discharged',
+      'its trigger condition (situation resolved) held and its effects were applied in this same commit');
 
     const events = h.db.prepare('SELECT event_type, payload_json FROM branch_events WHERE branch_id=? ORDER BY event_seq').all(h.branchId)
       .map(row => ({ type: row.event_type, payload: JSON.parse(row.payload_json) }));

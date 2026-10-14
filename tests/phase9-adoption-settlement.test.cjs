@@ -116,8 +116,8 @@ for (const completion of [
     assert.equal(await h.session.runCampaignReplan(h.campaignId, h.branchId), 'adopted');
     const after = await h.turns.getState(h.branchId);
     assert.equal(after.campaignRuntime.nodeStates.find(n => n.nodeId === 'stage-2').status, 'succeeded', 'adoption reads committed branch history');
-    assert.equal(after.campaignRuntime.deferredConsequences[0].status, 'triggered');
-    assert.equal(after.actors['npc-tpl-lin'].resources.hp, before.actors['npc-tpl-lin'].resources.hp - 1, 'triggered means effects were applied');
+    assert.equal(after.campaignRuntime.deferredConsequences[0].status, 'discharged');
+    assert.equal(after.actors['npc-tpl-lin'].resources.hp, before.actors['npc-tpl-lin'].resources.hp - 1, 'discharged means effects were applied');
     assert.equal(after.cards.find(c => c.actorId === 'npc-tpl-lin').card.resourceMax.hp, 9);
     assert.ok(after.discoveries.some(d => d.entryId === 'lore-crates' && d.actorId === 'npc-tpl-lin'));
     assert.equal(after.clockSeconds, before.clockSeconds, 'adoption itself does not advance game time');
