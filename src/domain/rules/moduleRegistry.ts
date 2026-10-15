@@ -13,7 +13,9 @@ export interface MechanismManifest {
   conflicts: readonly string[];
   /** Executable capabilities this module contributes. */
   capabilities: readonly string[];
-  /** State fields owned exclusively by this module. */
+  /** State projection fields associated with this module's capabilities.
+   * Descriptive metadata only; this registry does not enforce writer isolation.
+   */
   ownedFields: readonly string[];
   parameterSchemaId: string;
   stateSchemaVersion: number;
@@ -48,7 +50,7 @@ export const MECHANISM_MODULES: readonly MechanismManifest[] = [
     requires: [{ moduleId: 'resources_conditions', version: '1.0.0' }],
     conflicts: [],
     capabilities: ['move_location', 'investigate_clue', 'discover_entry'],
-    ownedFields: ['discoveredEntryIds'],
+    ownedFields: ['discoveries'],
     parameterSchemaId: 'exploration_discovery.params-1',
     stateSchemaVersion: 1,
   },

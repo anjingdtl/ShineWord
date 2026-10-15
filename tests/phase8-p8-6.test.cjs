@@ -81,6 +81,13 @@ test('composition resolves in the fixed registry order regardless of selection o
     'selection order must not influence composition order');
 });
 
+test('exploration discovery metadata names the snapshot field without claiming runtime writer isolation', () => {
+  const manifest = getMechanismManifest('exploration_discovery');
+  assert.ok(manifest);
+  assert.deepEqual(manifest.ownedFields, ['discoveries'],
+    'the registry metadata follows GameStateSnapshot.discoveries, not a nonexistent discoveredEntryIds field');
+});
+
 test('A26: a fantasy configuration compiles to a deterministic binding, capability table and projection', () => {
   const config = fantasyConfig();
   config.configHash = computeWorldRuleConfigurationHash(config);
