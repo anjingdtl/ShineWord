@@ -17,7 +17,7 @@
 | R6 | PARTIAL | SQLite/save/fork/migration/privacy 定向 58/58；三意图隐私与私有库设备复核未完成。 |
 | R7 | BLOCKED / PARTIAL | 未提供本轮预算 scope/请求上限/费用边界，真实模型请求 0；80 有效决定、L1 与后果因果消费未验。 |
 | R8 | PARTIAL | A40 本地确定性 100/300/1000 已留证；matched performance、完整可访问性与4名外部试玩未验。 |
-| R9 | PASS-HANDOFF | 报告、矩阵、身份和检查点已提交；Draft PR #13，Core/Android CI run 130/95 通过。 |
+| R9 | PASS-HANDOFF | Draft PR #13 已推送；head 620b268 的 Core Verify run 131、Android Verify run 96 均通过；检查点与矩阵已更新。 |
 
 最终 Core 1334/1334；移动端 typecheck、version 检查、Debug APK build 和 git diff --check PASS。APK SHA-256 3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b，110156351 bytes，安装后设备 base.apk hash 一致。完整报告见本轮证据目录。
 

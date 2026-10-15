@@ -44,13 +44,13 @@ G/V95/A 项不因自动化或首屏冒烟整体 PASS。G0/G1/G2/G4/G5 均 PARTIA
 
 ## PR 与 CI
 
-- 施工分支已推送并核对远端 ref：codex/phase95-closeout-short，head f52563b4f54fca3fef030a26fcb36af5dd9f5cfd。
+- 施工分支已推送并核对远端 ref：codex/phase95-closeout-short，最新已验证 tip 620b268bee66a30559c8b10a47fecca05c3b4710；origin/main 仍为 599d038efa6a65d7107f276961bc7b66caab37f6。
 - Draft PR #13：https://github.com/anjingdtl/ShineWord/pull/13；base main 599d038efa6a65d7107f276961bc7b66caab37f6；未合并、未发布。
-- 该候选 SHA 的 Core Verify run 130（38769959336）PASS；Android Verify run 95（38769959429）PASS，包含 mobile typecheck 和 Debug APK build。
-- 本报告提交为后续文档归档；生产源码摘要和 APK SHA 未改变。最终 branch tip 的检查需在文档提交推送后再次读取。
+- head 620b268 的 Core Verify run 131（38770974932）PASS；Android Verify run 96（38770974975）PASS，包含 mobile typecheck 和 Debug APK build。之前 head f52563b 的 run 130/95 也均 PASS。
+- head 620b268 后的本次证据归档仅修改文档，不改变生产源码摘要或 APK SHA；该文档提交推送后的 CI 另行核验并记录在最终交付。
 
 没有自动合并 main 或发布 Release。
 
 ## 交接
 
-从 ACCEPTANCE_MATRIX.md 查看所有未关闭项；从 CHECKPOINT.md 继续。下一步先重查 origin/main 和认证，按授权推送施工分支并创建 PR，等待该提交 CI；之后的最小安全动作是取得独立预算授权/私有账本证据/试玩人员，再分别推进 R3、R5–R8。不得自动执行模型请求、重放 unknown 或改动用户历史数据。
+从 ACCEPTANCE_MATRIX.md 查看所有未关闭项；从 CHECKPOINT.md 继续。Draft PR #13 和当前 head 的 Core/Android CI 已核实。下一步须取得本轮真实模型预算 scope、物理请求上限和费用边界，或只读历史账本/attempt 证据，并安排独立试玩者；在依赖满足前继续本地工程验证。不得自动执行模型请求、重放 unknown 或改动用户历史数据。

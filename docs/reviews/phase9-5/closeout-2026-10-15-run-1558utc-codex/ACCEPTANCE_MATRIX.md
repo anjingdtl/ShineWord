@@ -12,7 +12,7 @@
 
 | 节点 | 状态 | 本轮证据 | 尚缺 |
 |---|---|---|---|
-| R0 | PASS-ENGINEERING | 2bbf179 D01 修复；基线复现 9/10、定向修复 13/13；最终 Core 1334/1334、版本门禁和 Debug APK 已执行 | PR/CI；完整真实开局 |
+| R0 | PASS-ENGINEERING | 2bbf179 D01 修复；基线复现 9/10、定向修复 13/13；最终 Core 1334/1334、版本门禁、Debug APK 和 head 620b268 的 Core/Android CI 均通过 | 完整真实开局 |
 | R1 | PASS-ENGINEERING | 40e85a2 稳定引用、producer-backed 完成条件；修复和冻结历史合同回归 | 当前 APK 的完整生成/修复/采用旅程 |
 | R2 | PASS-ENGINEERING | b871b88 修正 D14；生产 Session 生命周期和 settlement 定向测试 34/34 | 后果被实际下游消费的真实旅程 |
 | R3 | PARTIAL | 预算 authority、审批、并发/fence、timeout/unknown 定向测试 53/53；历史账本隔离登记 | 私有账本/attempt 原始凭据和差异对账 |
@@ -21,13 +21,13 @@
 | R6 | PARTIAL | 存档、迁移、fork、SQLite 和隐私相关定向测试 58/58 | 三意图全层隐私、用户数据库只读复核、save10 续玩设备旅程 |
 | R7 | BLOCKED / PARTIAL | 没有派发真实请求；本地确定性合同可继续 | 无本轮预算 scope/请求上限/费用边界；完整旅程 0；合格 L1、80 决定和自然结局未证 |
 | R8 | PARTIAL | 本地确定性 A40 100/300/1000；字体比例和键盘冒烟 | 10+10 matched performance、完整可访问性、四名独立试玩者 |
-| R9 | PASS-HANDOFF | 分支已推送，Draft PR #13 已创建；run 130/95 Core/Android CI 均通过 | 真实玩法验收仍由 R3/R5–R8 外部依赖阻塞；PR 未合并、未发布 |
+| R9 | PASS-HANDOFF | Draft PR #13 open/draft；head 620b268 的 Core Verify run 131、Android Verify run 96 均通过；分支 tip 与远端一致 | 真实玩法验收仍由 R3/R5–R8 外部依赖阻塞；PR 未合并、未发布 |
 
 ## G 门
 
 | ID | 本轮状态 | 依据/差距 |
 |---|---|---|
-| G0 | PARTIAL | 当前源码/APK/AVD 身份和本地请求计数已记录；PR/CI 未证，历史预算账本未核验。 |
+| G0 | PARTIAL | 当前源码/APK/AVD 身份、本地请求计数及 PR CI 已核验；历史预算账本仍未核验。 |
 | G1 | PARTIAL | R1/R2 工程合同和四档确定性测试通过；合格 L1 分布及真实 Planner 0 请求证据未形成。 |
 | G2 | PARTIAL | 投影只读工程测试和 R4 审计通过；无三路汇合后的机制差异及两条下游消费链旅程。 |
 | G3 | NOT NEEDED（本轮） | 本轮未启动 M3 或真实付费模型路径；这只说明本轮没有触发 M3 判定，不代表全局永远不需要 M3。 |

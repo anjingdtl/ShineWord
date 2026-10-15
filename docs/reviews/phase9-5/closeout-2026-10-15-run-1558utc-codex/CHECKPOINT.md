@@ -8,7 +8,7 @@
 - 初始 fetch 时间：2026-10-15 15:22:18 UTC；当时 origin/main = 599d038efa6a65d7107f276961bc7b66caab37f6。推送前必须重新 fetch 并记录最新差异。
 - 施工分支：codex/phase95-closeout-short。
 - 当前生产输入提交：b4641bd8c27aafaed64eb001865b39088dcd6115；当前代码 HEAD：36fe25d7459d093541a3691d864d6326fae7c868；生产源码摘要：333b22e1202d11be4177d167b6cf1dfd8e41c8cc4e80e6877eb8f34d0f055d66；生产文件数 469。
-- 本轮证据包与根进度文件由单独文档提交归档；该文档提交不改变生产源码/APK 输入。
+- 本轮证据包与根进度文件由单独文档提交归档；该文档提交不改变生产源码/APK 输入。最新已验证分支 tip：620b268bee66a30559c8b10a47fecca05c3b4710；对应 PR CI run 131/96 均通过。
 - 原 main checkout 和既有 worktree F:\sw95 未用于施工；短路径隔离 worktree 逻辑名 phase95-closeout-worktree。
 - 不存在 reset --hard、git clean、强推、合并 main 或 Release 操作。
 
@@ -33,7 +33,7 @@
 - 4 名独立试玩者缺失；责任角色为产品/内容 QA 负责人；取得参与者后按 EXTERNAL_PLAYTEST.md 执行。
 - 完整 Stage-1/8、A15/A28 UI 恢复、三意图隐私、10+10 matched performance、TalkBack/小屏/主题与实体机验收尚未完成。
 - 用户授权的 GLM 配置与小说素材逻辑资源已登记；本轮未读取内容、未入仓。模拟器使用逻辑资源 phase95-empty-avd-20261016，Android API 37；原有 QA AVD 数据未更改。
-- Git push 已成功；credential-manager 缺失程序警告不影响远端 ref 核验。Draft PR #13 已创建。Core Verify run 130 与 Android Verify run 95 在 head f52563b4f54fca3fef030a26fcb36af5dd9f5cfd 均 PASS。
+- Git push 已成功；credential-manager 缺失程序警告不影响远端 ref 核验。Draft PR #13 当前 open/draft/mergeable，head 为 620b268bee66a30559c8b10a47fecca05c3b4710，base 为 main 599d038efa6a65d7107f276961bc7b66caab37f6。Core Verify run 131（38770974932）和 Android Verify run 96（38770974975）均 PASS；远端施工分支 ref 与该 tip 一致。
 
 ## 预算与 unknown
 
@@ -51,4 +51,4 @@
 
 ## 下一最小安全动作
 
-当前证据已提交；重新 fetch origin，确认施工分支相对最新 origin/main 仍可安全推送。优先尝试 Git push；若 CLI 凭据仍无效，使用已授权的 GitHub connector API 将施工提交安全发布到分支并创建 PR，记录 URL 和最终 CI；不输出凭据。不得合并 main、发布、调用真实模型、改历史数据或重派 unknown。
+当前分支、PR 和 head 620b268 对应 CI 均已核验。后续最小安全动作是在获取新的预算 scope、物理请求 cap、费用边界后，才启动真实模型路径；只读取得私有历史账本/attempt 凭据后，逐条核对差异与 unknown；安排独立试玩者后推进 R7/R8。未满足这些依赖时仅继续不依赖它们的工程节点。不得合并 main、发布、改历史数据或重派 unknown。
