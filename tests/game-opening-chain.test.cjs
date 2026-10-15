@@ -86,6 +86,31 @@ test('rapid opening uses the same complete extraction/mapping analysis as full b
   } finally { rapid.db.close(); full.db.close(); }
 });
 
+test('the canon character picker offers each character once even with unmerged duplicate entities', async () => {
+  const h = await built();
+  try {
+    const worldId = h.imported.worldId;
+    const original = (await h.runtime.worldStore.listEntities(worldId)).find(e => e.type === 'character' && e.name === '林凡');
+    assert.ok(original, 'the fixture extraction publishes the named character');
+    await h.runtime.worldStore.upsertEntity({ worldId, entityId: 'ent-lin-duplicate-row', type: 'character',
+      name: '林凡', firstSeenChapterId: null, aliases: [] }, 'later');
+    const existingFact = (await h.runtime.worldStore.listFacts(worldId))
+      .find(f => f.subjectEntityId === original.entityId);
+    assert.ok(existingFact && existingFact.sources.length, 'the fixture character carries a cited fact');
+    const saved = await h.runtime.worldStore.saveFact({ worldId, factId: 'fact-lin-dup-location',
+      subjectEntityId: 'ent-lin-duplicate-row', predicate: 'current_location', value: { location: '青石巷' },
+      status: 'explicit', confidence: 1, validFrom: null, validTo: null, revealAt: null, scope: 'world',
+      sources: existingFact.sources }, 'later');
+    assert.equal(saved, 'inserted');
+    const setup = await session(h).getWorldSetup(worldId);
+    const named = setup.canonCharacters.filter(c => c.name === '林凡');
+    assert.equal(named.length, 1, 'unmerged same-name entity rows must not duplicate the playable canon picker');
+    const ids = (await h.runtime.worldStore.listEntities(worldId))
+      .filter(e => e.type === 'character' && e.name === '林凡').map(e => e.entityId).sort();
+    assert.equal(named[0].entityId, ids[0], 'the deterministic first row by entity_id order is the one offered');
+  } finally { h.db.close(); }
+});
+
 test('complete analysis -> archive v3 -> independent DB -> canon protagonist -> valid campaign snapshot', async () => {
   const source = await built();
   const target = await createMobileHarness();
@@ -210,4 +235,60 @@ test('a published legacy archive without canon has a repair state, while a v3 ro
       archive, newWorldId: 'with-canon', createdAt: 'now' });
     assert.equal(await hasPlayableOpening(target.runtime.worldStore, 'with-canon', source.pkg.manifest.revision), true);
   } finally { source.db.close(); target.db.close(); }
+});
+
+test('canon opening suppresses a same-person NPC template linked through a duplicate entity row', async () => {
+  const h = await built();
+  try {
+    const worldId = h.imported.worldId;
+    const original = (await h.runtime.worldStore.listEntities(worldId))
+      .find(entity => entity.type === 'character' && entity.name === '林凡');
+    assert.ok(original, 'the fixture has a canon protagonist');
+    const originalFact = (await h.runtime.worldStore.listFacts(worldId))
+      .find(fact => fact.subjectEntityId === original.entityId && fact.sources.length > 0);
+    assert.ok(originalFact, 'the original entity has visible source evidence');
+
+    const duplicateEntityId = 'ent-lin-same-person-row';
+    await h.runtime.worldStore.upsertEntity({ worldId, entityId: duplicateEntityId, type: 'character',
+      name: original.name, firstSeenChapterId: null, aliases: [] }, 'later');
+    await h.runtime.worldStore.saveFact({ ...originalFact, worldId, factId: 'fact-lin-same-person-row',
+      subjectEntityId: duplicateEntityId }, 'later');
+
+    const setup = await session(h).getWorldSetup(worldId);
+    const hero = setup.canonCharacters.find(character => character.name === original.name);
+    assert.ok(hero, 'the duplicated canon name remains selectable');
+    const otherEntityId = hero.entityId === duplicateEntityId ? original.entityId : duplicateEntityId;
+    const supportingFactId = otherEntityId === duplicateEntityId ? 'fact-lin-same-person-row' : originalFact.factId;
+    const templateId = 'actor-template-duplicate-lin';
+    const scenes = h.db.prepare(`SELECT entry_id, definition_json FROM package_entries
+      WHERE world_id = ? AND revision = ? AND kind = 'scene'`).all(worldId, setup.packageRevision);
+    const scene = scenes.map(row => ({ row, definition: JSON.parse(row.definition_json) }))
+      .find(candidate => candidate.definition.locationId === setup.locations[0]);
+    assert.ok(scene, 'the opening location has a published scene');
+    scene.definition.actors = [...scene.definition.actors, templateId];
+    h.db.prepare('UPDATE package_entries SET definition_json = ? WHERE world_id = ? AND revision = ? AND entry_id = ?')
+      .run(JSON.stringify(scene.definition), worldId, setup.packageRevision, scene.row.entry_id);
+    const definition = { name: original.name, category: 'human', description: '同一原著人物的重复模板',
+      attributes: {}, skills: {}, hp: 10, stamina: 10, defense: 2, attacks: [], abilities: [],
+      behavior: { goal: '旁观', retreatThreshold: 0.25, morale: 'steady' }, lootPolicy: 'none',
+      threat: { damage: 1, durability: 1, actions: 1, control: 0, environment: 0 } };
+    h.db.prepare(`INSERT INTO package_entries
+      (world_id, revision, entry_id, kind, definition_json, provenance_json,
+       field_provenance_json, visibility, dependency_ids_json, created_at)
+      VALUES (?, ?, ?, 'actor_template', ?, ?, '{}', 'public', '[]', 'later')`)
+      .run(worldId, setup.packageRevision, templateId, JSON.stringify(definition), JSON.stringify({
+        kind: 'explicit', sourceFactIds: [supportingFactId], rationale: '回归测试中的重复人物映射。',
+      }));
+
+    const created = await createCampaign({ db: h.adapter, worldStore: h.runtime.worldStore,
+      campaignId: 'canon-duplicate-person', title: '重复人物开局回归', worldId,
+      packageRevision: setup.packageRevision, anchor: { worldTimeOrder: 1, locationId: setup.locations[0] },
+      protagonist: { actorId: 'player', kind: 'canon', name: hero.name, canonEntityId: hero.entityId },
+      goal: '观察街口', createdAt: 'later' });
+
+    assert.equal(created.cards.filter(card => card.name === original.name).length, 1,
+      'the same canon person must not be instantiated again as an NPC');
+    assert.equal(created.cards.some(card => card.actorId === `npc-${templateId}`), false);
+    assert.equal(created.cards[0].entityId, hero.entityId, 'the selected canonical entity remains the player binding');
+  } finally { h.db.close(); }
 });

@@ -120,10 +120,20 @@ function validateMethodCompileBinding(
 function currentCompletionHasProducer(condition: SituationCondition, artifact: CampaignContentArtifactV1): boolean {
   const own = new Set(artifact.situations.map(s => s.entryId));
   const effects = artifactEffects(artifact);
+  const engineEvents = new Set([
+    'actor_death_resolved', 'actor_entered_critical_state', 'actor_recovered_from_critical',
+    'quest_failed', 'quest_succeeded', 'reference_event_due',
+  ]);
   const possible = (c: SituationCondition): boolean => {
     if (c.kind === 'all') return c.of.every(possible);
     if (c.kind === 'any') return c.of.some(possible);
     if (c.kind === 'not') return true;
+    if (c.kind === 'committed_event') return c.payloadMatch === undefined && (engineEvents.has(c.eventType)
+      || effects.some(effect => effect.template === 'record_event' && effect.eventType === c.eventType)
+      || (c.eventType === 'situation_resolved' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'resolved'))
+      || (c.eventType === 'situation_suppressed' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'suppressed'))
+      || (c.eventType === 'promise_fulfilled' && effects.some(effect => effect.template === 'promise_fulfill'))
+      || (c.eventType === 'promise_broken' && effects.some(effect => effect.template === 'promise_break')));
     if (!('situationId' in c) || !own.has(c.situationId)) return true;
     if (c.kind === 'situation_status') return c.status === 'active' || effects.some(e => e.template === 'situation_status' && e.situationId === c.situationId && e.status === c.status);
     if (c.kind === 'situation_counter_at_least') return c.minimum <= 0 || effects.some(e => e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId && e.delta > 0);
@@ -155,6 +165,9 @@ export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact
     // The current stage cannot unlock its own producer by already succeeding.
     if (c.kind === 'campaign_node_status' && c.nodeId === start.nodeId) return c.status === 'active';
     if (c.kind === 'committed_event') {
+      // A prior committed event can satisfy a replan immediately; when no
+      // local producer exists, leave that external/history question to the
+      // branch snapshot and the normal completion reducer.
       return !allEffects.some(e => e.template === 'record_event' && e.eventType === c.eventType)
         || effects.some(e => e.template === 'record_event' && e.eventType === c.eventType);
     }

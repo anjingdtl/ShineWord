@@ -258,6 +258,9 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       .filter(([skillId]) => publicSkillIds.has(skillId)));
   }
   cards.push(protagonistCard);
+  const protagonistCanonEntity = input.protagonist.kind === 'canon'
+    ? entities.find(entity => entity.entityId === protagonistCard.entityId && entity.type === 'character')
+    : undefined;
 
   // Companion cards from actor templates.
   const relationships: NonNullable<GameStateSnapshot['relationships']> = [];
@@ -361,8 +364,16 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       const fact = projectionFacts.find(f => f.factId === id);
       return fact?.subjectEntityId ? [fact.subjectEntityId] : [];
     }));
-    if (protagonistCard.entityId && supportedSubjects.size === 1 && supportedSubjects.has(protagonistCard.entityId)
-      && templateName === protagonistCard.name) continue;
+    const exactCanonSubjectMatch = protagonistCard.entityId && supportedSubjects.size === 1
+      && supportedSubjects.has(protagonistCard.entityId) && templateName === protagonistCard.name;
+    const templateCanonSubject = supportedSubjects.size === 1
+      ? entities.find(entity => entity.entityId === [...supportedSubjects][0])
+      : undefined;
+    const duplicateCanonSubjectMatch = protagonistCanonEntity
+      && templateCanonSubject?.type === 'character'
+      && templateCanonSubject.name === protagonistCanonEntity.name
+      && templateName === protagonistCanonEntity.name;
+    if (exactCanonSubjectMatch || duplicateCanonSubjectMatch) continue;
     const actorId = `npc-${templateId}`;
     if (cards.some(card => card.actorId === actorId) || actorId === input.protagonist.actorId) {
       throw new Error(`开局场景 NPC 角色 ID 冲突：${actorId}。`);

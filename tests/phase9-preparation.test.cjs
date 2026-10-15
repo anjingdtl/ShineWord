@@ -112,6 +112,22 @@ test('preparation: producer analysis accepts a preparation chain but rejects a s
   } finally { h.db.close(); }
 });
 
+test('preparation: a concrete stage cannot complete on an event its content cannot produce', async () => {
+  const h = await fixture();
+  try {
+    const candidate = await h.planStore.getCandidate('cand-t');
+    const plan = structuredClone(candidate.plan), artifact = structuredClone(candidate.artifact);
+    plan.nodes[0].completion = { kind: 'committed_event', eventType: 'unreachable_stage_event' };
+    const ctx = { visibleWorldEntryIds: new Set(['skill-observation', 'item-crate', 'lore-crates']),
+      openingActorIds: new Set(['pc']), openingTemplateIds: new Set(['tpl-lin']),
+      protagonistSkills: new Set(['skill-observation']) };
+    const errors = validateCampaignPlan(plan, ctx, artifact);
+    assert.match(errors.join(' '), /current stage stage-1 completion has no local effect producer/);
+    assert.deepEqual(validateOrdinarySuccessCompletion(plan, artifact), [],
+      'ordinary-completion analysis leaves an unknown external event history to the branch reducer');
+  } finally { h.db.close(); }
+});
+
 test('preparation: relationship completion respects the closing boundary, committed baseline and direction', async () => {
   const h = await fixture();
   try {

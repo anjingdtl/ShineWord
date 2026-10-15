@@ -1,6 +1,29 @@
-# ShineWord 第六阶段进度与本地接续
+# ShineWord 项目进度
 
-> 当前阶段入口（2026-10-09）：第九阶段仍为29 PASS / 2 FAIL / 9 NOT RUN。R69后继预生成工程已修，真实全旅程尚未闭合；最新[检查点](docs/reviews/phase9/HANDOFF_R69_CLOUD_2026-10-09.md)、[全通收尾方案](docs/Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)、[执行提示词](docs/Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_AGENT_PROMPT.md)。下文为第六阶段历史进度，不能作为当前第九阶段状态或测试预算。
+## 当前：阶段 9.5 接手停止点（2026-10-15）
+
+收尾证据：[最终报告](docs/reviews/phase9-5/closeout-2026-10-15/FINAL_REPORT.md)、[验收矩阵](docs/reviews/phase9-5/closeout-2026-10-15/ACCEPTANCE_MATRIX.md)、[测试与设备报告](docs/reviews/phase9-5/closeout-2026-10-15/TEST_REPORT.md)、[接续检查点](docs/reviews/phase9-5/closeout-2026-10-15/CHECKPOINT.md)。结论为 **PARTIAL**：已停止真实模型与设备操作；工程门禁通过，但完整原提示词清单和真实全旅程验收尚未闭合。
+
+| 项 | 停止点证据 |
+|---|---|
+| ZCode 截图 | main，+828/-6，4/10；该截图是接手起点，不代表当前已完成比例。 |
+| 原提示词 | 用户给出的 D:\办公文档\2020年销拓部工作\03_竞赛活动\创智杯\2026年创智杯\省内竞赛\提示词.txt 在执行环境不可访问，未能逐条核对附件截图未显示的要求。 |
+| 源码快照 | 起始 HEAD 5f04b8d94bc9d6dee7d9586d98735dc8bfe95226；停止点 scope-v3 productionSourcesHash `5f17b1ceed260d740bb81ae70f17356f82c1638275d3be913af697afa45c81dc`。该哈希反映当时完整工作树，包含未纳入本次提交的既有工作。 |
+| 最终 Debug APK | SHA-256 `d2bd7882c1a851ac0aa702a01f641f8390c220eb12018e2b3b92be7a976041e8`，109,977,423 bytes；停止前已安装到 emulator-5554，安装包 hash 与构建产物一致。 |
+| 工程门禁 | `verify:core` 1325/1325；移动端 typecheck、版本检查、git diff --check 均 PASS。 |
+| 已完成短旅程 | branch `camp-mv92k6h0-main` v10：4/4 玩家提交有意义、2 条延迟后果 discharged，自然结束于“边陲立足”；对应较早 APK，不能与后续 fork 证据合并。 |
+| 最新续接 fork | branch `camp-mv8y62m2-bmv9axe9u` v18：12 次玩家提交、6 个候选有意义、6 个排除、0 条延迟后果；仍 active。v17 后继计划已采用；v18 后继生成失败，`skillId` 不符合稳定 ID 合同。 |
+| MiniMax 预算 | `phase95-minimax-20261015`：65/104 已计，剩余 39；物理账本 64 completed、1 outcome_unknown。该 v18 #a1 在应用账本有明确 HTTP 429，物理账本状态不一致，未手工改账。 |
+| Unknown 与恢复 | 旧 planner 与 world_mapping 各保留一条应用层 outcome_unknown；未自动或手工重放。v18 #a2 HTTP 200 返回的计划因验证错误而 invalid。 |
+| 代理 | 已停止本轮 Phase 9 代理进程；本地 18591 端口停止监听，未显示在途请求。 |
+| 总体验收 | 阶段 9.5 PARTIAL；A01–A40、Stage-8 端上回放、A15/A28 完整故障矩阵、V95-08 和 V95-12 真人试玩仍未关闭。 |
+
+代码修复限于本轮归属文件；其他 ZCode/工作区修改保持原样且不纳入本次提交。旧阶段记录保留在下方，不能替代当前停止点报告。
+
+---
+
+
+# ShineWord 第六阶段进度与本地接续（历史）
 
 记录日期：2026-10-03。范围依据：`docs/Shine-TRPG_PHASE6_CONSTRUCTION_PLAN.md`，方案入库提交 `51033973445825f01b730b7e62eec0a3352414e1`。本文件记录实际完成范围，不把工程通过等同于全部内容、设备和性能验收通过。
 
