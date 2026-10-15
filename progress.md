@@ -2,7 +2,7 @@
 
 ## 当前：阶段 9.5 收口施工（2026-10-16）
 
-依据：[施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)。施工分支从现场 fetch 的 `origin/main=599d038efa6a65d7107f276961bc7b66caab37f6` 建立，当前 `codex/phase95-closeout-short` / `b51331a678ae50927dc1ea8feb84bd548a9bafba`。本轮按 R0→R9 推进，最终验收保持 PARTIAL，直至设备、预算、私有账本、真实旅程及外部试玩各自取得对应证据。
+依据：[施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)。施工分支从现场 fetch 的 `origin/main=599d038efa6a65d7107f276961bc7b66caab37f6` 建立，当前 `codex/phase95-closeout-short` / `b871b882180b33d664ab93b2a1e427e25a726cfa`。本轮按 R0→R9 推进，最终验收保持 PARTIAL，直至设备、预算、私有账本、真实旅程及外部试玩各自取得对应证据。
 
 当前证据包：[closeout-2026-10-15-run-1558utc-codex](docs/reviews/phase9-5/closeout-2026-10-15-run-1558utc-codex/)。
 
@@ -10,14 +10,14 @@
 |---|---|---|
 | R0 | D01 已修；最终身份门禁待补 | `2bbf179…`；远端 RED 9/10，修复定向 13/13、旧 Core 1317/1317。最终同 SHA Core/APK/CI 后再关闭。 |
 | R1 | 工程 PASS | `40e85a2…`；完整 Core 1328/1328。引用、修复上限、冻结历史/payload 与无来源事件测试通过。 |
-| R2 | 待最终集成证据 | 既有有限供给、一次性收益和 consequences 生产测试在完整 Core 中通过；继续审查并登记生产 Session/SQLite 闭环。 |
-| R3 | PARTIAL / NOT VERIFIED | 合成预算与 unknown 测试在 Core 中通过；本机私有 ledger 不可核验，无本轮预算 scope；不派发、不改账、不重放。 |
+| R2 | 工程 PASS | `b871b88…` 修正 D14：规则 manifest discovery 字段对齐 `GameStateSnapshot.discoveries`，标明元数据不施加 writer 隔离。生产有限供给/一次性收益/后果生命周期 targeted tests 34/34。 |
+| R3 | PARTIAL / NOT VERIFIED | 本地预算、unknown、预览审批、单次恢复、并发/fence targeted tests 53/53；`REQUEST_RECONCILIATION.md` 登记本轮物理请求 0、历史账本缺失及恢复责任/条件，不派发、不改账、不重放。 |
 | R4 | 工程 PASS | `b51331a…`；审计目标测试 9/9。生产 Session/SQLite discharge 不漏计；幂等去重，取消/应用/消费者分列，事件/快照缺失 UNKNOWN，源 DB hash 不变。 |
 | R5 | BLOCKED-DEVICE（本轮） | Android SDK/ADB 与 QA AVD 已发现，当前无在线设备；构建和保留数据安装/UI 路径待执行。 |
 | R6 | PARTIAL | 离线存档、迁移、fork、隐私合成测试由最终 Core 覆盖；逐项证据索引和移动端回归待补。 |
 | R7 | BLOCKED-BUDGET / NOT VERIFIED | GLM配置和授权小说仅作逻辑资源登记；无本轮请求数/费用上限，真实LLM请求=0。80有效决定、L1统计与因果消费未验。 |
 | R8 | PARTIAL / BLOCKED-EXTERNAL | 本地 A40 100/300/1000 自动回归通过；性能匹配样本、可访问性人工检查和4名外部试玩未验。 |
-| R9 | 进行中 | 当前检查点：R2/R3 复核；最终文档、身份矩阵、PR/CI、跨机器 CHECKPOINT 尚未完成。 |
+| R9 | 进行中 | R0–R4 工程改动归属清晰；R5/R6/R8/R9 尚需最终同 SHA 门禁和证据包。当前 R3 是本地合同 PASS、私有账本对账 NOT VERIFIED；本证据包 CHECKPOINT 已更新至 R2 HEAD。 |
 
 阶段9.5关闭：PARTIAL。阶段9遗留整体关闭：PARTIAL。旧停止点和旧运行报告保留如下，结论只作为历史现场，不冒充本轮结果。
 
