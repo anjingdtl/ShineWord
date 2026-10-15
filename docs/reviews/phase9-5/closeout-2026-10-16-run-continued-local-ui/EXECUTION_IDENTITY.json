@@ -1,0 +1,77 @@
+{
+  "productionInputCommit": "b4641bd8c27aafaed64eb001865b39088dcd6115",
+  "app": {
+    "versionCode": 1000000,
+    "package": "com.shineword.app",
+    "versionName": "1.0.0"
+  },
+  "branch": "codex/phase95-closeout-short",
+  "modelDispatch": {
+    "feeBoundary": null,
+    "budgetScope": null,
+    "physicalRequests": 0,
+    "localMockRequests": 11,
+    "newUnknown": 0,
+    "historicalUnknown": "preserved-not-replayed",
+    "historicalLedger": "NOT_VERIFIED",
+    "physicalRequestCap": null
+  },
+  "preContinuationBranchHead": "28b86157b1a691b9dc38a11b4cb9b3e763404ef2",
+  "syntheticInputs": {
+    "save": {
+      "bytes": 34691,
+      "sha256": "fe27fd633a6cab73e8cdbb5a772322082cf60ad91a228719a6951d44e5e29041",
+      "logicalResource": "phase95-synthetic-save"
+    },
+    "world": {
+      "bytes": 3250,
+      "contentHash": "dd00bdecf9265a04ab8d224dc109c86610324736a08b36fc53669014383cb281",
+      "sha256": "5baa836f8009b1395c70acd5d39882dbb1fc39f58b5a92284276d87fd4072a04",
+      "logicalResource": "phase95-synthetic-world-archive"
+    }
+  },
+  "android": {
+    "memoryKiB": 3042496,
+    "height": 2400,
+    "densityDpi": 420,
+    "resource": "phase95-isolated-avd:ShineWord_Phase95_20261016",
+    "api": 37,
+    "release": "17",
+    "abi": "x86_64",
+    "width": 1080
+  },
+  "evidence": "docs/reviews/phase9-5/closeout-2026-10-16-run-continued-local-ui",
+  "journey": {
+    "externalParticipants": 0,
+    "effectivePlayerDecisions": 0,
+    "completeRealPlaythroughs": 0,
+    "a40SyntheticCounts": [
+      100,
+      300,
+      1000
+    ]
+  },
+  "apk": {
+    "sha256": "3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b",
+    "installedBaseMatches": true,
+    "bytes": 110156351
+  },
+  "repository": "https://github.com/anjingdtl/ShineWord.git",
+  "remoteMain": "599d038efa6a65d7107f276961bc7b66caab37f6",
+  "latestProductionAuditCommit": "36fe25d7459d093541a3691d864d6326fae7c868",
+  "androidProbe": {
+    "smallViewportLogicalDp": {
+      "width": 360,
+      "height": 800,
+      "evidence": "R8-small-screen-turn-top.png"
+    },
+    "talkBackSmoke": {
+      "focusAndNodeSemanticsInspected": true,
+      "fullTraversalVerified": false,
+      "restoredEnabled": 0,
+      "restoredServices": null,
+      "evidence": "R8-talkback-focus-1.png"
+    },
+    "displayOverrideRestored": true
+  }
+}

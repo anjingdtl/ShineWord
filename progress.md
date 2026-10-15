@@ -208,3 +208,15 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 这些路径用于本地接续与测试配置，不硬编码进 Android 产品代码。LLM 文件只在本地读取，输出/日志/提交中隐藏密钥。
 
 交接提示词见 [LOCAL_AGENT_HANDOFF.md](docs/reviews/phase6/LOCAL_AGENT_HANDOFF.md)。详细证据：[STATE.md](docs/reviews/phase6/STATE.md)、[TEST_RESULTS.md](docs/reviews/phase6/TEST_RESULTS.md)、[FINAL_REPORT.md](docs/reviews/phase6/FINAL_REPORT.md)、[ACCEPTANCE_MATRIX.md](docs/reviews/phase6/ACCEPTANCE_MATRIX.md)、[COMPATIBILITY.md](docs/reviews/phase6/COMPATIBILITY.md)、[DEVICE_RESULTS.md](docs/reviews/phase6/DEVICE_RESULTS.md)、[MEASUREMENTS.json](docs/reviews/phase6/MEASUREMENTS.json)。
+
+## Shine-TRPG 阶段 9.5 续跑（2026-10-16，本地合成 UI）
+
+- 现场以 origin/main 599d038efa6a65d7107f276961bc7b66caab37f6 和施工分支 codex/phase95-closeout-short 为准；本轮复核时分支 HEAD 28b86157b1a691b9dc38a11b4cb9b3e763404ef2，0 behind / 11 ahead，其他 worktree 保持原样。
+- R0 当前聚焦复验 node --test tests/game-opening-chain.test.cjs：13/13 PASS；既有去重修复继续有效。
+- R5 在隔离 API37 AVD 上用合成 save/world 与仅监听 loopback 的 mock 执行一轮 skill-check：3d6 为 1/2/4、成功、10分钟，Narrator 文本、commit 与 branch v2 均可见。force-stop/relaunch 后同turn的行动、骰点、耗时、结果和故事逐项回放通过；无重掷。
+- R6 合成存档在缺world时被明确拒绝；先导入world后可导入并继续。未使用历史 save-10、用户数据库或小说正文。
+- 代码复审发现 synthetic archive helper 对输出文件采用覆盖写；已修为独占创建并增加双目标存在性预检，正常导出成功，冲突目标拒绝且sentinel SHA不变。
+- 本轮 mock 台账11条：campaign_plan 7、Planner 2、Narrator 2；真实 provider/GLM 物理请求0，新建 unknown 0，历史私有账本仍 NOT VERIFIED。HTTP 200 的campaign_plan响应没有被应用业务合同接受，保留为mock限制。
+- 未修改生产源码或 APK；既有APK/installed base SHA均为3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b。PR #13此前head 28b8615的 Core Verify #132、Android Verify #97通过；本轮续跑提交后的CI需复核。
+- R8 补做单视口小屏与 TalkBack 语义/焦点冒烟；360×800dp 下合成结果卡完整可见，TalkBack 焦点截图和节点语义已记录。没有将它扩写成完整可访问性验收；测试后恢复 1080×2400/420dpi 和原无障碍开关。
+- 证据与完整G/V95/A追踪矩阵：docs/reviews/phase9-5/closeout-2026-10-16-run-continued-local-ui/。阶段9.5与阶段9遗留整体保持PARTIAL。
