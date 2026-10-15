@@ -102,12 +102,91 @@ test('the canon character picker offers each character once even with unmerged d
       status: 'explicit', confidence: 1, validFrom: null, validTo: null, revealAt: null, scope: 'world',
       sources: existingFact.sources }, 'later');
     assert.equal(saved, 'inserted');
+    const listEntities = h.runtime.worldStore.listEntities.bind(h.runtime.worldStore);
+    h.runtime.worldStore.listEntities = async (...args) => (await listEntities(...args)).reverse();
     const setup = await session(h).getWorldSetup(worldId);
     const named = setup.canonCharacters.filter(c => c.name === '林凡');
     assert.equal(named.length, 1, 'unmerged same-name entity rows must not duplicate the playable canon picker');
     const ids = (await h.runtime.worldStore.listEntities(worldId))
       .filter(e => e.type === 'character' && e.name === '林凡').map(e => e.entityId).sort();
     assert.equal(named[0].entityId, ids[0], 'the deterministic first row by entity_id order is the one offered');
+  } finally { h.db.close(); }
+});
+
+test('the canon character picker keeps same-name people with independent source evidence', async () => {
+  const h = await built();
+  try {
+    const worldId = h.imported.worldId;
+    const original = (await h.runtime.worldStore.listEntities(worldId))
+      .find(e => e.type === 'character' && e.name === '林凡');
+    assert.ok(original);
+    const originalFact = (await h.runtime.worldStore.listFacts(worldId))
+      .find(f => f.subjectEntityId === original.entityId && f.sources.length > 0);
+    assert.ok(originalFact);
+    const otherId = 'ent-lin-independent-person';
+    await h.runtime.worldStore.upsertEntity({ worldId, entityId: otherId, type: 'character',
+      name: original.name, firstSeenChapterId: null, aliases: [] }, 'later');
+    const independentSources = await Promise.all(originalFact.sources.map(async source => ({ ...source,
+      startOffset: source.startOffset + 500, endOffset: source.endOffset + 500,
+      quoteSha256: await sha.sha256Hex(`${source.quoteSha256}:independent-person`) })));
+    const saved = await h.runtime.worldStore.saveFact({ ...originalFact, worldId,
+      factId: 'fact-lin-independent-person', subjectEntityId: otherId, sources: independentSources }, 'later');
+    assert.equal(saved, 'inserted');
+
+    const setup = await session(h).getWorldSetup(worldId);
+    const namedIds = setup.canonCharacters.filter(c => c.name === original.name).map(c => c.entityId).sort();
+    assert.deepEqual(namedIds, [original.entityId, otherId].sort(),
+      'a shared display name without the same cited assertion is not enough to merge people');
+  } finally { h.db.close(); }
+});
+
+test('the canon character picker preserves conflicting aliases across a duplicate-row bridge', async () => {
+  const h = await built();
+  try {
+    const worldId = h.imported.worldId;
+    const original = (await h.runtime.worldStore.listEntities(worldId))
+      .find(e => e.type === 'character' && e.name === '林凡');
+    assert.ok(original);
+    const originalFact = (await h.runtime.worldStore.listFacts(worldId))
+      .find(f => f.subjectEntityId === original.entityId && f.sources.length > 0);
+    assert.ok(originalFact);
+    const aliasAId = 'ent-lin-alias-a-bridge';
+    const aliasBId = 'ent-lin-alias-b-conflict';
+    for (const [entityId, alias] of [[aliasAId, '青岚少主'], [aliasBId, '北境行者']]) {
+      await h.runtime.worldStore.upsertEntity({ worldId, entityId, type: 'character',
+        name: original.name, firstSeenChapterId: null, aliases: [alias] }, 'later');
+      const saved = await h.runtime.worldStore.saveFact({ ...originalFact, worldId,
+        factId: `fact-${entityId}`, subjectEntityId: entityId }, 'later');
+      assert.equal(saved, 'inserted');
+    }
+
+    const setup = await session(h).getWorldSetup(worldId);
+    const namedIds = setup.canonCharacters.filter(c => c.name === original.name).map(c => c.entityId).sort();
+    assert.deepEqual(namedIds, [aliasAId, aliasBId].sort(),
+      'an unqualified duplicate row cannot bridge two entities with disjoint explicit aliases');
+  } finally { h.db.close(); }
+});
+
+test('the canon character picker filters evidence beyond the selected world-time anchor', async () => {
+  const h = await built();
+  try {
+    const worldId = h.imported.worldId;
+    const original = (await h.runtime.worldStore.listEntities(worldId))
+      .find(e => e.type === 'character' && e.name === '林凡');
+    assert.ok(original);
+    const originalFact = (await h.runtime.worldStore.listFacts(worldId))
+      .find(f => f.subjectEntityId === original.entityId && f.sources.length > 0);
+    assert.ok(originalFact);
+    const futureId = 'ent-lin-future-only';
+    await h.runtime.worldStore.upsertEntity({ worldId, entityId: futureId, type: 'character',
+      name: original.name, firstSeenChapterId: null, aliases: [] }, 'later');
+    const saved = await h.runtime.worldStore.saveFact({ ...originalFact, worldId,
+      factId: 'fact-lin-future-only', subjectEntityId: futureId, validFrom: '2' }, 'later');
+    assert.equal(saved, 'inserted');
+
+    const setup = await session(h).getWorldSetup(worldId, 1);
+    const namedIds = setup.canonCharacters.filter(c => c.name === original.name).map(c => c.entityId);
+    assert.deepEqual(namedIds, [original.entityId], 'future-only identity evidence is not exposed at an earlier anchor');
   } finally { h.db.close(); }
 });
 

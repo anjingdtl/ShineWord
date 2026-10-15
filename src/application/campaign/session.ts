@@ -1,4 +1,4 @@
-import { hashActionContract } from '../../domain/turns/canonical';
+import { canonicalStringify, hashActionContract, type CanonicalJson } from '../../domain/turns/canonical';
 import { stableFingerprint } from '../llm/requestPlan';
 import { requireCompiledRules } from '../content/runtimeRules';
 import { SqliteInteractionOperationJournal } from './interactionOrchestrator';
@@ -47,6 +47,7 @@ import type { RandomSource } from '../../domain/rules/random';
 import type { GameStateSnapshot } from '../../domain/state/types';
 import { describeWorldClock } from '../../domain/state/worldClock';
 import type { SqliteDatabase, SqliteRow } from '../ports/sqlite';
+import type { StoredEntity, StoredFact } from '../ports/worldStore';
 import type { SqliteTurnStore } from '../../infra/sqlite/sqliteTurnStore';
 import type { SqliteGameStore } from '../../infra/sqlite/sqliteGameStore';
 import type { SqliteWorldStore } from '../../infra/sqlite/sqliteWorldStore';
@@ -125,7 +126,6 @@ import { assembleTurnGuidance } from '../guidance/validate';
 import { buildLocalAncillaryGuidance, upgradeAncillaryGuidance } from '../guidance/ancillary';
 import type { PublicSituationPacketV1, TurnGuidanceV1, GuidanceDecisionPointBinding } from '../guidance/types';
 import type { GuidanceStore } from '../ports/guidanceStore';
-import { canonicalStringify } from '../../domain/turns/canonical';
 import { forkBranch } from '../branch/fork';
 import { hasBranchContentManifestTable, ensureBaseBranchContentManifest } from '../worldPackage/branchContentStore';
 import { contentDependencyBinding, createBaseContentManifest, loadBranchDeltaEntries } from '../worldPackage/contentManifest';
@@ -135,6 +135,47 @@ import {
   type BeginEncounterInput,
   type EncounterView,
 } from './encounterService';
+
+interface CanonCharacterCandidate {
+  entity: StoredEntity;
+  nameKey: string;
+  aliasKeys: ReadonlySet<string>;
+  evidenceKeys: ReadonlySet<string>;
+}
+
+function normalizeCanonCharacterLabel(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+}
+
+function canonCharacterFactEvidenceKey(fact: StoredFact): string | null {
+  if (fact.sources.length === 0) return null;
+  const sources = fact.sources
+    .map(source => canonicalStringify([source.chapterId, source.startOffset, source.endOffset, source.quoteSha256]))
+    .sort();
+  return canonicalStringify({
+    predicate: fact.predicate,
+    value: fact.value as unknown as CanonicalJson,
+    scope: fact.scope,
+    validFrom: fact.validFrom,
+    validTo: fact.validTo,
+    revealAt: fact.revealAt,
+    sources,
+  });
+}
+
+function canonCharacterAliases(entity: StoredEntity, nameKey: string): ReadonlySet<string> {
+  return new Set(entity.aliases.map(normalizeCanonCharacterLabel).filter(alias => alias.length > 0 && alias !== nameKey));
+}
+
+function canonCharacterAliasesConflict(left: CanonCharacterCandidate, right: CanonCharacterCandidate): boolean {
+  return left.aliasKeys.size > 0 && right.aliasKeys.size > 0
+    && ![...left.aliasKeys].some(alias => right.aliasKeys.has(alias));
+}
+
+function representsSameCanonCharacter(left: CanonCharacterCandidate, right: CanonCharacterCandidate): boolean {
+  if (!left.nameKey || left.nameKey !== right.nameKey || canonCharacterAliasesConflict(left, right)) return false;
+  return [...left.evidenceKeys].some(key => right.evidenceKeys.has(key));
+}
 
 export interface SessionDeps {
   db: SqliteDatabase;
@@ -3707,15 +3748,51 @@ export class CampaignSession {
         worldTimeOrder: event.worldTimeOrder ?? 1,
       }));
     const entities = await this.deps.worldStore.listEntities(worldId);
-    const canonCharacters = entities
+    const visibleCanonFactsByEntityId = new Map<string, StoredFact[]>();
+    for (const fact of facts) {
+      if (fact.status === 'speculation' || fact.status === 'conflict') continue;
+      if (worldTimeOrder === undefined
+        ? fact.validFrom !== null || fact.validTo !== null || fact.revealAt !== null
+        : !isFactVisibleAtAnchor(fact, worldTimeOrder)) continue;
+      const subjectFacts = visibleCanonFactsByEntityId.get(fact.subjectEntityId) ?? [];
+      subjectFacts.push(fact);
+      visibleCanonFactsByEntityId.set(fact.subjectEntityId, subjectFacts);
+    }
+    const canonCandidates = entities
       .filter(entity => entity.type === 'character')
-      .filter(entity => facts.some(fact => fact.subjectEntityId === entity.entityId
-        && fact.status !== 'speculation' && fact.status !== 'conflict'
-        && (worldTimeOrder === undefined
-          ? fact.validFrom === null && fact.validTo === null && fact.revealAt === null
-          : isFactVisibleAtAnchor(fact, worldTimeOrder))))
-      .slice(0, 60)
-      .map(entity => ({ entityId: entity.entityId, name: entity.name }));
+      .flatMap(entity => {
+        const visibleFacts = visibleCanonFactsByEntityId.get(entity.entityId) ?? [];
+        if (visibleFacts.length === 0) return [];
+        const nameKey = normalizeCanonCharacterLabel(entity.name);
+        return [{
+          entity,
+          nameKey,
+          aliasKeys: canonCharacterAliases(entity, nameKey),
+          evidenceKeys: new Set(visibleFacts.flatMap(fact => {
+            const key = canonCharacterFactEvidenceKey(fact);
+            return key ? [key] : [];
+          })),
+        }];
+      })
+      .sort((left, right) => left.entity.entityId < right.entity.entityId ? -1
+        : left.entity.entityId > right.entity.entityId ? 1 : 0);
+    // A matching display name alone cannot establish identity. Collapse rows
+    // only when they share a source-backed assertion and have no conflicting
+    // alias evidence; sorting first keeps the retained entity deterministic.
+    const distinctCanonCandidateGroups: CanonCharacterCandidate[][] = [];
+    const distinctCanonCandidates: CanonCharacterCandidate[] = [];
+    for (const candidate of canonCandidates) {
+      const duplicateGroup = distinctCanonCandidateGroups.find(group =>
+        group.some(existing => representsSameCanonCharacter(existing, candidate))
+        && group.every(existing => !canonCharacterAliasesConflict(existing, candidate)));
+      if (duplicateGroup) duplicateGroup.push(candidate);
+      else {
+        distinctCanonCandidateGroups.push([candidate]);
+        distinctCanonCandidates.push(candidate);
+      }
+    }
+    const canonCharacters = distinctCanonCandidates.slice(0, 60)
+      .map(({ entity }) => ({ entityId: entity.entityId, name: entity.name }));
 
     return {
       packageRevision: revision,
