@@ -30,7 +30,7 @@ R0、R1、R2、R4保留既有PASS-ENGINEERING；R3 PARTIAL；R5 PARTIAL（新增
 - QA helper：两文件 node --check 通过；本地mock白名单日志11条；Maestro冷启动回放assertions通过。
 - QA helper生成安全：正常fixture导出hash与设备输入一致；已存在输出路径拒绝覆盖且sentinel原样保留。
 - 生产Debug APK：110,156,351 bytes，SHA-256 3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b；与安装base.apk SHA一致。它是此前生产输入b4641bd构建的同一APK，本轮未重建。
-- 最近与生产输入匹配的CI为PR #13 head 28b8615：Core Verify #132、Android Verify #97均success。当前续跑提交推送后的CI状态在CHECKPOINT与PR记录更新。
+- 提交 27a515b45469ee11baef2a81a362964c33a0d192 的PR #13 CI已通过：Core Verify #133、Android Verify #98均success，含mobile typecheck与Debug APK构建。
 
 ## 预算与资料
 

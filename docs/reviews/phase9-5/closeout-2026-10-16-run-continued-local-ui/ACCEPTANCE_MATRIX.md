@@ -12,7 +12,7 @@
 
 | 节点 | 状态 | 本轮证据 | 尚缺 |
 |---|---|---|---|
-| R0 | PASS-ENGINEERING | 2bbf179 D01 修复；基线复现 9/10、定向修复 13/13；最终 Core 1334/1334、版本门禁、Debug APK；施工分支 28b8615 的 Core/Android CI 均通过 | 完整真实开局 |
+| R0 | PASS-ENGINEERING | 2bbf179 D01 修复；基线复现 9/10、定向修复 13/13；最终 Core 1334/1334、版本门禁、Debug APK；提交 27a515b 的 Core/Android CI 均通过 | 完整真实开局 |
 | R1 | PASS-ENGINEERING | 40e85a2 稳定引用、producer-backed 完成条件；修复和冻结历史合同回归 | 当前 APK 的完整生成/修复/采用旅程 |
 | R2 | PASS-ENGINEERING | b871b88 修正 D14；生产 Session 生命周期和 settlement 定向测试 34/34 | 后果被实际下游消费的真实旅程 |
 | R3 | PARTIAL | 预算 authority、审批、并发/fence、timeout/unknown 定向测试 53/53；历史账本隔离登记 | 私有账本/attempt 原始凭据和差异对账 |
@@ -21,7 +21,7 @@
 | R6 | PARTIAL | 自动化合同58/58；本轮合成world缺失拒绝、SAF world/save导入与campaign隔离续玩 | 三意图全层隐私、用户数据库只读复核、真实save10与历史迁移设备旅程 |
 | R7 | BLOCKED / PARTIAL | 没有派发真实请求；本地确定性合同可继续 | 无本轮预算 scope/请求上限/费用边界；完整旅程 0；合格 L1、80 决定和自然结局未证 |
 | R8 | PARTIAL | 本地确定性 A40 100/300/1000；字体比例、键盘、小屏单视口和 TalkBack 焦点/节点语义冒烟 | 10+10 matched performance、完整可访问性、四名独立试玩者 |
-| R9 | PARTIAL-HANDOFF | 本轮证据包已整理；PR #13 上一已验证 head 28b8615 的 Core Verify run 132、Android Verify run 97 均成功 | 本续跑提交推送与精确SHA的CI复核待完成；真实玩法仍由R3/R5–R8外部依赖阻塞；不合并、不发布 |
+| R9 | PASS-HANDOFF | PR #13 保持 Draft/open；提交 27a515b 的 Core Verify run 133、Android Verify run 98 均成功，工作流中的 core/version、mobile typecheck 与 Debug APK 构建通过；证据/检查点已提交 | 阶段9.5与阶段9整体仍PARTIAL，真实玩法仍由R3/R5–R8外部依赖阻塞；不合并、不发布 |
 
 ## G 门
 

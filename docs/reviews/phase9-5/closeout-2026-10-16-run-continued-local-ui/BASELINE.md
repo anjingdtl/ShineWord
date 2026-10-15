@@ -11,6 +11,7 @@
 - 主 checkout ShineWord-main-worktree 与 HEAD 599d038 保持不动；另有 ShineWord-phase95-20261015 worktree HEAD 2bbf179，sw95-detached-evidence 保持 detached 08b6452；未清理或覆盖这些现场。
 - 本轮改动归属：Android 本地确定性 QA helper、合成 UI 证据和续跑文档。未改生产源码、既有报告或用户存档。
 - 续跑复核时间 2026-10-15 23:45 UTC：再次 fetch 后 origin/main 仍为 599d038，origin 施工分支仍为 28b8615；本地相对 origin/main 为 0 behind / 11 ahead，工作树差异均为本轮预期证据文件。
+- CI后复核时间 2026-10-15 23:57 UTC：origin/main 仍为 599d038；提交 27a515b 已推送为施工分支 tip，分支相对 main 为 0 behind / 12 ahead、工作树 clean；Core Verify #133 与 Android Verify #98 均 success。
 
 ## 工具与 Android 资源
 

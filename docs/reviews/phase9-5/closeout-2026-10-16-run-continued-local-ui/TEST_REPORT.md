@@ -18,13 +18,13 @@
 
 ## 当前分支最近匹配生产代码的完整门禁
 
-施工分支28b86157b1a691b9dc38a11b4cb9b3e763404ef2对应的公开PR CI：
-- Core Verify run 132（38772199551）：success；npm run verify:core报告1334/1334。
-- Android Verify run 97（38772199757）：success；mobile typecheck、version一致性和Debug APK构建通过。
-- CI页面存在非阻断runner/action deprecation notices；workflow状态为成功。
-- 同一APK安装在隔离API37 AVD；APK与installed base.apk SHA一致。
+提交 27a515b45469ee11baef2a81a362964c33a0d192 对应的公开PR CI：
+- Core Verify run 133（38825951754）：success；工作流中的 deterministic core 与 product version 步骤均成功。
+- Android Verify run 98（38825951738）：success；mobile typecheck 与 Debug APK 构建均成功。
+- CI 页面没有报告失败；两条 workflow 均已完成。
+- 同一既有 APK 安装在隔离 API37 AVD；APK 与 installed base.apk SHA 一致。CI 构建是当前分支完整 Android 门禁证据；本轮设备运行的本地 APK身份仍见 ANDROID_EVIDENCE.md。
 
-本轮新增仅为测试helper和文档/截图，不改变production source、mobile package或APK输入。当前分支最终PR同步后的CI需在推送后另行记录；如果Android workflow因路径过滤不运行，应按R9记为NOT RUN并绑定最近可匹配APK SHA。
+本轮新增仅为测试 helper 和文档/截图，不改变 production source、mobile package 或设备APK输入。
 
 ## 之前节点的定向证据（引用既有closeout，不将其冒充本轮重跑）
 

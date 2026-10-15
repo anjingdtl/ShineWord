@@ -1,12 +1,12 @@
 # 接续检查点
 
-更新时间：2026-10-16，Asia/Shanghai。记录的最新代码/生产输入基线：施工分支 codex/phase95-closeout-short，本轮测试前HEAD 28b86157b1a691b9dc38a11b4cb9b3e763404ef2。生产APK输入为既有debug构建SHA 3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b；APK文件110,156,351 bytes。证据包提交只增加helper与文档，不改变生产源码。最终分支ref以PR #13最新head和仓库git rev-parse HEAD为准。
+更新时间：2026-10-16，Asia/Shanghai。生产代码基线在本轮前为 28b86157b1a691b9dc38a11b4cb9b3e763404ef2；含完整本轮QA证据的已测提交为 27a515b45469ee11baef2a81a362964c33a0d192。随后此检查点文档仅记录CI结论，生产代码与APK输入未变。生产APK SHA-256 3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b，110,156,351 bytes。最终分支tip以PR #13和`git rev-parse HEAD`为准。
 
 ## 当前现场身份
 
 - 仓库逻辑名：ShineWord。
 - origin：https://github.com/anjingdtl/ShineWord.git。
-- 最新fetch：2026-10-15 23:45 UTC；origin/main=599d038efa6a65d7107f276961bc7b66caab37f6；origin施工分支=28b86157b1a691b9dc38a11b4cb9b3e763404ef2，本地基线较main 0 behind / 11 ahead；本轮待提交改动是证据/QA helper。
+- 最新fetch：2026-10-15 23:57 UTC；origin/main=599d038efa6a65d7107f276961bc7b66caab37f6；已测origin施工分支=27a515b45469ee11baef2a81a362964c33a0d192，较main 0 behind / 12 ahead；最终CI记录提交仅更新文档，需用`git rev-parse HEAD`取得最新tip。
 - worktree：逻辑资源 phase95-closeout-worktree；施工分支 codex/phase95-closeout-short。main checkout、sw95 detached evidence worktree和10/15 worktree均保留原状。
 - PR：#13，Draft/open，base main；本轮需在本续跑提交推送后重新核对head与CI。不合并、不发布。
 - Android逻辑资源：phase95-isolated-avd:ShineWord_Phase95_20261016，API37 / x86_64 / 1080×2400 / 420dpi / 约3GB RAM。设备只运行隔离测试APK；未卸载、未清数据。
@@ -15,7 +15,7 @@
 
 ## 当前节点
 
-R0–R4有先前定向工程证据；R0本轮聚焦复验13/13。R5新增合成APK行动与force-stop冷启动后的同turn回放，仍PARTIAL。R6保存/迁移/三意图隐私保持PARTIAL。R7等待当前budget scope、真实旅程和有效决定证据。R8补做小屏单视口与TalkBack焦点/语义冒烟，但匹配性能、完整可访问性和独立试玩仍未完成。R9完成工程交接所需文件，真实旅程收口未达成。
+R0–R4有先前定向工程证据；R0本轮聚焦复验13/13。R5新增合成APK行动与force-stop冷启动后的同turn回放，仍PARTIAL。R6保存/迁移/三意图隐私保持PARTIAL。R7等待当前budget scope、真实旅程和有效决定证据。R8补做小屏单视口与TalkBack焦点/语义冒烟，但匹配性能、完整可访问性和独立试玩仍未完成。R9完成证据交接且提交27a515b的Core/Android CI通过；阶段验收仍PARTIAL。
 
 ## 通过证据
 
@@ -25,7 +25,7 @@ R0–R4有先前定向工程证据；R0本轮聚焦复验13/13。R5新增合成A
 - R5 local mock日志11条：campaign_plan 7、Planner 2、Narrator 2；真实provider请求0；该turn一对Planner/Narrator，无重播；新建outcome_unknown=0。
 - APK与installed base.apk SHA一致；APK信息见 ANDROID_EVIDENCE.md 与 EXECUTION_IDENTITY.json。
 - 小屏结束后显示恢复为1080×2400/420dpi，TalkBack设置恢复为关闭/null；隔离AVD没有卸载应用或清理数据。
-- 最新已确认CI（续跑提交之前）：head 28b8615；Core Verify #132、Android Verify #97 success。续跑提交后的CI需再复核。
+- 已测提交 27a515b45469ee11baef2a81a362964c33a0d192 的 CI：Core Verify #133（38825951754）success；Android Verify #98（38825951738）success，含 mobile typecheck、Debug APK 构建和版本校验。
 
 ## 未决事项、责任与恢复条件
 
@@ -47,6 +47,6 @@ R0–R4有先前定向工程证据；R0本轮聚焦复验13/13。R5新增合成A
 
 ## 源码/APK/证据与下一安全动作
 
-- 本轮生产代码未修改；R0–R4源代码身份和代码门禁见前一closeout。APK SHA与安装包相同。
+- 本轮生产代码未修改；R0–R4源代码身份和代码门禁见前一closeout。已测提交CI通过；本轮已安装APK SHA与installed base.apk相同。
 - 续跑证据目录：docs/reviews/phase9-5/closeout-2026-10-16-run-continued-local-ui/。
 - 下一最小安全动作：另一台机器先git fetch origin、核对PR head与工作树，再从CHECKPOINT.md和ACCEPTANCE_MATRIX.md继续；依赖未到位时仅做本地确定性工程验证。不得启动真实付费调用、重派unknown或改历史数据。

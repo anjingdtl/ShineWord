@@ -217,6 +217,6 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 - R6 合成存档在缺world时被明确拒绝；先导入world后可导入并继续。未使用历史 save-10、用户数据库或小说正文。
 - 代码复审发现 synthetic archive helper 对输出文件采用覆盖写；已修为独占创建并增加双目标存在性预检，正常导出成功，冲突目标拒绝且sentinel SHA不变。
 - 本轮 mock 台账11条：campaign_plan 7、Planner 2、Narrator 2；真实 provider/GLM 物理请求0，新建 unknown 0，历史私有账本仍 NOT VERIFIED。HTTP 200 的campaign_plan响应没有被应用业务合同接受，保留为mock限制。
-- 未修改生产源码或 APK；既有APK/installed base SHA均为3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b。PR #13此前head 28b8615的 Core Verify #132、Android Verify #97通过；本轮续跑提交后的CI需复核。
+- 未修改生产源码或 APK；既有APK/installed base SHA均为3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b。提交27a515b的PR #13 Core Verify #133、Android Verify #98已通过（含mobile typecheck与Debug APK构建）。
 - R8 补做单视口小屏与 TalkBack 语义/焦点冒烟；360×800dp 下合成结果卡完整可见，TalkBack 焦点截图和节点语义已记录。没有将它扩写成完整可访问性验收；测试后恢复 1080×2400/420dpi 和原无障碍开关。
 - 证据与完整G/V95/A追踪矩阵：docs/reviews/phase9-5/closeout-2026-10-16-run-continued-local-ui/。阶段9.5与阶段9遗留整体保持PARTIAL。
