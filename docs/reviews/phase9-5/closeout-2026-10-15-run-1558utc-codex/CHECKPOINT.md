@@ -33,7 +33,7 @@
 - 4 名独立试玩者缺失；责任角色为产品/内容 QA 负责人；取得参与者后按 EXTERNAL_PLAYTEST.md 执行。
 - 完整 Stage-1/8、A15/A28 UI 恢复、三意图隐私、10+10 matched performance、TalkBack/小屏/主题与实体机验收尚未完成。
 - 用户授权的 GLM 配置与小说素材逻辑资源已登记；本轮未读取内容、未入仓。模拟器使用逻辑资源 phase95-empty-avd-20261016，Android API 37；原有 QA AVD 数据未更改。
-- GitHub CLI 身份先前报告 token 无效；GitHub connector 已确认 ShineWord 仓库 push 权限。无 PR、无 CI 结果，push 前仍按当前远端 ref 核验。
+- Git push 已成功；credential-manager 缺失程序警告不影响远端 ref 核验。Draft PR #13 已创建。Core Verify run 130 与 Android Verify run 95 在 head f52563b4f54fca3fef030a26fcb36af5dd9f5cfd 均 PASS。
 
 ## 预算与 unknown
 

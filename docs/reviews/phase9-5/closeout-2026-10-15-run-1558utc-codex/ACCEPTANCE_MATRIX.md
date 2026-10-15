@@ -21,7 +21,7 @@
 | R6 | PARTIAL | 存档、迁移、fork、SQLite 和隐私相关定向测试 58/58 | 三意图全层隐私、用户数据库只读复核、save10 续玩设备旅程 |
 | R7 | BLOCKED / PARTIAL | 没有派发真实请求；本地确定性合同可继续 | 无本轮预算 scope/请求上限/费用边界；完整旅程 0；合格 L1、80 决定和自然结局未证 |
 | R8 | PARTIAL | 本地确定性 A40 100/300/1000；字体比例和键盘冒烟 | 10+10 matched performance、完整可访问性、四名独立试玩者 |
-| R9 | PARTIAL | 报告和接续包已形成，源码/APK 身份绑定 | 最终 push、PR、PR 对应 CI；未合并、未发布 |
+| R9 | PASS-HANDOFF | 分支已推送，Draft PR #13 已创建；run 130/95 Core/Android CI 均通过 | 真实玩法验收仍由 R3/R5–R8 外部依赖阻塞；PR 未合并、未发布 |
 
 ## G 门
 

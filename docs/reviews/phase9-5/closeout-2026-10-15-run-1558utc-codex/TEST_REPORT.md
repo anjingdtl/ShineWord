@@ -46,7 +46,7 @@ APK build 生成的 mobile/src/version.json 已纳入生产元数据提交 b4641
 
 ## 未运行与外部依赖
 
-- Push/PR/CI：以最终 FINAL_REPORT 和 CHECKPOINT 的更新为准。
+- PR/CI：PR #13 draft；branch head f52563b4f54fca3fef030a26fcb36af5dd9f5cfd 的 Core Verify run 130 和 Android Verify run 95 均 PASS。
 - 当前设备正式恢复矩阵、Stage-1/8、API 24、实体机、完整 TalkBack/小屏/主题矩阵：NOT RUN。
 - 当前真实完整旅程、80 有效决定、真实模型请求、三意图隐私与四人外部试玩：NOT RUN。
 - 私有历史预算账本和原始 attempt 响应：NOT VERIFIED。

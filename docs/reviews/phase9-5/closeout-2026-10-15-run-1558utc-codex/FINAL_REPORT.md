@@ -44,7 +44,12 @@ G/V95/A 项不因自动化或首屏冒烟整体 PASS。G0/G1/G2/G4/G5 均 PARTIA
 
 ## PR 与 CI
 
-最终状态待补：施工分支 push、PR URL、对应 CI 检查与失败修复情况。不得在该事项完成前将 R9 标为 PASS；没有合并 main 或 Release。
+- 施工分支已推送并核对远端 ref：codex/phase95-closeout-short，head f52563b4f54fca3fef030a26fcb36af5dd9f5cfd。
+- Draft PR #13：https://github.com/anjingdtl/ShineWord/pull/13；base main 599d038efa6a65d7107f276961bc7b66caab37f6；未合并、未发布。
+- 该候选 SHA 的 Core Verify run 130（38769959336）PASS；Android Verify run 95（38769959429）PASS，包含 mobile typecheck 和 Debug APK build。
+- 本报告提交为后续文档归档；生产源码摘要和 APK SHA 未改变。最终 branch tip 的检查需在文档提交推送后再次读取。
+
+没有自动合并 main 或发布 Release。
 
 ## 交接
 
