@@ -163,8 +163,8 @@ function compileMethods(
   errors: string[],
   knowledgeAliases: ReadonlyMap<string, string>,
 ): MethodTemplateV1[] {
-  const skillIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'skill').flatMap(entry => [entry.entryId, entry.entryId.replace(/^skill-/, '')]));
-  const abilityIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'ability').flatMap(entry => [entry.entryId, entry.entryId.replace(/^ability-/, '')]));
+  const skillIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'skill').map(entry => entry.entryId));
+  const abilityIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'ability').map(entry => entry.entryId));
   const itemIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'item').map(entry => entry.entryId));
   const openingSceneEvidenceIds = new Set(ctx.visibleEntries.filter(entry => entry.kind === 'scene'
     && (entry.definition as { locationId?: string }).locationId === ctx.openingLocationId)
@@ -182,12 +182,20 @@ function compileMethods(
       errors.push(`method ${method.methodId}: evidenceAllowlist must use clues from the visible opening scene.`);
       continue;
     }
-    if (method.firstStep.skillId && !skillIds.has(method.firstStep.skillId) && !skillIds.has(method.firstStep.skillId.replace(/^skill-/, ''))) {
+    if (method.firstStep.skillId && !skillIds.has(method.firstStep.skillId)) {
       errors.push(`method ${method.methodId}: skill ${method.firstStep.skillId} not visible at the anchor.`);
       continue;
     }
-    if (method.firstStep.abilityId && !abilityIds.has(method.firstStep.abilityId) && !abilityIds.has(method.firstStep.abilityId.replace(/^ability-/, ''))) {
+    if (method.firstStep.abilityId && !abilityIds.has(method.firstStep.abilityId)) {
       errors.push(`method ${method.methodId}: ability ${method.firstStep.abilityId} not visible at the anchor.`);
+      continue;
+    }
+    if (method.firstStep.itemId && !itemIds.has(method.firstStep.itemId)) {
+      errors.push(`method ${method.methodId}: firstStep item ${method.firstStep.itemId} not visible at the anchor.`);
+      continue;
+    }
+    if (method.requires.itemId && !itemIds.has(method.requires.itemId)) {
+      errors.push(`method ${method.methodId}: requires item ${method.requires.itemId} not visible at the anchor.`);
       continue;
     }
     if (method.firstStep.targetEntryId && !actorReferenceInScope(method.firstStep.targetEntryId, ctx)) {
@@ -217,7 +225,7 @@ function compileMethods(
         ...requires,
         ...(requires.knowledgeEntryId ? { knowledgeEntryId: knowledgeAliases.get(requires.knowledgeEntryId) ?? requires.knowledgeEntryId } : {}),
         ...(condition ? { condition } : {}),
-        ...(method.requires.skillId && !skillIds.has(method.requires.skillId) && !skillIds.has(method.requires.skillId.replace(/^skill-/, ''))
+        ...(method.requires.skillId && !skillIds.has(method.requires.skillId)
           ? (errors.push(`method ${method.methodId}: requires skill ${method.requires.skillId} not visible.`), { skillId: undefined as never })
           : {}),
       },
@@ -234,7 +242,6 @@ function compileMethods(
       outcomeTemplates,
     });
   }
-  void itemIds;
   return methods;
 }
 

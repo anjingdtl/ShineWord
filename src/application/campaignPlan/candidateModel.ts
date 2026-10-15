@@ -496,6 +496,17 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
       errors.push(`${prefix}.firstStep.${field}: stable string id required.`); return null;
     }
   }
+  const requiredActionReference = step.actionKind === 'skill_check' ? 'skillId'
+    : step.actionKind === 'ability' ? 'abilityId'
+      : step.actionKind === 'move' ? 'destinationId' : undefined;
+  if (requiredActionReference && !isReference(step[requiredActionReference])) {
+    errors.push(`${prefix}.firstStep.${requiredActionReference}: stable id required for ${step.actionKind}.`); return null;
+  }
+  for (const [field, onlyAction] of [['skillId', 'skill_check'], ['abilityId', 'ability'], ['destinationId', 'move']] as const) {
+    if (step[field] !== undefined && step[field] !== null && step.actionKind !== onlyAction) {
+      errors.push(`${prefix}.firstStep.${field}: not valid for ${step.actionKind}.`); return null;
+    }
+  }
   const requires = parseRequirements(m.requires, errors, `${prefix}.requires`);
   if (!requires) return null;
   if (m.ruleBindingHash !== undefined) {

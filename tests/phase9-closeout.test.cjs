@@ -223,6 +223,117 @@ test('closeout: malformed required skill never reaches compiler or a retryable j
   } finally { h.db.close(); }
 });
 
+test('closeout: a skill-check method without its stable skill reference cannot become candidate-ready', async () => {
+  const h = await fixture();
+  try {
+    await opening(h, 'skill-check-without-id');
+    const model = candidateModel();
+    delete model.firstSituation.methods[0].firstStep.skillId;
+    const rawResponse = JSON.stringify(model);
+    let calls = 0;
+    const result = await runOpeningPlanJob(deps(h, { async complete() {
+      calls++;
+      return { text: rawResponse };
+    } }), 'skill-check-without-id', args);
+    assert.equal(result.status, 'invalid', JSON.stringify(result));
+    assert.equal(calls, 2, 'the existing bounded repair allowance is sufficient and no retry follows rejection');
+    assert.match(result.errors.join(' '), /firstStep\.skillId: stable id required for skill_check/);
+    const candidate = await h.planStore.latestCandidateForJob('skill-check-without-id');
+    assert.equal(candidate.rawResponseText, rawResponse);
+    assert.equal(candidate.stage, 'rejected');
+    await runOpeningPlanJob(deps(h, { async complete() { calls++; return { text: rawResponse }; } }), 'skill-check-without-id', args);
+    assert.equal(calls, 2, 'a rejected candidate is not resent on resume');
+  } finally { h.db.close(); }
+});
+
+test('closeout: action kinds require their own stable references and reject mismatched reference fields', () => {
+  const cases = [
+    ['null skill on a skill check', model => { model.firstSituation.methods[0].firstStep.skillId = null; }, /firstStep\.skillId: stable id required for skill_check/],
+    ['missing ability on an ability action', model => { model.firstSituation.methods[0].firstStep.actionKind = 'ability'; delete model.firstSituation.methods[0].firstStep.skillId; }, /firstStep\.abilityId: stable id required for ability/],
+    ['missing destination on a move action', model => { model.firstSituation.methods[0].firstStep.actionKind = 'move'; delete model.firstSituation.methods[0].firstStep.skillId; }, /firstStep\.destinationId: stable id required for move/],
+    ['skill on an observe action', model => { model.firstSituation.methods[0].firstStep.actionKind = 'observe'; }, /firstStep\.skillId: not valid for observe/],
+    ['ability on a talk action', model => { model.firstSituation.methods[0].firstStep.actionKind = 'talk'; delete model.firstSituation.methods[0].firstStep.skillId; model.firstSituation.methods[0].firstStep.abilityId = 'ability-unknown'; }, /firstStep\.abilityId: not valid for talk/],
+    ['destination on an interact action', model => { model.firstSituation.methods[0].firstStep.actionKind = 'interact'; delete model.firstSituation.methods[0].firstStep.skillId; model.firstSituation.methods[0].firstStep.destinationId = '青石巷'; }, /firstStep\.destinationId: not valid for interact/],
+  ];
+  for (const [label, mutate, diagnostic] of cases) {
+    const model = candidateModel(); mutate(model);
+    const errors = [];
+    assert.equal(parseCampaignPlanCandidate(model, errors), null, label);
+    assert.match(errors.join(' '), diagnostic, label);
+  }
+});
+
+test('closeout: stable skill and item references must match visible directory ids exactly', async () => {
+  const cases = [
+    ['invisible skill id', model => { model.firstSituation.methods[0].firstStep.skillId = 'not-visible-skill'; }, /skill not-visible-skill not visible at the anchor/],
+    ['skill display alias instead of directory id', model => { model.firstSituation.methods[0].firstStep.skillId = 'observation'; }, /skill observation not visible at the anchor/],
+    ['invisible item id', model => { model.firstSituation.methods[0].firstStep.itemId = 'item-not-visible'; }, /firstStep item item-not-visible not visible at the anchor/],
+    ['invisible required item id', model => { model.firstSituation.methods[0].requires.itemId = 'item-not-visible'; }, /requires item item-not-visible not visible at the anchor/],
+  ];
+  for (const [label, mutate, diagnostic] of cases) {
+    const h = await fixture();
+    try {
+      const jobId = `reference-${label.replace(/\W+/g, '-')}`;
+      await opening(h, jobId);
+      const model = candidateModel(); mutate(model);
+      const rawResponse = JSON.stringify(model);
+      let calls = 0;
+      const result = await runOpeningPlanJob(deps(h, { async complete() { calls++; return { text: rawResponse }; } }), jobId, args);
+      assert.equal(result.status, 'invalid', `${label}: ${JSON.stringify(result)}`);
+      assert.equal(calls, 2, `${label}: bounded repair attempts only`);
+      assert.match(result.errors.join(' '), diagnostic, label);
+      const candidate = await h.planStore.latestCandidateForJob(jobId);
+      assert.equal(candidate.rawResponseText, rawResponse, `${label}: raw response is retained without rewriting`);
+      assert.equal(candidate.stage, 'rejected', `${label}: invalid content never becomes ready`);
+    } finally { h.db.close(); }
+  }
+});
+
+test('closeout: a visible non-ASCII location id is a valid move reference through the opening job', async () => {
+  const h = await fixture();
+  try {
+    await opening(h, 'unicode-location-reference');
+    const model = candidateModel();
+    model.firstSituation.methods[0].firstStep = {
+      intent: '沿着青石巷走到巷口观察出口', actionKind: 'move', destinationId: '青石巷',
+    };
+    model.firstSituation.methods[0].requires = {};
+    const rawResponse = JSON.stringify(model);
+    let calls = 0;
+    const result = await runOpeningPlanJob(deps(h, { async complete() { calls++; return { text: rawResponse }; } }),
+      'unicode-location-reference', args);
+    assert.equal(result.status, 'candidate_ready', JSON.stringify(result));
+    assert.equal(calls, 1);
+    const candidate = await h.planStore.getCandidate(result.candidateId);
+    assert.equal(candidate.rawResponseText, rawResponse);
+    assert.equal(candidate.artifact.situations[0].definition.methods[0].firstStep.destinationId, '青石巷');
+  } finally { h.db.close(); }
+});
+
+test('closeout: the replan job applies the same missing skill reference gate and does not replay rejection', async () => {
+  const model = candidateModel();
+  delete model.firstSituation.methods[0].firstStep.skillId;
+  const rawResponse = JSON.stringify(model);
+  const h = await fixture();
+  let calls = 0;
+  const provider = { async complete() { calls++; return { text: rawResponse }; } };
+  try {
+    h.session.provider = provider;
+    h.session.profile = profile;
+    await h.session.changeCampaignGoal({ campaignId: h.campaignId, branchId: h.branchId, newGoal: '护送林凡离开青石巷' });
+    const job = await h.planStore.findActiveJob(h.branchId, 'replan');
+    const result = await runReplanJob(deps(h, provider), job.jobId, { ...args, intent: {} });
+    assert.equal(result.status, 'invalid', JSON.stringify(result));
+    assert.equal(calls, 2);
+    assert.match(result.errors.join(' '), /firstStep\.skillId: stable id required for skill_check/);
+    const candidate = await h.planStore.latestCandidateForJob(job.jobId);
+    assert.equal(candidate.rawResponseText, rawResponse);
+    assert.equal(candidate.stage, 'rejected');
+    await runReplanJob(deps(h, provider), job.jobId, { ...args, intent: {} });
+    assert.equal(calls, 2, 'a rejected replan does not dispatch again when resumed');
+  } finally { h.db.close(); }
+});
+
 test('closeout: unsupported preparation fields get exact repair feedback while a legal knowledge gate is preserved', async () => {
   const h = await fixture();
   try {

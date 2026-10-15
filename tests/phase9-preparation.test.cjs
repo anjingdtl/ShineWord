@@ -123,8 +123,8 @@ test('preparation: a concrete stage cannot complete on an event its content cann
       protagonistSkills: new Set(['skill-observation']) };
     const errors = validateCampaignPlan(plan, ctx, artifact);
     assert.match(errors.join(' '), /current stage stage-1 completion has no local effect producer/);
-    assert.deepEqual(validateOrdinarySuccessCompletion(plan, artifact), [],
-      'ordinary-completion analysis leaves an unknown external event history to the branch reducer');
+    assert.match(validateOrdinarySuccessCompletion(plan, artifact).join(' '), /no ordinary success producer/,
+      'an unsourced event is rejected by ordinary-completion validation as well as plan validation');
   } finally { h.db.close(); }
 });
 

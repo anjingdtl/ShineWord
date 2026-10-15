@@ -253,10 +253,18 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
   return events;
 }
 
-export async function readCampaignEventHistory(db: SqliteDatabase, branchId: string): Promise<BranchEventRecord[]> {
+export async function readCampaignEventHistory(
+  db: SqliteDatabase,
+  branchId: string,
+  atOrBeforeVersion?: number,
+): Promise<BranchEventRecord[]> {
+  const versionFilter = atOrBeforeVersion === undefined ? '' : ' AND state_version <= ?';
+  const params = atOrBeforeVersion === undefined
+    ? [branchId, EVENT_HISTORY_WINDOW]
+    : [branchId, atOrBeforeVersion, EVENT_HISTORY_WINDOW];
   const rows = await db.queryAll<{ event_seq: number; event_type: string; payload_json: string; state_version: number }>(
-    'SELECT event_seq, event_type, payload_json, state_version FROM branch_events WHERE branch_id=? ORDER BY event_seq DESC LIMIT ?',
-    [branchId, EVENT_HISTORY_WINDOW]);
+    `SELECT event_seq, event_type, payload_json, state_version FROM branch_events WHERE branch_id=?${versionFilter} ORDER BY event_seq DESC LIMIT ?`,
+    params);
   return rows.reverse().map(row => {
     const payload = JSON.parse(row.payload_json);
     return { eventType: row.event_type === 'recordEvent' && typeof payload?.eventType === 'string' ? payload.eventType : row.event_type,

@@ -2,6 +2,7 @@ import type { CampaignContentArtifactV1, CampaignEffectSpec, CampaignPlanV1 } fr
 import type { MethodTemplateV1, SituationCondition } from '../situations/types';
 
 export interface CompletionBaseline {
+  committedEvents?: ReadonlyArray<{ eventType: string; payload: unknown }>;
   playerActorId?: string;
   relationships?: ReadonlyArray<{ fromActorId: string; toActorId: string; closeness: number }>;
   discoveries?: ReadonlyArray<{ entryId: string; actorId: string }>;
@@ -12,6 +13,42 @@ export interface CompletionBaseline {
     counters: Readonly<Record<string, number>>;
     promises: ReadonlyArray<{ promiseId: string; status: 'open' | 'fulfilled' | 'broken' }>;
   }>;
+}
+
+export const ENGINE_COMMITTED_EVENT_TYPES = new Set([
+  'actor_death_resolved', 'actor_entered_critical_state', 'actor_recovered_from_critical',
+  'quest_failed', 'quest_succeeded', 'reference_event_due',
+]);
+
+function payloadMatches(payload: unknown, payloadMatch?: Readonly<Record<string, string>>): boolean {
+  if (!payloadMatch || Object.keys(payloadMatch).length === 0) return true;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const values = payload as Record<string, unknown>;
+  return Object.entries(payloadMatch).every(([key, value]) => String(values[key]) === value);
+}
+
+export function committedEventMatches(
+  condition: Extract<SituationCondition, { kind: 'committed_event' }>,
+  event: { eventType: string; payload: unknown },
+): boolean {
+  return event.eventType === condition.eventType && payloadMatches(event.payload, condition.payloadMatch);
+}
+
+export function hasCommittedEvent(
+  condition: Extract<SituationCondition, { kind: 'committed_event' }>,
+  baseline?: CompletionBaseline,
+): boolean {
+  return baseline?.committedEvents?.some(event => committedEventMatches(condition, event)) ?? false;
+}
+
+export function recordEventEffectMatches(
+  condition: Extract<SituationCondition, { kind: 'committed_event' }>,
+  effect: CampaignEffectSpec,
+): boolean {
+  return effect.template === 'record_event' && committedEventMatches(condition, {
+    eventType: effect.eventType,
+    payload: { eventType: effect.eventType, summary: effect.summary },
+  });
 }
 
 /** Undefined remains unknown; authoring must not invent a negative fact. */
@@ -94,8 +131,9 @@ export function ordinaryCompletionBeforeExit(
       return !allEffects.some(e => e.template === 'grant_knowledge' && e.entryId === c.entryId)
         || available.some(e => e.template === 'grant_knowledge' && e.entryId === c.entryId);
     }
-    if (c.kind === 'committed_event') return !allEffects.some(e => e.template === 'record_event' && e.eventType === c.eventType)
-      || available.some(e => e.template === 'record_event' && e.eventType === c.eventType);
+    if (c.kind === 'committed_event') return hasCommittedEvent(c, baseline)
+      || available.some(effect => recordEventEffectMatches(c, effect))
+      || ((!c.payloadMatch || Object.keys(c.payloadMatch).length === 0) && ENGINE_COMMITTED_EVENT_TYPES.has(c.eventType));
     if (!('situationId' in c)) return true;
     const committed = committedSituationMarker(c, baseline);
     if (committed === true) return true;

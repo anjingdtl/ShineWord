@@ -148,6 +148,9 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /把 factId 当 entryId/);
     assert.match(materials.system, /初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实/);
     assert.match(materials.system, /evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选/);
+    assert.match(materials.system, /firstStep\.actionKind=skill_check 时必须把“可用技能”中的完整 entryId 逐字写入 skillId/);
+    assert.match(materials.system, /observe\/talk\/interact 不得附带 skillId、abilityId 或 destinationId/);
+    assert.doesNotMatch(materials.system, /仅检定时填写已给出的技能 ID/);
     assert.match(materials.system, /至少设计两个 trigger 和权威效果各不相同、且能在同一条可达玩家旅程中被排程的持续后果/);
     assert.match(materials.system, /至少经过两次不同的有效玩家决定/);
     assert.match(materials.system, /trigger 的每条成立路径都必须等待该调度点之后至少两段的 required main 阶段成功/);

@@ -7,7 +7,8 @@ import type {
 import { CAMPAIGN_PLAN_COMPILER_VERSION, CAMPAIGN_PLAN_SCHEMA } from './types';
 import type { MethodTemplateV1, SituationCondition } from '../situations/types';
 import { validateConditionShape } from '../situations/conditions';
-import { committedSituationMarker, producesSituationMarker, ordinaryCompletionBeforeExit, type CompletionBaseline } from './ordinaryCompletion';
+import { hasCommittedEvent, recordEventEffectMatches, ENGINE_COMMITTED_EVENT_TYPES, committedSituationMarker, producesSituationMarker,
+  ordinaryCompletionBeforeExit, type CompletionBaseline } from './ordinaryCompletion';
 import { actorReferenceInScope as actorInScope } from './actorReferences';
 import { validateCampaignClues } from './clues';
 
@@ -52,6 +53,8 @@ export interface PlanValidationContext {
   executableMethodIds?: ReadonlySet<string>;
   /** Promise identity belongs to its committed situation, never its id alone. */
   knownPromiseRefs?: ReadonlyArray<{ situationId: string; promiseId: string }>;
+  /** Branch facts frozen at the candidate job's base state version. */
+  completionBaseline?: CompletionBaseline;
 }
 
 function artifactEffects(artifact: CampaignContentArtifactV1): import('./types').CampaignEffectSpec[] {
@@ -117,23 +120,24 @@ function validateMethodCompileBinding(
 
 /** New current content cannot rely on a local state change with no producer.
  * Other world/engine conditions remain governed by their existing contracts. */
-function currentCompletionHasProducer(condition: SituationCondition, artifact: CampaignContentArtifactV1): boolean {
+function currentCompletionHasProducer(
+  condition: SituationCondition,
+  artifact: CampaignContentArtifactV1,
+  baseline?: CompletionBaseline,
+): boolean {
   const own = new Set(artifact.situations.map(s => s.entryId));
   const effects = artifactEffects(artifact);
-  const engineEvents = new Set([
-    'actor_death_resolved', 'actor_entered_critical_state', 'actor_recovered_from_critical',
-    'quest_failed', 'quest_succeeded', 'reference_event_due',
-  ]);
   const possible = (c: SituationCondition): boolean => {
     if (c.kind === 'all') return c.of.every(possible);
     if (c.kind === 'any') return c.of.some(possible);
     if (c.kind === 'not') return true;
-    if (c.kind === 'committed_event') return c.payloadMatch === undefined && (engineEvents.has(c.eventType)
-      || effects.some(effect => effect.template === 'record_event' && effect.eventType === c.eventType)
+    if (c.kind === 'committed_event') return hasCommittedEvent(c, baseline)
+      || effects.some(effect => recordEventEffectMatches(c, effect))
+      || ((!c.payloadMatch || Object.keys(c.payloadMatch).length === 0) && (ENGINE_COMMITTED_EVENT_TYPES.has(c.eventType)
       || (c.eventType === 'situation_resolved' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'resolved'))
       || (c.eventType === 'situation_suppressed' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'suppressed'))
       || (c.eventType === 'promise_fulfilled' && effects.some(effect => effect.template === 'promise_fulfill'))
-      || (c.eventType === 'promise_broken' && effects.some(effect => effect.template === 'promise_break')));
+      || (c.eventType === 'promise_broken' && effects.some(effect => effect.template === 'promise_break'))));
     if (!('situationId' in c) || !own.has(c.situationId)) return true;
     if (c.kind === 'situation_status') return c.status === 'active' || effects.some(e => e.template === 'situation_status' && e.situationId === c.situationId && e.status === c.status);
     if (c.kind === 'situation_counter_at_least') return c.minimum <= 0 || effects.some(e => e.template === 'situation_counter' && e.situationId === c.situationId && e.counterId === c.counterId && e.delta > 0);
@@ -165,11 +169,13 @@ export function validateOrdinarySuccessCompletion(plan: CampaignPlanV1, artifact
     // The current stage cannot unlock its own producer by already succeeding.
     if (c.kind === 'campaign_node_status' && c.nodeId === start.nodeId) return c.status === 'active';
     if (c.kind === 'committed_event') {
-      // A prior committed event can satisfy a replan immediately; when no
-      // local producer exists, leave that external/history question to the
-      // branch snapshot and the normal completion reducer.
-      return !allEffects.some(e => e.template === 'record_event' && e.eventType === c.eventType)
-        || effects.some(e => e.template === 'record_event' && e.eventType === c.eventType);
+      if (hasCommittedEvent(c, baseline) || effects.some(effect => recordEventEffectMatches(c, effect))) return true;
+      if (c.payloadMatch && Object.keys(c.payloadMatch).length > 0) return false;
+      return ENGINE_COMMITTED_EVENT_TYPES.has(c.eventType)
+        || (c.eventType === 'situation_resolved' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'resolved'))
+        || (c.eventType === 'situation_suppressed' && effects.some(effect => effect.template === 'situation_status' && effect.status === 'suppressed'))
+        || (c.eventType === 'promise_fulfilled' && effects.some(effect => effect.template === 'promise_fulfill'))
+        || (c.eventType === 'promise_broken' && effects.some(effect => effect.template === 'promise_break'));
     }
     if (!('situationId' in c)) return true;
     const committed = committedSituationMarker(c, baseline);
@@ -577,7 +583,7 @@ export function validateContentArtifact(
     errors.push(`artifact: start node ${startNode.nodeId} has no situation (situationRef unresolved).`);
     return errors;
   }
-  if (!currentCompletionHasProducer(startNode.completion, artifact)) {
+  if (!currentCompletionHasProducer(startNode.completion, artifact, ctx.completionBaseline)) {
     errors.push(`artifact: current stage ${startNode.nodeId} completion has no local effect producer; provide a realizable outcome path.`);
   }
   if (completionCanUseDeadlineAlone(startNode.completion, artifact)) {

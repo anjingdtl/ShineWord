@@ -19,6 +19,7 @@ import { freezeReasoningUsageFeedback } from '../llm/reasoningFeedback';
 import { readBoundCampaignArtifacts } from './boundArtifacts';
 import { resolveCampaignContent, campaignContentEntries } from './contentResolver';
 import { stagePreparationTargetId } from './stagePreparation';
+import { readCampaignEventHistory } from './settlement';
 
 /** Both planning modes share durable generation, bounded repair and fencing. */
 export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, input: {
@@ -211,6 +212,10 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         createdAt: existing?.createdAt ?? now(), updatedAt: now() }, tx);
       });
     };
+    const committedEvents = job.branchId && Number.isInteger(job.baseStateVersion)
+      ? (await readCampaignEventHistory(deps.db, job.branchId, job.baseStateVersion as number))
+        .map(event => ({ eventType: event.eventType, payload: event.payload }))
+      : [];
     const compile = (model: import('./candidateModel').CampaignPlanCandidateModelV1) => {
       const ctx = thawPlanContext(frozen!);
       const baseRuntime = frozen!.baseState?.campaignRuntime;
@@ -281,6 +286,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
       openingTemplateIds: ctx.openingTemplateIds, artifactSituationIds: new Set([...compiled.artifact.situations.map(s => s.entryId), ...(frozen!.baseState?.situations ?? []).map(s => s.situationId)]), protagonistSkills: ctx.protagonistSkills,
       presentActorRefs: ctx.presentActorRefs, protagonistSkillRanks: ctx.protagonistSkillRanks,
       executableMethodIds,
+      completionBaseline: { committedEvents },
       knownPromiseRefs: (frozen!.baseState?.situations ?? []).flatMap(s => (s.promises ?? []).map(p => ({ situationId: s.situationId, promiseId: p.promiseId }))),
       knownLocationIds: new Set(ctx.visibleEntries.filter(e => e.kind === 'scene').map(e => (e.definition as { locationId: string }).locationId)) }, compiled.artifact),
       ...validateOrdinarySuccessCompletion(compiled.plan, compiled.artifact, {
@@ -288,6 +294,7 @@ export async function runCandidateJob(deps: PlanningRunDeps, jobId: string, inpu
         relationships: state?.relationships ?? openingRelationships, discoveries: state?.discoveries,
         actorAliases: state ? cards : frozen!.intent.companionBindings,
         situations: state?.situations,
+        committedEvents,
       }, frozen!.preparedNodeId), ...validateEndingCompletionOrder(compiled.plan, compiled.artifact),
       // The full frozen journey was validated when adopted. A scoped stage
       // materialization contains only one playable situation, so re-running

@@ -1,12 +1,62 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { fixture, candidateModel, SITUATION_ID } = require('./helpers/phase9CampaignFixture.cjs');
-const { validateOrdinarySuccessCompletion } = require('../dist/domain/campaignPlan/planValidation');
-const { canonicalJsonOf } = require('../dist/application/campaignPlan/hashing');
+const { fixture, candidateModel, SITUATION_ID, baseEntries } = require('./helpers/phase9CampaignFixture.cjs');
+const { validateCampaignPlan, validateOrdinarySuccessCompletion } = require('../dist/domain/campaignPlan/planValidation');
+const { canonicalJsonOf, sha256HexOf } = require('../dist/application/campaignPlan/hashing');
 const { SqliteGuidanceStore } = require('../dist/infra/sqlite/sqliteGuidanceStore');
 
 const prior = (status = 'open', count = 0) => ({ situations: [{ situationId: 'old', status: 'active', counters: { work: count },
   promises: [{ promiseId: 'help', status }] }] });
+
+test('inherited completion: committed events require a matching base-history entry, success effect or known engine source', async () => {
+  const h = await fixture();
+  try {
+    const { plan: originalPlan, artifact: originalArtifact } = await h.planStore.getCandidate('cand-t');
+    const plan = structuredClone(originalPlan), artifact = structuredClone(originalArtifact);
+    plan.nodes[0].completion = { kind: 'committed_event', eventType: 'report_received', payloadMatch: { summary: '已确认' } };
+    const rehashPlan = () => {
+      const { contentHash: _hash, ...body } = plan;
+      plan.contentHash = sha256HexOf(canonicalJsonOf(body));
+    };
+    const rehashArtifact = () => {
+      const { contentHash: _hash, ...body } = artifact;
+      artifact.contentHash = sha256HexOf(canonicalJsonOf(body));
+    };
+    const context = completionBaseline => ({
+      visibleWorldEntryIds: new Set(baseEntries().map(entry => entry.entryId)),
+      openingActorIds: new Set(['pc']), openingTemplateIds: new Set(['tpl-lin']),
+      availableFactIds: new Set(['fact-crates']), artifactSituationIds: new Set([SITUATION_ID]),
+      knownLocationIds: new Set(['青石巷']), protagonistSkills: new Set(['skill-observation']),
+      completionBaseline,
+    });
+    const validationErrors = baseline => validateCampaignPlan(plan, context(baseline), artifact);
+    const ordinaryErrors = baseline => validateOrdinarySuccessCompletion(plan, artifact, baseline);
+
+    rehashPlan();
+    assert.ok(validationErrors().some(error => error.includes('completion has no local effect producer')),
+      'an authored event name with no baseline or current producer is rejected');
+    assert.match(ordinaryErrors().join(' '), /no ordinary success producer/);
+
+    artifact.situations[0].definition.methods[1].outcomeTemplates.success.effects.push({
+      template: 'record_event', eventType: 'report_received', summary: '已确认',
+    });
+    rehashArtifact();
+    assert.ok(!validationErrors().some(error => error.includes('completion has no local effect producer')),
+      'the supported record_event payload can satisfy a matching completion filter');
+    assert.deepEqual(ordinaryErrors(), []);
+
+    artifact.situations[0].definition.methods[1].outcomeTemplates.success.effects.pop();
+    rehashArtifact();
+    const matchingHistory = { committedEvents: [{ eventType: 'report_received', payload: { summary: '已确认' } }] };
+    assert.ok(!validationErrors(matchingHistory).some(error => error.includes('completion has no local effect producer')),
+      'a matching committed history event can satisfy a replan completion');
+    assert.deepEqual(ordinaryErrors(matchingHistory), []);
+    const mismatchingHistory = { committedEvents: [{ eventType: 'report_received', payload: { summary: '未确认' } }] };
+    assert.ok(validationErrors(mismatchingHistory).some(error => error.includes('completion has no local effect producer')),
+      'payload filters must match the historical event, not only its type');
+    assert.match(ordinaryErrors(mismatchingHistory).join(' '), /no ordinary success producer/);
+  } finally { h.db.close(); }
+});
 
 test('inherited completion: an open old promise cannot require a full-success-only fulfillment', async () => {
   const h = await fixture();

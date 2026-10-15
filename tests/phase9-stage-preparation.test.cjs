@@ -57,6 +57,83 @@ test('P9-O1: an active stage queues its nearest missing successor before complet
   } finally { h.db.close(); }
 });
 
+test('P9-O1: successor preparation rejects a skill-check reference gap through the bounded planning job', async () => {
+  const h = await fixture();
+  try {
+    await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看青石巷现场' });
+    const job = await h.planStore.findActiveJob(h.branchId, 'replan');
+    assert.ok(job && job.triggerReasons.includes('stage_content_target:stage-2'));
+    const model = nextStageModel();
+    delete model.firstSituation.methods[0].firstStep.skillId;
+    const rawResponse = JSON.stringify(model);
+    let calls = 0;
+    const result = await generate(h, job.jobId, { async complete() { calls++; return { text: rawResponse }; } });
+    assert.equal(result.status, 'invalid', JSON.stringify(result));
+    assert.equal(calls, 2, 'invalid successor content consumes only the existing bounded repair slot');
+    assert.match(result.errors.join(' '), /firstStep\.skillId: stable id required for skill_check/);
+    const candidate = await h.planStore.latestCandidateForJob(job.jobId);
+    assert.equal(candidate.rawResponseText, rawResponse);
+    assert.equal(candidate.stage, 'rejected');
+    await generate(h, job.jobId, { async complete() { calls++; return { text: rawResponse }; } });
+    assert.equal(calls, 2, 'rejected successor content is not replayed');
+  } finally { h.db.close(); }
+});
+
+test('P9-O1: full preparation job binds committed event type and payload to its frozen branch history', async () => {
+  const cases = [
+    { name: 'matching history', history: { eventType: 'report_received', summary: '林凡已作证' },
+      completion: { kind: 'committed_event', eventType: 'report_received', payloadMatch: { summary: '林凡已作证' } }, expected: 'candidate_ready' },
+    { name: 'mismatching history payload', history: { eventType: 'report_received', summary: '另一份报告' },
+      completion: { kind: 'committed_event', eventType: 'report_received', payloadMatch: { summary: '林凡已作证' } }, expected: 'invalid' },
+    { name: 'event after the frozen base version', history: { eventType: 'report_received', summary: '林凡已作证' }, afterBase: true,
+      completion: { kind: 'committed_event', eventType: 'report_received', payloadMatch: { summary: '林凡已作证' } }, expected: 'invalid' },
+    { name: 'matching current producer', history: null,
+      completion: { kind: 'committed_event', eventType: 'successor_signal', payloadMatch: { summary: '后继阶段确认' } },
+      produced: { eventType: 'successor_signal', summary: '后继阶段确认' }, expected: 'candidate_ready' },
+    { name: 'registered engine source', history: null,
+      completion: { kind: 'committed_event', eventType: 'quest_succeeded' }, expected: 'candidate_ready' },
+    { name: 'no history or current producer', history: null,
+      completion: { kind: 'committed_event', eventType: 'unsourced_signal' }, expected: 'invalid' },
+  ];
+  for (const scenario of cases) {
+    const opening = candidateModel();
+    opening.stages[1].completion = scenario.completion;
+    const h = await fixture({ model: opening });
+    try {
+      await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '仔细查看青石巷现场' });
+      const job = await h.planStore.findActiveJob(h.branchId, 'replan');
+      assert.ok(job && job.triggerReasons.includes('stage_content_target:stage-2'), scenario.name);
+      if (scenario.history) {
+        // Seed the disposable SQLite fixture with a committed event at the
+        // already-frozen base version; this isolates payload binding from RNG.
+        const turn = h.db.prepare('SELECT turn_id FROM turns WHERE branch_id=? AND committed_state_version=?').get(h.branchId, job.baseStateVersion);
+        assert.ok(turn, `${scenario.name}: base-version turn exists`);
+        const eventSeq = h.db.prepare('SELECT COALESCE(MAX(event_seq),0)+1 AS next FROM branch_events WHERE branch_id=?').get(h.branchId).next;
+        const payload = { eventType: scenario.history.eventType, summary: scenario.history.summary };
+        h.db.prepare('INSERT INTO branch_events(branch_id,event_seq,turn_id,state_version,event_type,payload_json,created_at) VALUES(?,?,?,?,?,?,?)')
+          .run(h.branchId, eventSeq, turn.turn_id, job.baseStateVersion + (scenario.afterBase ? 1 : 0),
+            scenario.history.eventType, JSON.stringify(payload), new Date().toISOString());
+        const recorded = JSON.parse(h.db.prepare('SELECT payload_json FROM branch_events WHERE branch_id=? AND event_seq=?').get(h.branchId, eventSeq).payload_json);
+        assert.equal(recorded.summary, scenario.history.summary, `${scenario.name}: source payload is persisted`);
+      }
+      const candidate = nextStageModel();
+      if (scenario.produced) for (const grade of ['success', 'full_success']) {
+        candidate.firstSituation.methods[0].outcomes[grade].effects.push({ template: 'record_event', ...scenario.produced });
+      }
+      const rawResponse = JSON.stringify(candidate);
+      let calls = 0;
+      const result = await generate(h, job.jobId, { async complete() { calls++; return { text: rawResponse }; } });
+      assert.equal(result.status, scenario.expected, `${scenario.name}: ${JSON.stringify(result)}`);
+      assert.equal(calls, scenario.expected === 'candidate_ready' ? 1 : 2, scenario.name);
+      if (scenario.expected === 'invalid') assert.match(result.errors.join(' '), /committed event|ordinary success producer|local effect producer/i, scenario.name);
+      else assert.deepEqual(result.errors, [], scenario.name);
+      const stored = await h.planStore.latestCandidateForJob(job.jobId);
+      assert.equal(stored.rawResponseText, rawResponse, `${scenario.name}: response remains byte-for-byte intact`);
+      assert.equal(stored.stage, scenario.expected === 'candidate_ready' ? 'ready' : 'rejected', scenario.name);
+    } finally { h.db.close(); }
+  }
+});
+
 test('P9-O1: entering automatic preparation schedules the missing successor without requiring a filler turn', async () => {
   let calls = 0;
   const h = await fixture({ provider: { complete: async () => { calls++; return { text: JSON.stringify(nextStageModel()) }; } } });
