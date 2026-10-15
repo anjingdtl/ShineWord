@@ -78,7 +78,7 @@ try {
         .map(event => eventSignature(event.semanticType, event.payload)));
       for (const effect of recordEventEffects) {
         const signature = eventSignature(effect.eventType, effect);
-        const committed = currentEvents.some(event => event.semanticType === effect.eventType
+        const committed = currentEvents.some(event => event.turn_id === turn.turn_id && event.semanticType === effect.eventType
           && eventSignature(event.semanticType, event.payload) === signature);
         if (!committed) {
           eventEvidenceStatus = 'incomplete';
@@ -86,6 +86,17 @@ try {
           continue;
         }
         if (!previousSignatures.has(signature)) changes.push('new.committed_event');
+      }
+    } else if (rest && snapshotsContiguous && before && after) {
+      // Rest is excluded as a meaningful decision, but contiguous snapshots remain complete evidence.
+      const currentEvents = events.filter(event => event.state_version === version && event.turn_id === turn.turn_id);
+      for (const effect of recordEventEffects) {
+        const signature = eventSignature(effect.eventType, effect);
+        if (!currentEvents.some(event => event.semanticType === effect.eventType
+          && eventSignature(event.semanticType, event.payload) === signature)) {
+          eventEvidenceStatus = 'incomplete';
+          evidenceStatus = 'unknown';
+        }
       }
     } else {
       evidenceStatus = 'unknown';

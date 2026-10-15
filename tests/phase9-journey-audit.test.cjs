@@ -37,11 +37,14 @@ test('journey audit excludes opening adoption and production system commits from
     for(let v=0;v<=4;v++)h.snapshot(v);
     h.turn('b:adoption',0); h.turn('system-scene_actors-000001',1);
     h.turn('b:manage-replan:2',2); h.turn('turn-0003',3,{op:'recordEvent',eventType:'fact',summary:'first finding'});
-    h.turn('turn-0004',4,null,'rest');
+    h.turn('turn-0004',4,{op:'recordEvent',eventType:'rest_event',summary:'rested'},'rest');
     const r=h.audit();
     assert.equal(r.submittedPlayerTurns,2); assert.equal(r.candidateMeaningfulDecisions,1);
     assert.deepEqual(r.decisions.map(d=>d.turnId),['turn-0003','turn-0004']);
     assert.equal(r.decisions[1].excluded,'rest');
+    assert.equal(r.decisions[1].evidenceStatus,'complete');
+    assert.equal(r.decisions[1].eventEvidenceStatus,'complete');
+    assert.equal(r.evidenceStatus,'complete');
   } finally { h.db.close(); }
 });
 test('journey audit recognizes nested durable recordEvent types and does not count the same fact twice', t => {
@@ -65,6 +68,29 @@ test('journey audit marks a missing committed event row unknown instead of infer
     assert.equal(r.decisions[0].evidenceStatus,'unknown');
     assert.equal(r.decisions[0].candidateMeaningful,false);
     assert.equal(r.decisions[0].excluded,'committed event evidence incomplete');
+  } finally { h.db.close(); }
+});
+test('journey audit does not bind a same-version event from a different turn', t => {
+  const h=fixture(t); try {
+    h.snapshot(0); h.snapshot(1);
+    const effect={op:'recordEvent',eventType:'fact',summary:'same version, wrong turn'};
+    h.turn('turn-missing-event',1,effect,'observe',false);
+    h.event('other-turn',1,'recordEvent',effect);
+    const r=h.audit();
+    assert.equal(r.decisions[0].eventEvidenceStatus,'incomplete');
+    assert.equal(r.decisions[0].evidenceStatus,'unknown');
+    assert.equal(r.decisions[0].candidateMeaningful,false);
+  } finally { h.db.close(); }
+});
+test('journey audit keeps a rest with missing event evidence UNKNOWN', t => {
+  const h=fixture(t); try {
+    h.snapshot(0); h.snapshot(1);
+    h.turn('rest-with-missing-event',1,{op:'recordEvent',eventType:'rest_event',summary:'unpersisted rest'},'rest',false);
+    const r=h.audit();
+    assert.equal(r.decisions[0].excluded,'rest');
+    assert.equal(r.decisions[0].eventEvidenceStatus,'incomplete');
+    assert.equal(r.decisions[0].evidenceStatus,'unknown');
+    assert.equal(r.evidenceStatus,'unknown');
   } finally { h.db.close(); }
 });
 test('journey audit returns UNKNOWN when the requested branch has no snapshots', t => {
