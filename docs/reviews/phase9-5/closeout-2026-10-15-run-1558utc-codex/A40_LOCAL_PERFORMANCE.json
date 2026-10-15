@@ -1,0 +1,38 @@
+{
+  "kind": "production-session-local-deterministic",
+  "samples": [
+    {
+      "decisions": 100,
+      "stateVersion": 100,
+      "snapshotBytes": 5128,
+      "runtimeBytes": 1414,
+      "runtimeStructuralBytes": 1412,
+      "queryMs": 1.0614000000000487,
+      "elapsedMs": 1579.8883999999998,
+      "jobs": 1,
+      "calls": 200
+    },
+    {
+      "decisions": 300,
+      "stateVersion": 300,
+      "snapshotBytes": 5129,
+      "runtimeBytes": 1414,
+      "runtimeStructuralBytes": 1412,
+      "queryMs": 2.152799999999843,
+      "elapsedMs": 4876.5335,
+      "jobs": 1,
+      "calls": 600
+    },
+    {
+      "decisions": 1000,
+      "stateVersion": 1000,
+      "snapshotBytes": 5133,
+      "runtimeBytes": 1415,
+      "runtimeStructuralBytes": 1412,
+      "queryMs": 7.090700000000652,
+      "elapsedMs": 29251.143,
+      "jobs": 1,
+      "calls": 2000
+    }
+  ]
+}

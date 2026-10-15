@@ -1,0 +1,35 @@
+{
+  "repository": "https://github.com/anjingdtl/ShineWord.git",
+  "branch": "codex/phase95-closeout-short",
+  "remoteMainBaseline": "599d038efa6a65d7107f276961bc7b66caab37f6",
+  "productionInputCommit": "b4641bd8c27aafaed64eb001865b39088dcd6115",
+  "journeyAuditToolCommit": "36fe25d7459d093541a3691d864d6326fae7c868",
+  "productionSourcesHash": "333b22e1202d11be4177d167b6cf1dfd8e41c8cc4e80e6877eb8f34d0f055d66",
+  "productionFileCount": 469,
+  "android": {
+    "package": "com.shineword.app",
+    "versionName": "1.0.0",
+    "versionCode": 1000000,
+    "minSdk": 24,
+    "targetSdk": 36,
+    "debugApkBytes": 110156351,
+    "debugApkSha256": "3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b",
+    "installedBaseApkSha256": "3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b",
+    "deviceResource": "phase95-empty-avd-20261016",
+    "androidApi": 37
+  },
+  "modelDispatch": {
+    "physicalRequestsThisRun": 0,
+    "budgetScope": null,
+    "physicalRequestCap": null,
+    "feeBoundary": null,
+    "historicalLedger": "NOT_VERIFIED",
+    "historicalUnknown": "preserved and not replayed"
+  },
+  "journey": {
+    "completeRealPlaythroughs": 0,
+    "effectivePlayerDecisions": 0,
+    "localSyntheticStressDecisionCounts": [100, 300, 1000],
+    "externalPlaytestParticipants": 0
+  }
+}

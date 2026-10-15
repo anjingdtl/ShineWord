@@ -2,24 +2,26 @@
 
 ## 当前：阶段 9.5 收口施工（2026-10-16）
 
-依据：[施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)。施工分支从现场 fetch 的 `origin/main=599d038efa6a65d7107f276961bc7b66caab37f6` 建立，当前 `codex/phase95-closeout-short` / `b871b882180b33d664ab93b2a1e427e25a726cfa`。本轮按 R0→R9 推进，最终验收保持 PARTIAL，直至设备、预算、私有账本、真实旅程及外部试玩各自取得对应证据。
+依据：[施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)。施工分支 codex/phase95-closeout-short 从现场 fetch 的 origin/main 599d038efa6a65d7107f276961bc7b66caab37f6 建立；当前生产输入提交 b4641bd8c27aafaed64eb001865b39088dcd6115。证据目录：[本轮 closeout](docs/reviews/phase9-5/closeout-2026-10-15-run-1558utc-codex/)。
 
-当前证据包：[closeout-2026-10-15-run-1558utc-codex](docs/reviews/phase9-5/closeout-2026-10-15-run-1558utc-codex/)。
+本轮按 R0→R9 推进。自动化证据不替代真实设备玩法、真实模型、80 个有效决定或外部试玩。阶段 9.5 和阶段 9 遗留整体均保持 PARTIAL。
 
 | 节点 | 当前状态 | 本轮证据/下一步 |
 |---|---|---|
-| R0 | D01 已修；最终身份门禁待补 | `2bbf179…`；远端 RED 9/10，修复定向 13/13、旧 Core 1317/1317。最终同 SHA Core/APK/CI 后再关闭。 |
-| R1 | 工程 PASS | `40e85a2…`；完整 Core 1328/1328。引用、修复上限、冻结历史/payload 与无来源事件测试通过。 |
-| R2 | 工程 PASS | `b871b88…` 修正 D14：规则 manifest discovery 字段对齐 `GameStateSnapshot.discoveries`，标明元数据不施加 writer 隔离。生产有限供给/一次性收益/后果生命周期 targeted tests 34/34。 |
-| R3 | PARTIAL / NOT VERIFIED | 本地预算、unknown、预览审批、单次恢复、并发/fence targeted tests 53/53；`REQUEST_RECONCILIATION.md` 登记本轮物理请求 0、历史账本缺失及恢复责任/条件，不派发、不改账、不重放。 |
-| R4 | 工程 PASS | `b51331a…`；审计目标测试 9/9。生产 Session/SQLite discharge 不漏计；幂等去重，取消/应用/消费者分列，事件/快照缺失 UNKNOWN，源 DB hash 不变。 |
-| R5 | BLOCKED-DEVICE（本轮） | Android SDK/ADB 与 QA AVD 已发现，当前无在线设备；构建和保留数据安装/UI 路径待执行。 |
-| R6 | PARTIAL | 离线存档、迁移、fork、隐私合成测试由最终 Core 覆盖；逐项证据索引和移动端回归待补。 |
-| R7 | BLOCKED-BUDGET / NOT VERIFIED | GLM配置和授权小说仅作逻辑资源登记；无本轮请求数/费用上限，真实LLM请求=0。80有效决定、L1统计与因果消费未验。 |
-| R8 | PARTIAL / BLOCKED-EXTERNAL | 本地 A40 100/300/1000 自动回归通过；性能匹配样本、可访问性人工检查和4名外部试玩未验。 |
-| R9 | 进行中 | R0–R4 工程改动归属清晰；R5/R6/R8/R9 尚需最终同 SHA 门禁和证据包。当前 R3 是本地合同 PASS、私有账本对账 NOT VERIFIED；本证据包 CHECKPOINT 已更新至 R2 HEAD。 |
+| R0 | PASS-ENGINEERING | D01 基线 9/10，修复定向 13/13；最终 Core 1334/1334，version/APK 已核验。 |
+| R1 | PASS-ENGINEERING | 稳定引用、候选修复和冻结历史完成条件合同；最终 Core 1334/1334。 |
+| R2 | PASS-ENGINEERING | D14 元数据修复；生产 Session 生命周期/结算定向 34/34。 |
+| R3 | PARTIAL / NOT VERIFIED | 本地预算/unknown/恢复定向 53/53；历史私有账本缺失，未改账、未重派。物理请求 0。 |
+| R4 | PASS-ENGINEERING | 36fe25d 补强；审计测试 11/11，生产 Session/SQLite discharged 计数正确且源 DB hash 未变。 |
+| R5 | PARTIAL | 故障恢复合同 49/49；隔离 API 37 AVD APK 安装身份一致，空配置页/键盘/字体冒烟；无玩法旅程。 |
+| R6 | PARTIAL | SQLite/save/fork/migration/privacy 定向 58/58；三意图隐私与私有库设备复核未完成。 |
+| R7 | BLOCKED / PARTIAL | 未提供本轮预算 scope/请求上限/费用边界，真实模型请求 0；80 有效决定、L1 与后果因果消费未验。 |
+| R8 | PARTIAL | A40 本地确定性 100/300/1000 已留证；matched performance、完整可访问性与4名外部试玩未验。 |
+| R9 | PARTIAL | 报告、矩阵、身份和检查点已整理；施工分支 push、PR、CI 待完成。 |
 
-阶段9.5关闭：PARTIAL。阶段9遗留整体关闭：PARTIAL。旧停止点和旧运行报告保留如下，结论只作为历史现场，不冒充本轮结果。
+最终 Core 1334/1334；移动端 typecheck、version 检查、Debug APK build 和 git diff --check PASS。APK SHA-256 3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b，110156351 bytes，安装后设备 base.apk hash 一致。完整报告见本轮证据目录。
+
+阶段 9.5 关闭：PARTIAL。阶段 9 遗留整体关闭：PARTIAL。旧停止点和旧运行报告保留如下，结论只作为历史现场，不冒充本轮结果。
 
 ## 历史停止点（2026-10-15）
 
