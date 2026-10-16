@@ -16,15 +16,15 @@
 
 本轮本地HTTP log共有11条loopback请求：7 campaign_plan、2 Planner、2 Narrator；没有真实provider请求。campaign_plan HTTP 200但业务合同不通过，另列为mock限制。
 
-## 当前分支最近匹配生产代码的完整门禁
+## 当前施工分支 tip 的完整门禁
 
-提交 27a515b45469ee11baef2a81a362964c33a0d192 对应的公开PR CI：
-- Core Verify run 133（38825951754）：success；工作流中的 deterministic core 与 product version 步骤均成功。
-- Android Verify run 98（38825951738）：success；mobile typecheck 与 Debug APK 构建均成功。
-- CI 页面没有报告失败；两条 workflow 均已完成。
-- 同一既有 APK 安装在隔离 API37 AVD；APK 与 installed base.apk SHA 一致。CI 构建是当前分支完整 Android 门禁证据；本轮设备运行的本地 APK身份仍见 ANDROID_EVIDENCE.md。
+施工分支提交 `3e48e437f9a98dcba65358e1d783400e81d084eb` 对应的公开 PR CI：
+- Core Verify #134（run `38826701775`）：success；deterministic core 与 product version 步骤完成。
+- Android Verify #99（run `38826701657`）：success；mobile typecheck 与 Debug APK 构建完成。
+- 两条 workflow 均已完成且为 success。较早的 27a515b / #133 / #98 结果保留作历史证据，不再作为最新 tip 的依据。
+- 与该 tip 对应的隔离 API37 AVD 已安装 APK 和 `base.apk` SHA 一致；本轮设备证据及其边界见 ANDROID_EVIDENCE.md。CI Debug APK 构建不等于设备验收。
 
-本轮新增仅为测试 helper 和文档/截图，不改变 production source、mobile package 或设备APK输入。
+当前补记只改进度和测试报告，不改生产源码、mobile package 或设备 APK 输入。该报告更新提交本身仍需由随后运行的 CI 独立验证；在收到其结果之前，不把后续提交标记为 CI PASS。
 
 ## 之前节点的定向证据（引用既有closeout，不将其冒充本轮重跑）
 

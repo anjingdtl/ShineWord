@@ -220,3 +220,10 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 - 未修改生产源码或 APK；既有APK/installed base SHA均为3d74e582f40a6203cb997e682e1d767eccdd9eaf70758b129c4e49c9c429095b。提交27a515b的PR #13 Core Verify #133、Android Verify #98已通过（含mobile typecheck与Debug APK构建）。
 - R8 补做单视口小屏与 TalkBack 语义/焦点冒烟；360×800dp 下合成结果卡完整可见，TalkBack 焦点截图和节点语义已记录。没有将它扩写成完整可访问性验收；测试后恢复 1080×2400/420dpi 和原无障碍开关。
 - 证据与完整G/V95/A追踪矩阵：docs/reviews/phase9-5/closeout-2026-10-16-run-continued-local-ui/。阶段9.5与阶段9遗留整体保持PARTIAL。
+
+### 9.5 收口交付核验（2026-10-16）
+
+- 本轮施工分支当前已核对为 `codex/phase95-closeout-short`，源码与证据提交 `3e48e437f9a98dcba65358e1d783400e81d084eb`；`origin/main` 基线为 `599d038efa6a65d7107f276961bc7b66caab37f6`。本次文档补记前工作树干净，施工分支相对 main 为 13 ahead / 0 behind。其他 worktree 保持未改动。
+- 与该提交匹配的 Core Verify #134（run `38826701775`）和 Android Verify #99（run `38826701657`）均成功；Android 工作流包含 mobile typecheck 和 Debug APK 构建。该证据不代表模拟器完整旅程、真实模型调用、实体机或外部试玩验收。
+- 本轮证据报告与施工分支仅需追加文档核验记录；没有生产源码改动。用户随后明确要求将施工成果直接推送 main。主分支推送及本地/远端同 SHA 核验结果以本次提交后的 Git refs 和最终交接为准。
+- 阶段 9.5 与阶段 9 遗留整体仍为 `PARTIAL`：真实模型预算 scope、历史私有账本/unknown、真实完整旅程、80 个有效玩家决定、外部试玩及未完成的设备/性能验收均未被本轮合成测试替代。
