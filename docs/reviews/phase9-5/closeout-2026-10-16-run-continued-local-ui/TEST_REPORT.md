@@ -24,7 +24,17 @@
 - 两条 workflow 均已完成且为 success。较早的 27a515b / #133 / #98 结果保留作历史证据，不再作为最新 tip 的依据。
 - 与该 tip 对应的隔离 API37 AVD 已安装 APK 和 `base.apk` SHA 一致；本轮设备证据及其边界见 ANDROID_EVIDENCE.md。CI Debug APK 构建不等于设备验收。
 
-当前补记只改进度和测试报告，不改生产源码、mobile package 或设备 APK 输入。该报告更新提交本身仍需由随后运行的 CI 独立验证；在收到其结果之前，不把后续提交标记为 CI PASS。
+当前补记只改进度和测试报告，不改生产源码、mobile package 或设备 APK 输入。
+
+## 推送 main 后的最终提交 CI
+
+提交 `c94e62e1dd7f6ceea4ca92253d68d6a500b1780d` 已从 `599d038efa6a65d7107f276961bc7b66caab37f6` 快进推送至 main：
+- Core Verify #135（run `38837360165`）：success，deterministic core 与 product version 均成功。
+- Android Verify #100（run `38837360167`）：success，mobile typecheck 与 Android Debug APK 构建均成功。
+- 两个 run 均于 2026-10-16 UTC 完成。PR #13 因 head 提交进入 main 被 GitHub 自动记录为 merged；没有单独执行 PR merge 操作。
+- 测试证据仍只覆盖工程门禁和已记录的隔离合成 Android smoke；阶段 9.5 与阶段 9 遗留保持 `PARTIAL`。
+
+此报告后续随接续检查点做的改动仅为文档，不改生产源码、移动端依赖或 APK 输入；其最终 GitHub CI 状态需按最终 main SHA 查看。
 
 ## 之前节点的定向证据（引用既有closeout，不将其冒充本轮重跑）
 

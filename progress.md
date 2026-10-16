@@ -227,3 +227,9 @@ M0～M9 已接入 Android 生产路径，P6-0～P6-6 已分阶段实现、审查
 - 与该提交匹配的 Core Verify #134（run `38826701775`）和 Android Verify #99（run `38826701657`）均成功；Android 工作流包含 mobile typecheck 和 Debug APK 构建。该证据不代表模拟器完整旅程、真实模型调用、实体机或外部试玩验收。
 - 本轮证据报告与施工分支仅需追加文档核验记录；没有生产源码改动。用户随后明确要求将施工成果直接推送 main。主分支推送及本地/远端同 SHA 核验结果以本次提交后的 Git refs 和最终交接为准。
 - 阶段 9.5 与阶段 9 遗留整体仍为 `PARTIAL`：真实模型预算 scope、历史私有账本/unknown、真实完整旅程、80 个有效玩家决定、外部试玩及未完成的设备/性能验收均未被本轮合成测试替代。
+
+### 主分支交付与最终 CI（2026-10-16）
+
+- 文档提交 `c94e62e1dd7f6ceea4ca92253d68d6a500b1780d` 将本轮施工分支快进推送至 `main`。推送后 `main` 与 `origin/main` 均为该 SHA，工作树干净；GitHub 将 PR #13 自动标记为 merged（head 成为 base 的祖先），没有调用 GitHub 的合并操作，也未发布 Release。
+- 该提交的 Core Verify #135（run `38837360165`）与 Android Verify #100（run `38837360167`）均成功；Android 包含 mobile typecheck 与 Debug APK 构建。另有此前代码/证据 tip 的 #134/#99 通过记录。
+- 当前阶段 9.5 与阶段 9 遗留仍为 `PARTIAL`。历史账本、outcome_unknown、真实模型调用、完整真实旅程、有效决定配额和外部试玩不因 PR 合入或 CI 通过而变成已验收。
