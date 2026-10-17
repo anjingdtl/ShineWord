@@ -1,0 +1,169 @@
+{
+  "evidenceLevel": "local-synthetic-engineering",
+  "baseline": "1b460fb378614986a3896d487c78e6a180409764",
+  "codeTestHead": "4a1b169b7986a423656fa309f86e436eb2a05b87",
+  "realProviderCalls": 0,
+  "realPlayerDecisions": 0,
+  "logs": {
+    "baseline-core": {
+      "sha256": "6a282c19a56ef29c4bc1bbd8f4202f458f52b4313720e4ec6a4478a041b95c2e",
+      "summary": [
+        "ℹ tests 1334",
+        "ℹ suites 0",
+        "ℹ pass 1334",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 141550.96534"
+      ]
+    },
+    "final-core": {
+      "sha256": "616cf3e9d9a45de77f3e7e96c575836240092b06ce45e5c69195d7845656f62d",
+      "summary": [
+        "ℹ tests 1342",
+        "ℹ suites 0",
+        "ℹ pass 1342",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 159687.313553"
+      ]
+    },
+    "m1-red": {
+      "sha256": "993e903eeb69f76d705ddaa67493b44bd0c57348df0cbe0979b882aa7a29c304",
+      "summary": [
+        "ℹ tests 1",
+        "ℹ suites 0",
+        "ℹ pass 0",
+        "ℹ fail 1",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 560.036332",
+        "  AssertionError [ERR_ASSERTION]: an exact fixed method must not dispatch Planner"
+      ]
+    },
+    "m2-red": {
+      "sha256": "a98b22c8806e890f9ee25a6f834a4eb34e377ce8304ce6fa4380e8da4c774489",
+      "summary": [
+        "ℹ tests 2",
+        "ℹ suites 0",
+        "ℹ pass 0",
+        "ℹ fail 2",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 797.418171",
+        "  AssertionError [ERR_ASSERTION]: {\"route\":\"permit\",\"situations\":[{\"situationId\":\"camp-sit-open\",\"status\":\"resolved\",\"counters\":{\"prepared\":1,\"evidence\":1},\"processedEventKeys\":[\"tick:0\",\"method:turn-0002\",\"method:turn-0003\",\"tick:3\"],\"promises\":[],\"suppressedEventKeys\":{},\"sourceTurnId\":\"c-t-main:adoption\",\"statusVersion\":4,\"activatedAtVersion\":0,\"resolvedAtVersion\":3,\"resolution\":\"三条路线在巷口汇合\"},{\"situationId\":\"camp-sit-51b809a931b955d2\",\"status\":\"active\",\"counters\":{},\"processedEventKeys\":[\"method:turn-0002\",\"method:turn-0003\",\"tick:3\"],\"promises\":[],\"suppressedEventKeys\":{},\"sourceTurnId\":\"c-t-main:manage-replan:2\",\"statusVersion\":1,\"activatedAtVersion\":3}],\"routes\":[{\"candidateRef\":\"method:camp-sit-51b809a931b955d2:read-manifest\",\"situationId\":\"camp-sit-51b809a931b955d2\",\"methodId\":\"read-manifest\",\"title\":\"凭调查资料核对货单\",\"goal\":\"弄清巷子里的异常\",\"firstStepIntent\":\"凭调查资料核对货单\",\"actionKind\":\"observe\",\"available\":false,\"blockerCodes\":[],\"blockers\":[\"需要先发现相关线索\"],\"actionSignature\":\"observe||||||凭调查资料核对货单\"},{\"candidateRef\":\"method:camp-sit-51b809a931b955d2:use-permit\",\"situationId\":\"camp-sit-51b809a931b955d2\",\"methodId\":\"use-permit\",\"title\":\"凭通行资格通过巷口\",\"goal\":\"弄清巷子里的异常\",\"firstStepIntent\":\"凭通行资格通过巷口\",\"actionKind\":\"observe\",\"available\":false,\"blockerCodes\":[],\"blockers\":[\"前提条件尚未成立\"],\"actionSignature\":\"observe||||||凭通行资格通过巷口\"},{\"candidateRef\":\"method:camp-sit-51b809a931b955d2:manual\",\"situationId\":\"camp-sit-51b809a931b955d2\",\"methodId\":\"manual\",\"title\":\"付出时间逐项人工核验\",\"goal\":\"弄清巷子里的异常\",\"firstStepIntent\":\"付出时间逐项人工核验\",\"actionKind\":\"observe\",\"available\":true,\"blockerCodes\":[],\"blockers\":[],\"actionSignature\":\"observe||||||付出时间逐项人工核验\"}],\"consequences\":[{\"consequenceId\":\"permit\",\"description\":\"核准通行资格在汇合时生效\",\"triggerCondition\":{\"kind\":\"campaign_node_status\",\"nodeId\":\"stage-1\",\"status\":\"succeeded\"},\"sourceEventRefs\":[\"turn-0002\"],\"affectedActors\":[],\"effectSpecs\":[{\"template\":\"situation_counter\",\"situationId\":\"camp-sit-open\",\"counterId\":\"route_permit\",\"delta\":1}],\"visibility\":\"public\",\"idempotencyKey\":\"c-t-main:permit\",\"status\":\"discharged\",\"createdAtVersion\":2,\"sourceTurnId\":\"turn-0002\",\"triggeredAtVersion\":3,\"dischargedAtVersion\":3}]}",
+        "  false !== true",
+        "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+        "  undefined !== 2"
+      ]
+    },
+    "m4-red": {
+      "sha256": "86f057687b61d88e594f7f32389d5391c0611dfa4be9f37b952483cc651a2390",
+      "summary": [
+        "ℹ tests 1",
+        "ℹ suites 0",
+        "ℹ pass 0",
+        "ℹ fail 1",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 415.248184",
+        "  AssertionError [ERR_ASSERTION]: post-settlement opportunity selection is computed once for the prepared state",
+        "  4 !== 1"
+      ]
+    },
+    "m1-green": {
+      "sha256": "55fee6174babf65c00667236be37bf2ef918a89af314ab00d5a16a473fc18ce1",
+      "summary": [
+        "ℹ tests 20",
+        "ℹ suites 0",
+        "ℹ pass 20",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 2005.683938"
+      ]
+    },
+    "m2-green": {
+      "sha256": "5a3502d4258de6cbbc0c1f683a7fb111c6c66e45d4dd1ec9c889d6b09bc945c7",
+      "summary": [
+        "ℹ tests 60",
+        "ℹ suites 0",
+        "ℹ pass 60",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 5184.700018"
+      ]
+    },
+    "m3-green": {
+      "sha256": "2ce427793ae249634bfaa81d171767d02b5e6b28d520a4eb49c58181a52147f2",
+      "summary": [
+        "ℹ tests 23",
+        "ℹ suites 0",
+        "ℹ pass 23",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 2489.706998"
+      ]
+    },
+    "m4-green": {
+      "sha256": "7a168aefb8bae704ef79b99ac44717198930b9da0361efea4106ad3d9a670645",
+      "summary": [
+        "ℹ tests 53",
+        "ℹ suites 0",
+        "ℹ pass 53",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 3481.338645"
+      ]
+    },
+    "m5-new": {
+      "sha256": "65fddffae810b039f87045ad14714ef9109ee61e1b8a7eabbc447257ed7fae67",
+      "summary": [
+        "ℹ tests 14",
+        "ℹ suites 0",
+        "ℹ pass 14",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 2265.543105"
+      ]
+    },
+    "m5-regression": {
+      "sha256": "59022eeb02e2d793fc86c9bfb3c69bead9e94cb74860288856f607e19ac37fdb",
+      "summary": [
+        "ℹ tests 101",
+        "ℹ suites 0",
+        "ℹ pass 101",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 10507.638542"
+      ]
+    },
+    "mobile-install": {
+      "sha256": "eac4521be94bdd3daf512bb4133bad1bee07dbb45bde351fc990e8c732ddae41",
+      "summary": [
+        "added 581 packages in 7s"
+      ]
+    },
+    "mobile-typecheck": {
+      "sha256": "0ad50d78936acbb131e6377ba5be1421b5e9ad3d2c4c9c9d95363dec82a64dbc",
+      "summary": []
+    }
+  }
+}

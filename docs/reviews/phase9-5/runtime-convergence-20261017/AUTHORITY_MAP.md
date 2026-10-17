@@ -49,3 +49,29 @@ flowchart TD
 - Frozen turn root snapshot/context, staged ActionContract hash, rule/content bindings, roll record and narrative candidate remain restart inputs. Commit-before-journal-checkpoint replays existing commit. Cold mobile startup marks interrupted attempts uncertain and requires approval.
 
 Evidence: source audit at baseline SHA above; production integration tests use `tests/helpers/phase9CampaignFixture.cjs`. This is an audited call map, not a claim of complete enforcement of all legacy store APIs.
+
+## Existing commit caller inventory (post-change audit)
+
+Captured at code head `4a1b169`; line numbers are for this head, not baseline. `executeDeterministicTurn` and encounterService are pre-existing callers of the shared commit authority, not new runtime construction. Lifecycle create/fork/import transactions remain described above.
+
+```text
+src/application/turns/executeDeterministicTurn.ts:72:  const committed = await commitResolvedTurn({
+src/application/turns/commitTurn.ts:146:export async function commitResolvedTurn({
+src/application/turns/commitTurn.ts:182:  const stored = await store.commitAtomic({
+src/application/turns/commitTurn.ts:290:  const stored = await store.commitAtomic({
+src/application/ports/turnStore.ts:73:  commitAtomic(input: AtomicCommitInput): Promise<CommittedTurn>;
+src/application/game/v2Turn.ts:777:    result = await commitResolvedTurn({
+src/application/campaignPlan/replanService.ts:338:    await input.turns.commitAtomic({ branchId: input.branchId, turnId, expectedStateVersion: state.stateVersion,
+src/application/campaign/session.ts:569:    await this.deps.turns.commitAtomic({
+src/application/campaign/session.ts:605:    await this.deps.turns.commitAtomic({ branchId: options.branchId, turnId, expectedStateVersion: state.stateVersion, nextState,
+src/application/campaign/session.ts:815:    await commitResolvedTurn({
+src/application/campaign/session.ts:3347:    await commitResolvedTurn({
+src/application/campaign/session.ts:3465:    await commitResolvedTurn({
+src/application/campaign/session.ts:3569:    const committed = await commitResolvedTurn({
+src/application/campaign/encounterService.ts:307:    const result = await commitResolvedTurn({
+src/application/campaign/encounterService.ts:402:    await commitResolvedTurn({
+src/application/campaign/encounterService.ts:1267:    const result = await commitResolvedTurn({
+src/infra/sqlite/sqliteTurnStore.ts:537:  async commitAtomic(input: AtomicCommitInput): Promise<CommittedTurn> {
+src/infra/sqlite/sqliteTurnStore.ts:576:      await this.persistState(
+src/infra/sqlite/sqliteTurnStore.ts:1118:  private async persistState(
+```
