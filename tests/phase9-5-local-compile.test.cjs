@@ -480,7 +480,7 @@ test('convergence: exact free input uses the same fixed L1 contract as a tap wit
     const state = await h.turns.getState(h.branchId);
     const events = h.db.prepare('SELECT event_type,payload_json FROM branch_events WHERE turn_id=? ORDER BY event_seq').all(result.turnId);
     samples.push({ contract: staged.actionContractJson, roll: await h.turns.getRollRecord(h.branchId, result.turnId, 0),
-      situations: state.situations, campaignRuntime: state.campaignRuntime, actors: state.actors, events });
+      state, events });
   }
   // Timestamps belong to storage metadata, not the deterministic contract or outcomes.
   const clean = value => JSON.parse(JSON.stringify(value, (key, item) => ['createdAt', 'rolledAt'].includes(key) ? undefined : item));

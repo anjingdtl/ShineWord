@@ -164,6 +164,20 @@
     "mobile-typecheck": {
       "sha256": "0ad50d78936acbb131e6377ba5be1421b5e9ad3d2c4c9c9d95363dec82a64dbc",
       "summary": []
+    },
+    "m6-full-snapshot-parity": {
+      "sha256": "3a313fd6d999b26a47f8e277bc6b6be74d7b885ca0e7db3b2b1a9886bdf63736",
+      "summary": [
+        "ℹ tests 11",
+        "ℹ suites 0",
+        "ℹ pass 11",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 702.692627"
+      ]
     }
-  }
+  },
+  "notes": "Production/M5 checkpoint shown above; M6 strengthens full snapshot parity without changing source or test count. Exact final commit/CI is recorded in PR description."
 }

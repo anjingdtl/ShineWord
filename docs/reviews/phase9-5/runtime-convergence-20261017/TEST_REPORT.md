@@ -1,6 +1,6 @@
 # Test report — local deterministic engineering evidence
 
-Baseline `1b460fb378614986a3896d487c78e6a180409764`; final code/tests/lockfile `4a1b169b7986a423656fa309f86e436eb2a05b87`. M6 adds only reports. Final delivery SHA and current-head CI URLs/results are recorded in the PR description and delivery response, without creating a self-referential report commit.
+Baseline `1b460fb378614986a3896d487c78e6a180409764`; production/M5 test/lockfile checkpoint `4a1b169b7986a423656fa309f86e436eb2a05b87`. M6 adds reports and strengthens the existing parity assertion to compare the full GameStateSnapshot (11/11 affected tests pass; no test count change). Final delivery SHA and current-head CI URLs/results are recorded in the PR description and delivery response, without creating a self-referential report commit.
 
 | Gate | Result | Evidence |
 |---|---|---|

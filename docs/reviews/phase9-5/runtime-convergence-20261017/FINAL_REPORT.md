@@ -3,7 +3,7 @@
 Engineering result: PASS-ENGINEERING for the scoped changes and local regression gates. Phase 9.5 complete acceptance: PARTIAL; independent review, real-material L1, historical assets and device/gameplay gates remain open.
 
 - Fresh origin/main baseline: `1b460fb378614986a3896d487c78e6a180409764`.
-- Branch: `codex/phase95-runtime-convergence-20261017`; code/test head: `4a1b169b7986a423656fa309f86e436eb2a05b87`. M6 report commit is discoverable with `git log -1` / final delivery response. Feature branch only; no force-push, main commit, release or automatic merge.
+- Branch: `codex/phase95-runtime-convergence-20261017`; production/M5 test checkpoint: `4a1b169b7986a423656fa309f86e436eb2a05b87`. M6 report/full-snapshot parity commits are discoverable with `git log -1` / final delivery response. Feature branch only; no force-push, main commit, release or automatic merge.
 - PR URL, final branch SHA and exact-head Core/Android CI results are provided in the PR description and final delivery response. Reports are a pre-CI artifact snapshot; no stale success is used as final-head proof.
 
 ## Delivered changes
@@ -41,3 +41,5 @@ eec0613c920f90d44cc6577b76dd76a70fb5a699 refactor(runtime): M4 reuse the prepare
 e47644dfb6890a6ba47644021a90e848c260ebda fix(runtime): M1 route exact method input through shared L1 readiness
 16f24cd261f00c3ff8dcbfc9f2ab74699b74d6b8 docs(phase95): M0 freeze runtime authority and adversarial baseline
 ```
+
+M6 final adversarial follow-up: strengthened the existing text/tap parity test from selected state fields to the complete GameStateSnapshot (excluding only generated createdAt/rolledAt metadata). The unchanged contract, dice and event comparisons still apply; 11/11 affected tests pass. This is stronger evidence, with no production change or extra test count. Final-head CI must rerun this version.

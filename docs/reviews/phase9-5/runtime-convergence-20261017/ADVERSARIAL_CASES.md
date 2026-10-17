@@ -58,3 +58,7 @@ Independent human red-team/playtesting is not available here. M6 will perform a 
 - First mobile typecheck during incomplete dependency installation failed TS2307 missing package imports; that is retained as environment evidence, not reported as a code defect. Re-run after complete installation is the acceptance check (see TEST_REPORT).
 - No adb/AVD/Android SDK/Gradle executable available; JDK21 exists. Local APK/device QA NOT RUN; current-head Android Verify CI is required. No old APK/device evidence is reused as this PR's pass.
 - `git diff --check` PASS. No user keys, original novel or private saves read; real provider dispatch 0; no unknown replay or budget waiver. No additional production recovery entrance was needed.
+
+## M6 final evidence-strength review
+
+The original text/tap parity test compared key authority fields but omitted inventory, knowledge, card/skill and other snapshot projections. The final review strengthened it to compare the entire GameStateSnapshot, retaining exact serialized contract/roll/event parity and excluding only generated createdAt/rolledAt metadata. This found no production defect; all 11 local-compile tests pass. No assertion weakened, no count added. The final SHA CI supersedes earlier PR runs.
