@@ -532,3 +532,32 @@ test('convergence: one prepared projection and packet serve Narrator and final g
   assert.equal(packetVersions.filter(v => v === result.stateVersion).length, 1,
     'the packet validated for Narrator is reused for final guidance');
 });
+
+test('convergence: state, content, plan and rule drift refuse the old L1 selection before dispatch', async t => {
+  const h = await fixture({ model: modelWithPolicy({ kind: 'fixed', band: 'normal' }, []) });
+  t.after(() => h.db.close());
+  const input = await readinessInput(h);
+  const ready = evaluateLocalCompileReadiness(input);
+  assert.equal(ready.kind, 'ready');
+  const methods = input.selectedMethods.map(item => item.method);
+  const methodSituations = input.selectedMethods.map(item => item.situationId);
+  for (const drift of [
+    state => { state.stateVersion += 1; },
+    state => { state.campaignContentBinding.contentHash = 'e'.repeat(64); },
+    state => { state.campaignRuntime.planBinding.revision += 1; },
+    state => { state.ruleConfiguration = undefined; },
+  ]) {
+    const state = structuredClone(input.state);
+    drift(state);
+    let requests = 0;
+    await assert.rejects(runV2Turn({
+      branchId: h.branchId, turnId: ready.selection.proposal.turnId, playerIntent: input.playerIntent,
+      store: { getCommittedTurn: async () => null, getState: async () => state },
+      journal: { getStagedTurn: async () => null }, provider: { complete: async () => { requests++; throw new Error('unexpected provider'); } },
+      actingCard: input.playerCard, cards: input.cards, methods, methodSituations,
+      selectedMethodRef: ready.selection.selectedMethodRef, candidateRef: ready.selection.candidateRef,
+      campaignBindingHash: ready.selection.campaignBindingHash, localCompileSelection: ready.selection,
+    }), /stale|binding changed|rules are missing/i);
+    assert.equal(requests, 0);
+  }
+});

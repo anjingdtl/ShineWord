@@ -136,3 +136,37 @@ test('convergence: two deferred transition batches after a method both apply onc
   await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '完成调查并在巷口汇合', turnIdOverride: join.turnId });
   assert.equal(JSON.stringify(await h.turns.getState(h.branchId)), before);
 });
+
+test('convergence: outbox abort rolls back deferred effects and recovery reuses the frozen candidate exactly once', async t => {
+  const roles = [];
+  const h = await fixture({ model: branchingModel(), onRequest: r => roles.push(r.role) });
+  t.after(() => h.db.close());
+  await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: '准备permit路线' });
+  const before = JSON.stringify(await h.turns.getState(h.branchId));
+  const eventCount = h.db.prepare('SELECT COUNT(*) n FROM branch_events').get().n;
+  h.db.exec("CREATE TRIGGER convergence_outbox_abort BEFORE INSERT ON frozen_turn_postprocess_outbox BEGIN SELECT RAISE(ABORT,'injected outbox abort'); END");
+  await assert.rejects(h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: '完成调查并在巷口汇合' }), /injected outbox abort/);
+  assert.equal(JSON.stringify(await h.turns.getState(h.branchId)), before);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM branch_events').get().n, eventCount);
+  const pendingTurn = h.db.prepare("SELECT turn_id,action_contract_json,action_contract_hash FROM turns WHERE status!='Committed'").get();
+  assert.ok(pendingTurn);
+  const candidate = h.db.prepare('SELECT text,status FROM turn_narratives WHERE turn_id=?').get(pendingTurn.turn_id);
+  assert.equal(candidate.status, 'Candidate');
+  const requests = roles.length;
+  h.db.exec('DROP TRIGGER convergence_outbox_abort');
+  const result = await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: '完成调查并在巷口汇合', turnIdOverride: pendingTurn.turn_id });
+  assert.equal(roles.length, requests, 'received valid candidate is reused after transaction failure');
+  const after = await h.turns.getState(h.branchId);
+  assert.equal(after.situations.find(s => s.situationId === SITUATION_ID).counters.route_permit, 1);
+  assert.equal(after.campaignRuntime.deferredConsequences[0].status, 'discharged');
+  const frozen = await h.turns.getStagedTurn(h.branchId, result.turnId);
+  assert.equal(frozen.actionContractJson, pendingTurn.action_contract_json);
+  assert.equal(frozen.actionContractHash, pendingTurn.action_contract_hash);
+  assert.equal(h.db.prepare('SELECT text FROM turn_narratives WHERE turn_id=?').get(result.turnId).text, candidate.text);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM frozen_turn_postprocess_outbox WHERE turn_id=?').get(result.turnId).n, 1);
+  await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: '完成调查并在巷口汇合', turnIdOverride: result.turnId });
+  assert.deepEqual(await h.turns.getState(h.branchId), after);
+});
