@@ -2484,8 +2484,7 @@ export class CampaignSession {
     const separator = candidate?.lastIndexOf(':') ?? -1;
     const selectedSituationId = separator >= 0 ? candidate!.slice(0, separator) : undefined;
     const selectedMethodId = separator >= 0 ? candidate!.slice(separator + 1) : undefined;
-    const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
-    const typedIntent = normalizeIntent(options.intent);
+    const typedIntent = normalizeMethodIntent(options.intent);
     const activeSituationIds = new Set((state.situations ?? [])
       .filter(item => item.status === 'active').map(item => item.situationId));
     const playerActorId = state.party?.find(member => member.controller === 'player')?.actorId;
@@ -2504,7 +2503,7 @@ export class CampaignSession {
       for (const method of authored.definition.methods) {
         const isSelected = selectedSituationId !== undefined
           ? authored.entryId === selectedSituationId && method.methodId === selectedMethodId
-          : normalizeIntent(method.firstStep.intent) === typedIntent;
+          : normalizeMethodIntent(method.firstStep.intent) === typedIntent;
         if (!isSelected) continue;
         const blocker = campaignCompletionRewardBlocker({
           state, plan: content.plan, artifacts: content.artifacts,
@@ -2703,8 +2702,6 @@ export class CampaignSession {
       .map(entry => [entry.situationId, entry] as const));
     const activeMethods: MethodTemplateV1[] = [];
     const activeMethodSituations: string[] = [];
-    const blockedMethodRefs = new Set<string>();
-    const blockedMethodMessages = new Map<string, string>();
     const submissionSelectsMethod = (situationId: string, method: MethodTemplateV1): boolean => {
       const selectedRef = options.guidanceChoice?.candidateRef;
       return selectedRef
@@ -2726,9 +2723,6 @@ export class CampaignSession {
             situationId: situation.situationId, method,
           });
           if (rewardBlocker) {
-            const methodRef = `method:${situation.situationId}:${method.methodId}`;
-            blockedMethodRefs.add(methodRef);
-            blockedMethodMessages.set(methodRef, '此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
             if (submissionSelectsMethod(situation.situationId, method)) {
               throw new Error('此收尾路线暂不可用：奖励所需人物尚未加入当前战局。请选择其他办法。');
             }
@@ -2744,9 +2738,6 @@ export class CampaignSession {
               : eventBlocker === CAMPAIGN_METHOD_PROMISE_ALREADY_RESOLVED
                 ? '此路线关联的承诺已经解决，不能重复领取奖励。请选择其他办法。'
                 : '此路线的普通成功不会产生新的线索或状态变化，且事件未被后续主线使用，无法推进当前局面。请选择其他办法或准备后续主线。';
-            const methodRef = `method:${situation.situationId}:${method.methodId}`;
-            blockedMethodRefs.add(methodRef);
-            blockedMethodMessages.set(methodRef, blockerMessage);
             if (submissionSelectsMethod(situation.situationId, method)) {
               throw new Error(blockerMessage);
             }
@@ -3007,8 +2998,9 @@ export class CampaignSession {
       return plan;
     };
     const guidancePlan = campaignContent?.plan;
-    const preferredSituationFor = (state: GameStateSnapshot): string | undefined =>
-      opportunityProjectionFor(state)?.primarySituationId
+    const preferredSituationFor = (state: GameStateSnapshot,
+      projection: ReturnType<typeof projectNarrativeOpportunities> | undefined): string | undefined =>
+      projection?.primarySituationId
       ?? (state.campaignRuntime?.campaignStatus === 'active'
         ? guidancePlan?.nodes.find(node => node.nodeId === state.campaignRuntime?.primaryNodeId)?.situationRef
         : undefined);
@@ -3152,31 +3144,22 @@ export class CampaignSession {
             const methodRef = contract.methodRef;
             const failedMethodRef = methodRef && grade !== 'success' && grade !== 'full_success'
               ? `method:${methodRef.situationId}:${methodRef.methodId}` : undefined;
+            const opportunityProjection = opportunityProjectionFor(prepared.nextState, failedMethodRef);
             return buildSituationPacket({
               prepared,
-              preferredSituationId: preferredSituationFor(prepared.nextState),
+              preferredSituationId: preferredSituationFor(prepared.nextState, opportunityProjection),
               situationDefinitions: playableSituationsFor(prepared.nextState),
               playerCard,
               visibleActorNames,
               keyItemIds,
               entries, cards: plannerCards,
-              opportunityProjection: opportunityProjectionFor(prepared.nextState, failedMethodRef),
+              opportunityProjection,
               failedCandidateRef: failedMethodRef,
             });
           },
           buildGuidance: async ({
-            prepared, contract, grade, llmSteps, llmSummary,
+            prepared, contract, grade, llmSteps, llmSummary, packet,
           }) => {
-            const methodRef = contract.methodRef;
-            const failedMethodRef = methodRef && grade !== 'success' && grade !== 'full_success'
-              ? `method:${methodRef.situationId}:${methodRef.methodId}` : undefined;
-            const opportunityProjection = opportunityProjectionFor(prepared.nextState, failedMethodRef);
-            const packet = buildSituationPacket({
-              prepared, situationDefinitions: playableSituationsFor(prepared.nextState), playerCard, visibleActorNames, keyItemIds, entries, cards: plannerCards,
-              preferredSituationId: preferredSituationFor(prepared.nextState),
-              opportunityProjection,
-              failedCandidateRef: failedMethodRef,
-            });
             const knowledgeHash = await this.deps.hashProvider.sha256Hex(
               [...new Set((prepared.nextState.discoveries ?? []).filter(d => d.actorId === playerCard.actorId).map(d => d.entryId))].sort().join('\n'));
             const contentBindingHash = guidanceContentBindingHash(prepared.nextState);

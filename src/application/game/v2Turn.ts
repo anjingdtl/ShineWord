@@ -152,6 +152,8 @@ export interface RunV2TurnInput {
   /** P7: validate LLM steps against the packet and build the final guidance. */
   buildGuidance?: (args: {
     prepared: PreparedTurnResolution;
+    /** Same public packet built from this prepared resolution before narration. */
+    packet: import('../guidance/types').PublicSituationPacketV1 | null;
     contract: ActionContract;
     grade: RollGrade;
     /** Null when the response carried no (usable) steps — local fallback. */
@@ -755,6 +757,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   if (input.buildGuidance && prepared) {
     guidance = await input.buildGuidance({
       prepared,
+      packet,
       contract,
       grade,
       llmSteps: extractedGuidance.llmSteps,

@@ -40,3 +40,11 @@ Independent human red-team/playtesting is not available here. M6 will perform a 
 - Considered a wrapper aggregating route blocker calls, then discarded it: it added an extra hop and code classification without reducing semantic authority. No production rewrite retained for M3.
 - GREEN: build + opportunity-projection/runtime-convergence/blocker-repair suites 23/23, no skipped. GM text is absent from the projection; stale bound plan returns no opportunities; hidden active node becomes content_gap. Source entry projection remains the upstream privacy authority; this is not proof against all real private source material.
 - Diff review: only a regression test and evidence; Graph still never writes, pays out rewards or decides rolls. M4 will remove repeated projection/packet computation within the existing turn chain.
+
+## M4 coordination convergence
+
+- RED counting actual production function calls via Node's scoped test mocks: the same prepared version caused 4 Graph projections (expected 1); the Session independently built 2 packets. `node --test --test-name-pattern='one prepared projection' tests/phase9-5-local-compile.test.cjs` fails 4 !== 1 before change.
+- `runV2Turn` already owns the prepared packet. It now passes that packet to `buildGuidance`; Session uses it directly instead of rebuilding it. Preferred-situation fallback consumes the computed projection instead of re-running Graph. No persistent cache, additional coordinator, or live-state read introduced.
+- Removed two write-only blocked-method collections made redundant by M1's selection consolidation, and reused the same punctuation normalizer in the pre-journal preflight. Kept pre-journal and live foreground checks: these protect distinct TOCTOU boundaries.
+- GREEN: build + local-compile/prepared-turn/guidance/opportunity-projection/runtime-convergence/P8-2 budget suites: 53/53. Prepared-state projection count 4→1, packet count 2→1. Contract/dice/event/state parity still passes; same prepared object remains sole commit input.
+- Diff review: rest/training/replan/encounter transaction semantics untouched; all eight manifests and their hashes/versions unchanged. The callback argument is ephemeral and never added to frozen/save protocols.

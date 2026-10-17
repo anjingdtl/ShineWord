@@ -507,3 +507,28 @@ test('convergence: punctuation-equivalent text selects L1, semantic paraphrase r
   await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: text });
   assert.deepEqual(roles, ['Planner', 'Narrator'], 'text must honor planner_required, even when the intent matches exactly');
 });
+
+test('convergence: one prepared projection and packet serve Narrator and final guidance', async t => {
+  const h = await fixture({ model: modelWithPolicy({ kind: 'fixed', band: 'normal' }, []), includeGuidance: true });
+  t.after(() => h.db.close());
+  const projections = require('../dist/application/campaignPlan/opportunityProjection');
+  const packets = require('../dist/application/guidance/packet');
+  const originalProjection = projections.projectNarrativeOpportunities;
+  const originalPacket = packets.buildSituationPacket;
+  const projectionVersions = [];
+  const packetVersions = [];
+  t.mock.method(projections, 'projectNarrativeOpportunities', input => {
+    projectionVersions.push(input.state.stateVersion);
+    return originalProjection(input);
+  });
+  t.mock.method(packets, 'buildSituationPacket', input => {
+    packetVersions.push(input.prepared.nextState.stateVersion);
+    return originalPacket(input);
+  });
+  const result = await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+    intent: modelWithPolicy().firstSituation.methods[0].firstStep.intent });
+  assert.equal(projectionVersions.filter(v => v === result.stateVersion).length, 1,
+    'post-settlement opportunity selection is computed once for the prepared state');
+  assert.equal(packetVersions.filter(v => v === result.stateVersion).length, 1,
+    'the packet validated for Narrator is reused for final guidance');
+});
