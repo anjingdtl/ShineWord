@@ -716,3 +716,21 @@ test('M2 blocks a promise-fulfillment route after its fixed promise is already r
   assert.equal(campaignMethodEventConsumerBlocker({ state, plan: context.plan, artifacts, situationId: SITUATION_ID,
     method: validKnowledgeRoute }), null, 'a new legal clue remains usable with an idempotent old promise transition');
 });
+
+test('convergence: graph refuses a stale plan and never projects private active nodes or GM prose', async t => {
+  const h = await fixture();
+  t.after(() => h.db.close());
+  const context = await projectionContext(h);
+  const unchanged = JSON.stringify(context);
+  const stale = structuredClone(context.plan);
+  stale.revision += 1;
+  assert.deepEqual(projectNarrativeOpportunities({ ...context, plan: stale }).opportunities, []);
+  assert.equal(projectNarrativeOpportunities({ ...context, plan: stale }).status, 'stale_binding');
+  const hidden = structuredClone(context.plan);
+  hidden.nodes.find(n => n.nodeId === 'stage-1').visibility = 'gm';
+  const projection = projectNarrativeOpportunities({ ...context, plan: hidden });
+  assert.equal(projection.status, 'content_gap');
+  assert.deepEqual(projection.opportunities, []);
+  assert.equal(JSON.stringify(projection).includes(hidden.nodes[0].gmPurpose), false);
+  assert.equal(JSON.stringify(context), unchanged, 'projection has no mutation or independent progress');
+});
