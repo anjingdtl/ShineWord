@@ -191,7 +191,8 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
       Object.assign(nextState, applyEffects(nextState, compiled.effects));
       for (const effect of compiled.effects) events.push({ eventType: effect.op === 'recordEvent' ? effect.eventType : 'campaign_consequence_effect', payload: { consequenceId: consequence.consequenceId, ...effect } });
       const causal = applySituationRuntime({ nextState: { ...nextState, stateVersion: nextVersion }, sourceTurnId: input.turnId, playerActorId,
-        definitions: input.artifacts.flatMap(a => a.situations.map(s => ({ situationId: s.entryId, definition: s.definition }))), methodOps: compiled.transitions });
+        definitions: input.artifacts.flatMap(a => a.situations.map(s => ({ situationId: s.entryId, definition: s.definition }))),
+        methodOps: compiled.transitions, transitionEventKey: `consequence:${consequence.idempotencyKey}` });
       applySituationProjection(nextState, causal);
       events.push(...causal.events);
       for (const grant of compiled.knowledgeGrants) {

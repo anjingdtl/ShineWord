@@ -41,6 +41,9 @@ export interface ApplySituationRuntimeInput {
    * (contract.methodRef); empty on turns without a method match.
    */
   methodOps: readonly import('../../domain/situations/types').SituationTransitionOp[];
+  /** Distinct authoritative batches in one turn (e.g. deferred consequences)
+   * must not reuse the action's method key. Defaults preserve frozen action replay. */
+  transitionEventKey?: string;
 }
 
 export interface ApplySituationRuntimeResult {
@@ -130,7 +133,7 @@ export function applySituationRuntime(input: ApplySituationRuntimeInput): ApplyS
     const applied = applySituationTransitions({
       situations,
       ops: input.methodOps,
-      eventKey: `method:${input.sourceTurnId}`,
+      eventKey: input.transitionEventKey ?? `method:${input.sourceTurnId}`,
       sourceTurnId: input.sourceTurnId,
       stateVersion: state.stateVersion,
       clockSeconds,
