@@ -161,10 +161,32 @@ export function compileProposal(input: CompileProposalInput): CompiledAction {
   return compiled;
 }
 
+/** Match only a player-selected reference or punctuation-equivalent authored text.
+ * Semantic interpretation and untrusted Planner references remain on the L2 path. */
+export function normalizeMethodIntent(text: string): string {
+  return text.replace(/[\s，。！？、,.!?；;：:]/g, '');
+}
+
+export function resolvePlayerMethodIndex(
+  methods: readonly import('../../domain/situations/types').MethodTemplateV1[],
+  methodSituations: readonly string[],
+  intent: string,
+  candidateRef?: string,
+): number {
+  if (candidateRef && !candidateRef.startsWith('method:')) return -1;
+  const indices = methods.flatMap((method, index) => (candidateRef
+    ? candidateRef === `method:${methodSituations[index] ?? ''}:${method.methodId}`
+    : normalizeMethodIntent(intent) === normalizeMethodIntent(method.firstStep.intent)) ? [index] : []);
+  if (indices.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
+  if (candidateRef && indices.length === 0) {
+    throw new ProposalRejectedError('所选路径已不在当前可用办法中，请刷新后重新选择。');
+  }
+  return indices[0] ?? -1;
+}
+
 function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   const methods = input.methods ?? [];
   const requestedIntent = input.requestedIntent ?? input.proposal.intent;
-  const normalize = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
   // Only a reference explicitly selected by the player can choose the method
   // shape. A Planner-produced candidateRef is untrusted: it may bind campaign
   // effects only when its proposal already matches the method's action shape.
@@ -173,9 +195,8 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
   let selected: import("../../domain/situations/types").MethodTemplateV1 | undefined;
   let plannerSelectedRef: { situationId: string; methodId: string } | undefined;
   if (explicitRef) {
-    const index = methods.findIndex((method, i) => method.methodId === explicitRef.methodId
-      && (input.methodSituations?.[i] ?? "") === explicitRef.situationId);
-    if (index === -1) throw new ProposalRejectedError('所选路径已不在当前可用办法中，请刷新后重新选择。');
+    const index = resolvePlayerMethodIndex(methods, input.methodSituations ?? [], requestedIntent,
+      `method:${explicitRef.situationId}:${explicitRef.methodId}`);
     selected = methods[index]!;
   } else {
     if (plannerRef) {
@@ -189,9 +210,8 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
     }
   }
   if (!selected && !explicitRef) {
-    const matching = methods.filter(method => normalize(method.firstStep.intent) === normalize(requestedIntent));
-    if (matching.length > 1) throw new ProposalRejectedError('此行动对应多个办法，请明确选择其中一条路径。');
-    selected = matching[0];
+    const index = resolvePlayerMethodIndex(methods, input.methodSituations ?? [], requestedIntent);
+    selected = index >= 0 ? methods[index] : undefined;
   }
   const baseAction = input.selectedBaseAction;
   if (baseAction && (baseAction.availability !== 'available' || baseAction.firstStepIntent !== requestedIntent)) {
@@ -309,14 +329,13 @@ function bindSituationMethod(
   campaignBindingHash?: string,
 ): CompiledAction {
   const { contract } = compiled;
-  const normalizeIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
   for (const [index, method] of methods.entries()) {
     if (selectedIndex !== undefined && index !== selectedIndex) continue;
     const step = method.firstStep;
     // P9: a stable selected id binds even when the player paraphrased the
     // step text; only structural checks still apply (A11).
     const byId = selectedIndex !== undefined && index === selectedIndex;
-    if (!byId && normalizeIntent(requestedIntent) !== normalizeIntent(step.intent)) continue;
+    if (!byId && normalizeMethodIntent(requestedIntent) !== normalizeMethodIntent(step.intent)) continue;
     if (step.actionKind !== contract.actionType) continue;
     if (step.actionKind === 'skill_check' && step.skillId !== undefined) {
       if (contract.skillId === undefined) continue;

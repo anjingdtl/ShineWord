@@ -40,7 +40,7 @@ import { estimateTokens } from '../context/tokenEstimate';
 import { runV2Turn } from '../game/v2Turn';
 import { evaluateLocalCompileReadiness } from '../game/localCompileReadiness';
 import { TurnPostProcessingCoordinator } from '../game/turnPostProcessing';
-import { packageIndexes, ProposalRejectedError } from '../game/v2Compile';
+import { packageIndexes, ProposalRejectedError, normalizeMethodIntent, resolvePlayerMethodIndex } from '../game/v2Compile';
 import type { ApiProfile } from '../llm/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { RandomSource } from '../../domain/rules/random';
@@ -2705,7 +2705,6 @@ export class CampaignSession {
     const activeMethodSituations: string[] = [];
     const blockedMethodRefs = new Set<string>();
     const blockedMethodMessages = new Map<string, string>();
-    const normalizeMethodIntent = (text: string): string => text.replace(/[\s，。！？、,.!?；;：:]/g, '');
     const submissionSelectsMethod = (situationId: string, method: MethodTemplateV1): boolean => {
       const selectedRef = options.guidanceChoice?.candidateRef;
       return selectedRef
@@ -3017,25 +3016,12 @@ export class CampaignSession {
     try {
       // P9 (A11/A13): resolve the selected guidance candidate to a stable
       // method reference, verified against the methods offered this turn.
-      const selectedCandidateRef = options.guidanceChoice?.candidateRef;
-      let selectedCandidate: { selectedMethodRef: { situationId: string; methodId: string }; candidateRef: string } | undefined;
-      if (selectedCandidateRef?.startsWith('method:')) {
-        const rest = selectedCandidateRef.slice('method:'.length);
-        const separator = rest.lastIndexOf(':');
-        const situationId = rest.slice(0, separator);
-        const methodId = rest.slice(separator + 1);
-        const offered = activeMethodSituations.some((owner, index) =>
-          owner === situationId && activeMethods[index]?.methodId === methodId);
-        if (!offered) {
-          const blockerMessage = blockedMethodMessages.get(selectedCandidateRef);
-          if (blockerMessage) {
-            throw new Error(blockerMessage);
-          }
-          if (blockedMethodRefs.has(selectedCandidateRef)) throw new Error('所选路径当前不可用，请刷新局面后重新选择。');
-          throw new Error('所选路径已不在当前可用办法中，请刷新后重新选择。');
-        }
-        selectedCandidate = { selectedMethodRef: { situationId, methodId }, candidateRef: selectedCandidateRef };
-      }
+      const selectedIndex = resolvePlayerMethodIndex(activeMethods, activeMethodSituations,
+        options.intent, options.guidanceChoice?.candidateRef);
+      const selectedCandidate = selectedIndex >= 0 ? {
+        selectedMethodRef: { situationId: activeMethodSituations[selectedIndex]!, methodId: activeMethods[selectedIndex]!.methodId },
+        candidateRef: `method:${activeMethodSituations[selectedIndex]}:${activeMethods[selectedIndex]!.methodId}`,
+      } : undefined;
       let localCompileSelection: import('../game/localCompileReadiness').LocalCompileSelectionV1 | undefined;
       let campaignBindingHash: string | undefined;
       if (selectedCandidate) {

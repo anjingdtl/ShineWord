@@ -453,3 +453,57 @@ test('a closure route with an unresolved reward actor is blocked before operatio
   const turnId = 'turn-' + String(state.stateVersion + 1).padStart(4, '0');
   assert.equal(await h.turns.getStagedTurn(h.branchId, turnId), null, 'no staged action contract or roll is created');
 });
+
+
+test('convergence: exact free input uses the same fixed L1 contract as a tap without Planner', async t => {
+  const samples = [];
+  for (const tap of [true, false]) {
+    const requests = [];
+    const entries = baseEntries();
+    entries.find(entry => entry.entryId === 'scene-alley').definition.clues = ['lore-crates'];
+    const h = await fixture({ entries, model: modelWithPolicy(), includeGuidance: true,
+      provider: { async complete(request) {
+        requests.push(request.role);
+        assert.notEqual(request.role, 'Planner', 'an exact fixed method must not dispatch Planner');
+        const value = JSON.parse(request.user);
+        return { text: JSON.stringify({ turnId: value.turnId, outcomeGrade: value.outcomeGrade, text: '相同的受控叙事' }) };
+      } } });
+    t.after(() => h.db.close());
+    const guidance = await h.session.ensureDecisionPointGuidance({ campaignId: h.campaignId,
+      branchId: h.branchId, sourceTurnId: 'opening', localOnly: true });
+    const step = guidance.steps.find(item => item.candidateRef === `method:${SITUATION_ID}:sweep`);
+    const result = await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId,
+      intent: step.firstStepIntent,
+      ...(tap ? { guidanceChoice: { decisionPoint: guidance.decisionPoint, candidateRef: step.candidateRef } } : {}) });
+    assert.deepEqual(requests, ['Narrator']);
+    const staged = await h.turns.getStagedTurn(h.branchId, result.turnId);
+    const state = await h.turns.getState(h.branchId);
+    const events = h.db.prepare('SELECT event_type,payload_json FROM branch_events WHERE turn_id=? ORDER BY event_seq').all(result.turnId);
+    samples.push({ contract: staged.actionContractJson, roll: await h.turns.getRollRecord(h.branchId, result.turnId, 0),
+      situations: state.situations, campaignRuntime: state.campaignRuntime, actors: state.actors, events });
+  }
+  // Timestamps belong to storage metadata, not the deterministic contract or outcomes.
+  const clean = value => JSON.parse(JSON.stringify(value, (key, item) => ['createdAt', 'rolledAt'].includes(key) ? undefined : item));
+  assert.deepEqual(clean(samples[1]), clean(samples[0]));
+});
+
+test('convergence: punctuation-equivalent text selects L1, semantic paraphrase retains constrained L2', async t => {
+  const { resolvePlayerMethodIndex } = require('../dist/application/game/v2Compile');
+  const model = modelWithPolicy();
+  const method = model.firstSituation.methods[0];
+  const text = method.firstStep.intent.replace('，', '，  ') + '！';
+  assert.equal(resolvePlayerMethodIndex([method], [SITUATION_ID], text), 0);
+  assert.equal(resolvePlayerMethodIndex([method], [SITUATION_ID], '我想搜索一下巷子'), -1);
+  assert.throws(() => resolvePlayerMethodIndex([method, { ...method, methodId: 'other' }],
+    [SITUATION_ID, SITUATION_ID], text), /多个办法/);
+  assert.throws(() => resolvePlayerMethodIndex([method], [SITUATION_ID], text,
+    `method:${SITUATION_ID}:missing`), /已不在当前/);
+  assert.equal(resolvePlayerMethodIndex([method], [SITUATION_ID], text, 'base:observe'), -1);
+
+  const roles = [];
+  const h = await fixture({ model: modelWithPolicy({ kind: 'planner_required' }),
+    onRequest: request => roles.push(request.role) });
+  t.after(() => h.db.close());
+  await h.session.playTurn({ campaignId: h.campaignId, branchId: h.branchId, intent: text });
+  assert.deepEqual(roles, ['Planner', 'Narrator'], 'text must honor planner_required, even when the intent matches exactly');
+});

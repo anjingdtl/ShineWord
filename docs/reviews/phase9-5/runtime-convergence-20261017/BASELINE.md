@@ -27,3 +27,7 @@
 2. Adversarial review: exact text bypasses readiness today; duplicate node reachability is identical today (maintenance risk, not an observed behavioral bug). Test state/content/rule drift, ambiguity, refused input, replay and causal consumers before broad cleanup. Existing R0/R1/R2/R4 fixes remain in scope for regression, never replaced.
 
 M0 RED: `node --test --test-name-pattern='convergence: exact free' tests/phase9-5-local-compile.test.cjs` fails `an exact fixed method must not dispatch Planner`, stack Session → runV2Turn → requestPlanner. Tap half passes. No physical network call occurred. Test will be committed with M1 fix.
+
+M0 full baseline completed: `npm run verify:core`: 1334 tests, 1334 pass, 0 fail/skip, 141550.96534 ms. Existing R0/R1/R2/R4 regressions remain green. This ran against unchanged baseline compiled output before M1 rebuild.
+
+M1 review → RED → minimal implementation → GREEN → diff review: `resolvePlayerMethodIndex` lives in the existing compiler and is shared with Session. Punctuation-equivalent authored input enters the same readiness gate as a tap; arbitrary paraphrases remain L2. Existing final live-state check and atomic CAS remain. `npm run build:core` and targeted local-compile + phase9-turns + baseline: 20/20 PASS. Same synthetic nontrivial skill/evidence method yields identical serialized contract, persisted dice, situation/campaign state, actors and turn events for text/tap; fake Planner count 0, Narrator 1. This does not prove a real authored-content L1 sample. No new state/store/protocol or paid request.
