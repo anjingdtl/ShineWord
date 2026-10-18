@@ -32,6 +32,9 @@
 ## UI 与数据保全
 
 - 书库、小说世界项目页、角色/战役开局、行动提交、结果/掷骰和终局回归在当前 APK 上完成。
+- API 37 AVD 上在 play 分支执行 portrait → landscape → portrait 配置变化；每个方向的 Play composer 与下一轮控件都能继续显示。将隔离显示覆盖设为 720×1600 @320dpi（360×800dp）后，从书库重新打开同一 QA 分支，campaign progress、composer、submit 三个 Maestro 断言通过。结束后恢复设备原始 1080×2400 @420dpi。小屏回归先导航到 branch，避免把尺寸覆盖可能触发的 Activity 重建或 Maestro 冷启动误判成控件缺失。
+- 暗色系统主题下 Play composer 与 submit 控件断言通过，并恢复原系统夜间模式。TalkBack 服务未完成实际焦点/语音校验；设置探测后恢复原无障碍服务列表。
+- UI 截图/调试日志仅保留在本机私有目录 `C:\Temp\sw95-phase95-active\`。小屏 Play 截图 `small-before-maestro.png` SHA-256 `F98D9451488927A8A782E149832AA5E1A443553207981D74A93EEC7D59016F6A`；旋转、夜间模式和小屏 Maestro 输出分别位于 `rotation-ui`、`night-mode-ui`、`small-screen-final` 子目录。均未将剧情画面或日志提交。
 - Gboard 首次弹出系统手写教程；取消教程后通过键盘菜单显式启用屏幕键盘，随后输入可正常工作。这是模拟器键盘初始设置，不作为应用缺陷。
 - APK 更新通过 `install -r` 保留 SQLite、小说源、GLM Keychain 配置及故障项目；没有卸载、清库或重建模拟器。
 - 单独的 SQLite 快照在本机只读分析，`PRAGMA integrity_check=ok`；快照包含本地剧情与测试状态，不提交。

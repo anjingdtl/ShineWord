@@ -13,10 +13,12 @@
 - 姓名输入框焦点冒烟通过；模拟器 Gboard 首次打开的手写教程被取消，系统屏幕键盘菜单打开后正常输入并提交过 QA action。该教程是 AVD 初始输入法状态，不作为应用缺陷。
 - 临时将系统字号调至 1.3 时，开局核心字段和按钮仍可见，长标题以省略号截断；测试后恢复 1.0。
 - Runtime failed 的终局页检查了隐藏变更候选、禁用 composer 与提交按钮；没有禁用只读 Runtime 状态显示。当前 crash buffer 采样未发现 app FATAL EXCEPTION。
+- portrait → landscape → portrait 配置变化后，Play composer、campaign progress 与下一轮提交控件均通过 Maestro 检查。360×800dp 的 AVD 显示覆盖下，先从书库导航到同一隔离 branch，再验证 campaign progress、composer、submit 可见；小屏回归固定从书库建立导航前置条件，避免把尺寸覆盖可能触发的 Activity 重建或 Maestro 冷启动误判成控件缺失。测试结束恢复 1080×2400 @420dpi。
+- 切换 Android 夜间模式为 dark 后，Play composer 与 submit 控件断言通过；系统设置恢复为初始 `Night mode: no`。
 
 ## 未验
 
-- TalkBack 未启用（secure accessibility_enabled=0）；焦点顺序与无障碍播报为 NOT RUN。
-- 未运行旋转/多窗口、API 24 / 小屏设备、大字完整页面、长历史滚动和完整战役各屏布局矩阵。
+- TalkBack 的实际焦点移动与 spoken output 未验证。设备上 TalkBack 包已安装但服务未启用；临时服务设置探测未能产生可读的 UiAutomator 树，随后精确恢复原服务列表。master `accessibility_enabled` 标志为 1 本身不代表 TalkBack 正在工作。
+- 未运行多窗口、API 24 / 真实低尺寸设备、大字完整战役页、长历史滚动和完整战役各屏布局矩阵。360×800dp 结果来自虚拟显示尺寸/密度覆盖，不等同另一台物理设备。
 - 没有匹配 L1/L2 各 10 次的真实请求性能、TTFT 或费用对比；本轮仅有 campaign-scope fixed-empty-evidence L1 样本，world package 仍没有 method entry，也没有非空 evidence L1。
 - PSS 与 GfxInfo 样本来自长会话，不应与独立、固定步骤基准比较，也不能外推低端设备表现。
