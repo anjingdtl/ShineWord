@@ -6,12 +6,12 @@
 
 - M0：PASS-ENGINEERING。重新 fetch 后 origin/main 与开始施工时一致；原 main、其他 worktree 和 ignored 历史账本均保留。
 - M1：PASS-DEVICE（限定范围）。本地依赖、Core、版本、mobile typecheck、Debug APK 与专用 API37 AVD 基础旅程通过。
-- M2：PARTIAL。真实 GBK 小说 SAF 导入、0–9,600 code-point 有界样本、3 次真实 GLM 成功及 partial world package ready；L1 与完整开局未通过。
-- M3：PARTIAL / BLOCKED-PLAYER-AND-GLM-CONFIG。开局身份页已打开；没有替玩家填写角色或提交任何 action，campaigns=0、turns=0。
+- M2：PARTIAL。真实 GBK 小说 SAF 导入、0–9,600 code-point 有界样本、4 次真实 GLM 成功及 partial world package ready；L1 与完整开局未通过。
+- M3：PARTIAL / BLOCKED-PLAYER。开局身份页已打开，更新 GLM 配置后的 opening_goal 自动建议请求 HTTP 200；没有替玩家填写角色或提交任何 action，campaigns=0、turns=0。
 - M4：PARTIAL / BLOCKED-ASSET。localhost 429 与 network_unknown 现场保留且未重派；缺少合法 save-10、Stage-1/8 历史资产，live gameplay crash 矩阵未完成。
 - M5：PARTIAL。有限的 build latency、设备 PSS/gfx、软键盘与 1.3 字号检查；TalkBack、匹配 10+10 和独立试玩未完成。
 - M6：PASS-ENGINEERING；设备回归 PARTIAL。Structured opening evidence recovery RED→GREEN、Core 1,344/1,344、当前 APK 安装复测通过；设备复测未观察到新 extension request。
-- M7：进行中。报告、矩阵和节点证据已提交；[PR #15](https://github.com/anjingdtl/ShineWord/pull/15) 已开放，exact-head checks 见 [PR checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)。
+- M7：PR #15 已承载收束实现和本次模型回归证据；原最终代码 HEAD `f62ae30` 的 Core/Android CI 均通过。本次新增的文档/截图提交须按最新 PR HEAD 查看 [live checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)。
 
 ## Git
 
@@ -26,12 +26,13 @@
 - 用户后来明确授权不限 GLM 请求次数/金额；实际执行并发峰值为 1。
 - GLM 成功 3 次：world_extract 2 次、style_analyzer 1 次；累计 input 9,569、output 6,201、reasoning 20 tokens。
 - opening_goal 1 次 HTTP 401，usage/provider request ID 均无；此项为明确失败，不是 outcome_unknown。
-- 人民币实际费用未知；用户反馈已轮换密钥，但本地 `GLM-TEST.txt` 时间戳未更新，当前配置仍返回 401。未重试，也未在聊天中要求或输出密钥。
+- 配置更新后新发起 opening_goal 1 次 HTTP 200，185 input / 39 output / 0 reasoning tokens，用时 6.11 s。当前 4 次成功请求累计 input 9,754、output 6,240、reasoning 20 tokens；无新的 unknown。
+- 人民币实际费用未知；用户在模拟器安全更新并测通配置。配置更新前的 401 保持历史失败记录，没有重派，也未在聊天中要求或输出密钥。
 - 本地 mock 项目的 HTTP 429 和 network_unknown 不属于 GLM；unknown 保留 needs_review，从未重派或清账。
 
 ## 最终阻滞
 
-- 有效 GLM 本地凭据未确认；开局页自动建议请求 401。密钥已轮换但文件时间戳未更新，真实模型轨道待本地配置更新。
+- GLM 凭据已由用户在模拟器测通，真实 opening_goal 已 HTTP 200；配置更新前的 401 保持历史记录。当前仍等待真人身份/姓名/开局意图与行动决定。
 - 必须由真人选择角色/目标并完成真实行动；执行者没有代选。当前 0/80 真实决定、0/4 独立试玩。
 - L1 method 资格尚未确证；世界仅覆盖 0–9,600 code points 的 partial package。
 - save-10、Stage-1/8 合法历史资产缺失；历史因果/迁移验收 BLOCKED-ASSET。

@@ -27,14 +27,14 @@
 ## 真实小说和模型
 
 - 原始小说 SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，7,178,905 bytes，Windows-936/GBK。仅本机处理；partial package 的模型 scope 为 0–9,600 code points，未发送全书。
-- 3 次 GLM 成功：world_extract ×2、style_analyzer ×1；合计 input 9,569、output 6,201、reasoning 20 tokens。另 1 次 opening_goal 是已知 HTTP 401，无 usage/provider request ID；CNY 实际费用未知。用户已授权不限请求/费用，本轮并发峰值仍为 1。
-- 用户已说明密钥已轮换，但本地 `GLM-TEST.txt` 时间戳未更新；模拟器读取的配置仍返回 401。没有重试该配置，也未要求用户将密钥贴入聊天；待本地文件更新后再继续真实模型请求。
+- 原有 3 次 GLM 成功（world_extract ×2、style_analyzer ×1）后，用户更新并在模拟器测通配置；开局页自动发送的新 `opening_goal` 返回 HTTP 200（185 input / 39 output / 0 reasoning tokens，6.11 s）。当前合计 4 次成功，累计 input 9,754、output 6,240、reasoning 20 tokens；配置更新前的 401 失败继续保留。CNY 实际费用未知；实际模型并发峰值为 1。
+- 当前模拟器停在“身份与姓名”步骤：UI 默认显示“原创旅人”、姓名为空、下一步禁用。没有替真人选身份或命名，没有创建角色/战役/行动；新请求成功不等于真实玩家开局或 L1/L2 行动验收。截图：[开局页证据](evidence/android-opening-goal-success-and-player-decision.png)。
 - 早先 Maestro 输入密钥的一次本地运行曾在运行诊断中暂存凭据字节。对应诊断在任何后续模型调用前完成脱敏；本轮再次保存配置的诊断也在检查后清除。当前可检索诊断中密钥匹配数为 0；没有把值写入仓库或报告。用户已知此安全事件。
 - 本地 429 fixture 记录 1 次 loopback HTTP 429；原项目后续 network_unknown 保留在 needs_review，没有重派，不属于 GLM 请求。
 
 ## 阻滞与下一步
 
-1. 用户更新本机有效 GLM key 后，重新进入模拟器 opening 页，确认真实 `opening_goal` 成功；随后由真人决定身份、姓名、地点/锚点与行动，继续观察 L1/L2、骰点、Narrator、commit 和下一轮机会。
+1. 真人继续决定身份、姓名、地点/锚点和行动；再验证 L1/L2、骰点、Narrator、原子 commit 和下一轮机会。当前 GLM 配置和一次 opening_goal 已成功，真人决定仍未发生。
 2. 真实模型费用需要从用户实际账户账单确认；本机 request ledger 只有 token usage，没有 CNY 费用字段。
 3. 小说本地章节标题计数 1,498 与 Android parser 1,504 的差异尚未归因；不能静默规范化或减弱证据。
 4. 真实 action fault matrix、完整历史数据恢复和外部试玩仍未完成；缺少合法 save-10 / Stage-1/8 identity-bound assets。

@@ -11,12 +11,12 @@
 |---|---|---|
 | M0 | PASS-ENGINEERING | 起始工作树已隔离，重新 fetch 后 origin/main 为 87eef899；原始 main 与既有 worktree 未改写。用户后续授权模型不限额度，并发仍为 1。 |
 | M1 | PASS-DEVICE（限定范围） | 当前 M6 APK 成功构建/安装/冷启动，base.apk 与构建 APK SHA 一致；书库、项目页、开局身份页可达。完整战役动作未包含。 |
-| M2 | PARTIAL | SAF 导入真实 GBK 小说、开篇两次 GLM extraction、partial world package published/ready；scope 0–9,600。L1 未确认，opening_goal 401，全书未构建。 |
-| M3 | PARTIAL / BLOCKED-PLAYER-AND-GLM-CONFIG | 开局身份页真实可达但停在姓名输入前；campaigns=0、turns=0、玩家行动/骰点/Narrator/commit=0。需有效本地 GLM 配置及真人决定。 |
+| M2 | PARTIAL | SAF 导入真实 GBK 小说、开篇两次 GLM extraction、partial world package published/ready；scope 0–9,600。更新配置后 opening_goal 200；L1 未确认，全书未构建。 |
+| M3 | PARTIAL / BLOCKED-PLAYER | 开局页自动 goal suggestion 请求 HTTP 200；身份页停在真人填写姓名前；campaigns=0、turns=0、玩家行动/骰点/Narrator/commit=0。需真人决定。 |
 | M4 | PARTIAL / BLOCKED-ASSET | localhost 429 与 unknown 现场保留，unknown 未重派；Core 相关恢复合同通过。没有 identity-bound save-10、Stage-1/8 或 live gameplay 中断矩阵。 |
 | M5 | PARTIAL | 有限导入时长、LLM 耗时、内存、gfx、键盘和 1.3 字号记录；TalkBack、旋转、小屏全矩阵、匹配 10+10 未验。 |
 | M6 | PASS-ENGINEERING / DEVICE-PARTIAL | Structured opening evidence RED→GREEN、Core 1,344/1,344、mobile typecheck、Debug APK 和安装回归通过；设备恢复了 cached finalization，但未观察到新的有界 extension 请求。 |
-| M7 | IN PROGRESS | 节点报告、分节点 commits 和本轮复跑 Core 已形成；PR 与 exact-head Core/Android CI 尚待推送后验证。任何旧 SHA CI 都不作为最终证明。 |
+| M7 | PASS-ENGINEERING | PR #15 已开放，原最终代码 HEAD `f62ae30` 的 Core/Android checks 均通过；本次新增为验收证据文档与模拟器截图，当前 PR checks 以最新 HEAD 的 live 状态为准。 |
 
 ## R 节点
 
@@ -29,7 +29,7 @@
 | R4 | PASS-ENGINEERING / real PARTIAL | 当前 Core 因果与延迟后果合同测试通过；无本轮真人三路汇合及下游消费者。 |
 | R5 | PARTIAL | unknown park、原子提交、fence 等合同在现行 Core 通过；仅设备 build finalization 恢复，无真实 turn force-stop/outbox 旅程。 |
 | R6 | PARTIAL | package validation 与隐私/权限合同在现行 Core 回归；未在本轮真实 turn 中验证三意图私密投影。 |
-| R7 | PARTIAL / BLOCKED-REAL-ACTION | 3 次模型成功、1 次明确 401；没有真实 action turns、有效 L1 物理 Planner=0 配对或玩家决策。 |
+| R7 | PARTIAL / BLOCKED-REAL-ACTION | 4 次模型成功、1 次明确 401；没有真实 action turns、有效 L1 物理 Planner=0 配对或玩家决策。 |
 | R8 | PARTIAL | 实测设备帧、内存、键盘和字号；无 10+10 matched L1/L2 与四名独立玩家。 |
 | R9 | TRACKED ON PR #15 | 本轮最终分支 HEAD 的 Core Verify 和 Android Verify 链接在 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；PR #14 的基线检查不代替。 |
 
@@ -40,7 +40,7 @@
 | G0 | PARTIAL | 源码、APK、AVD 和本轮 ledger 已绑定；个人/历史请求预算账本未核验，模型 CNY 费用未知。 |
 | G1 | PARTIAL | 共享 L1/L2 authority 与确定性合同在 Core 通过；本小说没有通过资格审查的真实 L1。 |
 | G2 | PARTIAL | 只读 projection 与一致状态工程回归通过；没有真实 promise→trigger→consumer 因果链。 |
-| G3 | PARTIAL | 已进入开局页且自动 goal request 遇到 401；未完成 M3 游戏回合、下一轮机会或真人决定。 |
+| G3 | PARTIAL | 配置更新后的自动 goal request 已 HTTP 200；未完成 M3 游戏回合、下一轮机会或真人决定。 |
 | G4 | PARTIAL | 当前 APK/字体/键盘/项目页通过有限检查；真实性能、完整 Narrator 与外部试玩未完成。 |
 | G5 | PARTIAL | mock 429/unknown 现场与应用数据库保留；旧 save、live turn crash、导入/迁移和配置重启矩阵未完成。 |
 

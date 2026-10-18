@@ -15,6 +15,7 @@
 - 世界包 revision 1–3 均为 published，scope 均为 source 0–9,600 code points、partial；运行状态最终为 completed，segment 状态为 ready，项目 build_status 为 ready。
 - 样本汇总：49 条 explicit facts、3 条 inference facts；52 个事实来源引用分布于 4 个章节；公开包包含 8 个技能、4 个场景和 11 个公开角色模板。这里是计数，不代表内容质量或来源完备验收。
 - 开局向导成功加载世界起点与身份页；“原创旅人”处于产品默认值、姓名为空，下一步不可提交。没有角色、战役或行动被创建。
+- 配置更新后的复核（2026-10-18 14:29 Asia/Shanghai）：用户确认 GLM 配置连接测试成功；进入可游玩世界后，开局页按当前锚点自动取得 goal suggestions。账本新增一条 `opening_goal` HTTP 200（185 input / 39 output / 0 reasoning tokens，6.11 s）。身份页仍显示产品默认“原创旅人”、姓名为空、下一步禁用；没有替玩家选择、命名或创建角色/战役。截图：[身份选择与真实开局请求后的页面](evidence/android-opening-goal-success-and-player-decision.png)。
 - 本样本未确认一个同时具备 fixed difficulty、evidence binding 与规则绑定的 published L1 method。现有 package 结构没有显示这些资格字段，因此不把技能/场景数量当作 L1 PASS；真实 L1/L2 行动验证仍未完成。
 
 ## 物理请求和耗时
@@ -26,9 +27,10 @@
 | world_extract | succeeded | 200 | 5,011 / 3,033 / 13 | 40.95 s |
 | world_extract | succeeded | 200 | 2,898 / 2,758 / 7 | 35.80 s |
 | style_analyzer | succeeded | 200 | 1,660 / 410 / 0 | 12.15 s |
-| opening_goal | failed, known auth rejection | 401 | no usage reported | 2.19 s |
+| opening_goal | failed, known auth rejection（更新配置前） | 401 | no usage reported | 2.19 s |
+| opening_goal | succeeded（更新配置后） | 200 | 185 / 39 / 0 | 6.11 s |
 
-成功请求合计 3 次，输入 9,569、输出 6,201、reasoning 20 tokens；另有 1 次已知 401 失败，无 provider request ID、无 usage，不是 outcome_unknown。实际人民币费用无法由设备账本确认；用户的不限额度授权替代附件默认 20 次/¥10 上限，不能据此声称费用为零。
+成功请求合计 4 次，输入 9,754、输出 6,240、reasoning 20 tokens；另有 1 次已知 401 失败，无 provider request ID、无 usage，不是 outcome_unknown。配置连接测试是独立于应用物理请求账本的验证，不计入上表。实际人民币费用无法由设备账本确认；用户的不限额度授权替代附件默认 20 次/¥10 上限，不能据此声称费用为零。
 
 实测从测试世界创建 13:16:34.738 到 ready 13:25:19.020，约 8 分 44 秒；两个 extraction 请求耗时合计约 77 秒，style analyzer 约 12 秒，其余等待/本地阶段没有拆分计时，故首次可玩耗时不能归因于模型。完整小说构建成本没有估算，也未启动。
 
@@ -38,6 +40,7 @@
 
 ## 阻滞
 
-1. 开局页自动发起的一次 opening_goal 请求返回 HTTP 401；该失败保持原始 ledger 记录。当前仍需要用户更新本机 GLM 配置为有效密钥后，才能继续真实模型轨道。不要在聊天中传密钥。
-2. 需要真实 L1 eligible method、角色/战役和后续行动因果样本；当前已发布 partial package 不足以证明。
-3. 小说标题计数 1,498 与设备 parser 1,504 的差异待查；当前没有正文级人工 QA。
+1. 更新前的 opening_goal HTTP 401 失败仍保留原始 ledger 记录；更新配置后的新请求已 HTTP 200，未重派旧失败，也没有 `outcome_unknown`。
+2. 当前停在真实玩家身份与姓名决定之前；需要真人继续选择角色、目标/锚点和行动，才可验证 L1/L2、骰点、Narrator、commit 和下一轮剧情。
+3. 需要真实 L1 eligible method 与后续行动因果样本；当前已发布 partial package 不足以证明。
+4. 小说标题计数 1,498 与设备 parser 1,504 的差异待查；当前没有正文级人工 QA。

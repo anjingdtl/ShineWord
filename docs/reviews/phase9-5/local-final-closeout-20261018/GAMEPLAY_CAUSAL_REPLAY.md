@@ -1,14 +1,15 @@
 # M3：真实开局、游玩与剧情因果
 
 日期：2026-10-18（Asia/Shanghai）
-状态：PARTIAL / BLOCKED-PLAYER-AND-GLM-CONFIG。
+状态：PARTIAL / BLOCKED-PLAYER。
 
 ## 已验证
 
 - 当前分支 APK 在专用 AVD 上打开真实小说的 published partial world，项目页明确显示可开始冒险；World setup projection 成功加载。
 - 开局向导到达“身份与姓名”第一步。姓名为空，“下一步”保持禁用；数据库此时 campaigns=0、turns=0。
 - 由于这是玩家决定的真实入口，执行者没有替玩家填写姓名、选择原创/原著身份、锚点、地点、同行者、目标、行动或骰点，也没有创建 campaign。模拟器暂留在该输入页，等待真实玩家继续。
-- 开局页自动 goal suggestion 请求因当前本地凭据配置返回 HTTP 401，已知失败且无 usage；没有自动重试 unknown。真实 GLM 后续请求暂停，等待有效本地配置。
+- 更新配置前的一次开局 goal suggestion 请求返回 HTTP 401，已知失败且无 usage；原 ledger 保留。用户随后在模拟器测通 GLM 配置，重进开局页后一次自动 goal suggestion 返回 HTTP 200（185/39/0 tokens，6.11 s），没有重派 401 或触发 unknown。
+- 当前 UI 停在身份与姓名步骤，产品默认“原创旅人”尚未由玩家确认，姓名为空。执行者没有替玩家选择或创建角色/战役；截图见 [真实开局建议与玩家决定页](evidence/android-opening-goal-success-and-player-decision.png)。
 
 ## 未完成的验收
 

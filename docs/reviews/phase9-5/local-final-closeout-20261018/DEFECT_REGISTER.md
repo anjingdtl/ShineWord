@@ -16,5 +16,5 @@
 
 ## 外部配置阻滞（非代码缺陷）
 
-- 模拟器 opening_goal 物理请求返回已知 HTTP 401，usage 与 provider request ID 缺失；没有 unknown outcome。当前 GLM 配置不能证明可认证，新增真实模型请求暂停。
+- 配置更新前的模拟器 opening_goal 物理请求返回已知 HTTP 401，usage 与 provider request ID 缺失；没有 unknown outcome。用户更新并在模拟器测通 GLM 配置后，新开局建议请求返回 HTTP 200（185 input / 39 output / 0 reasoning tokens，6.11 s）；因此本项当前不再阻塞模型认证。真人身份、姓名和行动尚未决定。
 - 本地原小说章节计数 1,498 与移动导入器 1,504 不一致；没有足够证据将其定性为代码缺陷，暂列观察项 P2，不通过修改 parser 或验收标准消除差异。
