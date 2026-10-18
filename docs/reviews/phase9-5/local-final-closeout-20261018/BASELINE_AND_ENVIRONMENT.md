@@ -10,6 +10,7 @@
 - PR #14（Phase 9.5 runtime convergence）已合并，merge commit 与上述 HEAD 相同。基线 HEAD 检查：Core Verify #139 / run `38989018424` success；Android Verify #103 / run `38989018421` success，均绑定该 SHA。
 - 起始盘点的既有 worktree：`F:\c95`（`c94e62e`）、`F:\ClaudeWorkSpace\projects\ShineWord-phase95-closeout-20261015`（`2bbf179`，落后当时远端 22）、`F:\sw95`（detached `08b6452`）。Git status 均干净；其中 `F:\sw95` 有被 Git 忽略的私有 `test-logs`，按历史数据保留，不执行写入、删除或重放。
 - 新建隔离 worktree：`F:\ClaudeWorkSpace\projects\ShineWord-phase95-local-final-closeout-20261018`，分支 `fix/phase95-local-final-closeout-20261018`，从当时的 `origin/main` 创建。原仓库、其他分支与 worktree 未改写。
+- 仓库最终 worktree 盘点发现该基线 worktree 仍独立存在：HEAD `c821f659`（从 origin/main 创建），状态含 `mobile/src/version.json` 修改和未跟踪 `docs/reviews/phase9-5/local-final-closeout-20261018/evidence/`；本轮没有进入、恢复或修改这份现场。用于 PR 的工作树为 `F:\sw95local-20261018` / `fix/phase95-local-final-closeout-20261018-short`，从 PR #15 分支继续提交；两者分支与工作目录隔离。
 - `git fetch origin` 成功；PR #14 的合并状态也由 GitHub connector 只读确认。`gh pr view` 本机 CLI 返回 HTTP 401，后续远端操作使用已连通的 GitHub app 能力或再验证凭据，不以该错误推断远端不可用。
 
 ## 本机工具链
@@ -34,9 +35,9 @@
 
 ## 最终状态（覆盖施工中的临时观察）
 
-- 用户明确授权本项目 GLM 测试不设额度上限；实际物理并发峰值为 1。累计请求及 token 使用见 [真实小说与 GLM 报告](REAL_NOVEL_AND_LLM.md)，账户 CNY 实扣仍无账单证据。
+- 用户明确授权本项目 GLM 测试不设额度上限；真实小说 world、对应 campaigns 与 mapped branches 的观测窗口物理并发峰值为 2，后续请求逐条等待。累计请求及 token 使用见 [真实小说与 GLM 报告](REAL_NOVEL_AND_LLM.md)，账户 CNY 实扣仍无账单证据。
 - 配置更新前的 `opening_goal` HTTP 401 保留为已知失败；用户随后更新本地文件并确认 GLM 连接测试成功，应用侧新请求 HTTP 200。未对旧 401 重派；原始密钥/指纹未写入本文件或仓库。
 - 本地测试小说只通过 SAF 导入 CRLF 私有副本，模型 scope 为 source 0–9,600 code points；未传全书。章节计数差异待查。
 - 再次 `git fetch origin` 后 `origin/main=87eef899281f267a17e02357cc643dd475cabd7c`。本轮施工 worktree 为 `F:\sw95local-20261018`，分支 `fix/phase95-local-final-closeout-20261018-short`；原始 checkout、main 和其他 worktree 保持原样。
-- PR #15 已存在且未合并；当前最终修复和报告位于该分支。检查结果以 PR #15 当前 SHA 的 live checks 为准，不引用旧 head。
+- PR #15 已存在且未合并；代码修复和最终报告位于 PR worktree 分支。推送后检查结果以 PR #15 当前 SHA 的 live checks 为准，不引用旧 head。
 - 私有 mock fault 世界与小说 GLM 世界分开。旧 localhost 429 与 `network_unknown` 均保留在 needs_review，未修改、确认或重派；没有从 ignored history ledger 借用额度。

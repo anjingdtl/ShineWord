@@ -11,12 +11,12 @@
 | 节点 | 状态 | 当前证据 / 缺口 |
 |---|---|---|
 | M0 | PASS-ENGINEERING | 现场 `git ls-remote` 确认实际 origin/main=87eef899281f267a17e02357cc643dd475cabd7c；隔离 worktree 施工，原 main / checkout / ignored 历史账本未改写。用户授权 GLM 不限额度；小说 world + branch ledger 实测并发峰值 2。 |
-| M1 | PASS-DEVICE（限定范围） | API 37 专用 AVD 运行当前 APK，安装物与构建物 SHA-256 均为 C5B27FAEAAF8B1DF60946A8B826952DC4C1EC77A3AB4EA3BC26072FDFA26AF10。三局实际开局、action、roll、Narrator、commit 已运行；stage 5 content prep 仍未完成。 |
+| M1 | PASS-DEVICE（限定范围） | API 37 专用 AVD 运行当前 APK，安装物与构建物 SHA-256 均为 3B3A8A33463F74A37617BBE5B47B000D80CC1BBE51972D00404D3E5A6BE03167。三局实际开局、action、roll、Narrator、commit 已运行；stage 5 content prep 仍未完成。 |
 | M2 | PARTIAL | SAF 导入真实 GBK 小说；0–9,600 code-point partial package；真实 GLM opening_goal / campaign_plan。world package method entries=0；第三局 campaign artifact 实际提供 6 个 fixed-empty-evidence L1，另有 2 个 L2；全书未发送、非空 evidence L1 未验。 |
-| M3 | PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN | 三个 campaign branch、5+1+8 个 agent-driven QA actions、骰点、Narrator、原子提交与下一轮 L2 均有设备/DB 证据；stage 1–4 及 3 个延迟消费者通过。stage 5 内容 unresolved；无真人选择。 |
-| M4 | PARTIAL / BLOCKED-ASSET | 当前小说 world 无真实 GLM unknown 或在途请求；旧 401 保留。独立 mock 世界 429 与 network_unknown 保留未重派。live turn force-stop/outbox、合法 save-10 / Stage-1/8 缺失。 |
+| M3 | PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN | 三个 campaign 主线含 14 个 agent-driven QA action turns；另有一个隔离测试 branch 的 method-bound 行动，共 15 个。骰点、Narrator、原子提交与下一轮 L2 均有设备/DB 证据；stage 1–4 及 3 个延迟消费者通过。stage 5 内容 unresolved；无真人选择。 |
+| M4 | PARTIAL / BLOCKED-ASSET | 小说 world 与对应 campaigns/branches 共 65 次物理请求：64 HTTP 200、1 旧配置 401、unknown=0、in-flight=0；mock 世界 429 与 network_unknown 保留未重派。live turn force-stop/outbox、合法 save-10 / Stage-1/8 缺失。 |
 | M5 | PARTIAL | 长会话 PSS/RSS 与 GfxInfo、键盘、1.3 字号及终局页有限样本。TalkBack、其他 API/尺寸和匹配 L1/L2 10+10 未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | opening evidence recovery、Canon plan adoption、terminal action gate 的 RED→GREEN；Core 1,348/1,348、mobile typecheck、version check、Debug APK 与安装复测通过。 |
+| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | opening evidence recovery、Canon plan adoption、terminal action gate、stage completion repair guidance 四项 RED→GREEN；Core 1,354/1,354、mobile typecheck、version check、Debug APK 与安装复测通过。修复后的 stage-5 候选仍被 validator 拒绝。 |
 | M7 | PR #15 / EXACT-HEAD CHECK | PR #15 开放未合并；只以最终 push 后 PR 当前 SHA 的 Core Verify 与 Android Verify 为准，旧 head 和 PR #14 checks 不代替本轮最终 SHA。 |
 
 
@@ -24,14 +24,14 @@
 
 | ID | 状态 | 当前依据 / 尚缺 |
 |---|---|---|
-| R0 | PASS-ENGINEERING | 当前 Core 1,348/1,348；Canon 去重、导入安全、adoption 与 terminal 修复合同全量通过。真人完整旅程仍缺。 |
+| R0 | PASS-ENGINEERING | 当前 Core 1,354/1,354；Canon 去重、导入安全、adoption、terminal 与 bounded stage-plan repair guidance 合同全量通过。真人完整旅程仍缺。 |
 | R1 | PARTIAL / DEVICE-AGENT-L1-PATH | exact method/readiness 与冻结合同通过；第三局实际 6 个 campaign-scope fixed-empty-evidence L1 无 Planner；world package 仍无 method entry，非空 evidence L1 未验。 |
 | R2 | PARTIAL | settlement/reducer/replay 工程合同通过；真实行动 roll、状态变化与 3 个 delayed consumer effect 有提交记录；无真人复核。 |
 | R3 | PARTIAL | novel ledger 与独立 mock ledger 已分开审计；mock unknown 保留，长期历史预算账本不改写、不借额。 |
 | R4 | PARTIAL / AGENT-DRIVEN-CHAIN | 第三局 3 项 deferred consequence 已触发并消费，第四项 stage-5 consequence pending；真人后续反馈未验。 |
 | R5 | PARTIAL | unknown park、原子提交/fence 工程覆盖；live turns 已 commit，但未做中断/outbox/旧 worker 故障注入。 |
 | R6 | PARTIAL | package privacy/validation Core 通过；本轮真实行动未完成三意图私密投影审计。 |
-| R7 | PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN | novel world + 3 branches 53 次 HTTP 200、1 次旧配置 401、unknown=0；campaign_plan 22 / Planner 8 / Narrator 14。L1 6 次、L2 8 次，L1 仅 fixed empty evidence；真人决定 0。 |
+| R7 | PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN | novel world + campaigns/mapped branches 65 次物理请求：64 HTTP 200、1 次旧配置 401、unknown=0；campaign_plan 32 / Planner 8 / Narrator 15。15 个 action turns 均 agent-driven；L1 6 次、主 QA L2 8 次，L1 仅 fixed empty evidence；真人决定 0。 |
 | R8 | PARTIAL | 长会话性能样本已记录；无 matched L1/L2 10+10 或四名独立玩家。 |
 | R9 | TRACKED ON PR #15 | 最终 SHA 的 Core Verify / Android Verify 见 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；必须核当前 PR HEAD。 |
 
@@ -40,7 +40,7 @@
 
 | ID | 状态 | 当前依据 / 缺口 |
 |---|---|---|
-| G0 | PARTIAL | 用户授权本轮 GLM 不限额度；小说 world + branches 53 success / 1 旧 401，mock 429/unknown 分离；attempt ledger observed concurrency=2，无 in-flight 请求。CNY 费用未知，历史 510/600 ignored ledger 未改动。 |
+| G0 | PARTIAL | 用户授权本轮 GLM 不限额度；小说 world + campaigns/branches 64 success / 1 旧 401，mock 429/unknown 分离；attempt ledger observed concurrency=2、无 in-flight。input/output/reasoning tokens 为 846,768 / 204,224 / 30,202。CNY 费用未知，历史 510/600 ignored ledger 未改动。 |
 | G1 | PARTIAL | shared L1/L2 authority 与 strict candidate contracts 在 Core 通过；campaign-scope 有 6 个真实 L1，但 evidenceIds 均为空，package method entry=0。 |
 | G2 | PARTIAL | Runtime status、即时 counter、3 个 delayed consumer effects 与结束 UI 可对账；stage-5 consumer pending，真人反馈未验。 |
 | G3 | PARTIAL | 更新配置后的 opening_goal HTTP 200；之后完成真实 campaign plan、Planner/Narrator 与行动提交。真人选择及玩家反馈没有。 |
@@ -62,7 +62,7 @@
 | V95-08 | NOT RUN | 真实三意图到公开输出的全层隐私对照未运行。 |
 | V95-09 | PARTIAL | action/method refs 与 turn commit 有样本；没有真人开局与完整行动供给审计。 |
 | V95-10 | PARTIAL / BLOCKED-ASSET | 合成自动化回归通过；真实 save-10、Stage-1/8 不存在于隔离 AVD。 |
-| V95-11 | PARTIAL / AGENT-DRIVEN | 三局开局、角色、campaign、14 个真实 action turns 与终局/后续运行在设备完成；选择由 QA 执行者作出，非玩家验收。 |
+| V95-11 | PARTIAL / AGENT-DRIVEN | 三局开局、角色、campaign、15 个真实 action turns 与终局/后续运行在设备完成；全部选择由 QA 执行者作出，非玩家验收。 |
 | V95-12 | BLOCKED-EXTERNAL-HUMAN | 独立试玩人数 0/4。 |
 
 ## A01–A40（阶段 9 遗留）
@@ -73,7 +73,7 @@
 | A02 | PARTIAL | 执行者在代理 QA 中选 Canon Roland 与开局锚点；没有真人选择、原创身份对照或锚点替换。 |
 | A03 | NOT RUN | 未验证晚到来源、按需补建及正式采用后可玩。 |
 | A04 | NOT RUN | 未完成明确目标和开放探索对照。 |
-| A05 | PARTIAL | 第三局 7 个代理行动推进 stage 1–4；第 8 个自由输入 L2 行动在 stage 5 降级路径提交。stage 5 专属内容准备失败，未有玩家沿完整计划行动。 |
+| A05 | PARTIAL | 第三局 7 个代理行动推进 stage 1–4；第 8 个自由输入 L2 行动在 stage 5 降级路径提交。stage-5 repair guidance 已有 RED→GREEN，但最新候选仍因 skill_check destinationId 无效被 validator 拒绝；没有玩家沿完整计划行动。 |
 | A06 | NOT RUN | 未测救援/存活后规划。 |
 | A07 | PASS-ENGINEERING | 当前 Core 覆盖无效/截断候选不能绕过生产校验。 |
 | A08 | NOT RUN | 未在当前 APK 运行 ready 前强停/占位恢复。 |
@@ -106,12 +106,12 @@
 | A35 | PARTIAL | API 37、软键盘、1.3 字号冒烟通过；TalkBack 未启用，旋转/API 24/小屏未验。 |
 | A36 | BLOCKED-EXTERNAL-HUMAN | 独立试玩与六维评分为 0/4。 |
 | A37 | BLOCKED-REAL-PERFORMANCE | 没有匹配 10+10 的真实 L1/L2 数据。 |
-| A38 | PARTIAL | 当前 APK 与 installed base hash 匹配；真实小说 GLM 代理 QA 完成 14 个 action turns，真人完整旅程未跑。 |
-| A39 | PARTIAL | 同一世界创建三个 campaign branch 并分别提交；未完成三局身份/状态/知识隔离审计。 |
+| A38 | PARTIAL | 当前 APK 与 installed base hash 匹配；真实小说 GLM 代理 QA 完成 15 个 action turns，真人完整旅程未跑。 |
+| A39 | PARTIAL | 同一世界运行三个 campaign QA 主线，并保留多个隔离 branches；未完成三局身份/状态/知识隔离审计。 |
 | A40 | PASS-ENGINEERING | 当前全量 Core 的长期记忆/retrieval 确定性覆盖通过；不计玩家决定。 |
 
 ## 总体历史验收
 
-- 本轮真人完整剧情决定：0；阶段 9 要求的 80 个真人有效决定尚未开始。三个 campaign 的 14 个 agent-driven player-like actions 不计入 80。
+- 本轮真人完整剧情决定：0；阶段 9 要求的 80 个真人有效决定尚未开始。15 个 agent-driven player-like actions 不计入 80。
 - 独立外部试玩：0/4；自然结局：NOT RUN；真实匹配性能 10+10：NOT RUN；stage 5 内容路线与玩家后续反馈未完成。
 - 旧历史资产 save-10 / Stage-1/8：BLOCKED-ASSET。模拟器保留三局 QA 数据并停在第三局 stage 5 content-prep fallback；不将 agent-driven 角色或行动计作玩家决定。

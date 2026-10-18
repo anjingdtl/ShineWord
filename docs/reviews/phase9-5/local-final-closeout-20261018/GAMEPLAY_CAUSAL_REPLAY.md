@@ -6,7 +6,7 @@
 ## 世界与开局
 
 - 使用 SAF 导入的用户小说 CRLF 私有副本，world scope 0–9,600 code points，published partial package / ready。
-- 模拟器 `emulator-5556` 安装的 Debug APK 与构建物 SHA-256 同为 `C5B27FAEAAF8B1DF60946A8B826952DC4C1EC77A3AB4EA3BC26072FDFA26AF10`；安装保留原应用数据库与 Keychain。
+- 模拟器 `emulator-5556` 最新安装的 Debug APK 与构建物 SHA-256 同为 `3B3A8A33463F74A37617BBE5B47B000D80CC1BBE51972D00404D3E5A6BE03167`；使用 `adb install -r` 保留原应用数据库与 Keychain。
 - Canon 角色建议由 GLM campaign plan 生成并采用。由执行者选择程岩（罗兰）、序5锚点与开局目标；两局 branch 独立，世界相同。采取这些测试选择不等于真人已作选择。
 
 ## 第一局：5 个 action turns
@@ -44,11 +44,11 @@
 | `turn-0011` | L1 / `m-earn-jailer-trust` | full_success | `[4,5,6]` / 3d6 / diff 3 / margin +3；v10→11 |
 | `turn-0012` | L2 / freeform observe | success | 无骰点；v11→12 |
 
-L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 Planner request；turn-0002 与 turn-0012 均有真实 Planner 和 Narrator HTTP 200。全局 novel-world ledger 聚合为 Planner 8 / Narrator 14，其中第三局分别 2 / 8；所有 QA action 均为 agent-driven，不算真人决定。中间 `manage-replan` system turns 不计入上述 8 个 player-like actions。
+L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 Planner request；turn-0002 与 turn-0012 均有真实 Planner 和 Narrator HTTP 200。点时快照 novel-world ledger 聚合为 Planner 8 / Narrator 14，其中第三局分别 2 / 8；最新 ledger roll-up 已增加后续 QA jobs / action，现为 Planner 8 / Narrator 15。所有 QA action 均为 agent-driven，不算真人决定。中间 `manage-replan` system turns 不计入 8 个第三局 player-like actions。
 
 turn-0010 将 stage 3 推至 succeeded，消费 `conseq-town-tension`；turn-0011 将 stage 4 推至 succeeded，消费 `conseq-barov-attention` 和 `con-tension-peaked`。三个消费者分别在后续状态产生了 `town_tension_escalated`、`barov_offer_made`、`tension_peaked` 效果。第四项 `con-barov-offer` 仍 pending。
 
-stage 5 仍有 `content_prep` unresolved。v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒；v11 replan 的两次物理 attempt 均 HTTP 200，但最新候选因 full_success/success effects 超出既有上限被拒。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
+stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒，对该 validator 错误缺少定向 repair guidance 的代码缺陷已由 `SW95-M3-03` 以 RED→GREEN 修复。修复后新 v10 job 两个物理 attempt 均 HTTP 200，但候选因 `firstSituation.methods[1].firstStep.destinationId` 对 `skill_check` 无效而被拒；未采用、branch 未前进。早期 v11 replan 的两次物理 attempt均 HTTP 200，但候选因 full_success/success effects 超出既有上限被拒。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
 
 ## 因果与恢复边界
 
@@ -61,3 +61,10 @@ stage 5 仍有 `content_prep` unresolved。v10 replan 候选因缺少可达的 o
 
 - 本轮真实 Android/GLM 仅验证这些局部流程。没有玩家对因果/剧情作判断；L1 使用空 evidence，不覆盖非空来源证据；外部试玩、全书构建、旧 save 导入、实时行动中断与 stage 5 route 未完成。
 - 终局截图带模型生成文本，只保留在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`，不提交。数据库副本同样只留本机。
+
+## 本轮后续 QA 增量
+
+- 修复 `SW95-M3-03` 后，在 fresh stage-only v10 branch `camp-mvdjtr22-bmvdofyhk` 运行新 job `replan:camp-mvdjtr22-bmvdofyhk:v10:2026-10-18T10:24:17.433Z:4d0f2b492d38`。触发原因为 `stage_content_prepared_ahead` 与 `stage_content_target:stage-5`，请求预算 2；两个顺序 `campaign_plan` attempt 均 HTTP 200。终态为 invalid，错误为 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check.`；无 unknown/in-flight、无 plan adoption，branch 仍 v10、plan revision 4。
+- 在隔离 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交新 `turn-0010` 到 v10，method-bound skill check 结果为 failure；Narrator HTTP 200、Planner=0。它是 agent-driven QA，不计真人决定。
+- APK 更新之后创建的空 rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留为 v11，无新 action 和模型 request。主第三局 `camp-mvdjtr22-main` 仍 v12，历史 turn / roll 未改写。
+- novel-world + campaigns/mapped branches 的最新物理 ledger 是 65 requests / 64 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；输入、输出、推理 token 分别 846,768 / 204,224 / 30,202。与本文上方早期 snapshot 不同，最终统计见 `REAL_NOVEL_AND_LLM.md`。
