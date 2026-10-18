@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "shineword.phase95.sanitized-test-evidence.v1",
+  "case": "canon scenes bind only public lore backed by the same source facts as the scene",
+  "phase": "RED",
+  "command": "node --test --test-name-pattern \"canon scenes bind only public lore\" tests/phase2-package-build.test.cjs",
+  "exitCode": 1,
+  "assertion": {
+    "expected": ["lore-tower"],
+    "actual": [],
+    "reason": "The source-backed scene compiler leaves its clues list empty despite a public lore entry citing the exact same explicit fact."
+  },
+  "fixture": "synthetic in-memory SQLite package build; no user novel, provider request, save, or emulator data used",
+  "observedAt": "2026-10-19"
+}
