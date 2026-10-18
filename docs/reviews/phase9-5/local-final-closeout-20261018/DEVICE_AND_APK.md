@@ -8,8 +8,8 @@
 
 - Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`
 - 包名 `com.shineword.app`，versionName `1.0.0`，versionCode `1000000`，minSdk `24`，targetSdk `36`，x86_64。
-- 最新本地构建物 SHA-256：`3B3A8A33463F74A37617BBE5B47B000D80CC1BBE51972D00404D3E5A6BE03167`。
-- 模拟器 `/data/app/.../base.apk` 拉取后 SHA-256 完全相同。使用 `adb install -r`，没有清除应用数据。
+- 最新 standalone Debug APK SHA-256：`C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44`。
+- 模拟器 `/data/app/.../base.apk` 拉取后 SHA-256 完全相同。APK 内含 `assets/index.android.bundle`，可脱离 Metro 启动。使用 `adb install -r`，没有清除应用数据。
 
 ## 专用设备
 
@@ -21,9 +21,10 @@
 
 ## 最新构建和安装复测
 
-- `cbacbb0` 后重新构建 Debug APK 并执行 `adb install -r`。本地 APK 与设备 `/data/app/.../base.apk` SHA-256 完全一致：`3B3A8A33463F74A37617BBE5B47B000D80CC1BBE51972D00404D3E5A6BE03167`。安装保留原 package 数据，无 uninstall、clear data 或 AVD reset。
+- `447bd67` 后通过 `npm run apk:debug` 构建 standalone Debug APK 并执行 `adb install -r`。本地 APK 与设备 `/data/app/.../base.apk` SHA-256 完全一致：`C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44`。安装保留原 package 数据，无 uninstall、clear data 或 AVD reset。
+- 冷启动复测先移除 8081 reverse 并停止本次任务启动的 Metro 进程；应用直接进入书库，原小说与战役项目仍可见。清空 logcat 后再 force-stop/start，`MainActivity` 回到前台，crash buffer 无新应用异常。之前直接执行普通 `assembleDebug` 的开发包缺少内嵌 JS，确实显示 “Unable to load script”；改用项目的 standalone `npm run apk:debug` 后问题消失。这是构建模式选择问题，不登记为应用 Runtime 缺陷。
 - 安装前后 AsyncStorage、WAL、SHM 对应文件 hash 相同；SQLite 行级只读比较发现只有配置更新引起的一个 `llm_resource_buckets` 记录变化，campaign branches 与 turn history 未在 APK 更新时改写。后续 QA 显式新建了测试 branches 和一个 action turn，这是预期测试写入。
-- 主第三局 `camp-mvdjtr22-main` 仍在 v12。stage-5 新 repair job 的隔离 branch `camp-mvdjtr22-bmvdofyhk` 保持 v10，2/2 HTTP 200 后候选因 skill_check destinationId validator error 被拒，没有采用。另一个 method-bound 行动 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交至 v10；empty rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留 v11，无行动与模型调用。所有 branches 均保留供复核，没有清理。
+- 主第三局 `camp-mvdjtr22-main` 仍在 v12。stage-5 新 repair job 的隔离 branch `camp-mvdjtr22-bmvdofyhk` 保持 v10，2/2 HTTP 200 后候选因 skill_check destinationId validator error 被拒，没有采用。另一个 method-bound 行动 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交至 v10；empty rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留 v11，无行动与模型调用。之后通过 Runtime 回退/新建分支功能从 main v12 创建 `camp-mvdjtr22-bmvdq6wys` v11，parent 为 main；创建时无模型请求、无行动提交。其后此隔离 branch 上两个新 replan job 共 4 次 HTTP 200，均未采用；branch 保持 v11 / revision 4。main 与历史未改写。所有 branches 均保留供复核，没有清理。
 - 新分支与 turn 产生后，设备只读 SQLite 稳定快照 `PRAGMA integrity_check=ok`。在数据库 journal 活跃期间创建的一个临时副本 integrity check 失败，该副本已明确排除证据；等待 journal 清空后重新取稳态副本通过，不能将快照竞态误报为设备数据库损坏。
 
 ## UI 与数据保全

@@ -6,7 +6,7 @@
 ## 世界与开局
 
 - 使用 SAF 导入的用户小说 CRLF 私有副本，world scope 0–9,600 code points，published partial package / ready。
-- 模拟器 `emulator-5556` 最新安装的 Debug APK 与构建物 SHA-256 同为 `3B3A8A33463F74A37617BBE5B47B000D80CC1BBE51972D00404D3E5A6BE03167`；使用 `adb install -r` 保留原应用数据库与 Keychain。
+- 模拟器 `emulator-5556` 最新安装的 Debug APK 与构建物 SHA-256 同为 `C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44`；使用 `adb install -r` 保留原应用数据库与 Keychain。
 - Canon 角色建议由 GLM campaign plan 生成并采用。由执行者选择程岩（罗兰）、序5锚点与开局目标；两局 branch 独立，世界相同。采取这些测试选择不等于真人已作选择。
 
 ## 第一局：5 个 action turns
@@ -66,5 +66,5 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 
 - 修复 `SW95-M3-03` 后，在 fresh stage-only v10 branch `camp-mvdjtr22-bmvdofyhk` 运行新 job `replan:camp-mvdjtr22-bmvdofyhk:v10:2026-10-18T10:24:17.433Z:4d0f2b492d38`。触发原因为 `stage_content_prepared_ahead` 与 `stage_content_target:stage-5`，请求预算 2；两个顺序 `campaign_plan` attempt 均 HTTP 200。终态为 invalid，错误为 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check.`；无 unknown/in-flight、无 plan adoption，branch 仍 v10、plan revision 4。
 - 在隔离 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交新 `turn-0010` 到 v10，method-bound skill check 结果为 failure；Narrator HTTP 200、Planner=0。它是 agent-driven QA，不计真人决定。
-- APK 更新之后创建的空 rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留为 v11，无新 action 和模型 request。主第三局 `camp-mvdjtr22-main` 仍 v12，历史 turn / roll 未改写。
-- novel-world + campaigns/mapped branches 的最新物理 ledger 是 65 requests / 64 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；输入、输出、推理 token 分别 846,768 / 204,224 / 30,202。与本文上方早期 snapshot 不同，最终统计见 `REAL_NOVEL_AND_LLM.md`。
+- APK 更新之后创建的空 rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留为 v11，无新 action 和模型 request。主第三局 `camp-mvdjtr22-main` 仍 v12，历史 turn / roll 未改写。隔离 branch `camp-mvdjtr22-bmvdq6wys` 从 main v12 回退创建为 v11，随后两个 replan logical job 各用 2/2 HTTP 200；没有采用候选，branch stateVersion 仍为 11 / revision 4。
+- novel-world + campaigns/mapped branches 的最新物理 ledger 是 69 requests / 68 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；campaign_plan 共 36 次。输入、输出、推理 token 分别 949,571 / 225,651 / 34,277。与本文上方早期 snapshot 不同，最终统计见 `REAL_NOVEL_AND_LLM.md`。
