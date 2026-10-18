@@ -29,7 +29,7 @@
 - 最新应用代码在 `447bd67` 后完成全量 Core、mobile typecheck、version check、standalone APK 构建、安装身份核验及脱离 Metro 冷启动。其后本轮只修改脱敏 Markdown/JSON 证据；同一 APK 上完成 save-10 原生恢复、续玩与隔离 stage-5 行动/plan adoption。MainActivity 可运行且原有用户数据保留。
 - 最新 standalone Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`；修复后本机构建与 `emulator-5556` 安装物 SHA-256 均为 `F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`。此前 `113B8E...` 包是 `d8d9c3e` 轮次的构建，不代表最新修复包；M4 AVD 未在该轮更新。
 - 专用 AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 `emulator-5556`，API 37 / Android 17 / 1080×2400 @420 dpi。使用 `adb install -r`，没有清除数据库、小说、Keychain 或模拟器数据。
-- 应用户要求检查并精简 AVD：通过 Android SDK 管理器删除 7 台历史 ShineWord 专项 AVD；已注册设备从 10 台减至 3 台，保留当前小说实测机、M4 故障回归机和共享 `Medium_Phone`。F 盘可用空间实测增加约 45.53 GiB。复核确认 20.16 GiB 的未注册 `Pixel_10.avd` 数据目录属于 TAVO-MINI 的 Android 16 验证环境，已保留；清理后仍只有 3 台注册可用设备。详见 `AVD_CLEANUP_LOCAL.md`。
+- 应用户要求检查并精简 AVD：通过 Android SDK 管理器删除 7 台历史 ShineWord 专项 AVD；已注册设备从 10 台减至 3 台，其中 2 台为 ShineWord 专用（小说主流程、M4 故障回归），1 台 `Medium_Phone` 由 TAVO-MINI、ShineFS、ShineWord 共用。F 盘可用空间实测增加约 45.53 GiB。复核确认 20.16 GiB 的未注册 `Pixel_10.avd` 数据目录属于 TAVO-MINI Android 16 验证环境，已保留；清理后 ShineWord 没有超过 3 台上限的注册设备。详见 `AVD_CLEANUP_LOCAL.md`。
 - 收口期间另起的宿主机 GLM benchmark pilot 失败：fixture 不具备 L1 所需 binding，两次均被送往 Planner；两次 transport outcome 均为 unknown，且临时内存账本未导出 attempt identity。未重派、未将其计入 79 条持久应用账本；该 QA 流程偏差列入 `DEFECT_REGISTER.md`，也使本轮不能宣称所有潜在 endpoint 尝试都已对账。
 
 ## 小说、真实模型和游玩证据
