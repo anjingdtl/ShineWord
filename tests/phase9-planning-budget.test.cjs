@@ -556,6 +556,32 @@ test('campaign-plan action-reference mismatch receives minimal type-preserving r
   assert.match(requests[1].user, /保留.*skill_check|保留.*行动类型/);
   assert.match(requests[1].user, /不要.*放宽.*校验|不得.*放宽.*校验/);
 });
+test('campaign-plan missing compiled start node receives entry-preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.stages[0].activation = { kind: 'node_succeeded', nodeId: 'stage-1' };
+  const repaired = structuredClone(first);
+  repaired.stages[0].activation = null;
+  const errors = ['plan: startNodeIds required.; plan: main node stage-1 unreachable from start (主路径必须结构可达).; artifact: no concrete start node situation (首阶段需要局面).'];
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'missing-compiled-start-node-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return model.stages?.some(stage => stage.role === 'main' && stage.coverage === 'concrete' && stage.activation === null)
+        ? [] : errors;
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /plan: startNodeIds required/);
+  assert.match(requests[1].user, /stage-1/);
+  assert.match(requests[1].user, /activation.{0,20}null|null.{0,20}activation/i);
+  assert.match(requests[1].user, /本地编译器.*startNodeIds|编译器.*activation/);
+  assert.match(requests[1].user, /顶层 startNodeIds 不会被采用|不得.*放宽.*validator/);
+});
 test('campaign-plan missing long consequences receives validator-specific repair guidance', async () => {
   const first = structuredClone(candidateModel());
   first.consequences = [];

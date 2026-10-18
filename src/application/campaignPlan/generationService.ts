@@ -149,7 +149,7 @@ export function buildStructuralRepairGuidance(
   const root = asRecord(candidate);
   // Local compile/replan can aggregate several strict validator errors into
   // one semicolon-separated error. Match each diagnostic independently.
-  errors = errors.flatMap(error => error.split(/;\s*(?=(?:consequence |artifact:|method |clue |long plan:))/));
+  errors = errors.flatMap(error => error.split(/;\s*(?=(?:plan:|consequence |artifact:|method |clue |long plan:))/));
   const authoredCluesAllowed = options.authoredCluesAllowed ?? true;
   const unknownKnowledgeIds = [...new Set(errors.flatMap(error => {
     const match = /^(?:artifact|consequence): grant_knowledge references unknown entry (.+)\.$/.exec(error.trim());
@@ -161,6 +161,21 @@ export function buildStructuralRepairGuidance(
     ? [`- grant_knowledge 引用的 entryId 不在冻结资料目录或当前候选的 clues 别名中：${unknownKnowledgeIds.join(', ')}。逐个修复：若它表示本战役新线索，在顶层 clues 中定义唯一 clueId、可公开的线索内容和合法 provenance，再把 grant_knowledge.entryId 改为该 clueId；若对应已有资料，只能改用提示中逐字列出的目录 ID；若无合法知识来源，移除这条无效效果。${declaredClueIds.length > 0 ? `当前已声明的 clues 别名：${declaredClueIds.join(', ')}。` : '当前没有已声明的 clues 别名。'}不得补造世界目录 ID、使用原著事实 ID 冒充 entryId，或放宽本地校验。`]
     : [`- grant_knowledge 引用的 entryId 不在冻结资料目录中：${unknownKnowledgeIds.join(', ')}。本次是单阶段内容生成，顶层 clues 会被裁剪且不会保存；不要新增 clue 或引用候选 clues 别名。逐个改用本请求冻结资料中逐字列出的目录 ID；如果没有合适的合法条目，就从 firstSituation 各 outcome 的 effects 中移除该 grant_knowledge 效果。不得补造目录 ID、改用 sourceFactId、或放宽本地校验。`];
   const guidance = [...unknownKnowledgeGuidance, ...errors.flatMap(error => {
+    if (/^plan: startNodeIds required\.$/.test(error.trim())) {
+      const stages = Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((stage): stage is JsonRecord => stage !== null) : [];
+      const unreachableMainIds = errors.flatMap(item => {
+        const match = /^plan: main node (\S+) unreachable from start/.exec(item.trim());
+        return match?.[1] ? [match[1]] : [];
+      });
+      const concreteMainIds = stages.filter(stage => stage.role === 'main' && stage.coverage === 'concrete')
+        .flatMap(stage => typeof stage.nodeId === 'string' ? [stage.nodeId] : []);
+      const entryCandidates = [...new Set(unreachableMainIds.filter(id => concreteMainIds.includes(id)))];
+      const available = entryCandidates.length > 0 ? entryCandidates : concreteMainIds;
+      const target = available.length > 0
+        ? `当前候选中可检查的 concrete required-main 入口 ID：${available.join(', ')}。`
+        : '当前候选没有可用的 concrete required-main 入口；先修复现有当前目标阶段及其 firstSituation 绑定，不能靠另造节点伪造可玩入口。';
+      return [`- plan: startNodeIds required：startNodeIds 由本地编译器从 stages 中 activation=null 的节点派生，模型输出顶层 startNodeIds 不会被采用。${target}只将真正承载当前 firstSituation 的未完成必做 main 入口设为 activation:null；保持既有 nodeId、completion、硬 dependsOn 和合法后续阶段链，后续阶段继续使用真实前置条件。不要把 optional/远期阶段设为入口，不要删除门槛或硬依赖，不得补造 ID 或放宽 validator；选中的 concrete 入口会由编译器绑定 firstSituation。`];
+    }
     const effectLimitMatch = /^(.+): effects must be an array of ≤8 templates\.$/.exec(error.trim());
     if (effectLimitMatch) return [`- ${effectLimitMatch[1]} 的 effects 数组超过本地上限：每个 effects 数组最多 8 个效果模板。只对该路径对应的数组做最小调整；移除冗余效果，或把真实独立成果拆分到后续可执行办法。保留普通 success 到达 completion 所需的效果生产者及所有既有因果门槛；不得删除条件、夸大计数、只依赖 full_success 或用 record_event 伪装状态变化。`];
     const eventMatch = /^method ([^:]+): an ordinary-success event must be consumed by this or a reachable public campaign goal, or accompany a durable state effect\.$/.exec(error.trim());
