@@ -143,6 +143,7 @@ export function PlayPanel(props: {
 
           <ScrollView
             style={{ flexGrow: 0 }}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={{
               padding: theme.space.lg,
               gap: theme.space.md,
