@@ -88,6 +88,8 @@ export interface SavedTurn {
   /** Full roll record (dice, difficulty, grade) — restores rolled-but-uncommitted turns. */
   rollRecord: SavedRoll | null;
   narrativeText: string | null;
+  /** Exact historical effects_json projection; absent only in older save-10 files. */
+  effectsJson?: string;
 }
 
 export interface SavedRoll {
@@ -390,8 +392,9 @@ async function exportSaveSnapshot(input: ExportSaveInput): Promise<{ save: SaveF
     expected_state_version: number;
     action_contract_json: string;
     action_contract_hash: string;
+    effects_json: string;
   }>(
-    'SELECT turn_id, status, outcome_grade, committed_state_version, expected_state_version, action_contract_json, action_contract_hash FROM turns WHERE branch_id = ? ORDER BY created_at',
+    'SELECT turn_id, status, outcome_grade, committed_state_version, expected_state_version, action_contract_json, action_contract_hash, effects_json FROM turns WHERE branch_id = ? ORDER BY created_at',
     [input.branchId],
   );
   const turns: SavedTurn[] = [];
@@ -425,6 +428,7 @@ async function exportSaveSnapshot(input: ExportSaveInput): Promise<{ save: SaveF
       expectedStateVersion: turn.expected_state_version,
       actionContractJson: turn.action_contract_json,
       actionContractHash: turn.action_contract_hash,
+      effectsJson: turn.effects_json,
       rollRecord: roll
         ? {
             rulesetId: roll.ruleset_id,
@@ -745,11 +749,22 @@ export async function validateSaveJsonBytes(
     errors.push('Save snapshot history contains a malformed entry.');
   }
   if (!Array.isArray(parsed.turns)) errors.push('turns must be an array.');
-  else if (parsed.turns.some(turn => !turn || typeof turn !== 'object' || Array.isArray(turn)
-    || typeof turn.turnId !== 'string' || !turn.turnId.trim() || typeof turn.status !== 'string'
-    || !Number.isSafeInteger(turn.expectedStateVersion) || turn.expectedStateVersion < 0
-    || (turn.committedStateVersion !== null && (!Number.isSafeInteger(turn.committedStateVersion) || turn.committedStateVersion < 0))
-    || typeof turn.actionContractJson !== 'string' || typeof turn.actionContractHash !== 'string')) errors.push('Save contains a malformed frozen turn.');
+  else {
+    if (parsed.turns.some(turn => !turn || typeof turn !== 'object' || Array.isArray(turn)
+      || typeof turn.turnId !== 'string' || !turn.turnId.trim() || typeof turn.status !== 'string'
+      || !Number.isSafeInteger(turn.expectedStateVersion) || turn.expectedStateVersion < 0
+      || (turn.committedStateVersion !== null && (!Number.isSafeInteger(turn.committedStateVersion) || turn.committedStateVersion < 0))
+      || typeof turn.actionContractJson !== 'string' || typeof turn.actionContractHash !== 'string'
+      || (turn.effectsJson !== undefined && typeof turn.effectsJson !== 'string'))) errors.push('Save contains a malformed frozen turn.');
+    for (const [index, turn] of parsed.turns.entries()) {
+      if (turn?.effectsJson === undefined || typeof turn.effectsJson !== 'string') continue;
+      try {
+        if (!Array.isArray(JSON.parse(turn.effectsJson))) errors.push(`Turn ${index} effectsJson must encode an array.`);
+      } catch {
+        errors.push(`Turn ${index} effectsJson must contain valid JSON.`);
+      }
+    }
+  }
   if (!Array.isArray(parsed.skills)) errors.push('skills must be an array.');
   if (!Array.isArray(parsed.relationships)) errors.push('relationships must be an array.');
   if (!Array.isArray(parsed.memories)) errors.push('memories must be an array.');
@@ -1336,7 +1351,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
           (branch_id, turn_id, status, expected_state_version, committed_state_version,
            action_contract_json, action_contract_hash, outcome_grade, public_summary,
            effects_json, created_at, committed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.newBranchId,
           turn.turnId,
@@ -1347,6 +1362,7 @@ export async function restoreSave(input: RestoreSaveInput): Promise<RestoreSaveR
           turn.actionContractHash,
           turn.outcomeGrade,
           turn.narrativeText ? turn.narrativeText.slice(0, 200) : null,
+          turn.effectsJson ?? '[]',
           input.createdAt,
           turn.committedStateVersion !== null ? input.createdAt : null,
         ],

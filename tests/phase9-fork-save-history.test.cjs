@@ -3,10 +3,47 @@ const assert=require('node:assert/strict');
 const {fixture}=require('./helpers/phase9CampaignFixture.cjs');
 const {forkBranch}=require('../dist/application/branch/fork');
 const {exportSave,restoreSave,validateSaveJson}=require('../dist/application/export/saveFile');
+const {canonicalStringify}=require('../dist/domain/turns/canonical');
 const {sha}=require('./helpers/mobileHarness.cjs');
 const {SqliteGameStore}=require('../dist/infra/sqlite/sqliteGameStore');
 const {SqliteSourceStore}=require('../dist/infra/sqlite/sqliteSourceStore');
 const {publishUserRequestedSourceLookupDelta}=require('../dist/application/worldPackage/progressiveDelta');
+
+test('save round-trip preserves committed effects JSON and still imports older save-10 files',async t=>{
+ const source=await fixture(),target=await fixture(),legacyTarget=await fixture();
+ t.after(()=>source.db.close());t.after(()=>target.db.close());t.after(()=>legacyTarget.db.close());
+ await source.session.playTurn({campaignId:source.campaignId,branchId:source.branchId,intent:'向林凡打听青石巷最近的情况'});
+ const turn=source.db.prepare("select turn_id,status,committed_state_version from turns where branch_id=? and status='Committed' order by committed_state_version limit 1").get(source.branchId);
+ assert.ok(turn,'fixture must contain a committed historical turn');
+ const expectedEffectsJson='[{"op":"recordEvent","eventType":"closeout_effect_preservation","summary":"fixture"}]';
+ source.db.prepare('update turns set effects_json=? where branch_id=? and turn_id=?').run(expectedEffectsJson,source.branchId,turn.turn_id);
+ const exported=await exportSave({db:source.adapter,sha256Hex:sha.sha256Hex,campaignId:source.campaignId,branchId:source.branchId,createdAt:'2026-10-19T00:00:00Z'});
+ const savedTurn=exported.save.turns.find(item=>item.turnId===turn.turn_id);
+ assert.equal(savedTurn.effectsJson,expectedEffectsJson,'portable save must carry the exact historical effects JSON');
+ assert.equal((await validateSaveJson(exported.json,sha.sha256Hex)).ok,true);
+ await restoreSave({db:target.adapter,sha256Hex:sha.sha256Hex,save:exported.save,newCampaignId:'restored-effects',newBranchId:'restored-effects-main',createdAt:'2026-10-19T00:01:00Z'});
+ const restored=target.db.prepare('select effects_json from turns where branch_id=? and turn_id=?').get('restored-effects-main',turn.turn_id);
+ assert.equal(restored.effects_json,expectedEffectsJson,'import must retain the exact historical effects JSON');
+
+ const malformedSave=structuredClone(exported.save);
+ malformedSave.turns.find(item=>item.turnId===turn.turn_id).effectsJson='{}';
+ const {manifest:_malformedManifest,...malformedPayload}=malformedSave;
+ malformedSave.manifest.payloadSha256=await sha.sha256Hex(canonicalStringify(malformedPayload));
+ const malformedValidation=await validateSaveJson(JSON.stringify(malformedSave),sha.sha256Hex);
+ assert.equal(malformedValidation.ok,false,'malformed effects data must remain rejected');
+ assert.ok(malformedValidation.errors.some(error=>error.includes('effectsJson must encode an array')));
+
+ const legacySave=structuredClone(exported.save);
+ for(const item of legacySave.turns)delete item.effectsJson;
+ const {manifest:_manifest,...legacyPayload}=legacySave;
+ legacySave.manifest.payloadSha256=await sha.sha256Hex(canonicalStringify(legacyPayload));
+ const legacyJson=JSON.stringify(legacySave);
+ const legacyValidation=await validateSaveJson(legacyJson,sha.sha256Hex);
+ assert.equal(legacyValidation.ok,true,legacyValidation.errors.join('\n'));
+ await restoreSave({db:legacyTarget.adapter,sha256Hex:sha.sha256Hex,save:legacySave,newCampaignId:'restored-legacy-effects',newBranchId:'restored-legacy-effects-main',createdAt:'2026-10-19T00:02:00Z'});
+ const legacyRestored=legacyTarget.db.prepare('select effects_json from turns where branch_id=? and turn_id=?').get('restored-legacy-effects-main',turn.turn_id);
+ assert.equal(legacyRestored.effects_json,'[]','older save-10 files without effectsJson retain their historical fallback');
+});
 
 test('a historical campaign fork exports inherited frozen contracts with their actual pre-turn snapshots',async t=>{
  const h=await fixture();t.after(()=>h.db.close());
