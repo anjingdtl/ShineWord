@@ -14,7 +14,7 @@
 | M1 | PASS-DEVICE（限定范围） | API 37 专用 AVD 运行 standalone Debug APK，安装物与构建物 SHA-256 均为 C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44。真实小说开局、action、roll、Narrator、commit 及历史 save-10 原生恢复后继续运行通过。stage 5 在隔离 QA branch 完成并进入 stage 6；原 main 仍 v12/r4。 |
 | M2 | PARTIAL | SAF 导入真实 GBK 小说；0–9,600 code-point partial package；真实 GLM opening_goal / campaign_plan。world package method entries=0；第三局 campaign artifact 实际提供 6 个 fixed-empty-evidence L1，另有 2 个 L2；全书未发送、非空 evidence L1 未验。 |
 | M3 | PARTIAL / USER-PLAY-DEFERRED | 累计 17 个 agent-driven QA action turns，含真实骰点、Narrator、原子提交、下一轮与 stage-5 branch 实际推进到 stage 6。真实 L1/L2 分流、三个已审计的延迟消费者通过；第 4 条后果链没有独立下游消费对照。main branch 仍 v12/r4；真人体验由用户后续完成，不是自动化交付阻滞。 |
-| M4 | PARTIAL / SAVE-10-DEVICE-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；既有 campaigns/branches/turns 保留。77 次真实小说/战役 attempt 中 76 HTTP 200、1 旧配置 401、真实 unknown=0、in-flight=0；mock 429/unknown 未重派。force-stop/outbox/旧 worker 注入与 Stage-1/8 仍未完成。 |
+| M4 | PARTIAL / SAVE-10-DEVICE-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；合成 API 37 AVD 上另完成 Planner 在途 force-stop、冷启动后归为 unknown 且未重派（stateVersion 0，SQLite integrity ok）。小说范围 77 次真实 attempt 为 76 HTTP 200、1 旧配置 401；mock/合成 unknown 均保留。Narrator 前后中断、outbox/响应写盘故障、旧 worker 设备竞态与 Stage-1/8 资产仍未完成。 |
 | M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape 以及 360×800dp 虚拟显示均有有限证据；暗色模式控件断言通过。TalkBack 语音/焦点、多窗口、API 24/真实小屏和匹配 L1/L2 10+10 未验。 |
 | M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | 八项修复均先 RED→最小修复→GREEN，独立提交；Core 1,356/1,356、mobile typecheck、version check、standalone APK 构建与无 Metro 安装冷启动通过。M3-07 提示的目标修复在真实候选中验证；虽该候选未采用，后续 stage-5 action 与 plan r7 已在隔离设备 branch 运行通过。 |
 | M7 | TRACKED ON PR #15 | 每次 push 后只认 PR 当前 head 的 Core Verify / Android Verify exact-head 结果；[PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 为权威状态页，PR 正文记录最后核验的 SHA 与 run。PR 保持开放且不自动合并。 |
@@ -29,7 +29,7 @@
 | R2 | PARTIAL | settlement/reducer/replay 工程合同通过；真实行动 roll、状态变化与 3 个 delayed consumer effect 有提交记录；无真人复核。 |
 | R3 | PARTIAL | novel ledger 与独立 mock ledger 已分开审计；mock unknown 保留，长期历史预算账本不改写、不借额。 |
 | R4 | PARTIAL / AGENT-DRIVEN-CHAIN | 3 项 deferred consequence 已逐项核实触发、消费与下游效果；stage-5 action 和 stage-6 adoption 已通过隔离 branch，第四条 consequence 尚缺独立的触发/消费/下游读回及真人反馈。 |
-| R5 | PARTIAL | unknown park、原子提交/fence 工程覆盖；live turns 已 commit，但未做中断/outbox/旧 worker 故障注入。 |
+| R5 | PARTIAL | unknown park、原子提交/fence 工程覆盖；合成 Planner 在途强停后冷启动归为 unknown 且没有重派。已提交 live turn 的 Narrator/outbox 故障、响应写盘失败及旧 worker 设备竞态仍未做。 |
 | R6 | PARTIAL | package privacy/validation Core 通过；本轮真实行动未完成三意图私密投影审计。 |
 | R7 | PARTIAL / USER-PLAY-DEFERRED | novel world + campaigns/mapped branches 77 次物理请求：76 HTTP 200、1 次旧配置 401、unknown=0；campaign_plan 42 / Planner 8 / Narrator 17。17 个 action turns 均 agent-driven；L1 6 次、主 QA L2 8 次，L1 仅 fixed empty evidence；真人决定 0，留由用户后续体验。 |
 | R8 | PARTIAL | 长会话性能样本已记录；无 matched L1/L2 10+10 或四名独立玩家。 |
@@ -45,7 +45,7 @@
 | G2 | PARTIAL | Runtime status、即时 counter、3 个 delayed consumer effects 与结束 UI 可对账；隔离 branch 完成 stage 5 并进入 stage 6；第 4 条后果消费和真人反馈未验。 |
 | G3 | PARTIAL | 更新配置后的 opening_goal HTTP 200；后续真实 campaign plan、Planner/Narrator、stage-5 action 和 plan-r7 adoption 均有账本证据。真人选择及玩家反馈没有。 |
 | G4 | PARTIAL | 当前 APK 完成有限代理 QA 和终局门控；字号、键盘样本通过。TalkBack 与独立试玩未完成。 |
-| G5 | PARTIAL | mock 429/unknown 与应用数据保留；三局 rolls/turns 可读；没有 live crash、历史迁移矩阵。 |
+| G5 | PARTIAL | mock 429/unknown 与应用数据保留；API 37 合成 AVD 另验证 Planner 在途强停后 unknown 保留且冷启动不重派；三局 rolls/turns 可读。live turn/outbox crash、历史迁移矩阵仍缺。 |
 
 
 ## V95
@@ -56,7 +56,7 @@
 | V95-02 | PASS-ENGINEERING | 缺 difficulty/evidence/权限仍拒绝；小说内容未补默认值。 |
 | V95-03 | PARTIAL | 6 个 campaign-scope L1 已派发并提交；fixed empty evidence，未覆盖非空来源证据、不同证据资格或匹配性能分布。 |
 | V95-04 | PARTIAL | 真实设备骰点与四档结果记录在代理 QA turns；没有真人 roll。 |
-| V95-05 | PARTIAL | 旧 mock unknown 保持 needs_review；无重派。live turn/outbox crash 未执行。 |
+| V95-05 | PARTIAL | 旧 mock unknown 保持 needs_review；合成 AVD 的 in-flight Planner 强停后 cold-start 转为 outcome_unknown 且无重派。已提交 live turn/outbox crash 仍未执行。 |
 | V95-06 | PASS-ENGINEERING | Graph 仍是只读衍生 projection，Core 回归通过。 |
 | V95-07 | PARTIAL / AGENT-DRIVEN-CHAIN | 3 个 delayed consequences 已触发、消费并产生下游事件；stage-5 action 已推动 QA branch 至 stage 6，但第 4 条 consequence 的下游效果对照和玩家回应未验。 |
 | V95-08 | NOT RUN | 真实三意图到公开输出的全层隐私对照未运行。 |

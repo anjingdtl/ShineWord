@@ -1,0 +1,49 @@
+{
+  "schema": "phase95-synthetic-avd-force-stop.v1",
+  "date": "2026-10-18",
+  "device": {
+    "avd": "ShineWord_M4FaultQA_20261018",
+    "serial": "emulator-5560",
+    "api": 37,
+    "package": "com.shineword.app"
+  },
+  "branch_id": "camp-mvdw8w05-main",
+  "scenario": {
+    "kind": "planner_request_in_flight_then_force_stop",
+    "endpoint": "10.0.2.2:8765",
+    "server_behavior": "bounded_local_hold_server_discards_body_and_withholds_response",
+    "request": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body_bytes": 3225,
+      "body_persisted": false,
+      "authorization_logged": false
+    },
+    "force_stopped_after_server_received_request": true,
+    "cold_started_and_reopened_branch": true,
+    "second_request_observed": false
+  },
+  "attempts": [
+    {
+      "request_kind": "campaign_plan",
+      "attempt_no": 1,
+      "status": "failed",
+      "http_status": 429,
+      "failure_class": "http_rate_limit",
+      "changed": false
+    },
+    {
+      "request_kind": "planner",
+      "attempt_no": 1,
+      "status_after_cold_start": "outcome_unknown",
+      "http_status": null,
+      "provider_request_id": null,
+      "replayed": false
+    }
+  ],
+  "state_version": 0,
+  "roll_count": 0,
+  "branch_outbox_rows": 0,
+  "sqlite_integrity_check": "ok",
+  "unknown_attempt_replayed_or_cleared": false
+}
