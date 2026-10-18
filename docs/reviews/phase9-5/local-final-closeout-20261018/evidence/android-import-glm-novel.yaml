@@ -1,0 +1,13 @@
+appId: com.shineword.app
+---
+- tapOn: "书库"
+- assertVisible: "＋ 导入小说"
+- tapOn: "＋ 导入小说"
+- assertVisible: "Show roots"
+- tapOn: "Show roots"
+- assertVisible: "Downloads"
+- tapOn: "Downloads"
+- assertVisible: "Phase95_GLM_放开那个女巫.txt"
+- tapOn: "Phase95_GLM_放开那个女巫.txt"
+- waitForAnimationToEnd:
+    timeout: 5000
