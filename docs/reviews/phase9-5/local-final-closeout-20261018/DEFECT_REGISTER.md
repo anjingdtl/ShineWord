@@ -108,3 +108,12 @@
 - GREEN：定向 settlement closure 7/7；全量 Core 1,358/1,358；mobile typecheck、version check、standalone APK build 通过。提交 `e6a0bbd fix: cancel pending consequences when campaigns end`。
 - Android/GLM：更新现存专用 API 37 AVD（`adb install -r` 保留数据库），经 UI rewind 创建新分支。提前脱身分支 v20 的 consequence 变为 `cancelled/campaign_ended`；同一 v19 起点的守住阵地分支 turn-0020 在 v19→v20 成功，stage-8 consequence `triggered → discharged`，写入 `barov_network_opened`、`knowledge_discovered` 和权威 `branch_knowledge`。两个 Narrator 请求均为单次 HTTP 200，无 unknown 或重派。原来源分支保持原样。脱敏证据：`evidence/android-terminal-consequence-cleanup-20261019.json`。
 - 提交：RED `39a8d15`；fix `e6a0bbd`。
+
+## SW95-M6-03：弹层键盘打开时首次点击被滚动容器吞掉
+
+- 日期：2026-10-19；严重度：P2（目标表单需要重复点击，正常路径容易误判未保存）。
+- 根因：`PlayPanel` 中的 `ScrollView` 使用 React Native 默认键盘点击策略；输入框聚焦后，第一次触摸按钮只收起键盘，没有交给目标按钮。
+- RED：旧 APK 上 Maestro `sw95-l1-keyboard-disambiguation`（run `2026-10-19_025709`）输入 QA 标记后只点击一次，20 秒内 `campaign-adopt-goal` 仍可见；之后单独点击才卸载表单。未以该测试重派模型请求。
+- 最小修复：`mobile/src/ui/features/play/panels/PlayPanel.tsx` 的弹层 `ScrollView` 设置 `keyboardShouldPersistTaps="handled"`。不改状态、账本、模型分流或存档语义。
+- GREEN：standalone APK SHA-256 `A9987513029084AD8D37372A64421ACB32B63DDBD775976F18AEDED29A0169A0`，经 `adb install -r` 更新现存主 AVD并保留数据；新隔离 fork 上 Maestro `sw95-keyboard-single-tap-green`（run `2026-10-19_033457`）单击后表单在 60 秒内卸载。目标重规划 busy 在 180 秒内结束；没有可见错误或未知恢复控件。UI 检查未取得 provider HTTP status，不能据此计作 GLM 200。
+- 回归：Core 1,358/1,358；mobile typecheck、version check、`git diff --check` 通过；standalone Debug APK 构建成功。脱敏证据：`evidence/play-panel-keyboard-submit-red-green-sanitized-20261019.json`。

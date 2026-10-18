@@ -78,6 +78,8 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 - 新增 live GLM matched 10+10：同一 synthetic production `CampaignSession`、非空 evidence、20/20 turn commit；L1 每次 1 Narrator / Planner=0，L2 每次 Planner+Narrator；30/30 物理请求 HTTP 200、并发峰值 1、未触及 cap 40。L1 平均 6,705.2 ms，L2 平均 8,900.5 ms。tap/exact-text 完整状态 parity 由无模型 production harness PASS。此结果不替代真实小说 package method path。
 - 请求归因：matched run 汇总时为 111 个已知物理 attempt（110 HTTP 200、1 旧配置 HTTP 401），其后 stage-8 两条 UI action 各新增一次 Narrator HTTP 200。此次新增 2 次均串行、没有 unknown；两个历史 host transport unknown 仍未重派。真实 GLM 429=0；已汇总 token `1,152,193 / 265,801 / 41,097` 不含这两次新增调用。实际人民币费用无法从应用 ledger 确认。
 - AVD 继续保持 3 个注册项；不增加模拟器。7 台不再使用的 ShineWord 注册 AVD 已删除。`F:\avd\Pixel_10.avd` 为约 20.16 GiB 未注册目录、归属不明，递归删除被安全审查拦截后保留，未绕过。
+- 新确认并修复 `SW95-M6-03`：旧 APK 上键盘打开时首次点击目标提交按钮未生效（RED）；弹层 `ScrollView` 设置 `keyboardShouldPersistTaps="handled"` 后，保留数据安装的新 APK 在隔离 fork 上单击通过（GREEN）。最新 APK SHA-256 `A9987513029084AD8D37372A64421ACB32B63DDBD775976F18AEDED29A0169A0`；Core 1,358/1,358、mobile typecheck、version check、Debug APK 均通过。目标重规划 busy 已结束，UI 未显示 error/unknown；本次 UI 核验没有读取到 HTTP status，不将其记为 GLM 200。
+- 补丁后只在新隔离 fork 上验证了单击目标提交与后续 busy 结束；本次没有以分支状态版本或骰点 UI 断言来证明一轮行动完成。真实小说 package 的非空 evidence L1 和 `method` 供给阻滞仍保留，详见下列未完成项。
 
 ### 自动化未关闭项
 

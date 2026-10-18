@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "defectId": "SW95-M6-03",
+  "scope": "PlayPanel campaign-goal form tap handling while the keyboard is active",
+  "red": {
+    "packageVersion": "1.0.0",
+    "deviceSerial": "emulator-5556",
+    "flow": "sw95-l1-keyboard-disambiguation",
+    "run": "2026-10-19_025709",
+    "result": "FAIL",
+    "assertion": "campaign-adopt-goal became not visible within 20 seconds after one tap",
+    "observed": "The form remained visible after the first tap; a later tap after the keyboard transition submitted it."
+  },
+  "fix": {
+    "file": "mobile/src/ui/features/play/panels/PlayPanel.tsx",
+    "change": "Set ScrollView keyboardShouldPersistTaps to handled."
+  },
+  "green": {
+    "apkSha256": "A9987513029084AD8D37372A64421ACB32B63DDBD775976F18AEDED29A0169A0",
+    "deviceSerial": "emulator-5556",
+    "installMode": "adb install -r; application data retained",
+    "flow": "sw95-keyboard-single-tap-green",
+    "run": "2026-10-19_033457",
+    "result": "PASS",
+    "assertion": "campaign-adopt-goal became not visible after one tap within 60 seconds"
+  },
+  "postActionUi": {
+    "busyState": "completed within 180 seconds",
+    "visibleOperationError": false,
+    "unknownReplanRecoveryControl": false,
+    "providerHttpStatus": "not established by the UI check",
+    "realNovelNonEmptyEvidenceL1": "not established; this remains a documented content/package gap"
+  },
+  "privacy": "Contains no novel text, model prompt or response, credential, database, or narrative screenshot."
+}
