@@ -101,7 +101,18 @@
         "lin_called_in_favor",
         "campaign_consequence_discharged"
       ],
-      "pendingOutboxCount": 0
+    "genericOutbox": {
+      "table": "outbox",
+      "rowCount": 0
+    },
+    "memoryPostprocessHandoffs": {
+      "table": "frozen_turn_postprocess_outbox",
+      "rowCount": 3,
+      "pendingRows": 3,
+      "episodicIndexedRows": 3,
+      "physicalMemoryHttpCount": 0,
+      "hasBodyRows": 2
+    }
     },
     "mockRequestLog": {
       "file": "C:/Temp/shineword-m4-mock-fixed-20261019.jsonl",

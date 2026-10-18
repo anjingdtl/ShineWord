@@ -61,7 +61,7 @@
 4. 旧存档与故障恢复：save-10 已恢复、逐项对照历史 turn/roll 并续玩；Stage-1/8、live turn force-stop、Narrator 前后杀进程、outbox 与旧 worker 矩阵未执行。
 5. 性能与无障碍：本轮非匹配的长会话样本 PSS 196,443 KB / RSS 285,960 KB；GfxInfo 累计 10,169 frames、modern jank 140 (1.38%)、p50/p90/p95 17/30/31 ms。它不是独立 benchmark。360×800dp 虚拟显示及旋转/暗色核心控件冒烟已运行；TalkBack 实际焦点/播报、API 24 和真实小屏物理设备仍未运行。Synthetic production fixture 的 matched 10+10 已通过，真实小说 package method/non-empty-source-evidence 样本仍缺。
 6. 小说标题计数差异与实际模型人民币费用未知；不通过估算或改 parser 消除。
-7. 本轮提交尚待推送时，PR #16 的 exact-head Core Verify 与 Android Verify 尚未完成核验。推送后以该 PR 当前 head 检查为准；PR #15 已并入 main。
+7. M7 以 PR #16 当前最终 head 的 Core Verify 与 Android Verify 结果为准，PR 正文记录 SHA 与 run；PR #15 已并入 main。
 
 ## 私有证据边界
 
@@ -102,7 +102,7 @@
 
 ## 2026-10-19 最终自动化补充
 
-- M4 synthetic Android UI 回归已在现存 `ShineWord_M4FaultQA_20261018` 上完成：本地 mock 通过 opening campaign plan，连续执行两次 synthetic action；Planner、一次骰点、Narrator、turn 原子提交及 delayed consequence trigger/discharge 均可核对。branch stateVersion 1→3、SQLite `integrity_check=ok`、pending outbox=0；请求按序 HTTP 200，没有未知结果或重派。脱敏证据见 `evidence/m4-synthetic-local-mock-opening-turn-consequence-20261019.json`。
+- M4 synthetic Android UI 回归已在现存 `ShineWord_M4FaultQA_20261018` 上完成：本地 mock 通过 opening campaign plan，连续执行两次 synthetic action；Planner、一次骰点、Narrator、turn 原子提交及 delayed consequence trigger/discharge 均可核对。branch stateVersion 1→3、SQLite `integrity_check=ok`，普通业务 `outbox` 为 0 行；另有 3 条 memory postprocess handoff pending，但均已 episodic-indexed，memory HTTP=0。请求按序 HTTP 200，没有未知结果或重派。脱敏证据见 `evidence/m4-synthetic-local-mock-opening-turn-consequence-20261019.json`。
 - 测试 helper 的越界可选 Lore reward 先由 RED 测试复现，再通过仅修改 synthetic mock helper 移除。未改变生产 validator 或 QA metadata endpoint allowlist；新增定向回归与完整 Core 1,361/1,361 均通过。此项是测试夹具修复，不计作生产 Runtime 缺陷修复。
 - 本轮新增独立提交 `0321d9a`（AVD 项目归属）与 `61ecd89`（synthetic mock scope 回归及证据）；save effects round-trip 修复在 `7d29ecd`。最终推送后 PR #16 的实际 head 与 Core/Android exact-head CI 以 Checks 页核验并补录。
-- M4 仍为 PARTIAL：Narrator 前后设备 force-stop、收到响应后的写盘故障、outbox 事务故障、旧 worker fencing 的 Android 注入尚未运行。Core 自动回归不替代设备故障注入，也不代表真人决定。
+- M4 仍为 PARTIAL：Narrator 前后设备 force-stop、收到响应后的写盘故障、outbox 事务故障、旧 worker fencing 的 Android 注入尚未运行。本轮临时 Narrator hold-server 启动被执行环境工具策略拒绝，故保持 NOT RUN，没有尝试绕过。Core 自动回归不替代设备故障注入，也不代表真人决定。

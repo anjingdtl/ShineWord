@@ -14,14 +14,14 @@
 
 ## M0–M7
 
-- **M0 — PASS-ENGINEERING。** 最近实际 `origin/main=55ceb085a5b3638840ea6bbff160f259e6abbb65`（PR #15 合并后）；隔离工作树施工，原 checkout、其他 worktrees 与忽略的历史账本未清理或覆盖。当前后续 PR #16 尚待推送本轮提交并核验 exact-head CI。
+- **M0 — PASS-ENGINEERING。** 最近实际 `origin/main=55ceb085a5b3638840ea6bbff160f259e6abbb65`（PR #15 合并后）；隔离工作树施工，原 checkout、其他 worktrees 与忽略的历史账本未清理或覆盖。后续 PR #16 承载存档与 M4 自动化补充；M7 只按其最终 head 检查验收。
 - **M1 — PASS-DEVICE（限定旅程；最新包限 install/process smoke）。** 既有 API 37 主 AVD 上安装 hash `F1D3817...` 已完成 save-10 与 stage-8 回归。Canon clue 修复 APK hash `0ACA6E449598342A409F05790F84C1BF7DF6C1C821A0439F49FDEA943B8D896F` 已在现存 M4 AVD `emulator-5560` `adb install -r`，数据保留、MainActivity resumed、进程存在、AndroidRuntime errors=0；该轮 Maestro 无结果、UI assertion NOT RUN。之前书库冷启动 5/5、战役列表导航 7/7 属于先前 APK。注册 AVD 从 10 台清理到 3 台，F 盘空间增加 45.53 GiB；详见 `AVD_CLEANUP_LOCAL.md`。
 - **M2 — PARTIAL。** 小说原件 Windows-936/GBK，设备解析 1,504 章 / 3,260 chunks。最新独立真实 GLM scope 用 9,601 code points 串行完成 timeline/extract/mapping（3 次 HTTP 200，无 429/unknown），但因 1 blocking + 3 major 内容审查项未发布 package。新修复以 synthetic SQLite package RED→GREEN 验证场景同源 Lore clue 编译，尚无新 real package 证明非空 evidence L1；旧 world package method 数仍 0。另有 6 次 fixed-empty-evidence campaign-scope L1 和 synthetic non-empty-evidence matched 10+10；不替代真实 package 路径。
 - **M3 — PARTIAL / USER-PLAY-DEFERRED。** 19 个 agent-driven action turns 均不算玩家决定。stage-5 QA branch 的 consequence trigger/discharge 与下一轮 frozen context 已有证据，但下一轮 Narrator status 未对账；stage-8 sibling branch 取消/成功消费与知识写入有 Android 证据。世恒哥后续自行真人体验。
-- **M4 — PARTIAL / SAVE-10-DEVICE-PASS / M4-SYNTHETIC-UI-PASS。** 历史 save-10 与精确依赖包通过 Android 原生导入、六条历史 turn/两条 roll 精确对照、冷启动和后续行动。本轮 M4 AVD 另以 local mock 完成开局规划、两次行动、一次骰点、Narrator、原子提交与 delayed consequence trigger/discharge；branch v1→v3、SQLite integrity=`ok`、outbox pending=0。小说/campaign ledger 当前 79 条记录（78 HTTP 200、1 次旧配置 HTTP 401），独立开篇样本另有 2 条 HTTP 200；matched live synthetic 30 条及其他独立 scope 另计。设备账本中的 HTTP 429 与同逻辑 unknown 指向本地 `10.0.2.2:8765` mock，不是 GLM；该 unknown 保留未重派。另两次宿主机 Planner transport attempt 为无 HTTP status 的潜在 unknown，identity 未持久化，未重派。Stage-1/8、Narrator/outbox/旧 worker 设备注入矩阵仍缺。
+- **M4 — PARTIAL / SAVE-10-DEVICE-PASS / M4-SYNTHETIC-UI-PASS。** 历史 save-10 与精确依赖包通过 Android 原生导入、六条历史 turn/两条 roll 精确对照、冷启动和后续行动。本轮 M4 AVD 另以 local mock 完成开局规划、两次行动、一次骰点、Narrator、原子提交与 delayed consequence trigger/discharge；branch v1→v3、SQLite integrity=`ok`，普通业务 outbox 0 行；3 条 memory postprocess handoff pending，但均已 episodic-indexed、memory HTTP=0。小说/campaign ledger 当前 79 条记录（78 HTTP 200、1 次旧配置 HTTP 401），独立开篇样本另有 2 条 HTTP 200；matched live synthetic 30 条及其他独立 scope 另计。设备账本中的 HTTP 429 与同逻辑 unknown 指向本地 `10.0.2.2:8765` mock，不是 GLM；该 unknown 保留未重派。另两次宿主机 Planner transport attempt 为无 HTTP status 的潜在 unknown，identity 未持久化，未重派。Stage-1/8、Narrator/outbox/旧 worker 设备注入矩阵仍缺。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色主题控件通过；synthetic production fixture 上 live GLM matched 10+10 通过。TalkBack spoken/focus、多窗口、API 24/真实小尺寸仍缺。
 - **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 最新 `npm run verify:core` 1,361/1,361、mobile typecheck、version check 通过。新增 mock scope 回归仅改测试 helper；生产 APK 未变。M4 UI evidence 是 synthetic/local mock，不声称 GLM 或真人验收。
-- **M7 — PENDING EXACT-HEAD CI ON PR #16.** 本地新增提交推送后，需按 PR #16 当前 head 核验 Core Verify 与 Android Verify；旧 SHA 的 success 不替代最终 head 检查。PR #15 已合并入当前 main。
+- **M7 — TRACKED ON PR #16.** 以 PR #16 最终 head 的 Core Verify 与 Android Verify 为准，旧 SHA 的 success 不替代最终 head 检查。最终 SHA、run 与结论记于 PR 正文；PR #15 已合并入当前 main。
 
 ## 最新 GLM 账本汇总
 
@@ -53,4 +53,4 @@
 - 最新 APK SHA-256：`F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`。终局取消 branch 与 success/discharge/knowledge branch 均通过 Android UI + GLM；各一个 Narrator HTTP 200，无 unknown。
 - Live GLM matched 10+10 在 synthetic production fixture 上完成，30 HTTP 200、最大并发 1；其后 stage-8 QA 新增两个串行 Narrator HTTP 200。累计至少 113 个已知物理请求（112 HTTP 200、1 旧配置 401），另有 2 host transport unknown 保留未重派。旧 mock 429 与真实 endpoint 明确分开。
 - 真人决定/独立试玩由用户后续完成，不列为 agent 阻滞。自动化待项见 `FINAL_REPORT.md`：真实小说 package method/non-empty-evidence L1（当前 package 无 method entry）、Narrator/outbox/worker 的设备中断注入、Stage-1/8 原始资产和旧 schema、TalkBack/multiwindow/API24/真实小屏，以及 stage-5 `con-barov-offer` 的完整独立消费链。
-- M7：当前后续 PR 为 #16；本轮新增提交尚未 push。推送后以 PR #16 当前 head 的 Checks 为准，不使用旧 SHA 的检查结果。
+- M7：当前后续 PR 为 #16；以最终 push 后该 PR 当前 head 的 Checks 为准，不使用旧 SHA 的检查结果。

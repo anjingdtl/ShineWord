@@ -10,21 +10,21 @@
 
 | 节点 | 状态 | 当前证据 / 缺口 |
 |---|---|---|
-| M0 | PASS-ENGINEERING | 现场 `git ls-remote` 确认实际 origin/main=87eef899281f267a17e02357cc643dd475cabd7c；隔离 worktree 施工，原 main / checkout / ignored 历史账本未改写。用户授权 GLM 不限额度；小说 world + branch ledger 实测并发峰值 2。 |
+| M0 | PASS-ENGINEERING | 最近 `git fetch origin` 确认实际 origin/main=55ceb085a5b3638840ea6bbff160f259e6abbb65（PR #15 合并后）；隔离 worktree 施工，原 main / checkout / ignored 历史账本未改写。用户授权 GLM 不限额度；小说 world + branch ledger 实测并发峰值 2。 |
 | M1 | PASS-DEVICE（限定范围） | 先前 standalone APK `F1D3817...` 已完成 save-10 / stage-8 旅程。最新 Canon clue 修复包 SHA-256 `0ACA6E449598342A409F05790F84C1BF7DF6C1C821A0439FDEA943B8D896F` 已 `adb install -r` 安装至现存 M4 API 37 AVD，进程/前台 Activity smoke 通过；Maestro 无结果，UI assertion NOT RUN。 |
 | M2 | PARTIAL | SAF 导入真实 GBK 小说。新 9,601 code-point 隔离 real-GLM scope 串行完成 timeline/extract/mapping 3 次 HTTP 200、429=0、unknown=0；正常内容审查留有 1 blocking + 3 major issue，未发布 package。Canon 场景 clue 修复合成 SQLite RED→GREEN，但非空 evidence L1 与真实小说 package method 尚未验证。既有 6 次 campaign-scope fixed-empty-evidence L1 及 synthetic production live matched 10+10 不替代它；全书未发送。 |
 | M3 | PARTIAL / USER-PLAY-DEFERRED | 累计 19 个 agent-driven QA action turns，均不算玩家决定。stage-5 QA branch 的 `con-barov-offer` trigger/discharge 和下一轮 frozen context 有脱敏证据，下一轮 Narrator HTTP status 未对账；stage-8 sibling branches 有终局取消/成功消费与知识写入对照。真人体验由用户后续完成，不是自动化交付阻滞。 |
-| M4 | PARTIAL / SAVE-10-DEVICE-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；合成 API 37 AVD 上另完成 Planner 在途 force-stop、冷启动后归为 unknown 且未重派（stateVersion 0，SQLite integrity ok）。小说范围 79 次真实 attempt 为 78 HTTP 200、1 旧配置 401；mock/合成 unknown 均保留。Narrator 前后中断、outbox/响应写盘故障、旧 worker 设备竞态与 Stage-1/8 资产仍未完成。 |
+| M4 | PARTIAL / SAVE-10-DEVICE-PASS / M4-SYNTHETIC-UI-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；M4 AVD local mock 完成两次合成行动、骰点、Narrator、提交及延迟后果消费。普通业务 outbox 0 行；memory handoff 有 3 条 pending（episodic-indexed，memory HTTP=0）。既有合成 Planner 在途 force-stop 后冷启动归为 unknown 且未重派。Narrator 设备中断、响应写盘故障、outbox 事务失败、旧 worker 设备竞态与 Stage-1/8 资产仍未完成。 |
 | M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色模式控件有有限证据；同一 synthetic production fixture 上 live GLM matched L1/L2 各 10 次完成。TalkBack 语音/焦点、多窗口、API 24/真实小屏、小说 package method 供给下的匹配样本仍未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-LIMITED | 十二项已确认修复均有 RED→最小修复→GREEN；新增 Canon builder 同源 public Lore clue/dependency 修复。完整 `npm test` 1,359/1,359，mobile typecheck、version check 通过；最新 APK standalone build 与保留数据安装/process smoke 通过。本轮最新 APK Maestro UI assertion 无结果；不扩写为设备流程 PASS。 |
-| M7 | TRACKED ON PR #15 | 每次 push 后只认 PR 当前 head 的 Core Verify / Android Verify exact-head 结果；[PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 为权威状态页，PR 正文记录最后核验的 SHA 与 run。PR 保持开放且不自动合并。 |
+| M6 | PASS-ENGINEERING / DEVICE-LIMITED | 十三项已确认修复均有 RED→最小修复→GREEN；新增 Canon builder 同源 public Lore clue/dependency 修复。完整 `npm run verify:core` 1,361/1,361，mobile typecheck、version check 通过；M4 mock scope helper regression 单测 GREEN。最新 APK standalone build 与保留数据安装/process smoke 通过；不扩写为设备流程 PASS。 |
+| M7 | TRACKED ON PR #16 | 只认 [PR #16 checks](https://github.com/anjingdtl/ShineWord/pull/16/checks) 最终 head 的 Core Verify / Android Verify；最终 SHA、run 与结果写入 PR 正文。PR #15 已合并入 main。 |
 
 
 ## R 节点
 
 | ID | 状态 | 当前依据 / 尚缺 |
 |---|---|---|
-| R0 | PASS-ENGINEERING | 最新 Core 重跑 1,359/1,359；Canon 去重、导入安全、adoption、terminal、bounded stage-plan guidance、publication-diagnostic recovery、terminal consequence cancellation 与 source-backed scene-Lore linking 合同全量通过。真人完整旅程仍缺。 |
+| R0 | PASS-ENGINEERING | 最新 Core 重跑 1,361/1,361；Canon 去重、导入安全、adoption、terminal、bounded stage-plan guidance、publication-diagnostic recovery、terminal consequence cancellation、source-backed scene-Lore linking 与本地 mock scope 回归通过。真人完整旅程仍缺。 |
 | R1 | PARTIAL / DEVICE-AGENT-L1-PATH | exact method/readiness 与冻结合同通过；第三局实际 6 个 campaign-scope fixed-empty-evidence L1 无 Planner；world package 仍无 method entry，非空 evidence L1 未验。 |
 | R2 | PARTIAL | settlement/reducer/replay 工程合同通过；真实行动 roll、状态变化与 3 个 delayed consumer effect 有提交记录；无真人复核。 |
 | R3 | PARTIAL | novel ledger 与独立 mock ledger 已分开审计；mock unknown 保留，长期历史预算账本不改写、不借额。 |
