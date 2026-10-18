@@ -15,12 +15,16 @@ export type ActionChoice =
 export function ActionChoices(props: {
   choices: ActionChoice[];
   disabled?: boolean;
+  /** Hide state-changing choices while preserving read-only destinations such as clues. */
+  actionDisabled?: boolean;
   onChoose: (choice: ActionChoice) => void;
 }): React.JSX.Element | null {
   const { theme } = useTheme();
   // P7 §10.1: the count policy lives in the core projection — the view no
   // longer truncates, so an important route is never silently dropped here.
-  const choices = props.choices;
+  const choices = props.actionDisabled
+    ? props.choices.filter(choice => choice.kind === 'inspect')
+    : props.choices;
   if (choices.length === 0) return null;
   return (
     <View style={{ paddingHorizontal: theme.space.lg, paddingVertical: theme.space.xs, gap: theme.space.xs }}>
@@ -32,7 +36,7 @@ export function ActionChoices(props: {
             label={choice.label}
             variant="chip"
             onPress={() => props.onChoose(choice)}
-            disabled={props.disabled}
+            disabled={props.disabled || (props.actionDisabled && choice.kind !== 'inspect')}
             accessibilityLabel={`选择行动：${choice.label}`}
             testID={`story-choice-${choice.id}`}
           />

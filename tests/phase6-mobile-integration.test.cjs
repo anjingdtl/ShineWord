@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'), assert=require('node:assert/strict');
 const {createPhase6MobileHarness}=require('./helpers/phase6MobileHarness.cjs');
+const {loadMobileModule}=require('./helpers/mobileHarness.cjs');
 const profile={id:'test',name:'test',endpoint:'https://example.invalid/v1',model:'test',keyRef:'k',reasoningTier:'low',concurrency:2,
  capabilities:{supportsJson:true,supportsStreaming:false,reportsUsage:true,contextWindow:60000,maxOutputTokens:12000}};
 test('production streaming entry uses bounded segments, persistent index and one existing fenced run; reimport reuses work',async()=>{
@@ -30,6 +31,15 @@ test('production partial extraction never publishes empty canon; failed opening 
   const result=await h.sourceImport.runExtraction(first.runIds[0],profile,()=>{});
   assert.equal(result.completed,false);assert.equal(await h.runtime.worldStore.getPublishedPackageRevision(first.worldId),null);
   assert.ok((await h.adapter.queryOne('SELECT COUNT(*) AS n FROM segment_publication_diagnostics')).n>0);
+  const run=await h.runStore.getRun(first.runIds[0]);
+  assert.equal(run.lastErrorCode,'package_finalize_failed');
+  assert.match(run.lastErrorMessage,/发布诊断/);
+  assert.doesNotMatch(run.lastErrorMessage,/查看审查问题/);
+  assert.equal((await h.runtime.worldStore.listReviewIssues(first.worldId,'open')).length,0);
+  const tasksApi=loadMobileModule('mobile/src/buildTasks.ts',{ './database': { getDatabaseRuntime: async()=>h.runtime } });
+  const diagnostics=await tasksApi.listPublicationDiagnostics(first.worldId);
+  assert.equal(diagnostics.length>0,true);
+  assert.equal(diagnostics.every(d=>d.errorCodes.length>0&&d.errorCodes.every(code=>/^[a-z][a-z0-9_]*$/i.test(code))),true);
   assert.equal(calls,1,'one exact focused extraction; no separate survey, registry, timeline or paid mapping call');
  }finally{h.db.close()}
 });

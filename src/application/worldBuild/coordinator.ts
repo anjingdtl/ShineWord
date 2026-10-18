@@ -1577,7 +1577,7 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
                   ? '映射正在后台自动恢复：自动调整输出预算、拆小批次并退避续试；已完成成果保留。'
                 : mappingFailed
                   ? '当前 API 的配置或能力暂不可用，请核对模型配置；已完成成果保留。'
-                : '世界资料发布未完成，已抽取内容已保存；请查看审查问题后继续构建。',
+                : '世界资料发布未完成，已抽取内容已保存；展开构建任务查看发布诊断后再继续。',
           );
           return {
             runId, completed: false, unitsDone: fresh.unitsDone,

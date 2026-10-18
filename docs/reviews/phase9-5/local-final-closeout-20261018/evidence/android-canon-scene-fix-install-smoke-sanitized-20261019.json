@@ -1,0 +1,32 @@
+{
+  "schema": "phase95-android-install-smoke-sanitized/v1",
+  "date": "2026-10-19",
+  "apk": {
+    "versionName": "1.0.0",
+    "versionCode": 1000000,
+    "sha256": "0ACA6E449598342A409F05790F84C1BF7DF6C1C821A0439F49FDEA943B8D896F",
+    "build": "npm run apk:debug",
+    "buildResult": "BUILD SUCCESSFUL"
+  },
+  "device": {
+    "avd": "ShineWord_M4FaultQA_20261018",
+    "serial": "emulator-5560",
+    "api": 37,
+    "package": "com.shineword.app"
+  },
+  "installAndLaunch": {
+    "command": "adb install -r",
+    "result": "PASS",
+    "appDataCleared": false,
+    "processPresent": true,
+    "resumedActivity": "com.shineword.app.MainActivity",
+    "androidRuntimeErrorLinesInLast500": 0
+  },
+  "uiAutomation": {
+    "maestroHierarchy": "NO_RESULT_AFTER_20S; stopped",
+    "maestroColdLaunchFlow": "NO_RESULT_AFTER_30S; stopped",
+    "adbAccessibilityHierarchy": "NO_OUTPUT_AFTER_15S; stopped",
+    "screenAssertion": "NOT RUN"
+  },
+  "acceptanceBoundary": "This records standalone APK build, preserved-data install and process launch only. It does not claim a UI-flow or real-model action pass."
+}

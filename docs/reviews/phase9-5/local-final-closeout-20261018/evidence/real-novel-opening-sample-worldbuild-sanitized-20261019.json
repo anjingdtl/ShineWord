@@ -1,0 +1,31 @@
+{
+  "schema": "phase95-real-novel-opening-worldbuild-sanitized/v1",
+  "date": "2026-10-19",
+  "source": {
+    "scopeCodePoints": 9601,
+    "sampleSha256": "6345ddfb3eee244e74586f0460893583324b17951986f8f00e1cc9f90a4fa22e"
+  },
+  "isolation": {
+    "newWorldId": "world-src-6345ddfb3eee244e-mve9udkr",
+    "separateSqliteLedger": true,
+    "existingDeviceDatabaseModified": false,
+    "priorRequestLedgerModified": false,
+    "maxConcurrency": 1
+  },
+  "physicalAttempts": [
+    { "kind": "timeline", "count": 1, "httpStatus": 200, "inputTokens": 305, "outputTokens": 99 },
+    { "kind": "world_extract", "count": 1, "httpStatus": 200, "inputTokens": 2316, "outputTokens": 1352 },
+    { "kind": "world_mapping", "count": 1, "httpStatus": 200, "inputTokens": 3614, "outputTokens": 4622 }
+  ],
+  "result": {
+    "packagePublished": false,
+    "packageRevision": null,
+    "openReviewIssues": { "blocking_mapping_constraint": 1, "major_invalid_proposal": 3 },
+    "unknownAttempts": 0,
+    "realProvider429": 0,
+    "sqliteIntegrity": "ok",
+    "reviewIssuesAutomaticallyResolved": false,
+    "requestReplayed": false
+  },
+  "acceptanceBoundary": "The real-model opening sample reached production mapping and was retained at its normal content-review gate. No package method, source-evidence L1 or Android gameplay pass is claimed from this run. Private prompt/response rows remain only in the isolated local database."
+}

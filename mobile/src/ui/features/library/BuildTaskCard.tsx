@@ -22,6 +22,8 @@ import type { BuildTaskView } from '../../../buildTasks';
 import {
   formatActivityClock,
   listFailedUnits,
+  listPublicationDiagnostics,
+  type PublicationDiagnosticView,
   taskActivityLine,
   taskProgressLine,
   taskOverallProgress,
@@ -43,6 +45,7 @@ export function BuildTaskCard(props: {
   const [failedUnits, setFailedUnits] = useState<Array<{
     unitId: string; status: string; errorCode: string | null; errorMessage: string | null; attempt: number;
   }>>([]);
+  const [publicationDiagnostics, setPublicationDiagnostics] = useState<PublicationDiagnosticView[]>([]);
   const task = props.task;
   const progress = taskOverallProgress(task);
   const automaticRecovery = task.status === 'failed_retryable' && task.lastErrorCode === 'mapping_auto_retry';
@@ -59,11 +62,20 @@ export function BuildTaskCard(props: {
   useEffect(() => {
     if (!expanded) return;
     let cancelled = false;
-    listFailedUnits(task.runId)
-      .then(units => { if (!cancelled) setFailedUnits(units); })
+    Promise.all([
+      listFailedUnits(task.runId),
+      task.lastErrorCode === 'package_finalize_failed'
+        ? listPublicationDiagnostics(task.worldId)
+        : Promise.resolve([] as PublicationDiagnosticView[]),
+    ])
+      .then(([units, diagnostics]) => {
+        if (cancelled) return;
+        setFailedUnits(units);
+        setPublicationDiagnostics(diagnostics);
+      })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [expanded, task.runId, task.lastActivityAt]);
+  }, [expanded, task.runId, task.worldId, task.lastActivityAt, task.lastErrorCode]);
 
   return (
     <Card>
@@ -157,6 +169,9 @@ export function BuildTaskCard(props: {
               `处理中 ${task.unitsRunning} · 待重试 ${task.unitsRetryable} · 排队 ${task.unitsQueued}`,
               `累计失败尝试 ${task.unitsFailed} 次（历史计数，非当前待重试批数）`,
               task.lastErrorCode ? `最近错误: ${task.lastErrorCode} ${task.lastErrorMessage ?? ''}`.slice(0, 160) : null,
+              publicationDiagnostics.length > 0
+                ? `最近发布校验诊断: ${[...new Set(publicationDiagnostics.flatMap(diagnostic => diagnostic.errorCodes))].join('、')}`
+                : null,
               `最近活动: ${formatActivityClock(task.lastActivityAt) || task.lastActivityAt}`,
             ].filter(Boolean).join('\n')}
           </Text>

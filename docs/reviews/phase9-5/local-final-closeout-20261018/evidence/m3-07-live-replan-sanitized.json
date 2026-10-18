@@ -1,0 +1,109 @@
+{
+  "schema": "shineword.phase95.live-replan-sanitized.v1",
+  "date": "2026-10-18",
+  "apk": {
+    "sourceCommit": "447bd67",
+    "sha256": "C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44"
+  },
+  "worldId": "world-src-2d4ad3aaa7793c0b-mvddhkeg",
+  "campaignId": "camp-mvdjtr22",
+  "branchId": "camp-mvdjtr22-bmvdq6wys",
+  "base": {
+    "stateVersion": 11,
+    "planRevision": 4
+  },
+  "jobs": [
+    {
+      "jobId": "replan:camp-mvdjtr22-bmvdq6wys:v11:2026-10-18T11:22:22.973Z:6bcf6ccbf908",
+      "budget": 2,
+      "attempts": [
+        {
+          "httpStatus": 200,
+          "inputTokens": 23507,
+          "outputTokens": 4645,
+          "reasoningTokens": 1105,
+          "durationMs": 98069
+        },
+        {
+          "httpStatus": 200,
+          "inputTokens": 27090,
+          "outputTokens": 4186,
+          "reasoningTokens": 390,
+          "durationMs": 56244
+        }
+      ],
+      "terminalStatus": "invalid",
+      "validatorCategories": [
+        "missing compiled start node",
+        "unreachable required-main stage",
+        "no concrete start situation",
+        "insufficient executable delayed consequences"
+      ]
+    },
+    {
+      "jobId": "replan:camp-mvdjtr22-bmvdq6wys:v11:2026-10-18T11:34:15.046Z:5e606cda282e",
+      "budget": 2,
+      "attempts": [
+        {
+          "httpStatus": 200,
+          "inputTokens": 23523,
+          "outputTokens": 7354,
+          "reasoningTokens": 2392,
+          "durationMs": 193203
+        },
+        {
+          "httpStatus": 200,
+          "inputTokens": 28683,
+          "outputTokens": 5242,
+          "reasoningTokens": 188,
+          "durationMs": 68416
+        }
+      ],
+      "terminalStatus": "invalid",
+      "repairUsed": true,
+      "candidateSha256": "ce579ae447a597843b37fd7578b3effce3804fb3172027c0821e94806e198327",
+      "structuralResult": {
+        "requiredMainEntry": {
+          "nodeId": "stage-5",
+          "activation": null
+        },
+        "stageCount": 2,
+        "otherStage": {
+          "nodeId": "stage-6",
+          "role": "optional",
+          "coverage": "provisional"
+        },
+        "scheduledConsequenceIds": [
+          "con-tension-peak",
+          "con-barov-offer"
+        ],
+        "triggerNodeIds": [
+          "stage-5",
+          "stage-5"
+        ]
+      },
+      "validatorCategories": [
+        "consequence trigger is less than two required-main stages after scheduling",
+        "authoritative effect has no later required-main or ending consumer",
+        "long consequences reuse a trigger"
+      ]
+    }
+  ],
+  "result": {
+    "attemptsTotal": 4,
+    "http200": 4,
+    "http401": 0,
+    "unknown": 0,
+    "inFlight": 0,
+    "branchStateVersionAfter": 11,
+    "planRevisionAfter": 4,
+    "adopted": false,
+    "maxConcurrentCampaignPlanAttemptsInThisBranch": 1
+  },
+  "privacy": {
+    "rawModelTextIncluded": false,
+    "novelTextIncluded": false,
+    "promptIncluded": false,
+    "credentialsIncluded": false
+  }
+}

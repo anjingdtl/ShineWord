@@ -22,6 +22,7 @@ import { useContextualActions } from '../features/play/hooks/useContextualAction
 import { usePlayController } from '../features/play/hooks/usePlayController';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
+import { canSubmitCampaignAction } from '../../../../src/application/campaign/actionAvailability';
 
 type InfoTab = 'character' | 'party' | 'quests' | 'items' | 'knowledge';
 
@@ -177,6 +178,7 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   const hostiles = encounter?.actors.filter(actor => actor.side === 'hostile' && actor.hp > 0) ?? [];
   const recovery = controller.recovery;
   const recoveryLocked = !!recovery && (recovery.frozen || recovery.unknownAttemptIds.length > 0);
+  const campaignActionDisabled = !view || !canSubmitCampaignAction(view.campaignStatus);
 
   return (
     <ScreenShell bottom>
@@ -232,12 +234,13 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         guideVisible={guideVisible && !guideHidden}
         onDismissGuide={dismissGuide}
         footer={<>
-          {scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} /> : null}
-          {latestGuidance && (encounter?.status !== 'active' || encounter.currentActorIsPlayer) ? <GuidanceCard
+          {scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked || !view}
+            actionDisabled={campaignActionDisabled} onChoose={onChoose} /> : null}
+          {latestGuidance && !campaignActionDisabled && (encounter?.status !== 'active' || encounter.currentActorIsPlayer) ? <GuidanceCard
             embedded
             guidance={latestGuidance}
             currentStateVersion={view?.stateVersion}
-            disabled={busy || recoveryLocked}
+            disabled={busy || recoveryLocked || campaignActionDisabled}
             onSubmitStep={controller.submitGuidanceStep}
             onPrefillIntent={value => controller.setIntent(value)}
           /> : null}
@@ -256,13 +259,14 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
         {error ? <StatusBanner tone="error" title="操作未完成" message={error} /> : null}
       </View>
 
-      {!scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked} onChoose={onChoose} /> : null}
+      {!scrollChoices && !keyboardVisible ? <ActionChoices choices={choices} disabled={busy || recoveryLocked || !view}
+        actionDisabled={campaignActionDisabled} onChoose={onChoose} /> : null}
       <ActionComposer
         value={intent}
         onChangeText={setIntent}
         onSubmit={() => void submit()}
         busy={busy}
-        blocked={recoveryLocked}
+        blocked={recoveryLocked || campaignActionDisabled}
         encounterActive={encounter?.status === 'active'}
       />
 

@@ -62,6 +62,30 @@ test('phase 9 co-scheduling repair guidance joins mutually exclusive schedulers 
   assert.match(guidance, /不得把它们拆到互斥方法或互斥 outcome grade/);
 });
 
+test('phase 9 missing long-plan consequences receives executable bounded repair guidance', () => {
+  const candidate = {
+    stages: [
+      { nodeId: 'stage-1', role: 'main', activation: null, dependsOn: [] },
+      { nodeId: 'stage-2', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-1' }, dependsOn: ['stage-1'] },
+      { nodeId: 'stage-3', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-2' }, dependsOn: ['stage-2'] },
+      { nodeId: 'stage-4', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-3' }, dependsOn: ['stage-3'] },
+      { nodeId: 'stage-5', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-4' }, dependsOn: ['stage-4'] },
+    ],
+    firstSituation: { methods: [{ methodId: 'opening-action', outcomes: { success: { effects: [] } } }] },
+    consequences: [],
+  };
+  const guidance = buildStructuralRepairGuidance([
+    'long plan: at least two executable delayed consequences are required.',
+  ], candidate);
+
+  assert.match(guidance, /当前只有 0 项可执行延迟后果，至少还缺 2 项/);
+  assert.match(guidance, /只补足数量/);
+  assert.match(guidance, /ordinary success|success.*schedule_consequence/i);
+  assert.match(guidance, /至少两段.*required main/);
+  assert.match(guidance, /后续.*completion|completion.*消费/);
+  assert.match(guidance, /不得.*record_event.*伪装/);
+});
+
 test('phase 9 repair guidance maps unknown knowledge entries to bounded clue aliases', () => {
   const candidate = { clues: [{ clueId: 'clue-ledger-proof', title: '核账线索', text: '一段已获授权的合成线索内容。' }] };
   const guidance = buildStructuralRepairGuidance([
@@ -103,6 +127,30 @@ test('phase 9 repair guidance resolves out-of-scope action targets from the curr
   assert.match(guidance, /不得猜测、补造/);
 });
 
+test('phase 9 parser-limit repair guidance preserves executable completion', () => {
+  const guidance = buildStructuralRepairGuidance([
+    'firstSituation.methods[0].outcomes.success.effects: effects must be an array of ≤8 templates.',
+  ], { firstSituation: { methods: [{ methodId: 'method-main' }] } });
+  assert.match(guidance, /firstSituation\.methods\[0\]\.outcomes\.success/);
+  assert.match(guidance, /最多 8 个效果模板/);
+  assert.match(guidance, /保留普通 success.*completion/);
+  assert.match(guidance, /拆分到后续可执行办法/);
+});
+
+test('phase 9 repair guidance explains a missing local stage-completion effect producer', () => {
+  const guidance = buildStructuralRepairGuidance([
+    'artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.',
+  ], {
+    stages: [{ nodeId: 'stage-5', completion: { kind: 'committed_event', eventType: 'stage_5_complete' } }],
+    firstSituation: { methods: [{ methodId: 'fulfill-stage-5' }] },
+  });
+
+  assert.match(guidance, /stage stage-5.*completion.*effect producer/i);
+  assert.match(guidance, /success|full_success/);
+  assert.match(guidance, /record_event|situation_status|situation_counter|promise/);
+  assert.match(guidance, /保留.*completion.*条件|completion 条件.*保留/);
+  assert.match(guidance, /不得.*降低.*门槛|不得.*改写.*历史/);
+});
 function validationContext(ctx, artifact) {
   return {
     visibleWorldEntryIds: new Set(ctx.visibleEntries.map(entry => entry.entryId)),
@@ -144,6 +192,7 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /firstSituation 默认省略 deadlineClockSeconds/);
     assert.match(materials.system, /failure\/severe_failure 不得产生同一证据/);
     assert.match(materials.system, /每一条包含 resolved 的可完成路径/);
+    assert.match(materials.system, /每个 effects 数组最多 8 个效果模板/);
     assert.match(materials.system, /事实 ID 与目录条目 ID 是两个独立命名空间/);
     assert.match(materials.system, /把 factId 当 entryId/);
     assert.match(materials.system, /初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实/);

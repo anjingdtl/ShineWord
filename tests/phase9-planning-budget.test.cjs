@@ -512,3 +512,123 @@ test('planning budget: complete repair input is reflected in scheduler admission
     assert.ok(tokens + input.maxOutputTokens + deriveSafetyMargin(profile.capabilities.contextWindow) <= profile.capabilities.contextWindow);
   }
 });
+
+test('campaign-plan effect-limit rejection receives bounded preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.firstSituation.methods[0].outcomes.success.effects = Array.from({ length: 9 }, (_, index) => ({
+    template: 'record_event', eventType: 'fact_checked_' + index, summary: 'A distinct bounded fact ' + index,
+  }));
+  const responses = [first, candidateModel()];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'effect-cap-repair', worldId: 'w', physicalRequestBudget: 2,
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /firstSituation\.methods\[0\]\.outcomes\.success\.effects: effects must be an array of ≤8 templates/);
+  assert.match(requests[1].user, /最多 8 个效果模板/);
+  assert.match(requests[1].user, /保留普通 success.*completion/);
+  assert.match(requests[1].user, /拆分到后续可执行办法/);
+});
+test('campaign-plan action-reference mismatch receives minimal type-preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  const method = first.firstSituation.methods[1];
+  method.firstStep.actionKind = 'skill_check';
+  method.firstStep.skillId = 'skill-observation';
+  method.firstStep.destinationId = 'scene-invalid-for-check';
+  const repaired = structuredClone(first);
+  delete repaired.firstSituation.methods[1].firstStep.destinationId;
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'action-reference-type-repair', worldId: 'w', physicalRequestBudget: 2,
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /firstSituation\.methods\[1\]\.firstStep\.destinationId: not valid for skill_check/);
+  assert.match(requests[1].user, /remove|omit|删除|省略/i);
+  assert.match(requests[1].user, /保留.*skill_check|保留.*行动类型/);
+  assert.match(requests[1].user, /不要.*放宽.*校验|不得.*放宽.*校验/);
+});
+test('campaign-plan missing compiled start node receives entry-preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.stages[0].activation = { kind: 'node_succeeded', nodeId: 'stage-1' };
+  const repaired = structuredClone(first);
+  repaired.stages[0].activation = null;
+  const errors = ['plan: startNodeIds required.; plan: main node stage-1 unreachable from start (主路径必须结构可达).; artifact: no concrete start node situation (首阶段需要局面).'];
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'missing-compiled-start-node-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return model.stages?.some(stage => stage.role === 'main' && stage.coverage === 'concrete' && stage.activation === null)
+        ? [] : errors;
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /plan: startNodeIds required/);
+  assert.match(requests[1].user, /stage-1/);
+  assert.match(requests[1].user, /activation.{0,20}null|null.{0,20}activation/i);
+  assert.match(requests[1].user, /本地编译器.*startNodeIds|编译器.*activation/);
+  assert.match(requests[1].user, /顶层 startNodeIds 不会被采用|不得.*放宽.*validator/);
+});
+test('campaign-plan missing long consequences receives validator-specific repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.consequences = [];
+  const repaired = structuredClone(candidateModel());
+  repaired.consequences.push({ ...structuredClone(repaired.consequences[0]), consequenceId: 'lin-followup' });
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen long-plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'long-consequence-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return (model.consequences?.length ?? 0) < 2
+        ? ['long plan: at least two executable delayed consequences are required.'] : [];
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /只有 0 项可执行延迟后果，至少还缺 2 项/);
+  assert.match(requests[1].user, /success 或 full_success effects 以 schedule_consequence 排程/);
+  assert.match(requests[1].user, /至少两段 required main 阶段成功/);
+  assert.match(requests[1].user, /后续必做阶段 completion\/activation.*正向消费/);
+  assert.match(requests[1].user, /不得.*record_event.*伪装/);
+});
+
+test('campaign-plan missing local completion producer receives targeted repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  const repaired = structuredClone(candidateModel());
+  repaired.firstSituation.methods[0].methodId = 'method-repaired';
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen stage plan contract', user: 'frozen player intent and stage material' },
+    logicalRequestId: 'local-completion-producer-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return model.firstSituation?.methods?.some(method => method.methodId === 'method-repaired')
+        ? []
+        : ['artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.'];
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /current stage stage-5 completion has no local effect producer/);
+  assert.match(requests[1].user, /stage stage-5.*completion.*effect producer/i);
+  assert.match(requests[1].user, /success|full_success/);
+  assert.match(requests[1].user, /保留.*completion.*条件|completion 条件.*保留/);
+});

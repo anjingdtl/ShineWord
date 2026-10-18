@@ -52,7 +52,9 @@ export async function adoptOpeningPlan(input: AdoptOpeningPlanInput): Promise<Ad
     || setup.intent.protagonistBinding.name !== input.create.protagonist.name
     || setup.intent.protagonistBinding.canonEntityId !== input.create.protagonist.canonEntityId
     || (setup.intent.protagonistBinding.attributes !== undefined && canonicalJsonOf(setup.intent.protagonistBinding.attributes) !== canonicalJsonOf(input.create.protagonist.attributes))
-    || (setup.intent.protagonistBinding.initialSkills !== undefined && canonicalJsonOf(setup.intent.protagonistBinding.initialSkills) !== canonicalJsonOf(input.create.protagonist.initialSkills ?? []))
+    || (setup.intent.protagonistBinding.kind === 'original'
+      && setup.intent.protagonistBinding.initialSkills !== undefined
+      && canonicalJsonOf(setup.intent.protagonistBinding.initialSkills) !== canonicalJsonOf(input.create.protagonist.initialSkills ?? []))
     || (setup.intent.protagonistBinding.description !== undefined && setup.intent.protagonistBinding.description !== input.create.protagonist.description)
     || sha256HexOf(canonicalJsonOf(setup.intent)) !== candidate.plan.intentHash
     || canonicalJsonOf(setup.intent.companionBindings) !== canonicalJsonOf(input.create.companions ?? [])) {

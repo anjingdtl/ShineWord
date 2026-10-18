@@ -21,6 +21,7 @@ import { PREPARED_ABILITY_SLOTS, SKILL_RANK_DIE, type ActorCard, type CompanionD
 import { PRACTICE_THRESHOLDS } from '../../domain/progression/growth';
 import type { ContentEntry } from '../../domain/content/types';
 import type { SkillRank } from '../../domain/rules/types';
+import type { CampaignStatus } from '../../domain/campaignPlan/types';
 import type {
   GameStateSnapshot,
   ItemSourceSnapshotEntry,
@@ -118,6 +119,8 @@ export interface PlayUiProjection {
   campaignId: string;
   branchId: string;
   stateVersion: number;
+  /** Current branch status, projected from the authoritative runtime snapshot. */
+  campaignStatus?: CampaignStatus;
   worldId: string;
   packageRevision: number;
   /** Campaign title (`world · protagonist`), used by the play header. */
@@ -351,6 +354,7 @@ export function buildPlayUiProjection(input: PlayProjectionInput): PlayUiProject
     campaignId: input.campaignId,
     branchId: input.branchId,
     stateVersion: state.stateVersion,
+    ...(state.campaignRuntime ? { campaignStatus: state.campaignRuntime.campaignStatus } : {}),
     worldId: input.worldId,
     packageRevision: input.packageRevision,
     title: input.title,

@@ -23,6 +23,40 @@ test('reward closure also applies during opening adoption without an extra actio
   } finally { h.db.close(); }
 });
 
+test('P95: ending a campaign cancels pending consequences whose trigger can no longer be reached', async () => {
+  const h = await fixture();
+  try {
+    const state = await h.turns.getState(h.branchId);
+    const binding = state.campaignRuntime.planBinding;
+    const { plan } = await h.planStore.getPlanRevision(binding.planId, binding.revision);
+    const artifacts = await h.planStore.listArtifactsForCampaign(h.campaignId);
+    const consequence = {
+      consequenceId: 'await-stage-two', description: '阶段二之后才会发生的后果',
+      triggerCondition: { kind: 'campaign_node_status', nodeId: 'stage-2', status: 'succeeded' },
+      sourceEventRefs: [], affectedActors: [],
+      effectSpecs: [{ template: 'record_event', eventType: 'stage_two_followup', summary: '后续已发生' }],
+      visibility: 'public', status: 'pending', idempotencyKey: `${h.branchId}:await-stage-two`,
+      createdAtVersion: state.stateVersion, sourceTurnId: 'scheduled-before-ending',
+    };
+    state.campaignRuntime.deferredConsequences.push(consequence);
+    plan.possibleEndings = [{ endingId: 'ending-early-exit', title: '提前离开', publicDescription: '玩家离开了当前战役。',
+      condition: { kind: 'committed_event', eventType: 'player_left_early' }, outcomeKind: 'open' }];
+
+    const events = settleCampaignProgress({ nextState: state, turnId: 'early-exit',
+      nextStateVersion: state.stateVersion + 1, plan, artifacts,
+      transactionEvents: [{ eventType: 'player_left_early', payload: {} }], historyEvents: [] });
+
+    assert.equal(state.campaignRuntime.campaignStatus, 'completed');
+    const settledConsequence = state.campaignRuntime.deferredConsequences.find(c => c.consequenceId === 'await-stage-two');
+    assert.equal(settledConsequence.status, 'cancelled', 'a terminal branch cannot reach a still-active future node');
+    assert.equal(settledConsequence.cancelReason, 'campaign_ended');
+    assert.ok(events.some(event => event.eventType === 'campaign_consequence_cancelled'
+      && event.payload.consequenceId === 'await-stage-two' && event.payload.reason === 'campaign_ended'));
+    assert.equal(events.some(event => event.eventType === 'stage_two_followup'), false,
+      'a consequence that did not fire must not apply its effects');
+  } finally { h.db.close(); }
+});
+
 test('pending nested consequences resolve their archived templates after a revision', async () => {
   const model = candidateModel();
   model.consequences[0].trigger = { kind: 'committed_event', eventType: 'later_trigger' };

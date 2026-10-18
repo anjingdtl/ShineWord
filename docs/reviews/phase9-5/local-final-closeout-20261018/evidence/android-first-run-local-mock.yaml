@@ -1,0 +1,31 @@
+appId: com.shineword.app
+---
+- assertVisible: "配置你的 AI 模型"
+- tapOn:
+    id: "preset-glm-5.3-flash"
+- tapOn:
+    id: "profile-name"
+- inputText: "P95-local-mock"
+- hideKeyboard
+- tapOn:
+    id: "profile-endpoint"
+- inputText: "http://10.0.2.2:8765/v1"
+- hideKeyboard
+- tapOn:
+    id: "profile-model"
+- inputText: "glm-5.3-flash"
+- hideKeyboard
+- swipe:
+    start: 50%, 80%
+    end: 50%, 30%
+- tapOn:
+    id: "profile-apikey"
+- inputText: "local-mock-only"
+- hideKeyboard
+- swipe:
+    start: 50%, 80%
+    end: 50%, 30%
+- assertVisible: "保存并进入书架"
+- tapOn: "保存并进入书架"
+- assertVisible: "书库"
+- assertVisible: "还没有项目"

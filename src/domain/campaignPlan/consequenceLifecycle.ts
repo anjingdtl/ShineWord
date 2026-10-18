@@ -6,8 +6,8 @@
  * obligations therefore had no code path at all:
  *
  *   1. A pending obligation whose trigger can never become true stayed
- *      'pending' forever, so a superseded branch left records that looked like
- *      future consumable content but could never fire.
+ *      'pending' forever, so a superseded node or terminal campaign left a
+ *      record that looked like future content but could never fire.
  *   2. An obligation whose effects had been applied stayed 'triggered' forever,
  *      so the runtime could not distinguish "applied" from "not yet applied".
  *
@@ -30,10 +30,11 @@ import type { SituationCondition } from '../situations/types';
 
 /** Node statuses that can never change again. */
 const TERMINAL_NODE_STATUSES = ['succeeded', 'failed', 'superseded', 'cancelled'] as const;
+const TERMINAL_CAMPAIGN_STATUSES = ['completed', 'failed', 'ended'] as const;
 
 /** Why a pending obligation was closed without ever firing. */
-export const STRANDED_CONSEQUENCE_REASONS = ['trigger_node_retired'] as const;
-export type StrandedConsequenceReason = (typeof STRANDED_CONSEQUENCE_REASONS)[number];
+export const CONSEQUENCE_CANCEL_REASONS = ['trigger_node_retired', 'campaign_ended'] as const;
+export type ConsequenceCancelReason = (typeof CONSEQUENCE_CANCEL_REASONS)[number];
 
 export interface ConditionPossibility {
   canBeTrue: boolean;
@@ -102,7 +103,8 @@ export function orphanedPendingConsequences(input: {
 }
 
 /**
- * Cancels stranded pending obligations inside the runtime.
+ * Cancels pending obligations whose trigger is unreachable, including when the
+ * campaign has entered a terminal status.
  *
  * The trigger condition and description are preserved verbatim; only the
  * lifecycle status and an explicit reason are added. A GM-visible reason is
@@ -113,26 +115,27 @@ export function orphanedPendingConsequences(input: {
 export function dischargeStrandedConsequences(input: {
   runtime: CampaignRuntimeV1;
   nextStateVersion: number;
-  /** Only close records whose trigger is impossible under these node states. */
+  /** Current node states used to prove a trigger unreachable while the campaign is active. */
   nodeStates?: readonly CampaignNodeRuntimeV1[];
 }): { consequenceIds: string[]; events: CampaignEvent[] } {
   const nodeStates = input.nodeStates ?? input.runtime?.nodeStates;
-  if (!nodeStates) return { consequenceIds: [], events: [] };
-  const statuses = statusMap(nodeStates);
+  const campaignEnded = (TERMINAL_CAMPAIGN_STATUSES as readonly string[]).includes(input.runtime.campaignStatus);
+  if (!nodeStates && !campaignEnded) return { consequenceIds: [], events: [] };
+  const statuses = nodeStates ? statusMap(nodeStates) : new Map<string, string>();
   const consequenceIds: string[] = [];
   const events: CampaignEvent[] = [];
   for (const consequence of input.runtime.deferredConsequences) {
     if (consequence.status !== 'pending') continue;
-    if (conditionPossibilityForNodes(consequence.triggerCondition, statuses).canBeTrue) continue;
+    if (!campaignEnded && conditionPossibilityForNodes(consequence.triggerCondition, statuses).canBeTrue) continue;
     consequence.status = 'cancelled';
     consequence.cancelledAtVersion = input.nextStateVersion;
-    consequence.cancelReason = 'trigger_node_retired';
+    consequence.cancelReason = campaignEnded ? 'campaign_ended' : 'trigger_node_retired';
     consequenceIds.push(consequence.consequenceId);
     events.push({
       eventType: 'campaign_consequence_cancelled',
       payload: {
         consequenceId: consequence.consequenceId,
-        reason: 'trigger_node_retired',
+        reason: consequence.cancelReason,
         description: consequence.description,
         stateVersion: input.nextStateVersion,
       },

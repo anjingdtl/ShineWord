@@ -86,7 +86,7 @@ export function makeCampaignIntent(input: PreparePlanInput): CampaignIntentV1 {
       ...(input.protagonist.canonEntityId ? { canonEntityId: input.protagonist.canonEntityId } : {}),
       ...(input.protagonist.description ? { description: input.protagonist.description } : {}),
       ...(input.protagonist.attributes ? { attributes: input.protagonist.attributes } : {}),
-      initialSkills: [...input.protagonistSkills],
+      ...(input.protagonist.kind === 'original' ? { initialSkills: [...input.protagonistSkills] } : {}),
     },
     openingAnchor: {
       worldTimeOrder: input.anchor.worldTimeOrder,

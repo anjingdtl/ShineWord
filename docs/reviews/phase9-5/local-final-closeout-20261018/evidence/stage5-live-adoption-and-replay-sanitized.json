@@ -1,0 +1,66 @@
+{
+  "schema": "phase95-stage5-live-adoption-evidence/v1",
+  "date": "2026-10-18",
+  "device": {
+    "serial": "emulator-5556",
+    "avd": "ShineWord_Phase95_LocalFinal_20261018",
+    "api": 37,
+    "package": "com.shineword.app"
+  },
+  "sourceWorldId": "world-src-2d4ad3aaa7793c0b-mvddhkeg",
+  "mainBranch": {
+    "branchId": "camp-mvdjtr22-main",
+    "stateVersion": 12,
+    "planRevision": 4,
+    "stage5": "content preparation unresolved; main branch unchanged"
+  },
+  "qaBranch": {
+    "branchId": "camp-mvdjtr22-bmvdq6wys",
+    "parent": "camp-mvdjtr22-main",
+    "finalStateVersion": 15,
+    "finalPlanRevision": 7,
+    "turnRows": 16,
+    "rollRows": 5,
+    "snapshotRows": 16,
+    "primaryNodeId": "stage-6",
+    "stageState": {
+      "stage-1": "succeeded",
+      "stage-2": "succeeded",
+      "stage-3": "succeeded",
+      "stage-4": "succeeded",
+      "stage-5": "succeeded",
+      "stage-6": "active",
+      "stage-7": "planned",
+      "stage-8": "planned"
+    }
+  },
+  "stage5Action": {
+    "turnId": "turn-0014",
+    "submission": "available in-app guidance action through Android UI",
+    "commit": "v13-to-v14",
+    "status": "committed",
+    "grade": "success",
+    "rollRecord": false,
+    "plannerAttempts": 0,
+    "narrator": {
+      "httpStatus": 200,
+      "inputTokens": 3755,
+      "outputTokens": 348,
+      "reasoningTokens": 0
+    }
+  },
+  "planAdoption": {
+    "trigger": [
+      "stage_content_prepared_ahead",
+      "stage_content_target:stage-7"
+    ],
+    "campaignPlanAttempts": 2,
+    "httpStatuses": [200, 200],
+    "concurrency": 1,
+    "adoptedRevision": 7,
+    "adoptedAt": "2026-10-18T12:43:18.638Z"
+  },
+  "coldRelaunch": "passed; play-composer and campaign-progress-card visible",
+  "acceptanceBoundary": "All actions were agent-driven QA. This proves the isolated stage-5 device path and does not count as human acceptance or independent playtesting. The original main branch remains unchanged.",
+  "privacy": "No novel body, model prompt or response, secret, database, or screenshot is included."
+}

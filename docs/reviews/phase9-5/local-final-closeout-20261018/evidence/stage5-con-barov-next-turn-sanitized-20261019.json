@@ -1,0 +1,36 @@
+{
+  "schema": "phase95-stage5-consequence-next-turn-sanitized/v1",
+  "date": "2026-10-19",
+  "device": {
+    "avd": "ShineWord_Phase95_LocalFinal_20261018",
+    "serial": "emulator-5556",
+    "api": 37,
+    "package": "com.shineword.app"
+  },
+  "branch": {
+    "branchId": "camp-mvdjtr22-bmvdq6wys",
+    "stateVersionObserved": 20,
+    "planRevision": 7,
+    "mainBranchChanged": false
+  },
+  "stage5": {
+    "committingTurnId": "turn-0014",
+    "stateVersion": 14,
+    "nodeStatus": "succeeded",
+    "consequenceId": "con-barov-offer",
+    "triggeredAtStateVersion": 14,
+    "dischargedAtStateVersion": 14,
+    "turnNarratorHttpStatus": 200
+  },
+  "nextTurn": {
+    "turnId": "turn-0016",
+    "frozenMaterialRootSha256": "a3c5be8b340ba9ab54316cad6f0808bb3741ac35d88c2347b16fec558c4a5075",
+    "containsConsequenceId": true,
+    "containsResultEventType": true,
+    "narrationReferencesAffectedEntity": true,
+    "narrationCharacterCount": 120,
+    "narratorHttpStatus": "not reconciled in this evidence"
+  },
+  "eventAuditNote": "The turn and consequence each recorded the same result event type under distinct event origins; this content-level duplication was observed but not classified as a code defect.",
+  "acceptanceBoundary": "This is an agent-driven isolated branch causal-chain check, not a human player decision or independent playtest. No novel text, prompt, response or screenshot is included."
+}

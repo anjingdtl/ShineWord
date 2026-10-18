@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "shineword.phase95.sanitized-test-evidence.v1",
+  "case": "canon scenes bind only public lore backed by the same source facts as the scene",
+  "phase": "GREEN",
+  "redCommit": "f93742f",
+  "targetedCommand": "node --test --test-name-pattern \"canon scenes bind only public lore\" tests/phase2-package-build.test.cjs",
+  "targetedExitCode": 0,
+  "targetedPassed": 1,
+  "fullCommand": "npm test",
+  "fullExitCode": 0,
+  "fullTests": 1359,
+  "fullPassed": 1359,
+  "fullFailed": 0,
+  "asserted": [
+    "scene clues include the public lore entry citing the exact same source fact",
+    "scene dependencies include the linked lore entry",
+    "lore citing an unrelated source fact is excluded"
+  ],
+  "fixture": "synthetic in-memory SQLite package build; no user novel, provider request, save, or emulator data used",
+  "observedAt": "2026-10-19"
+}

@@ -347,6 +347,39 @@ test('P2-4: fixture facts build a package whose evidence ids all resolve', async
   }
 });
 
+test('canon scenes bind only public lore backed by the same source facts as the scene', async () => {
+  const { db, worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  db.prepare(`INSERT INTO source_chapters (world_id, chapter_id, chapter_index, title, start_offset, end_offset,
+    char_count, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run('w-build', 'chapter-1', 0, '测试章节', 0, 100, 100, 'c'.repeat(64), 't');
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'tower', type: 'location', name: '古塔',
+    firstSeenChapterId: null, aliases: [] }, 't');
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'traveler', type: 'character', name: '旅人',
+    firstSeenChapterId: null, aliases: [] }, 't');
+  const source = (quote, startOffset) => ({ chapterId: 'chapter-1', startOffset, endOffset: startOffset + quote.length,
+    quote, quoteSha256: sha.sha256Hex(quote) });
+  await worldStore.saveFact({ ...makeFact('w-build', 'fact-tower', 'tower', 'named_location', { name: '古塔' }),
+    sources: [source('古塔', 10)] }, 't');
+  await worldStore.saveFact({ ...makeFact('w-build', 'fact-traveler', 'traveler', 'occupation', { name: '旅人' }),
+    sources: [source('旅人', 30)] }, 't');
+
+  const { result } = await build(worldStore, fakeProvider({
+    skills: [], constraints: [], actorTemplates: [], items: [],
+    lore: [
+      { id: 'tower', name: '古塔', title: '古塔', text: '古塔已由原著事实确认。', provenanceKind: 'explicit',
+        evidenceFactIds: ['fact-tower'], rationale: '地点由对应原著事实确认。' },
+      { id: 'traveler', name: '旅人', title: '旅人', text: '旅人来自另一条原著事实。', provenanceKind: 'explicit',
+        evidenceFactIds: ['fact-traveler'], rationale: '人物由另一条原著事实确认。' },
+    ],
+  }));
+  const scene = result.entries.find(entry => entry.kind === 'scene' && entry.entryId === 'scene-tower');
+  assert.ok(scene, 'the source-backed location becomes a scene');
+  assert.deepEqual(scene.definition.clues, ['lore-tower'], 'only same-fact, public lore is a scene evidence candidate');
+  assert.ok(scene.dependencyIds.includes('lore-tower'), 'the clue dependency is explicit in the package graph');
+  assert.equal(scene.definition.clues.includes('lore-traveler'), false, 'unrelated canon facts do not become scene evidence');
+});
+
 // ---------------------------------------------------------------------------
 // Canon conflicts block publication through the review queue
 // ---------------------------------------------------------------------------
