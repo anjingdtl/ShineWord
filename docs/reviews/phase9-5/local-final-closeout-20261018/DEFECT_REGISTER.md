@@ -117,3 +117,12 @@
 - 最小修复：`mobile/src/ui/features/play/panels/PlayPanel.tsx` 的弹层 `ScrollView` 设置 `keyboardShouldPersistTaps="handled"`。不改状态、账本、模型分流或存档语义。
 - GREEN：standalone APK SHA-256 `A9987513029084AD8D37372A64421ACB32B63DDBD775976F18AEDED29A0169A0`，经 `adb install -r` 更新现存主 AVD并保留数据；新隔离 fork 上 Maestro `sw95-keyboard-single-tap-green`（run `2026-10-19_033457`）单击后表单在 60 秒内卸载。目标重规划 busy 在 180 秒内结束；没有可见错误或未知恢复控件。UI 检查未取得 provider HTTP status，不能据此计作 GLM 200。
 - 回归：Core 1,358/1,358；mobile typecheck、version check、`git diff --check` 通过；standalone Debug APK 构建成功。脱敏证据：`evidence/play-panel-keyboard-submit-red-green-sanitized-20261019.json`。
+
+## SW95-M2-01：Canon 开篇场景没有链接同源公开 Lore 线索
+
+- 日期：2026-10-19；严重度：P1（真实小说 world package 的开篇场景无法暴露其已有、同源的公开线索）。
+- 现象：Canon package builder 即使看到 scene 与 public Lore 引用相同来源事实，也生成 `clues: []` 且没有相应 Lore dependency；下游 `openingSceneEvidenceIds` 因此无法从场景取得该证据。严格 evidence validator 行为正确，不能通过默认字段或放宽 L1 合同掩盖。
+- RED：新增合成 in-memory SQLite package build 反例；修复前预期 clue `lore-tower`、实际 `[]`，命令以断言失败结束。证据：`evidence/canon-scene-lore-clue-red-20261019.json`。
+- 最小修复：`src/application/worldPackage/buildPackageFromCanon.ts` 仅链接同时满足公开、显式/推断、同一 source fact、anchor 可见的 Lore ID，并将该 ID 纳入 scene dependency。无匹配 Lore 时不造线索；不修改 validator、L1/L2 分流、Runtime、状态权威或存档。
+- GREEN：新定向测试 1/1；确认无关 source fact 被排除；全量 `npm test` 1,359/1,359。证据：`evidence/canon-scene-lore-clue-green-20261019.json`。RED 提交 `f93742f`，修复提交 `2e1a9c8`。
+- 真实小说边界：新的隔离 real-GLM world build 串行完成 timeline、extract、mapping 共 3 次 HTTP 200、无 429/unknown；正常内容审查仍有 1 个 blocking mapping constraint 和 3 个 major invalid proposal，package 未发布。不能据此宣称本修复已在新真实 package 上得到 L1 证明；没有自动审查或重派。

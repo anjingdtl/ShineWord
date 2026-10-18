@@ -8,21 +8,21 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 ## 分阶段结论
 
-- **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成开局、连续行动、合法 save-10 恢复续玩及 stage-5/8 隔离分支。现有 19 个 action turns 全由 QA 执行者驱动。stage 8 的提前脱身与守住阵地 sibling branches 已用真实 Android/GLM 对照终局取消与成功触发、消费及下游知识写入；历史 main v12/r4 未改。原著 package 非空来源 evidence L1、特定 `con-barov-offer` 后续链和真人反馈仍未完成。campaign-scope L1 使用显式 fixed empty evidence。两次宿主机 GLM transport unknown 保留且未重派。
-- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 十一项确认代码缺陷均有 RED → 最小修复 → GREEN；最新全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建及当前专用 AVD 复测通过。
+- **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成开局、连续行动、合法 save-10 恢复续玩及 stage-5/8 隔离分支。现有 19 个 action turns 全由 QA 执行者驱动。stage 8 的 early-exit/success siblings 已对照终局取消、后果消费与知识写入；stage-5 QA branch 的后果还进入下一回合 frozen context，详情见 10-19 最新补充。原著新 package 非空来源 evidence L1、`method` 供给和玩家反馈仍未完成。campaign-scope L1 使用显式 fixed empty evidence。两次宿主机 GLM transport unknown 保留且未重派。
+- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 十二项确认代码缺陷均有 RED → 最小修复 → GREEN；最新全量 Core 1,359/1,359、mobile typecheck、version check、standalone APK 构建通过。最新构建已保留数据安装并在现存 API 37 AVD 启动；该构建轮次的 Maestro 层级/流程无结果，故仅记 install/process smoke PASS。
 - **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验；production synthetic fixture 的 live GLM matched 10+10 已通过，但真实小说 package method 路径未覆盖。Stage-1/8 历史资产和若干故障注入仍缺。合法 save-10 已真实恢复并续玩；自动化证据不替代玩家验收。
 
 ## 基线、提交与 CI
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
-- 已独立提交的十一项代码修复：既有修复提交为 `dd17ccf`、`8ab0419`、`3847339`、`00f3625`、`b6c7d00`、`cbacbb0`、`76a51fc`、`447bd67`、`d8d9c3e`；`39a8d15` 先提交终局 consequence RED 反例、`e6a0bbd` 完成最小修复；`6848793` 修复键盘打开时弹层首击被吞并。M6-03 的 RED/GREEN 与构建哈希记录于脱敏证据 `play-panel-keyboard-submit-red-green-sanitized-20261019.json`，由 `7fa1c80` 提交。
+- 已独立提交的十二项代码修复：既有提交和 RED/fix 顺序记录见下方缺陷登记；本次新增 `f93742f`（Canon 场景线索 RED）与 `2e1a9c8`（最小修复）。M6-03 的 RED/GREEN 与构建哈希记录于 `play-panel-keyboard-submit-red-green-sanitized-20261019.json`。
 - PR #15 针对 main 保持开放且未合并。最终验收只认 PR #15 Checks 页面上当前 head 的 Core Verify 与 Android Verify；旧 SHA、main 基线或 PR #14 的 CI 不代替 exact-head 核验。PR 正文记录最终 SHA 与当前检查结果。
 - 最后推送提交及对应 Core Verify / Android Verify run 以 PR #15 正文和 Checks 页面为准；当前 head 必须在最终 push 后重新核验，旧 SHA 的 CI 不替代。
 
 ## 本地回归与 Android 包
 
 - `npm ci --ignore-scripts --no-audit --no-fund` 与 `npm --prefix mobile ci --no-audit --no-fund`：均退出码 0。
-- `npm run verify:core`：最新修复后 1,358/1,358 passed，0 failed / skipped；原 `d8d9c3e` 轮次的 1,357/1,357 已由新结果取代。
+- `npm run verify:core`：Canon 场景线索修复后的最终 CI 同名门禁 1,359/1,359 passed，0 failed / skipped；退出码 0，耗时约 36 秒。mobile typecheck、version check 也在本轮复核通过。
 - `npm --prefix mobile run typecheck`：通过；`npm run verify:version`：通过（1.0.0 / versionCode 1000000）。
 - 使用项目入口 `npm run apk:debug` 成功构建 standalone Debug APK；入口验证内嵌 `assets/index.android.bundle`。直接调用普通 Gradle `assembleDebug` 只生成依赖 Metro 的开发包，曾出现 “Unable to load script”，随后已用 standalone 包修复运行环境并复测。
 - API 37 AVD 的 Play QA 分支经过 portrait → landscape → portrait 控件断言；360×800dp 虚拟显示下重新进入同一 branch 后，progress/composer/submit 断言通过。Android 夜间 dark 模式下 composer/submit 断言也通过，测试结束恢复显示密度、尺寸和夜间设置。TalkBack 焦点/语音未取得可核证结果，仍为 NOT RUN。
@@ -41,7 +41,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 - 前两局分别有 5 与 1 个 agent-driven QA actions。第三局 main 有 8 个 actions、v1→v12；6 个 campaign-scope L1 与 2 个 L2 完成骰点、Narrator、原子提交和下一轮。stage-4 三项 deferred consequence 已消费。隔离 stage-5 branch 进入 stage 6，save-10 恢复后也成功续玩。新增 stage-8 两条 sibling branches 分别验证 terminal cancellation 和成功后果下游知识写入；本轮累计 19 个 agent-driven action turns，均不计真人决定。分支和状态详见 `GAMEPLAY_CAUSAL_REPLAY.md` 及 `evidence/android-terminal-consequence-cleanup-20261019.json`。
 - 第二局终局页仍验证 `guidance-submit-*` 与观察行动为 0、composer disabled，作为 M3-02 的设备 GREEN。之后第三局 main 推进至 v12，stage-5 降级提示与安全自由输入也曾现场验证。该 main 保持 v12/r4；应用创建的隔离 branch `camp-mvdjtr22-bmvdq6wys` 后续经 stage-5 action 推进至 v15/r7，stage 5 succeeded、stage 6 active、stage 7/8 planned。最新设备 SQLite 完整性检查为 `ok`。
 - 真实 save-10 已在原生 Android UI 恢复到新 campaign/branch，六条历史 turn 和两条历史 roll 的合同/hash/结果对照一致；恢复后新增一次行动并在冷启动后继续打开。详细证据见 `evidence/save10-device-restore-sanitized.json`。
-- 真实因果范围从即时 counter 扩展到 3 项 deferred consequence 的 trigger → discharge → 下游消费：turn-0010 消费 `conseq-town-tension`；turn-0011 消费 `conseq-barov-attention` 与 `con-tension-peaked`。stage-5 action 已运行，但第 4 条 consequence 尚无独立完整的下游消费对照，玩家后续回应也未验。
+- earlier device evidence had 3 deferred consequence trigger → discharge → downstream-consumption chains at turns 0010–0011. The latest isolated stage-5 branch additionally triggered and discharged `con-barov-offer`, then included its ID/result event and the affected entity in turn-0016 frozen context. The next Narrator HTTP status was not reconciled; no human response is claimed. See the dated latest review below.
 
 ## 缺陷修复登记
 
@@ -86,7 +86,16 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 1. 真实小说 world package 当前 `method` entry 数为 0；因此真实原著 package 上 non-empty source-evidence L1 与 package method 供给仍未验证。Synthetic production live 10+10 不能代替此项。
 2. 设备侧 Narrator 前/后 force-stop、响应已到但写盘失败、outbox 事务失败和旧 worker fencing 竞态矩阵仍不完整；现有 Planner 在途 force-stop 与 Core 原子性/fence 回归不能代替这些设备注入。
 3. Stage-1/8 合法历史资产不可用；旧 schema migration、从当前设备 export/import round-trip 与完整 fork/rewind 隔离矩阵仍缺可核证设备数据。
-4. TalkBack 实际焦点/播报、多窗口、API 24 与另一台真实小屏设备未完成。当前三台 AVD 中只有两台专用 API 37 ShineWord 设备；没有新增模拟器以填矩阵。
+4. TalkBack 实际焦点/播报、多窗口、API 24 与另一台真实小屏设备未完成。当前三台注册 AVD 中只有两台专用 API 37 ShineWord 设备；没有新增模拟器以填矩阵。
 5. 已新增 stage-8 独立分支的 trigger→discharge→权威知识消费者对照；先前记载的 stage-5 `con-barov-offer` 在原著 main v12/r4 中仍未验证完整后续链，stage-5 QA branch 进入 stage 6 的证据不能代替它。
 6. 本轮真人游玩与 4 人试玩由世恒哥自行安排，明确不算 agent 自动化交付阻滞，也没有宣称 PASS。
 7. PR #15 的 Core Verify / Android Verify 只按当前 head 核验；最终 SHA、run 与结论以 PR 正文及 Checks 页面为准。
+
+## 2026-10-19 最新复核：Canon scene evidence、stage 5 与真实小说审查门
+
+- 新增 `SW95-M2-01`：同源公开 Lore 没有进入 Canon 场景 clue/dependency。合成 SQLite package RED 失败后，提交 `2e1a9c8` 只链接同 source fact 且公开、anchor-visible 的 Lore；定向 GREEN 与全量 `npm test` 1,359/1,359 通过。RED/GREEN 脱敏证据在 `evidence/canon-scene-lore-clue-{red,green}-20261019.json`。
+- 新建隔离真实小说/GLM scope 再次走生产 world build，前 9,601 code points。timeline、world_extract、world_mapping 共 3 次物理请求，全部 HTTP 200，串行并发峰值 1；真实 GLM 429=0、unknown=0。SQLite 完整性 `ok`。正常 review gate 有 1 个 blocking `mapping_constraint` 与 3 个 major `invalid_proposal`，故 package 没发布；没有自动选案、修改审查结果或重派。脱敏数据 `evidence/real-novel-opening-sample-worldbuild-sanitized-20261019.json`。这次真实 scope 未到 package build、L1 或 Android 行动，不作为其通过证据。
+- stage-5 隔离 branch 的 turn-0014 已触发并消费 `con-barov-offer`；turn-0016 frozen material root 包含该 consequence 与结果事件，语义只读检查发现下一轮 Narrator 文本提及受影响实体。下一轮 Narrator HTTP status 未对账；同种事件由 turn 与 consequence 不同 origin 各记录一次，作为内容重复观察保留，不定性为缺陷。证据 `evidence/stage5-con-barov-next-turn-sanitized-20261019.json`；此为 QA branch 因果链，不是玩家反馈或主线分支证明。
+- 最新 `npm run apk:debug` standalone APK SHA-256 为 `0ACA6E449598342A409F05790F84C1BF7DF6C1C821A0439F49FDEA943B8D896F`，已 `adb install -r` 安装到 M4 AVD；保留数据，MainActivity 前台、进程在、最近 500 条 AndroidRuntime error=0。该轮 Maestro hierarchy 20 秒及冷启动 flow 30 秒均无结果，UI assertion NOT RUN；详见 `evidence/android-canon-scene-fix-install-smoke-sanitized-20261019.json`。
+- 当前新增核心阻滞是新真实小说 package 仍停在内容审查 gate，无法验证真实 package 上非空 evidence L1；旧 host transport unknown 仍不可重派。stage-5 QA branch 因果上下文已有证据，不能替代 main 的玩家决定。
+- AVD 实际盘点仍为 3 个已注册、2 个 ShineWord 专用实例在线；未新增或删除共享设备。`Pixel_10.avd` 未注册且归属未明，自动审查拒绝递归删除后继续保留，未换渠道绕过。

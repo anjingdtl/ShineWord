@@ -9,18 +9,18 @@
 ## 当前结论
 
 - **阶段 9.5：自动化工程交付目标达成后总体仍标 PARTIAL。** 已在专用 API 37 AVD 上导入真实 GBK 小说、测通 GLM、恢复 save-10 并续玩，stage-5 推进至 stage 6；stage-8 sibling branches 真实验证终局取消与成功后果消费/知识写入。累计 19 个 action turns 全为 agent-driven QA。世恒哥明确真人体验由其自行完成，不是本轮自动化交付阻滞。非空 evidence L1、历史 Stage-1/8 与部分设备故障注入证据仍缺；两条宿主机模型 pilot transport unknown 保留且未重派。
-- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 十一项确认代码缺陷各自有 RED → 最小修复 → GREEN。Core 当前 1,358/1,358，mobile typecheck、version check 通过；最新 standalone APK 安装在当前主 QA AVD，应用数据保留，终局两路径回归通过。
+- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 十二项确认代码缺陷各自有 RED → 最小修复 → GREEN。Canon 场景同源 Lore clue 是本轮最新缺陷；完整 `npm test` 1,359/1,359。mobile typecheck、version check 通过。最新 standalone APK 已保留数据安装并启动，但该构建轮次无 Maestro UI 结果。
 - **阶段 9 历史遗留：PARTIAL。** 真人有效决定 0/80、独立试玩 0/4；自然结局、Stage-1/8、TalkBack 与设备故障矩阵未完成。production synthetic fixture 的 live GLM matched 10+10 已完成，真实小说 package method 路径仍未覆盖。save-10 已恢复/续玩。真人游玩由世恒哥后续完成，不是自动化交付门。
 
 ## M0–M7
 
 - **M0 — PASS-ENGINEERING。** 实际 `origin/main=87eef899281f267a17e02357cc643dd475cabd7c`；隔离工作树施工，原 checkout、其他 worktrees 与忽略的历史账本未清理或覆盖。PR #15 未合并。
-- **M1 — PASS-DEVICE（限定范围）。** AVD `ShineWord_Phase95_LocalFinal_20261018` / `emulator-5556` / API 37 / Android 17 / 1080×2400 @420dpi。终局修复包 SHA-256 为 `F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`，已 `adb install -r` 保留数据并完成 stage-8 双分支回归。此前 `d8d9c3e` 版本的书库冷启动 5/5、M4 AVD 战役列表导航 7/7。注册 AVD 从 10 台清理到 3 台，F 盘空间增加 45.53 GiB；详见 `AVD_CLEANUP_LOCAL.md`。
-- **M2 — PARTIAL。** 小说原件 Windows-936/GBK，7,178,905 bytes；经 SAF 私有副本导入，设备解析 1,504 章 / 3,260 chunks。GLM 使用有界开篇；另以 9,601 code point 新样本独立完成 `world_extract` 与 style analyzer。world package 未含 method 条目；第三局有 6 次 fixed-empty-evidence campaign-scope L1；另以 synthetic production fixture + non-empty evidence 完成 live matched 10+10。不能以合成 fixture 代替原著 package method 路径；章节数差异未归因。
-- **M3 — PARTIAL / USER-PLAY-DEFERRED。** 骰点、Narrator、状态原子提交、下一轮、stage-5 adoption 与 stage-8 的成功/提前离开后果对照均有 Android 证据；累计 19 个 action turns 均由 QA 执行者驱动。世恒哥后续自行真人体验。
+- **M1 — PASS-DEVICE（限定旅程；最新包限 install/process smoke）。** 既有 API 37 主 AVD 上安装 hash `F1D3817...` 已完成 save-10 与 stage-8 回归。Canon clue 修复 APK hash `0ACA6E449598342A409F05790F84C1BF7DF6C1C821A0439F49FDEA943B8D896F` 已在现存 M4 AVD `emulator-5560` `adb install -r`，数据保留、MainActivity resumed、进程存在、AndroidRuntime errors=0；该轮 Maestro 无结果、UI assertion NOT RUN。之前书库冷启动 5/5、战役列表导航 7/7 属于先前 APK。注册 AVD 从 10 台清理到 3 台，F 盘空间增加 45.53 GiB；详见 `AVD_CLEANUP_LOCAL.md`。
+- **M2 — PARTIAL。** 小说原件 Windows-936/GBK，设备解析 1,504 章 / 3,260 chunks。最新独立真实 GLM scope 用 9,601 code points 串行完成 timeline/extract/mapping（3 次 HTTP 200，无 429/unknown），但因 1 blocking + 3 major 内容审查项未发布 package。新修复以 synthetic SQLite package RED→GREEN 验证场景同源 Lore clue 编译，尚无新 real package 证明非空 evidence L1；旧 world package method 数仍 0。另有 6 次 fixed-empty-evidence campaign-scope L1 和 synthetic non-empty-evidence matched 10+10；不替代真实 package 路径。
+- **M3 — PARTIAL / USER-PLAY-DEFERRED。** 19 个 agent-driven action turns 均不算玩家决定。stage-5 QA branch 的 consequence trigger/discharge 与下一轮 frozen context 已有证据，但下一轮 Narrator status 未对账；stage-8 sibling branch 取消/成功消费与知识写入有 Android 证据。世恒哥后续自行真人体验。
 - **M4 — PARTIAL / SAVE-10-DEVICE-PASS。** 历史 save-10 与精确依赖包通过 Android 原生导入、六条历史 turn/两条 roll 精确对照、冷启动和后续行动。小说/campaign ledger 当前 79 条记录（78 HTTP 200、1 次旧配置 HTTP 401），独立开篇样本另有 2 条 HTTP 200；matched live synthetic 30 条及其他独立 scope 另计。设备账本中的 HTTP 429 与同逻辑 unknown 指向本地 `10.0.2.2:8765` mock，不是 GLM；该 unknown 保留未重派。另两次宿主机 Planner transport attempt 为无 HTTP status 的潜在 unknown，identity 未持久化，未重派。Stage-1/8、live force-stop/outbox/旧 worker 矩阵仍缺。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色主题控件通过；synthetic production fixture 上 live GLM matched 10+10 通过。TalkBack spoken/focus、多窗口、API 24/真实小尺寸仍缺。
-- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十一项已确诊缺陷均 RED → 最小修复 → GREEN，并各自保留修复提交；全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建与安装身份通过。终局 pending-consequence 清理已在 Android/GLM 两个 sibling branches 复测；最新 M6-03 修复键盘打开时弹层首击失效，在保留数据的 API 37 AVD 上以 RED/GREEN 单击回归。M3-07 特定候选仍被 validator 正确拒绝；之后 stage-5 action/plan adoption 在隔离 branch 进入 stage 6。
+- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十二项确诊缺陷 RED → 最小修复 → GREEN；最新 `npm test` 1,359/1,359、mobile typecheck、version check 通过。最新 Canon clue 修复包在现存 M4 API 37 AVD 保留数据安装并启动；本轮 Maestro UI 检查无结果，因此该 APK 只记 install/process smoke。
 - **M7 — TRACKED ON PR #15.** PR 正文记录最新推送 HEAD 与该 HEAD 的 Core Verify / Android Verify 状态、run 链接；Checks 页为权威状态。旧 SHA 的成功记录不替代当前 head 检查，PR 保持开放且不自动合并。
 
 ## 最新 GLM 账本汇总
@@ -49,7 +49,7 @@
 
 ## 2026-10-19 最新状态
 
-- 最新代码修复提交：`39a8d15`（RED test）与 `e6a0bbd`（terminal consequence cleanup）。定向 7/7、Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建与 `emulator-5556` 安装身份均通过。
+- 最新代码修复提交：`f93742f`（Canon scene Lore link RED）与 `2e1a9c8`（minimal fix）。定向 1/1、全量 `npm test` 1,359/1,359、mobile typecheck、version check 均通过；`npm run verify:core` 的最终重跑仍在执行中。APK install/process smoke 证据在本轮 addendum。
 - 最新 APK SHA-256：`F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`。终局取消 branch 与 success/discharge/knowledge branch 均通过 Android UI + GLM；各一个 Narrator HTTP 200，无 unknown。
 - Live GLM matched 10+10 在 synthetic production fixture 上完成，30 HTTP 200、最大并发 1；其后 stage-8 QA 新增两个串行 Narrator HTTP 200。累计至少 113 个已知物理请求（112 HTTP 200、1 旧配置 401），另有 2 host transport unknown 保留未重派。旧 mock 429 与真实 endpoint 明确分开。
 - 真人决定/独立试玩由用户后续完成，不列为 agent 阻滞。自动化待项见 `FINAL_REPORT.md`：真实小说 package method/non-empty-evidence L1（当前 package 无 method entry）、Narrator/outbox/worker 的设备中断注入、Stage-1/8 原始资产和旧 schema、TalkBack/multiwindow/API24/真实小屏，以及 stage-5 `con-barov-offer` 的完整独立消费链。

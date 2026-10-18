@@ -24,6 +24,8 @@
 - 清理后复核确认 7 个已删除设备的目录和注册文件均不存在；`adb devices` 仍仅显示保留的两个运行中实例。M4 设备上临时开启的 TalkBack 已关闭，并恢复原 `accessibility_enabled=0` 设置。
 - 2026-10-19 复核 `emulator -list-avds` 仍只有以上 3 台，`adb devices` 只有 `emulator-5556` 与 `emulator-5560` 两台在线。项目自动化继续复用这两台现有实例，不新建 AVD；`Medium_Phone` 保持离线和不触碰。
 - `F:\avd\Pixel_10.avd` 仍是约 20.16 GiB 的未注册目录，不属于 3 台已注册设备。其项目归属依旧无法核实；对递归删除的请求被自动安全审查拦截，本轮没有通过其他命令、UI 或路径尝试绕过，也没有改动该目录。它是本机剩余磁盘占用项，不代表 ShineWord 需要第 4 台模拟器。
+- 2026-10-19 再次核实唯一 Android SDK 的 `avdmanager list avd` 与 `emulator -list-avds`，结果仍只有上述 3 个注册项；其中 `Medium_Phone` 共用，`ShineWord_M4FaultQA_20261018` 用于 M4 故障回归，`ShineWord_Phase95_LocalFinal_20261018` 用于主流程与小说验证。两台 ShineWord 专用设备（`emulator-5560`、`emulator-5556`）在线并供后续自动化复用。`F:\avd` 根下的截图、XML、SQLite/DB、APK 和日志是证据/数据文件，不是额外注册 AVD。未新增 AVD。
+- 自动安全审查拒绝删除归属未明的未注册 `Pixel_10.avd`；本记录保留该结果，不尝试换命令、UI 或路径绕过。当前可确认的 ShineWord AVD 已是用户设定的最多 3 台，不存在更多注册模拟器可继续删除。
 
 ## 验收边界
 
