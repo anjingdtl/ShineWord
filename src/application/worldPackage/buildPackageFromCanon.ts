@@ -1631,6 +1631,32 @@ async function compileCanonScenes(
   return entries;
 }
 
+/** Bind only visible, public lore that cites the exact canon facts supporting a scene.
+ * Scene clue ids also define the opening planner's evidence allowlist, so a
+ * missing link would make source-backed opening evidence unusable by L1. */
+function linkSceneLoreEvidence(entries: ContentEntry[], facts: readonly StoredFact[], anchor?: number): void {
+  const factIds = (entry: ContentEntry): Set<string> => new Set(entry.provenance.sourceFactIds);
+  const loreEntries = entries.filter(entry => entry.kind === 'lore' && entry.visibility === 'public'
+    && (entry.provenance.kind === 'explicit' || entry.provenance.kind === 'inferred')
+    && entry.provenance.sourceFactIds.length > 0
+    && isEntryVisibleAtAnchor(entry, facts, anchor));
+  for (const scene of entries.filter(entry => entry.kind === 'scene'
+    && (entry.provenance.kind === 'explicit' || entry.provenance.kind === 'inferred')
+    && entry.provenance.sourceFactIds.length > 0
+    && isEntryVisibleAtAnchor(entry, facts, anchor))) {
+    const sceneFacts = factIds(scene);
+    const linkedLoreIds = loreEntries
+      .filter(lore => lore.provenance.sourceFactIds.some(id => sceneFacts.has(id)))
+      .map(lore => lore.entryId);
+    if (linkedLoreIds.length === 0) continue;
+    const definition = scene.definition as { clues?: unknown };
+    const existing = Array.isArray(definition.clues)
+      ? definition.clues.filter((id): id is string => typeof id === 'string') : [];
+    definition.clues = [...new Set([...existing, ...linkedLoreIds])];
+    scene.dependencyIds = [...new Set([...scene.dependencyIds, ...linkedLoreIds])];
+  }
+}
+
 /** A referenced named entity may only have evidence on another subject.
  * Project the literal, unambiguous mention, never its inferred role or event narrative. */
 async function projectNamedMentionEvidence(store: SqliteWorldStore, entities: readonly StoredEntity[], facts: StoredFact[],
@@ -1884,6 +1910,7 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
   for (const skill of proposals.skills) entries.push(skill);
   for (const constraint of proposals.constraints) entries.push(constraint);
   for (const lore of proposals.lore) entries.push(lore);
+  linkSceneLoreEvidence(entries, scopedFacts, firstAnchor);
 
   // Fill missing baseline skills with conservative design_fill defaults.
   const baselineEntries = createProgressiveBaselineEntries();
@@ -2013,6 +2040,10 @@ async function buildPackagePipeline(input: BuildPackageInput, publish: boolean):
           text: `${subject.name}：${fact.predicate} ${JSON.stringify(fact.value)}` } }));
     }
   }
+
+  // Incremental local fallback lore is synthesized after mapped proposals;
+  // bind its exact fact citations too, before compiling the conservative opening.
+  linkSceneLoreEvidence(entries, scopedFacts, firstAnchor);
 
   if (input.mappingMode === 'startup_local') {
     // The default scene is the earliest visible, evidenced action entry.
