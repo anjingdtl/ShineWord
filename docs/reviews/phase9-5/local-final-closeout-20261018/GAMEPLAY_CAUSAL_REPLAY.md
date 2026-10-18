@@ -29,14 +29,35 @@
 - action 后 UI 显示“目标受阻”状态和下一轮建议；自动 campaign plan replan 随后两次顺序提交（v3→4→5），Runtime 结束为 `failed`，ending ID `ending-failure`、at stateVersion 5。此局只有一个玩家模拟行动，没有继续模拟终局之后的行动。
 - 当前终局页层级验证：`guidance-submit-*`=0、观察操作=0，composer disabled；终局行动阻断与权威 Runtime status 一致。
 
+## 第三局：campaign-scope L1、L2 与延迟消费者
+
+- Campaign `camp-mvdjtr22`，branch `camp-mvdjtr22-main`，使用同一已导入 partial world；数据库快照 integrity check 为 `ok`。下表只列行动与规则/账本指标，不复制小说或模型叙事。
+
+| Turn | routing / method | 结果 | roll 与状态版本 |
+|---|---|---|---|
+| `turn-0002` | L2 / Planner 生成后绑定 `m-follow-and-observe` | failure | `[3]` / d4 / diff 4 / margin -1；v1→2 |
+| `turn-0003` | L1 / `m-street-talk` | success | 无骰点；v2→3 |
+| `turn-0006` | L1 / `m-barov-pass` | success | `[3,6,2]` / 3d6 / diff 4 / margin +2；v5→6 |
+| `turn-0008` | L1 / `m-miner-testimony` | success | 无骰点；v7→8 |
+| `turn-0009` | L1 / `m-inspect-collapse` | failure | `[3]` / d4 / diff 4 / margin -1；v8→9 |
+| `turn-0010` | L1 / `m-enter-shaft` | success | `[4,3,6]` / 3d6 / diff 6 / margin 0；v9→10 |
+| `turn-0011` | L1 / `m-earn-jailer-trust` | full_success | `[4,5,6]` / 3d6 / diff 3 / margin +3；v10→11 |
+| `turn-0012` | L2 / freeform observe | success | 无骰点；v11→12 |
+
+L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 Planner request；turn-0002 与 turn-0012 均有真实 Planner 和 Narrator HTTP 200。全局 novel-world ledger 聚合为 Planner 8 / Narrator 14，其中第三局分别 2 / 8；所有 QA action 均为 agent-driven，不算真人决定。中间 `manage-replan` system turns 不计入上述 8 个 player-like actions。
+
+turn-0010 将 stage 3 推至 succeeded，消费 `conseq-town-tension`；turn-0011 将 stage 4 推至 succeeded，消费 `conseq-barov-attention` 和 `con-tension-peaked`。三个消费者分别在后续状态产生了 `town_tension_escalated`、`barov_offer_made`、`tension_peaked` 效果。第四项 `con-barov-offer` 仍 pending。
+
+stage 5 仍有 `content_prep` unresolved。v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒；v11 replan 的两次物理 attempt 均 HTTP 200，但最新候选因 full_success/success effects 超出既有上限被拒。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
+
 ## 因果与恢复边界
 
 - 两局 roll record、turn expected/committed stateVersion、ending ID 均来自 SQLite ledger；最终本机只读 snapshot `PRAGMA integrity_check=ok`。测试没有用重放修补或修改已提交 turn。
-- 第一局话语行动令 testimony +10 并延续到后续状态，这是已证实的即时 effect。两局最终 `deferredConsequences=[]`，没有真实延迟触发→消费→后续消费者回路，R4/V95-07/A19 仍 PARTIAL。
+- 第一局话语行动令 testimony +10 并延续到后续状态，这是已证实的即时 effect。第三局另外验证三项 deferred consequence 的真实 trigger→discharge→consumer effect；第四项仍 pending，且 stage 5 玩家后续回应未验，R4/V95-07/A19 仍 PARTIAL。
 - 第二局 terminal state 在异步重规划完成后落为 failed；其两次 manage-replan turn 仍按递增 stateVersion 保存，没覆盖 turn v3。UI 以 Runtime status 门控后续玩家行动。
-- 第一次完成真实模型调用期间，测试执行者没有重复提交、确认 unknown 或制造并发请求。实时 request ledger peak concurrency 为 1。mock world 的 429/unknown 与本小说真实 GLM world 分开记录。
+- 本小说 world 与三个 branch 的真实账本无 unknown 或在途请求，观测 peak concurrency 为 2。出现一次 campaign_plan interval 与 Planner/Narrator interval 的重叠；之后的长请求均等待完成，没有手工重派。mock world 的 429/unknown 与本小说真实 GLM world 分开记录。
 
 ## 证据界限
 
-- 本轮真实 Android/GLM 只验证这些局部流程。没有玩家对因果/剧情作判断，没有 L1 eligibility、外部试玩、全书构建、旧 save 导入、实时行动中断或 delayed consumer。
+- 本轮真实 Android/GLM 仅验证这些局部流程。没有玩家对因果/剧情作判断；L1 使用空 evidence，不覆盖非空来源证据；外部试玩、全书构建、旧 save 导入、实时行动中断与 stage 5 route 未完成。
 - 终局截图带模型生成文本，只保留在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`，不提交。数据库副本同样只留本机。

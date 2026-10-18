@@ -16,5 +16,5 @@
 
 - TalkBack 未启用（secure accessibility_enabled=0）；焦点顺序与无障碍播报为 NOT RUN。
 - 未运行旋转/多窗口、API 24 / 小屏设备、大字完整页面、长历史滚动和完整战役各屏布局矩阵。
-- 没有匹配 L1/L2 各 10 次的真实请求性能、TTFT 或费用对比；目前 package 没有 L1 合格 method。
+- 没有匹配 L1/L2 各 10 次的真实请求性能、TTFT 或费用对比；本轮仅有 campaign-scope fixed-empty-evidence L1 样本，world package 仍没有 method entry，也没有非空 evidence L1。
 - PSS 与 GfxInfo 样本来自长会话，不应与独立、固定步骤基准比较，也不能外推低端设备表现。

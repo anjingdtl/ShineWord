@@ -15,9 +15,9 @@
 
 - AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 serial `emulator-5556`，API 37 / Android 17 / `sdk_gphone16k_x86_64` / 1080×2400 @420 dpi。
 - 当前安装包通过 SAF 导入的真实 GBK 小说项目可见，partial world package `ready` 并能启动战役。
-- 两个 campaign branch 均由当前安装 APK 创建并写入本地 SQLite；真实 GLM 开局建议、campaign planning、Planner 和 Narrator 有物理账本记录。
-- 最后一局 Runtime `failed` 后，设备 UI 显示终局；hierarchy 中 `guidance-submit-*` 数量为 0、观察 action 数量为 0、composer disabled。它是 `SW95-M3-02` 安装后的设备 GREEN 证据。
-- 最终带有生成剧情的截图仅保存在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`，SHA-256 `7E8DE69217CB96A843B3B6D5E69AFEAC3832DE4731201C1145DD2C28CC2A3F4D`，未加入 Git。仓库内的开局身份截图仅展示空姓名控件与默认身份，不含小说正文或模型剧情。
+- 三个 campaign branch 均由当前安装 APK 创建并写入本地 SQLite；真实 GLM 开局建议、campaign planning、L1/L2 Planner 分流、Narrator 和 turn commit 均有账本记录。
+- 前两局的 Runtime `failed` 终局页仍保留 `SW95-M3-02` 设备 GREEN 证据：`guidance-submit-*` 与观察 action 数量为 0、composer disabled。第三局另在同一 AVD 推进到 branch state v12：campaign stage 5 内容预备失败并显示降级提示；hierarchy 有 3 个 enabled guidance 提交项与 enabled freeform composer，空输入时 submit disabled。turn-0012 的自由输入 L2 行动经 Planner/Narrator HTTP 200 并原子提交 v11→v12。
+- 第三局 state v12 的私有截图 SHA-256 `953FA7E8755212D12B8C3E26B7FD972C5BF1AA28525DEB8B18D1854FD496FC1F`，仅留在 `C:\Temp\shineword-phase95-local-final\after-stage5-fallback-l2.png`，未加入 Git。旧终局截图与开局身份截图也只保留在本地/原证据范围；仓库内身份页不含小说正文或模型剧情。
 
 ## UI 与数据保全
 
@@ -25,7 +25,7 @@
 - Gboard 首次弹出系统手写教程；取消教程后通过键盘菜单显式启用屏幕键盘，随后输入可正常工作。这是模拟器键盘初始设置，不作为应用缺陷。
 - APK 更新通过 `install -r` 保留 SQLite、小说源、GLM Keychain 配置及故障项目；没有卸载、清库或重建模拟器。
 - 单独的 SQLite 快照在本机只读分析，`PRAGMA integrity_check=ok`；快照包含本地剧情与测试状态，不提交。
-- AVD 当前停在终局页供查看。原始工作树和其他 AVD 未被启动、清除或改写。
+- AVD 当前保留第三局 active branch（state v12、stage 5 `content_prep` unresolved）供查看；三局和原小说数据均未清除。原始 main 工作树和其他 AVD 未被启动、清除或改写。
 
 ## 工具链与边界
 

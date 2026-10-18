@@ -8,7 +8,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 ## 分阶段结论
 
-- **阶段 9.5：PARTIAL。** 已用真实 GBK 小说、已认证 GLM 配置和当前分支 Debug APK，在专用 Android 37 模拟器上完成导入、开局、实际 Planner/Narrator 调用、骰点、原子 turn 提交、后续规划及终局 UI 检查。两局均由执行者按 QA 场景操作，不能算真人决定或独立试玩。当前 partial 世界没有任何合格的 package method entry，L1 物理路径未运行；最终状态也没有已消费的延迟后果。
+- **阶段 9.5：PARTIAL。** 真实 GBK 小说 partial world、已测通 GLM 配置和当前分支 Debug APK 在专用 API 37 AVD 上完成真实开局与 3 局 agent-driven 游玩。第三局真实运行 6 个 campaign-scope L1 与 2 个 L2 action turns；骰点、Narrator、原子提交、下一轮自由输入及 3 项延迟后果消费均有 SQLite/物理请求账本证据。L1 均使用显式固定空 evidence policy；stage 5 内容候选被既有 validator 拒绝，完整剧情仍阻滞。所有 QA 选择均不计真人决定或独立试玩。
 - **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 三项确认代码缺陷都具备 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态禁止继续提交变更行动。最新全量 Core 1,348/1,348、mobile typecheck、version check 通过；当前 APK 已在保留原应用数据的 AVD 安装，二进制身份匹配。
 - **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验、L1/L2 匹配性能 10+10 未验；合法 save-10 与 Stage-1/8 历史资产缺失。自动化、代理 QA、模型生成内容和 CI 不替代这些验收。
 
@@ -16,7 +16,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
 - 已独立提交的代码修复：`8ab0419`（Canon 开局方案采用）与 `3847339`（Runtime 终局行动门控）。M6 有界补建修复与各节点文档提交保留原提交历史。
-- PR #15 针对 main 开放且未合并。精确最终 HEAD 的 Core Verify / Android Verify 结果以 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 上显示的当前 SHA 为准；基线 PR #14 和旧 PR head 的 CI 不代替本轮验证。
+- PR #15 针对 main 开放且未合并。CI 结论只按 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 所示的实际 PR HEAD SHA 记录；每次证据提交后均需核对该精确 SHA，基线 PR #14 或旧 PR head 的 CI 不代替最终 HEAD 验证。
 
 ## 本地回归与 Android 包
 
@@ -28,11 +28,11 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 ## 小说、真实模型和游玩证据
 
 - 原小说 SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，7,178,905 bytes，Windows-936/GBK。设备解析 1,504 章、3,260 chunks；本轮 GLM scope 只覆盖 0–9,600 code points，未上传全书。章节计数 1,498 与设备解析 1,504 的差异仍待归因。
-- GLM 配置更新后，`opening_goal` 实际 HTTP 200。小说真实世界有 29 次成功和 1 次旧配置 HTTP 401；独立 localhost mock world 另有 1 次 429 和 1 条 `world_extract outcome_unknown`，不计作 GLM 失败。两份 ledger 未重派/确认/清除 unknown。真实成功调用并发峰值 1；token totals：输入 261,323、输出 69,611、reasoning 7,729。用户授权不设模型额度上限；账户人民币实际扣费无法从设备账本确认。
-- 公开 partial package 有 49 explicit 与 3 inference facts、52 个来源引用、8 skills、4 scenes、11 个角色模板；`method` 条目数为 0。故真实 L1 eligibility 缺内容依据，不能把 `Planner` 次数或本地建议冒充 L1；真实 L2 Planner 路径已运行。
-- 第一局有 5 个代理 QA 行动，含真实 GLM Planner/Narrator、骰点、原子提交及后续行动机会；其中 talk 成功将 testimony counter 从 0 增至 10，后续失败最终把 Runtime 推到 `failed` / `ending-case-lost`。第二局有 1 个代理 QA 行动：Planner 与 Narrator 成功，骰点 `[1]`、d4、难度 4、余量 -3，state version 2→3 原子提交；后续两次 replan 提交到版本 5，并产生 `ending-failure`。一次严重失败即进入结局是值得独立玩家评价的可玩性观察，不据此直接定性为代码缺陷或合格自然结局。
-- 在第二局终局页，`guidance-submit-*` 与观察行动按钮数量为 0，输入框 disabled；此为终局行动门控的设备 GREEN 证据。设备最终停在该终局页，没有再提交行动。
-- 真实因果范围仍有限：testimony +10 在后续状态中保留，但两局最终 `deferredConsequences` 均为空；延迟结果触发/消费及其后续玩家反馈没有通过。
+- GLM 配置更新并通过设备连接测试后，`opening_goal` 与后续 L1/L2、Narrator、campaign plan 均真实 HTTP 200。按小说 world 及三个 campaign branch 的 attempt ledger 去重：54 次物理请求，53 次成功、1 次旧配置 HTTP 401、真实模型 unknown=0、在途=0；观测峰值并发 2。token totals：输入 587,980、输出 153,011、reasoning 20,845。独立 localhost mock world 的 429 与 `outcome_unknown` 分开保留。用户授权不设模型额度上限；账户人民币实际扣费无法从设备账本确认。
+- 公开 partial package 有 49 explicit 与 3 inference facts、52 个来源引用、8 skills、4 scenes、11 个角色模板；world package `method` 条目数仍为 0。第三局 campaign-scope artifact 另生成并实际提交 6 个显式 fixed difficulty / fixed empty evidence / rule-bound 的 L1 actions（无 Planner），同时真实 L2 行动产生 Planner；不证明非空来源 evidence 的 L1 或 package method 覆盖。
+- 前两局分别有 5 与 1 个 agent-driven QA actions，既有骰点与终局证据仍保留。第三局有 8 个 actions，状态 v1→v12：L2 turn-0002 使用 Planner/Narrator；L1 turn-0003/0006/0008/0009/0010/0011 仅需 Narrator；stage 4 的 turn-0011 `[4,5,6]` / 3d6 / difficulty 3 / margin +3 full_success 原子提交 v10→v11，随后三个 deferred consequences 消费；stage 5 自由输入 L2 turn-0012 用 Planner/Narrator 成功并提交 v11→v12。三局合计 14 个 agent-driven actions，均不计真人决定。
+- 第二局终局页仍验证 `guidance-submit-*` 与观察行动为 0、composer disabled，作为 M3-02 的设备 GREEN。之后在保留数据的 AVD 上创建第三局并推进到 v12；当前活动 Runtime 为 stage 5，stage 5 `content_prep` 未解决，UI 显示准备失败/降级指导，3 个 guidance 与自由输入仍可用，空输入时 submit disabled。
+- 真实因果范围从即时 counter 扩展到代理 QA 分支上的 3 项 deferred consequence 已触发并消费：turn-0010 消费 `conseq-town-tension`；turn-0011 消费 `conseq-barov-attention` 与 `con-tension-peaked`。`con-barov-offer` 仍 pending，因 stage 5 content prep unresolved，未验证第四项消费者与玩家后续回应。
 
 ## 缺陷修复登记
 
@@ -43,9 +43,9 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 ## 未完成项 / 明确阻滞
 
-1. L1：当前世界 package 不含 method entry；不能对缺少 `difficultyPolicy` / `evidenceBinding` 的 legacy 内容做默认推断。
+1. L1：6 次真实 L1 使用 campaign-scope fixed empty evidence 与规则绑定；world package 仍无 method entry，非空 evidence L1 与 legacy 缺字段内容不得通过默认推断补齐。
 2. 真人与外部验收：0/80 真人决定、0/4 独立试玩；本轮默认角色、行动与骰点由执行者用于 QA。
-3. 延迟后果：无一个可核验的已触发且已消费 delayed consequence 消费者链。
+3. stage 5：v10 计划因缺少 ordinary-success 完成 effect producer 被拒；v11 新候选两次 HTTP 200 后因 full_success/success effect 数超过 8 被 validator 拒。revision 4 只含 stage 4 situation，stage 5 的 `content_prep` unresolved；未修改 validator、未确认代码缺陷。已消费的 3 项延迟后果为 agent-driven，第四项和玩家后续反馈未验。
 4. 旧存档与故障恢复：save-10、Stage-1/8 不存在于隔离 AVD；live turn force-stop、Narrator 前后杀进程、outbox 与旧 worker 矩阵未执行。
 5. 性能与无障碍：本轮非匹配的长会话样本 PSS 196,443 KB / RSS 285,960 KB；GfxInfo 累计 10,169 frames、modern jank 140 (1.38%)、p50/p90/p95 17/30/31 ms。它不是独立 benchmark。TalkBack、API 24、小屏和 10+10 L1/L2 matched test 未运行。
 6. 小说标题计数差异与实际模型人民币费用未知；不通过估算或改 parser 消除。
@@ -53,6 +53,6 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 ## 私有证据边界
 
-- 带模型生成文本的最新终局截图仅保存在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`（SHA-256 `7E8DE69217CB96A843B3B6D5E69AFEAC3832DE4731201C1145DD2C28CC2A3F4D`），不加入仓库。
-- 只读 SQLite 证据副本 `C:\Temp\shineword-phase95-local-final\shineword-current.db`（SHA-256 `673695A70BC6DE208C0AE99A0DA3749CDF951C03FF7942EFB47BD8935C61F04C`，`integrity_check=ok`）只留在本机；不包含密钥值，但含本地世界与测试状态，因此不提交。
+- 带模型生成文本的截图只保存在本机，不加入仓库。第三局 v12 当前屏幕截图 SHA-256 `953FA7E8755212D12B8C3E26B7FD972C5BF1AA28525DEB8B18D1854FD496FC1F`，本地路径 `C:\Temp\shineword-phase95-local-final\after-stage5-fallback-l2.png`。
+- 第三局状态 v12 的只读 SQLite 副本 SHA-256 `AF7BB3B76BA8F90636C77AE8CF7C34C6773124C0C92B7FE4B846D8F30DE4F8C5`，`integrity_check=ok`；完整 DB 仅留在本机。仓库新增的 `evidence/third-campaign-sanitized-summary.json` 不含剧情原文、提示词或密钥。
 - 已提交的开局身份页截图只显示身份控件与空姓名输入，不含小说正文或生成剧情。未将密钥、小说正文、LLM 提示词/响应、数据库、终局截图加入 PR。

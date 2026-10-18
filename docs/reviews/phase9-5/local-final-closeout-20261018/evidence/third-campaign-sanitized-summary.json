@@ -1,0 +1,247 @@
+{
+  "campaignId": "camp-mvdjtr22",
+  "branchId": "camp-mvdjtr22-main",
+  "branchStateVersion": 12,
+  "turn12": {
+    "id": "turn-0012",
+    "status": "Committed",
+    "expectedStateVersion": 11,
+    "committedStateVersion": 12,
+    "outcomeGrade": "success",
+    "roles": [
+      "Narrator",
+      "Planner"
+    ],
+    "methodId": null,
+    "actionType": "observe",
+    "roll": null
+  },
+  "runtime": {
+    "campaignStatus": "active",
+    "primaryNodeId": "stage-5",
+    "nodeStates": [
+      [
+        "stage-1",
+        "succeeded"
+      ],
+      [
+        "stage-2",
+        "succeeded"
+      ],
+      [
+        "stage-3",
+        "succeeded"
+      ],
+      [
+        "stage-4",
+        "succeeded"
+      ],
+      [
+        "stage-5",
+        "available"
+      ]
+    ],
+    "deferredConsequences": [
+      [
+        "conseq-town-tension",
+        "discharged"
+      ],
+      [
+        "conseq-barov-attention",
+        "discharged"
+      ],
+      [
+        "con-tension-peaked",
+        "discharged"
+      ],
+      [
+        "con-barov-offer",
+        "pending"
+      ]
+    ]
+  },
+  "content": {
+    "latestPlanRevision": 4,
+    "unresolvedDependencies": [
+      {
+        "nodeId": "stage-5",
+        "kind": "content_prep"
+      }
+    ],
+    "artifactSituationNodes": [
+      "stage-4"
+    ],
+    "latestReplan": {
+      "status": "invalid",
+      "base_state_version": 11,
+      "base_plan_revision": 4,
+      "updated_at": "2026-10-18T08:46:46.946Z",
+      "last_error": "firstSituation.methods[0].outcomes.full_success.effects: effects must be an array of ≤8 templates.; firstSituation.methods[0].outcomes.success.effects: effects must be an array of ≤8 templates."
+    },
+    "priorReplanV10": {
+      "status": "invalid",
+      "base_state_version": 10,
+      "base_plan_revision": 4,
+      "last_error": "artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.; artifact: current stage stage-5 has no ordinary success producer for a completion route; provide success effects that satisfy completion, or a subsequent ordinary-success fulfillment method with independently producible prerequisites. Repeated counters/promises cannot replace a missing resolved status or event; full_success may remain a shortcut."
+    }
+  },
+  "llm": {
+    "attempts": 54,
+    "success": 53,
+    "knownFailed": 1,
+    "unknown": 0,
+    "inFlight": 0,
+    "byKind": {
+      "campaign_plan": {
+        "success": 22,
+        "nonSuccess": 0
+      },
+      "memory_checkpoint": {
+        "success": 2,
+        "nonSuccess": 0
+      },
+      "narrator": {
+        "success": 14,
+        "nonSuccess": 0
+      },
+      "opening_goal": {
+        "success": 3,
+        "nonSuccess": 1
+      },
+      "planner": {
+        "success": 8,
+        "nonSuccess": 0
+      },
+      "style_analyzer": {
+        "success": 1,
+        "nonSuccess": 0
+      },
+      "world_extract": {
+        "success": 3,
+        "nonSuccess": 0
+      }
+    },
+    "inputTokens": 587980,
+    "outputTokens": 153011,
+    "reasoningTokens": 20845,
+    "peakConcurrency": 2
+  },
+  "database": {
+    "localOnly": true,
+    "sha256": "AF7BB3B76BA8F90636C77AE8CF7C34C6773124C0C92B7FE4B846D8F30DE4F8C5",
+    "integrity": "ok"
+  },
+  "screenshot": {
+    "localOnly": true,
+    "sha256": "953FA7E8755212D12B8C3E26B7FD972C5BF1AA28525DEB8B18D1854FD496FC1F",
+    "bytes": 272797
+  },
+  "latestTurnCreatedAtUtc": "2026-10-18T08:53:18.445Z",
+  "evidenceCapturedAtUtc": "2026-10-18T08:55:46Z",
+  "turn11": {
+    "id": "turn-0011",
+    "status": "Committed",
+    "expectedStateVersion": 10,
+    "committedStateVersion": 11,
+    "outcomeGrade": "full_success",
+    "methodId": "m-earn-jailer-trust",
+    "actionType": "skill_check",
+    "skillId": "skill-endurance",
+    "difficultyBand": "simple",
+    "evidenceIds": [],
+    "ruleBindingPresent": true,
+    "roll": {
+      "values": [
+        4,
+        5,
+        6
+      ],
+      "diceCount": 3,
+      "sides": 6,
+      "difficulty": 3,
+      "margin": 3,
+      "grade": "full_success"
+    }
+  },
+  "actionRouting": {
+    "playerActionTurnCount": 8,
+    "l1Count": 6,
+    "l2Count": 2,
+    "turns": [
+      {
+        "turnId": "turn-0002",
+        "routing": "L2",
+        "methodId": "m-follow-and-observe",
+        "roles": [
+          "Narrator",
+          "Planner"
+        ]
+      },
+      {
+        "turnId": "turn-0003",
+        "routing": "L1",
+        "methodId": "m-street-talk",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0006",
+        "routing": "L1",
+        "methodId": "m-barov-pass",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0008",
+        "routing": "L1",
+        "methodId": "m-miner-testimony",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0009",
+        "routing": "L1",
+        "methodId": "m-inspect-collapse",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0010",
+        "routing": "L1",
+        "methodId": "m-enter-shaft",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0011",
+        "routing": "L1",
+        "methodId": "m-earn-jailer-trust",
+        "roles": [
+          "Narrator"
+        ]
+      },
+      {
+        "turnId": "turn-0012",
+        "routing": "L2",
+        "methodId": null,
+        "roles": [
+          "Narrator",
+          "Planner"
+        ]
+      }
+    ]
+  },
+  "deviceUi": {
+    "guidanceSubmitCount": 3,
+    "guidanceEnabledCount": 3,
+    "composerEnabled": true,
+    "emptySubmitEnabled": false,
+    "degradedGuidanceVisible": true,
+    "preparationStatusVisible": true
+  }
+}

@@ -17,7 +17,7 @@
 - RED：`tests/phase9-planning.test.cjs` 在修复前以 Canon 计划含建议技能为反例，采用应成功、实则 drift 拒绝；跨身份不匹配仍应拒绝。
 - 最小修复：Canon intent 不绑定原创人物的建议技能；对已存旧 Canon proposal 中的规划字段兼容，其他身份不匹配仍拒绝。没有放宽 anchor、protagonist 或 Canon payload 校验。
 - GREEN：定向 5/5；最新全量 Core 1,348/1,348，mobile typecheck 通过。
-- Android：实际 GLM 开局方案在保留既有数据的 AVD 上采用成功，两个独立 campaign branch 均可写入 adoption turn 与后续 Runtime state。
+- Android：实际 GLM 开局方案在保留既有数据的 AVD 上采用成功，三个独立 campaign branch 均可写入 adoption turn 与后续 Runtime state。
 - 提交：`8ab0419 fix(phase95): allow canon opening plan adoption`。
 
 ## SW95-M3-02：终局/暂停 Runtime 仍可提交可变更行动
@@ -33,11 +33,12 @@
 ## 观测结果，未登记为代码缺陷
 
 - 两个 agent-driven QA campaign 的 severe failure 后由已采用的规划结局进入 failed：第一局 5 个玩家模拟行动后结束；第二局仅 1 个玩家模拟行动，观察行动 severe failure 后经两次 plan replan 到 failed。数据库的 user turns、roll records、ending ID 和终局 UI 一致，未发现状态/结局投影不一致；“一次严重失败即结束”留作独立玩家可玩性评估，不在无 RED 代码反例时登记为代码缺陷。
-- Partial world package 的 `package_entries.kind='method'` 数量为 0；所以 L1 阻滞是样本内容/资格不足，不通过手工补造或放宽 `difficultyPolicy` / `evidencePolicy` 把它伪装成缺陷修复。
-- Talk 成功将 `testimony` counter 0→10 并在后续状态中保留；最终两局 `deferredConsequences` 都为空。没有触发/消费延迟结果的证据，因此不声称该链通过。
+- Partial world package 的 `package_entries.kind='method'` 数量仍为 0；但第三局 campaign-scope artifact 实际执行了 6 个规则绑定的 L1 turn，且每个方法都有显式 fixed `difficultyPolicy` 与 fixed empty `evidencePolicy`。这验证了 campaign 内容 L1 路径，不覆盖非空来源 evidence，也不把 package method 缺项误报成代码缺陷。
+- 第三局从 state v1 推进到 v12，stage 1–4 成功，三个 deferred consequences 已触发、消费并产生下游事件；`con-barov-offer` 仍 pending。执行者的 QA 操作不等于玩家对后果的反馈。
+- stage 5 是内容生成阻滞，不是已确认的代码缺陷：v10 候选没有 ordinary-success completion effect producer；v11 候选的两次 GLM 响应均 HTTP 200，最终候选因 success/full_success effect 数超过验证上限而被拒。既有 revision 4 仅带 stage 4 situation，stage 5 `content_prep` unresolved。未改验证规则、未自动重派 unknown，也未声明 stage 5 可完成。
 
 ## 安全边界
 
 - 代码没有新增 Runtime、Store、Reducer、schema 或第二套规则语义。
-- 两局已提交 turn 与 dice 仅查询，不重放、不编辑；旧 world_extract unknown 保留，未确认、清账或重派。
+- 已提交历史 turns、骰点和 frozen content 仅只读核验，没有重放或编辑。第三局的新 turns 是隔离 QA 分支中的正常游戏提交；旧 world_extract unknown 保留，未确认、清账或重派。
 - 模型生成的剧情截图及本地 SQLite snapshot 留在本机临时目录；密钥、小说正文、提示词和原始响应不提交。

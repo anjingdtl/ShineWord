@@ -5,7 +5,7 @@
 
 ## 本轮可核证
 
-- 当前小说世界 GLM ledger 有 29 successes 和 1 个旧配置 opening_goal HTTP 401；没有真实 GLM `outcome_unknown`。401 未重派，配置更新后通过新请求 HTTP 200 验证连接。
+- 小说 world 与其三个 campaign branches 的 GLM attempt ledger 合计 53 successes 和 1 个旧配置 opening_goal HTTP 401；没有真实 GLM `outcome_unknown`。401 未重派，配置更新后通过新请求 HTTP 200 验证连接。
 - 单独的本地 mock world `world-src-7f45fe0b11ea30ec-mvdbwylw` 保留一次 HTTP 429 与一次 `network_unknown/outcome_unknown`，后者无 HTTP/provider request ID / tokens，`estimated_usage=1`。项目 remains needs_review；没有确认、清账、再派发或从真实 GLM 预算借额。
 - 两局真实 APK QA 的 action turn 均落在 SQLite 原子 commit；第一局 turn v2→v7 有多轮下一行动，第二局 severe failure 的 turn v2→v3 后，replan turn 继续提交到 v5。Roll record、state version 与 ending event 都可读。
 - 使用 `adb install -r` 更新 APK，之前的小说、Keychain、campaign、world 与旧故障现场仍保留。没有卸载、清库、模拟器 factory reset 或历史 turn 改写。
@@ -22,5 +22,5 @@
 
 ## 保护规则
 
-- 冻结历史 turn、骰点、两个 campaign ending 和所有真实模型 ledger 按原样保留。
+- 冻结历史 turn、骰点、前两局 campaign endings、第三局运行状态和所有真实模型 ledger 按原样保留。
 - 唯一 old `outcome_unknown` 是 mock world；没有 replay。读取 live SQLite 时只在 journal 空闲后对本地副本做查询；一次事务中副本未通过检查的临时快照未作为证据，设备数据库未被写入。
