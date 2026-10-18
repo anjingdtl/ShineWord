@@ -2,6 +2,14 @@
 
 日期：2026-10-18（Asia/Shanghai）
 
+## QA-PROC-01：宿主机 live-LLM pilot 未持久化 attempt identity
+
+- 类型：测试流程偏差；未确认产品代码缺陷。
+- 现象：两个独立 synthetic `CampaignSession` pilot 都进入 Planner；host transport 返回无 HTTP status 的 `transport_error`，provider 分类为 `dispatchState=unknown`。没有 HTTP/provider ID、usage 或 turn commit。
+- 根因：fixture 方法缺失 L1 所需 evidence/difficulty binding，未形成 L1 对照；临时 harness 将 `SqliteLlmLedgerStore` 绑定到 `:memory:` DB，退出前只输出了脱敏汇总，没有导出 logicalRequestId / attemptId。
+- 处置：两次未知均未重派；停止新增真实模型调用；把聚合结果与身份丢失记录在 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。无法凭现存证据确认 provider 是否收到请求。
+- 后续门槛：恢复 matched 10+10 前，先使用可保留的隔离账本、合格 L1 绑定与逐 attempt 脱敏导出；不重用这两条未知逻辑请求。
+
 ## SW95-M6-01：结构化开局证据码未触发有界补建
 
 - 严重度：P1。缺少必要开局证据时，首轮构建会停在可恢复失败状态。

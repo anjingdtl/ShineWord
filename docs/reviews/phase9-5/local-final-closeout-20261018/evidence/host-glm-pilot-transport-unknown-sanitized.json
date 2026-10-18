@@ -1,0 +1,43 @@
+{
+  "observedAtUtc": "2026-10-18T15:21:04Z",
+  "scope": "isolated synthetic CampaignSession pilot",
+  "provider": "GLM",
+  "model": "glm-5.3-flash",
+  "runs": [
+    {
+      "intendedRoute": "exact-method L1",
+      "observedRequestKinds": ["planner"],
+      "attemptCount": 1,
+      "attemptStatus": "outcome_unknown",
+      "httpStatus": null,
+      "dispatchState": "unknown",
+      "transportOutcome": "transport_error",
+      "durationMs": 1,
+      "usage": null,
+      "providerRequestId": null,
+      "turnCommitted": false
+    },
+    {
+      "intendedRoute": "free-text L2",
+      "observedRequestKinds": ["planner"],
+      "attemptCount": 1,
+      "attemptStatus": "outcome_unknown",
+      "httpStatus": null,
+      "dispatchState": "unknown",
+      "transportOutcome": "transport_error",
+      "durationMs": 0,
+      "usage": null,
+      "providerRequestId": null,
+      "turnCommitted": false
+    }
+  ],
+  "peakTransportConcurrency": 1,
+  "fixtureFinding": "Both runs used Planner; the fixture method lacked the required evidence and difficulty binding fields and therefore was not L1-eligible.",
+  "identityPersistence": "The harness used in-memory SQLite and exited without exporting logicalRequestId or attemptId. The two aggregate unknown rows were observed before exit, but their identities cannot now be recovered.",
+  "replay": "Neither request was replayed. No further real-model calls were made after this finding.",
+  "limitations": [
+    "These transport attempts are not included in the 79 durable application-ledger GLM attempts.",
+    "The HTTP dispatch outcome and possible provider receipt are unresolved.",
+    "No prompt, response, authorization value, or source text is present in this evidence."
+  ]
+}

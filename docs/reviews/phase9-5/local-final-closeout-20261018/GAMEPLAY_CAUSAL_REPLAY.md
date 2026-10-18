@@ -55,7 +55,7 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 - 两局 roll record、turn expected/committed stateVersion、ending ID 均来自 SQLite ledger；最终本机只读 snapshot `PRAGMA integrity_check=ok`。测试没有用重放修补或修改已提交 turn。
 - 第一局话语行动令 testimony +10 并延续到后续状态，这是已证实的即时 effect。第三局另外验证三项 deferred consequence 的真实 trigger→discharge→consumer effect；第四项仍 pending，且 stage 5 玩家后续回应未验，R4/V95-07/A19 仍 PARTIAL。
 - 第二局 terminal state 在异步重规划完成后落为 failed；其两次 manage-replan turn 仍按递增 stateVersion 保存，没覆盖 turn v3。UI 以 Runtime status 门控后续玩家行动。
-- 本小说 world 与三个 branch 的真实账本无 unknown 或在途请求，观测 peak concurrency 为 2。出现一次 campaign_plan interval 与 Planner/Narrator interval 的重叠；之后的长请求均等待完成，没有手工重派。mock world 的 429/unknown 与本小说真实 GLM world 分开记录。
+- 本小说 world 与三个 branch 的持久应用账本无 unknown 或在途请求，观测 peak concurrency 为 2。此结论只覆盖该账本；之后宿主机配对 pilot 的两条 transport unknown 单独记录于 `REAL_NOVEL_AND_LLM.md`，未重派。既有请求中出现一次 campaign_plan interval 与 Planner/Narrator interval 的重叠；其余长请求等待完成，没有手工重派。mock world 的 429/unknown 与小说账本分开记录。
 
 ## 证据界限
 

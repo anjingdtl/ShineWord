@@ -31,8 +31,8 @@
 | R4 | PARTIAL / AGENT-DRIVEN-CHAIN | 3 项 deferred consequence 已逐项核实触发、消费与下游效果；stage-5 action 和 stage-6 adoption 已通过隔离 branch，第四条 consequence 尚缺独立的触发/消费/下游读回及真人反馈。 |
 | R5 | PARTIAL | unknown park、原子提交/fence 工程覆盖；合成 Planner 在途强停后冷启动归为 unknown 且没有重派。已提交 live turn 的 Narrator/outbox 故障、响应写盘失败及旧 worker 设备竞态仍未做。 |
 | R6 | PARTIAL | package privacy/validation Core 通过；本轮真实行动未完成三意图私密投影审计。 |
-| R7 | PARTIAL / USER-PLAY-DEFERRED | novel world + campaigns/mapped branches 77 次物理请求：76 HTTP 200、1 次旧配置 401、unknown=0；campaign_plan 42 / Planner 8 / Narrator 17。17 个 action turns 均 agent-driven；L1 6 次、主 QA L2 8 次，L1 仅 fixed empty evidence；真人决定 0，留由用户后续体验。 |
-| R8 | PARTIAL | 长会话性能样本已记录；无 matched L1/L2 10+10 或四名独立玩家。 |
+| R7 | PARTIAL / USER-PLAY-DEFERRED | novel world + campaigns/mapped branches 持久 ledger 有 77 次物理请求：76 HTTP 200、1 次旧配置 401、该 scope 内 unknown=0；另有 2 条身份未保存的 host transport unknown，未重派。campaign_plan 42 / Planner 8 / Narrator 17。17 个 action turns 均 agent-driven；L1 6 次、主 QA L2 8 次，L1 仅 fixed empty evidence；真人决定 0，留由用户后续体验。 |
+| R8 | PARTIAL | 长会话性能样本已记录；未完成 matched L1/L2 10+10。配对 pilot 两条路都落入 Planner，transport outcome unknown，identity 未持久化，未重派。独立玩家仍为 0/4。 |
 | R9 | TRACKED ON PR #15 | 最终 SHA 的 Core Verify / Android Verify 见 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；必须核当前 PR HEAD。 |
 
 
@@ -40,7 +40,7 @@
 
 | ID | 状态 | 当前依据 / 缺口 |
 |---|---|---|
-| G0 | PARTIAL | 用户授权本轮 GLM 不限额度；小说 world + campaigns/branches 76 success / 1 旧 401，mock 429/unknown 分离；观测并发峰值=2、当前无 in-flight。input/output/reasoning tokens 为 1,117,695 / 258,924 / 40,902。CNY 费用未知，历史 510/600 ignored ledger 未改动。 |
+| G0 | PARTIAL | 用户授权本轮 GLM 不限额度；持久小说 world + campaigns/branches 有 76 success / 1 旧 401，mock 429/unknown 分离；另有 2 条 host transport unknown，dispatch 与 provider receipt 未确认。持久 ledger 当前无在途，观测最大并发=2。input/output/reasoning tokens 为 1,117,695 / 258,924 / 40,902。CNY 费用未知，历史 510/600 ignored ledger 未改动。 |
 | G1 | PARTIAL | shared L1/L2 authority 与 strict candidate contracts 在 Core 通过；campaign-scope 有 6 个真实 L1，但 evidenceIds 均为空，package method entry=0。 |
 | G2 | PARTIAL | Runtime status、即时 counter、3 个 delayed consumer effects 与结束 UI 可对账；隔离 branch 完成 stage 5 并进入 stage 6；第 4 条后果消费和真人反馈未验。 |
 | G3 | PARTIAL | 更新配置后的 opening_goal HTTP 200；后续真实 campaign plan、Planner/Narrator、stage-5 action 和 plan-r7 adoption 均有账本证据。真人选择及玩家反馈没有。 |

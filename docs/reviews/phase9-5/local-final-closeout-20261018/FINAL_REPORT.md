@@ -8,7 +8,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 ## 分阶段结论
 
-- **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成了开局、连续行动、历史 save-10 恢复续玩以及 stage-5 隔离分支推进。累计 17 个行动级回合全部由测试执行者驱动；3 项延迟后果已核对消费，第 4 项的下游读回和玩家反馈仍缺。stage 5 已在 QA branch 完成并进入 stage 6，但原 main 保持 v12/r4；campaign-scope L1 使用显式 fixed empty evidence。非空来源证据 L1、main 当前内容补建、真人和独立试玩仍未验收。
+- **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成了开局、连续行动、历史 save-10 恢复续玩以及 stage-5 隔离分支推进。累计 17 个行动级回合全部由测试执行者驱动；3 项延迟后果已核对消费，第 4 项的下游读回和玩家反馈仍缺。stage 5 已在 QA branch 完成并进入 stage 6，但原 main 保持 v12/r4；campaign-scope L1 使用显式 fixed empty evidence。非空来源证据 L1、main 当前内容补建、真人和独立试玩仍未验收。另有两次宿主机 GLM transport unknown（详情见脱敏证据），不重派且不计入持久应用账本。
 - **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 八项确认代码缺陷均具 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态行动门控、effect 上限 repair guidance、long-plan consequence repair guidance、stage completion producer repair guidance、action-reference mismatch guidance，以及 start-node recovery guidance。最新全量 Core 1,356/1,356、mobile typecheck、version check 通过；standalone APK 已在保留原应用数据的 AVD 安装，二进制身份匹配并通过脱离 Metro 的冷启动。
 - **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验、L1/L2 匹配性能 10+10 未验；Stage-1/8 历史资产和多项故障注入仍缺。合法 save-10 已真实恢复、续玩并保留历史记录。自动化、代理 QA、模型生成内容和 CI 不替代玩家验收。
 
@@ -29,12 +29,14 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 - 最新应用代码在 `447bd67` 后完成全量 Core、mobile typecheck、version check、standalone APK 构建、安装身份核验及脱离 Metro 冷启动。其后本轮只修改脱敏 Markdown/JSON 证据；同一 APK 上完成 save-10 原生恢复、续玩与隔离 stage-5 行动/plan adoption。MainActivity 可运行且原有用户数据保留。
 - 当前 standalone Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`；本地构建与模拟器安装包 SHA-256 均为 `C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44`。
 - 专用 AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 `emulator-5556`，API 37 / Android 17 / 1080×2400 @420 dpi。使用 `adb install -r`，没有清除数据库、小说、Keychain 或模拟器数据。
+- 应用户要求检查并精简 AVD：通过 Android SDK 管理器删除 7 台历史 ShineWord 专项 AVD；已注册设备从 10 台减至 3 台，保留当前小说实测机、M4 故障回归机和共享 `Medium_Phone`。F 盘可用空间实测增加约 45.53 GiB；未注册且归属不明的 `Pixel_10.avd` 残留目录保留。设备清理记录见 `AVD_CLEANUP_LOCAL.md`。
+- 收口期间另起的宿主机 GLM benchmark pilot 失败：fixture 不具备 L1 所需 binding，两次均被送往 Planner；两次 transport outcome 均为 unknown，且临时内存账本未导出 attempt identity。未重派、未将其计入 79 条持久应用账本；该 QA 流程偏差列入 `DEFECT_REGISTER.md`，也使本轮不能宣称所有潜在 endpoint 尝试都已对账。
 
 ## 小说、真实模型和游玩证据
 
 - 原小说 SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，7,178,905 bytes，Windows-936/GBK。设备解析 1,504 章、3,260 chunks；本轮 GLM scope 只覆盖 0–9,600 code points，未上传全书。章节计数 1,498 与设备解析 1,504 的差异仍待归因。
-- GLM 配置已由用户确认测通。按真实小说 world、三个 campaigns 与 mapped branches 去重，共 77 次物理 attempt：76 次 HTTP 200、1 次轮换前配置 HTTP 401；真实模型 unknown=0、在途=0。观测并发峰值 2，后续请求按序等待。成功 token totals：输入 1,117,695、输出 258,924、reasoning 40,902。mock 429 与 `outcome_unknown` 分开保留；用户授权不设额度上限，账户人民币实际扣费仍无法从 ledger 确认。
-- 后续排查发现设备账本里那条 `world_extract` 429 的冻结 endpoint 是本地故障注入 `10.0.2.2:8765`，不是 GLM。该同一 logical request 的 attempt 2 保持 `outcome_unknown`，未重派。为验证原著内容假设，另对开篇 9,601 code point 建立独立样本项目：当前直接 GLM 配置下 `world_extract` 与 `style_analyzer` 均 HTTP 200，在途峰值 1，单单元构建完成；样本不能代表未测试的全书后续内容。合并统计为 79 次真实 GLM attempt（78 HTTP 200、1 次旧配置 HTTP 401，0 次 GLM 429 / unknown / in-flight），详细脱敏证据见 `evidence/glm-429-attribution-and-retest-sanitized.json`。
+- GLM 配置已由用户确认测通。真实小说 world、三个 campaigns 与 mapped branches 的持久应用账本共 77 次物理 attempt：76 次 HTTP 200、1 次轮换前配置 HTTP 401。观测并发峰值 2，后续请求按序等待。成功 token totals：输入 1,117,695、输出 258,924、reasoning 40,902。实际人民币扣费仍无法从 app ledger 确认。
+- 后续排查发现设备账本里那条 `world_extract` 429 的冻结 endpoint 是本地故障注入 `10.0.2.2:8765`，不是 GLM；其同一 logical request 的 attempt 2 保持 `outcome_unknown`，未重派。另有独立开篇样本两次 HTTP 200。上述持久应用账本与开篇样本共 79 次已知记录（78 HTTP 200、1 次旧配置 HTTP 401；其中真实 GLM 429=0）。另两次面向 GLM 的宿主机 transport attempt 没有 HTTP status，dispatch outcome unknown，且 identity 未持久化；不能将其计作已确认成功/失败，不能重派。详情见 `evidence/glm-429-attribution-and-retest-sanitized.json` 与 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。
 - 公开 partial package 有 49 explicit 与 3 inference facts、52 个来源引用、8 skills、4 scenes、11 个角色模板；world package `method` 条目数仍为 0。第三局 campaign-scope artifact 另生成并实际提交 6 个显式 fixed difficulty / fixed empty evidence / rule-bound 的 L1 actions（无 Planner），同时真实 L2 行动产生 Planner；不证明非空来源 evidence 的 L1 或 package method 覆盖。
 - 前两局分别有 5 与 1 个 agent-driven QA actions，既有骰点与终局证据仍保留。第三局 main 有 8 个 actions、v1→v12；6 个 campaign-scope L1 与 2 个 L2 完成骰点、Narrator、原子提交和下一轮。stage 4 turn-0011 `[4,5,6]` / 3d6 / difficulty 3 / margin +3 `full_success` v10→v11，后续三项 deferred consequence 已消费。`camp-mvdjtr22-bmvdo8467` branch 另有 1 个 method-bound failure action。随后隔离 QA branch 的 stage-5 `turn-0014` 成功 v13→v14、无骰点、Narrator HTTP 200；两个串行 plan attempts 后采用 r7、进入 stage 6。Save-10 branch 也完成 1 个恢复后续玩行动。共 17 个新增 agent-driven action turns，均不计真人决定。
 - 第二局终局页仍验证 `guidance-submit-*` 与观察行动为 0、composer disabled，作为 M3-02 的设备 GREEN。之后第三局 main 推进至 v12，stage-5 降级提示与安全自由输入也曾现场验证。该 main 保持 v12/r4；应用创建的隔离 branch `camp-mvdjtr22-bmvdq6wys` 后续经 stage-5 action 推进至 v15/r7，stage 5 succeeded、stage 6 active、stage 7/8 planned。最新设备 SQLite 完整性检查为 `ok`。

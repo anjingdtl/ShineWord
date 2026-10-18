@@ -24,7 +24,7 @@
 | narrator | 17 | 0 | 55,395 / 8,144 / 294 | 6,941 / 12,140 / 20,138 |
 | memory_checkpoint | 2 | 0 | 4,686 / 2,899 / 19 | 22,071 / 25,640 / 29,208 |
 
-按真实小说 world、其三个 campaigns 及映射 branches 的物理 attempt 去重统计，共 77 次请求：76 次 HTTP 200 成功、1 次配置轮换前 HTTP 401；没有真实模型 `outcome_unknown` 或在途请求。配置更新后通过真实请求 HTTP 200 验证，旧 401 没有重派。新计划修复及 stage-5 后续采用共增加 6 个顺序 `campaign_plan` attempt 和 2 个串行 Narrator 调用；没有重派未知请求。
+按真实小说 world、其三个 campaigns 及映射 branches 的应用持久账本去重统计，共 77 次请求：76 次 HTTP 200 成功、1 次配置轮换前 HTTP 401；该账本范围内没有 `outcome_unknown` 或在途请求。配置更新后通过真实请求 HTTP 200 验证，旧 401 没有重派。新计划修复及 stage-5 后续采用共增加 6 个顺序 `campaign_plan` attempt 和 2 个串行 Narrator 调用；没有重派未知请求。
 
 76 次成功调用合计 input `1,117,695`、output `258,924`、reasoning `40,902` tokens。App ledger 不记录实际人民币扣费，费用未知；世恒哥对本项目的不限额度授权不代表费用为零。独立 localhost mock world 的 429 / `outcome_unknown` 不计入以上统计。旧证据文件 `evidence/third-campaign-sanitized-summary.json` 保留其较早点时快照；该快照的计数不代表本节最终汇总。
 
@@ -33,7 +33,13 @@
 - 复查设备数据库中的那条 `world_extract` HTTP 429 后，读取其冻结构建配置：endpoint host 为 `10.0.2.2`、port `8765`，模型字段为 `glm-5.3-flash`。这是 Android 模拟器宿主映射到的本地注入端口；仓库中的 [mock-429-server.cjs](evidence/mock-429-server.cjs) 明确固定返回 synthetic HTTP 429、丢弃请求正文且不记录 Authorization。因此该 429 来自本地故障注入服务，不是 GLM 内容审核响应，原著用词与该 429 无因果关系。
 - 该本地逻辑请求记录 attempt 1 `failed/http_rate_limit/429`，attempt 2 `outcome_unknown/network_unknown`；两条属于同一 logical request。ledger 未保存 HTTP 响应正文且没有 provider request ID，未知状态保持原样，未重派、未清账。
 - 为回答原著内容是否触发 GLM 拒绝，另建独立样本项目，从同一本机小说取开篇 9,601 个 code point，走当前 `open.bigmodel.cn` / `glm-5.3-flash` 配置。新 logical request 不是对上述 unknown 的重放：`world_extract` HTTP 200（49,202 ms；input/output/reasoning `5,011/3,133/18`），`style_analyzer` HTTP 200（15,232 ms；`1,660/550/0`）；在途峰值 1。单单元构建完成，SQLite `integrity_check=ok`。原文和响应均未加入仓库。
-- 该开篇样本在当前配置下没有 429 或内容拒绝；它不能证明未测试的全书后续段落均可通过。把独立样本的两次成功请求计入后，观测到的真实 GLM 总量为 79 次（78 HTTP 200、1 次旧配置 HTTP 401）；真实 GLM 429、unknown 和在途请求均为 0。分项证据见 `evidence/glm-429-attribution-and-retest-sanitized.json`；费用仍无法从 app ledger 确认。
+- 该开篇样本在当前配置下没有 429 或内容拒绝；它不能证明未测试的全书后续段落均可通过。把独立样本的两次成功请求计入后，持久应用 ledger 范围为 79 次真实 GLM 记录（78 HTTP 200、1 次旧配置 HTTP 401），该范围内 429 / unknown / in-flight 均为 0。宿主机配对试跑的两条 transport unknown 另见下节，不在这 79 条中；费用仍无法从 app ledger 确认。
+
+## 后续宿主机配对试跑偏差
+
+- 在 79 次持久应用账本调用之后，另起的合成 `CampaignSession` 配对试跑发生两次面向 GLM endpoint 的 Planner transport attempt；两次均无 HTTP status、provider request ID 或 usage，provider adapter 归类为 `transport_error` / `dispatchState=unknown`。是否已到达 provider 无法确认。
+- 这不是 L1/L2 样本：fixture 方法缺少 L1 必需的 evidence/difficulty binding 字段，原本计划走 L1 的输入也正确地落入 Planner。两个独立 fixture 的账本各观察到一条 `outcome_unknown`，但 harness 使用 `:memory:` SQLite，退出前未导出 `logicalRequestId` / `attemptId`；这两个 identity 现已无法恢复。
+- 两次均未重派；之后停止了真实模型调用。它们不计入 79 条持久应用账本记录，因此不能继续宣称本轮所有真实 endpoint 尝试结果都已核清。脱敏摘要见 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。这是测试 harness 的工程偏差，不是已确诊的产品代码缺陷。
 
 ## 独立本地故障注入世界
 

@@ -21,4 +21,5 @@
 - TalkBack 的实际焦点移动与 spoken output 未验证。设备上 TalkBack 包已安装但服务未启用；临时服务设置探测未能产生可读的 UiAutomator 树，随后精确恢复原服务列表。master `accessibility_enabled` 标志为 1 本身不代表 TalkBack 正在工作。
 - 未运行多窗口、API 24 / 真实低尺寸设备、大字完整战役页、长历史滚动和完整战役各屏布局矩阵。360×800dp 结果来自虚拟显示尺寸/密度覆盖，不等同另一台物理设备。
 - 没有匹配 L1/L2 各 10 次的真实请求性能、TTFT 或费用对比；本轮仅有 campaign-scope fixed-empty-evidence L1 样本，world package 仍没有 method entry，也没有非空 evidence L1。
+- 后续尝试的 L1/L2 小样没有形成有效样本：合成 fixture 缺少 L1 必需绑定字段，两条路径都进入 Planner；两次宿主机 transport attempt 无 HTTP status 且 outcome unknown，attempt identity 未从临时内存账本持久化。两次未重派，完整脱敏偏差记录见 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。
 - PSS 与 GfxInfo 样本来自长会话，不应与独立、固定步骤基准比较，也不能外推低端设备表现。

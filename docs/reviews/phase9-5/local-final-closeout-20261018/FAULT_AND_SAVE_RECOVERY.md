@@ -5,9 +5,10 @@
 
 ## 本轮可核证
 
-- 小说 world、三个 campaigns 与映射 branches 的最终 GLM ledger 合计 77 次物理 attempt：76 HTTP 200、1 个配置轮换前 `opening_goal` HTTP 401；真实模型 `outcome_unknown=0`、in-flight=0。401 未重派。成功 token 汇总为 input/output/reasoning `1,117,695 / 258,924 / 40,902`；观测并发峰值 2，最后 8 个真实请求均串行完成。费用账单不可见，CNY 金额未知。
+- 小说 world、三个 campaigns 与映射 branches 的持久应用 GLM ledger 合计 77 次物理 attempt：76 HTTP 200、1 个配置轮换前 `opening_goal` HTTP 401；仅在此账本 scope 内 `outcome_unknown=0`、in-flight=0。401 未重派。成功 token 汇总为 input/output/reasoning `1,117,695 / 258,924 / 40,902`；观测并发峰值 2，最后 8 个真实请求均串行完成。另有两次宿主机 Planner transport attempt 的 identity 未持久化、dispatch unknown，详见 `REAL_NOVEL_AND_LLM.md`；费用账单不可见，CNY 金额未知。
 - 单独的本地 mock world `world-src-7f45fe0b11ea30ec-mvdbwylw` 保留一次 HTTP 429 与一次 `network_unknown/outcome_unknown`，后者无 HTTP/provider request ID / tokens，`estimated_usage=1`。设备冻结配置确认这条 run 指向模拟器宿主映射 `10.0.2.2:8765`；仓库 bounded fixture 明确返回合成 429，所以这不是 GLM 响应。两条 attempt 同属一个 logical request，unknown 仍为 `needs_review`；没有确认、清账、重派或从真实 GLM 预算借额。
 - 在专用 `ShineWord_M4FaultQA_20261018`（API 37）上，使用有 90 秒安全上限的 localhost hold server 接收 Planner POST，只记录请求路径/字节数，丢弃正文且不记录 Authorization。收到请求后立即 force-stop app；冷启动并重新打开同一 synthetic branch 后，SQLite attempt 从 sent 收敛为 `outcome_unknown`，HTTP/provider ID 均为空，server 未观察到第二次请求。branch stateVersion 仍为 0、rolls=0、branch outbox=0、`integrity_check=ok`；unknown 保留，未确认、清账或重派。脱敏证据见 `evidence/m4-synthetic-avd-force-stop-sanitized.json`。这验证在途 Planner 强停及冷启动不重派，不代表已提交 turn 的 Narrator/outbox 故障矩阵。
+- 后续另起的宿主机 `CampaignSession` 配对试跑在两个隔离内存 fixture 中各发生一次 Planner transport attempt；均为 HTTP status=null、`transport_error`、`dispatchState=unknown`、无 provider ID/usage。请求可能到达 GLM，不能据此确认发送或未发送。该 harness 退出时丢失了临时 ledger 的 logical/attempt identity，因此列作未解决测试探针，不计入真实小说应用账本；两次均未重派。证据见 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。
 - 为排除当前原著开篇被 GLM 拒绝，新建独立 9,601 code point 样本项目走当前直接 GLM endpoint；`world_extract` 与 `style_analyzer` 连续 HTTP 200，观察到峰值在途 1，单单元构建完成。新请求未引用也未重派 local-mock unknown。脱敏指标见 `evidence/glm-429-attribution-and-retest-sanitized.json`。
 - 两局真实 APK QA 的 action turn 均落在 SQLite 原子 commit；第一局 turn v2→v7 有多轮下一行动，第二局 severe failure 的 turn v2→v3 后，replan turn 继续提交到 v5。Roll record、state version 与 ending event 都可读。
 - 使用 `adb install -r` 更新 APK，之前的小说、Keychain、campaign、world 与旧故障现场仍保留。没有卸载、清库、模拟器 factory reset 或历史 turn 改写。
