@@ -1,0 +1,72 @@
+{
+  "schema": "phase95-glm-429-attribution-retest.v1",
+  "date": "2026-10-18",
+  "prior_429": {
+    "request_kind": "world_extract",
+    "model": "glm-5.3-flash",
+    "endpoint_host": "10.0.2.2",
+    "endpoint_port": 8765,
+    "endpoint_is_local_fault_fixture": true,
+    "attempt_1": {
+      "status": "failed",
+      "http_status": 429,
+      "failure_class": "http_rate_limit"
+    },
+    "attempt_2": {
+      "status": "outcome_unknown",
+      "http_status": null,
+      "failure_class": "network_unknown"
+    },
+    "same_logical_request": true,
+    "response_body_persisted": false,
+    "provider_request_id_present": false,
+    "replayed": false,
+    "attribution": "local_synthetic_fault_injection_not_GLM"
+  },
+  "independent_real_glm_probe": {
+    "source_scope_codepoints": 9601,
+    "source_is_raw_novel_excerpt": true,
+    "raw_excerpt_or_prompt_in_repository": false,
+    "endpoint_host": "open.bigmodel.cn",
+    "model": "glm-5.3-flash",
+    "peak_in_flight_requests": 1,
+    "attempts": [
+      {
+        "request_kind": "world_extract",
+        "status": "succeeded",
+        "http_status": 200,
+        "duration_ms": 49202,
+        "input_tokens": 5011,
+        "output_tokens": 3133,
+        "reasoning_tokens": 18
+      },
+      {
+        "request_kind": "style_analyzer",
+        "status": "succeeded",
+        "http_status": 200,
+        "duration_ms": 15232,
+        "input_tokens": 1660,
+        "output_tokens": 550,
+        "reasoning_tokens": 0
+      }
+    ],
+    "build_run": {
+      "phase": "publishing",
+      "status": "completed",
+      "units_total": 1,
+      "units_done": 1,
+      "units_failed": 0
+    },
+    "database_integrity_check": "ok",
+    "replayed_prior_unknown": false
+  },
+  "observed_real_GLM_attempt_totals_including_this_probe": {
+    "physical_attempts": 79,
+    "http_200": 78,
+    "http_401": 1,
+    "http_429": 0,
+    "outcome_unknown": 0,
+    "in_flight": 0,
+    "currency_cost": "not available from the app ledger"
+  }
+}

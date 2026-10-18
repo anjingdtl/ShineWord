@@ -28,6 +28,13 @@
 
 76 次成功调用合计 input `1,117,695`、output `258,924`、reasoning `40,902` tokens。App ledger 不记录实际人民币扣费，费用未知；世恒哥对本项目的不限额度授权不代表费用为零。独立 localhost mock world 的 429 / `outcome_unknown` 不计入以上统计。旧证据文件 `evidence/third-campaign-sanitized-summary.json` 保留其较早点时快照；该快照的计数不代表本节最终汇总。
 
+## 2026-10-18：429 归因与独立 GLM 复测
+
+- 复查设备数据库中的那条 `world_extract` HTTP 429 后，读取其冻结构建配置：endpoint host 为 `10.0.2.2`、port `8765`，模型字段为 `glm-5.3-flash`。这是 Android 模拟器宿主映射到的本地注入端口；仓库中的 [mock-429-server.cjs](evidence/mock-429-server.cjs) 明确固定返回 synthetic HTTP 429、丢弃请求正文且不记录 Authorization。因此该 429 来自本地故障注入服务，不是 GLM 内容审核响应，原著用词与该 429 无因果关系。
+- 该本地逻辑请求记录 attempt 1 `failed/http_rate_limit/429`，attempt 2 `outcome_unknown/network_unknown`；两条属于同一 logical request。ledger 未保存 HTTP 响应正文且没有 provider request ID，未知状态保持原样，未重派、未清账。
+- 为回答原著内容是否触发 GLM 拒绝，另建独立样本项目，从同一本机小说取开篇 9,601 个 code point，走当前 `open.bigmodel.cn` / `glm-5.3-flash` 配置。新 logical request 不是对上述 unknown 的重放：`world_extract` HTTP 200（49,202 ms；input/output/reasoning `5,011/3,133/18`），`style_analyzer` HTTP 200（15,232 ms；`1,660/550/0`）；在途峰值 1。单单元构建完成，SQLite `integrity_check=ok`。原文和响应均未加入仓库。
+- 该开篇样本在当前配置下没有 429 或内容拒绝；它不能证明未测试的全书后续段落均可通过。把独立样本的两次成功请求计入后，观测到的真实 GLM 总量为 79 次（78 HTTP 200、1 次旧配置 HTTP 401）；真实 GLM 429、unknown 和在途请求均为 0。分项证据见 `evidence/glm-429-attribution-and-retest-sanitized.json`；费用仍无法从 app ledger 确认。
+
 ## 独立本地故障注入世界
 
 - 世界 `world-src-7f45fe0b11ea30ec-mvdbwylw` 绑定原始 TXT hash，是单独的 localhost/mock fixture 项目，不是上述 GLM campaign 世界。
