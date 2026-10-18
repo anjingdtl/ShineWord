@@ -558,3 +558,28 @@ test('campaign-plan missing long consequences receives validator-specific repair
   assert.match(requests[1].user, /后续必做阶段 completion\/activation.*正向消费/);
   assert.match(requests[1].user, /不得.*record_event.*伪装/);
 });
+
+test('campaign-plan missing local completion producer receives targeted repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  const repaired = structuredClone(candidateModel());
+  repaired.firstSituation.methods[0].methodId = 'method-repaired';
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen stage plan contract', user: 'frozen player intent and stage material' },
+    logicalRequestId: 'local-completion-producer-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return model.firstSituation?.methods?.some(method => method.methodId === 'method-repaired')
+        ? []
+        : ['artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.'];
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /current stage stage-5 completion has no local effect producer/);
+  assert.match(requests[1].user, /stage stage-5.*completion.*effect producer/i);
+  assert.match(requests[1].user, /success|full_success/);
+  assert.match(requests[1].user, /保留.*completion.*条件|completion 条件.*保留/);
+});

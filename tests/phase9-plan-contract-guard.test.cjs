@@ -136,6 +136,21 @@ test('phase 9 parser-limit repair guidance preserves executable completion', () 
   assert.match(guidance, /保留普通 success.*completion/);
   assert.match(guidance, /拆分到后续可执行办法/);
 });
+
+test('phase 9 repair guidance explains a missing local stage-completion effect producer', () => {
+  const guidance = buildStructuralRepairGuidance([
+    'artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.',
+  ], {
+    stages: [{ nodeId: 'stage-5', completion: { kind: 'committed_event', eventType: 'stage_5_complete' } }],
+    firstSituation: { methods: [{ methodId: 'fulfill-stage-5' }] },
+  });
+
+  assert.match(guidance, /stage stage-5.*completion.*effect producer/i);
+  assert.match(guidance, /success|full_success/);
+  assert.match(guidance, /record_event|situation_status|situation_counter|promise/);
+  assert.match(guidance, /保留.*completion.*条件|completion 条件.*保留/);
+  assert.match(guidance, /不得.*降低.*门槛|不得.*改写.*历史/);
+});
 function validationContext(ctx, artifact) {
   return {
     visibleWorldEntryIds: new Set(ctx.visibleEntries.map(entry => entry.entryId)),

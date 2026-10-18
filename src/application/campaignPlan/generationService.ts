@@ -178,6 +178,14 @@ export function buildStructuralRepairGuidance(
       const alternatives = methods.flatMap(m => m.methodId !== methodId && typeof m.methodId === 'string' ? [m.methodId] : []);
       return [`- method ${methodId} 的成功事件（${events.join(', ')}）没有可达用途。若该事件确已完成公开目标，让对应阶段 completion 以匹配 committed_event 消费；若只是问路、搜集信息或准备，保留真实行动范围，在普通 success 和 full_success 提供合法 grant_knowledge 或有明确事实单位的 situation_counter，并让另一办法（候选：${alternatives.join(', ')}）的 requires.condition 正向消费它后执行独立推进。首次准备不得关闭局面或宣称远期目标已完成，不得凭空补造世界条目、提高计数或删除既有门槛；保留至少一个当前可执行办法和完整四档合同，输出正式新候选。`];
     }
+    const localCompletionMatch = /^artifact: current stage (\S+) completion has no local effect producer(?:;.*)?$/.exec(error.trim());
+    if (localCompletionMatch) {
+      const stageId = localCompletionMatch[1]!;
+      const methods = (Array.isArray(asRecord(root?.firstSituation)?.methods)
+        ? asRecord(root?.firstSituation)!.methods as unknown[] : []).map(asRecord).filter((m): m is JsonRecord => m !== null);
+      const names = methods.flatMap(m => typeof m.methodId === 'string' ? [m.methodId] : []);
+      return [`- stage ${stageId} 的 completion 当前没有本地 effect producer（可执行办法：${names.join(', ') || '无已声明办法'}）。保留 completion 条件树、ID、门槛和 required-main 依赖不变；逐个核对该阶段本地 situation 的每个状态、计数、承诺或 committed_event 条件叶，为其提供一个从当前可执行办法可达的合法效果生产者，或由确实可排程的本地后果提供生产者：situation_status 必须匹配同一 situationId/status，situation_counter 必须匹配同一 situationId/counterId 且 delta 为正，promise_create/fulfill/break 必须匹配原 situationId/promiseId，committed_event 必须由同类型 record_event 或对应权威效果产生。效果必须位于真实 success/full_success 路径或可达后果中，不能只写在 resultFact、不可达办法或失败等级里；普通 success 路线仍须满足所有 required completion。不得降低门槛、删掉合法条件、伪造世界/引擎事件、借用未排程后果或把文案当状态变化；保留其余合同，输出完整修正候选。`];
+    }
     const ordinaryMatch = /^artifact: current stage (\S+) (?:has no ordinary success producer|cannot supply an ordinary completion route)/.exec(error.trim());
     if (ordinaryMatch) {
       const methods = (Array.isArray(asRecord(root?.firstSituation)?.methods)
