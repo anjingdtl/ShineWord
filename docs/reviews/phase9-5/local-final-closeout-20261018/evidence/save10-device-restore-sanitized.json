@@ -1,0 +1,70 @@
+{
+  "schema": "phase95-save10-device-restore-evidence/v1",
+  "date": "2026-10-18",
+  "device": {
+    "serial": "emulator-5556",
+    "avd": "ShineWord_Phase95_LocalFinal_20261018",
+    "api": 37,
+    "package": "com.shineword.app"
+  },
+  "sourceAssets": {
+    "historicalSave": {
+      "filename": "Phase95_Save10_Historical_20261018.shineword-save.json",
+      "bytes": 527081,
+      "sha256": "8fddd89fedd0fbdf48aeee563c44ce6dba8dca9a40ff57c07f423f8d2f3f0d60"
+    },
+    "exactWorldArchive": {
+      "filename": "Phase95_Save10_ExactWorld_Archive_20261018.shineword-world.zip",
+      "bytes": 657014,
+      "sha256": "29e451f62737816edfd68be9cd5fff1d803726c22993e3dab908e8fad35099a6",
+      "entries": 57,
+      "sections": 7,
+      "chapters": 1504,
+      "entities": 28,
+      "facts": 50,
+      "events": 9,
+      "ruleMappings": 4,
+      "artifacts": 2
+    }
+  },
+  "worldBinding": {
+    "worldId": "world-src-7f45fe0b11ea30ec-mv3ikzrw",
+    "sourceSha256": "7f45fe0b11ea30eca95f5a736232dd4c466a57c0f2cc9f67530e432015ecc6f4",
+    "packageRevision": 1,
+    "packageContentSha256": "690e22eabcea732f660c306d3134a3d43bfec882ed43d8b4e077d0ee863f8778",
+    "saveManifestPackageAndArtifactHashesMatched": true
+  },
+  "restore": {
+    "nativeLibraryWorldImport": "passed",
+    "nativeCampaignSaveImport": "passed",
+    "campaignId": "camp-mvdsy3v4",
+    "branchId": "camp-mvdsy3v4-main",
+    "stateVersion": 6,
+    "planRevision": 3,
+    "turnRowsAfterContinuation": 7,
+    "rollRowsAfterContinuation": 3,
+    "snapshotRowsAfterContinuation": 7,
+    "historicalTurnsCompared": 6,
+    "historicalTurnContractsAndHashesEqual": true,
+    "historicalRollsCompared": 2,
+    "historicalRollValuesAndHashesEqual": true,
+    "newContinuation": {
+      "turnId": "turn-0006",
+      "commit": "v5-to-v6",
+      "status": "committed",
+      "roll": "3d6, difficulty 4, margin +2, success",
+      "actionContractSha256": "05d176affbdb9b52be54a82bf552fa4f989820ba039b2ba48ffec42c6c0f33cf",
+      "narratorHttpStatus": 200
+    },
+    "coldRelaunch": "passed; play-composer and play-submit visible"
+  },
+  "preservation": {
+    "campaignsBeforeAndAfterImport": "3 existing; 1 new restored campaign",
+    "branchesBeforeAndAfterImport": "9 existing; 1 new restored branch",
+    "turnsBeforeAndAfterImport": "98 existing; 7 turns on the new restored branch",
+    "historicalRowsDeletedOrRewritten": false,
+    "databaseIntegrityCheck": "ok",
+    "notes": "Only two ephemeral llm_resource_buckets playingUntil/activities fields changed during application activity. The continuation is agent-driven QA, not human acceptance."
+  },
+  "privacy": "No novel body, model prompt or response, secret, database, or screenshot is included."
+}
