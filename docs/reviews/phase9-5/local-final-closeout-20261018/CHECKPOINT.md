@@ -21,7 +21,7 @@
 - **M4 — PARTIAL / BLOCKED-ASSET。** 小说 world 及其 campaigns/branches 合计 65 次真实物理请求：64 成功 HTTP 200、1 次旧配置 HTTP 401；`outcome_unknown=0`、在途=0，观测峰值并发=2。mock world 的 429 与 `outcome_unknown` 保留且未重派。live turn force-stop/outbox 与合法历史存档矩阵未运行。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号及终局页有限检查通过；TalkBack、多尺寸设备与匹配 10+10 未运行。
 - **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 六项已确诊缺陷均 RED → GREEN，并各自保留独立修复提交；全量 Core、mobile typecheck、version check、APK 构建和安装身份复核通过。stage 5 修复后候选仍被另一条既有 validator 规则拒绝，不代表 stage 5 已修复。
-- **M7 — IN PROGRESS。** 报告和代码已在 PR #15 分支。待提交报告、push，然后核对 PR 当前精确 HEAD 的 Core Verify 和 Android Verify；旧 SHA checks 不作为最终证据，不自动合并。
+- **M7 — PASS（已验证 HEAD）/ DOC-ONLY-HEAD-RECHECK。** PR #15 的 head `c0ae86e3c6b9853faee1c397f73491c7aa11fbae` 上 Core Verify run 147 与 Android Verify run 111 均 success。此后增加的仅是本次 CI 状态报告提交；推送后仍按新 PR 当前 SHA 核验两个 required checks。PR 不自动合并。
 
 ## 最新 GLM 账本汇总
 

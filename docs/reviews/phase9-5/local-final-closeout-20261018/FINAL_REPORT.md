@@ -16,7 +16,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
 - 已独立提交的六项代码修复：`dd17ccf`（bounded opening evidence recovery）、`8ab0419`（Canon 开局方案采用）、`3847339`（Runtime 终局行动门控）、`00f3625`（bounded campaign effect repair）、`b6c7d00`（missing long-plan consequence repair）、`cbacbb0`（local stage completion repair guidance）。三个 campaign-plan guidance 缺陷均先增加 helper 与 retry 集成 RED，再最小修复并分别 GREEN。
-- PR #15 针对 main 开放且未合并。报告提交后需 push 并核对最终 PR HEAD SHA；CI 结论只按该精确 SHA 的 Core Verify 与 Android Verify 记录。基线 PR #14 或旧 PR head 的 CI 不代替最终 HEAD 验证。
+- PR #15 针对 main 开放且未合并。已验证 head `c0ae86e3c6b9853faee1c397f73491c7aa11fbae` 的 Core Verify run 147 (`39120253593`) 与 Android Verify run 111 (`39120253591`) 均 success。后续仅报告状态更新仍需 push 并核验当前 PR HEAD；基线 PR #14 或旧 PR head 的 CI 不代替最终 HEAD 验证。
 
 ## 本地回归与 Android 包
 
@@ -53,7 +53,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 4. 旧存档与故障恢复：save-10、Stage-1/8 不存在于隔离 AVD；live turn force-stop、Narrator 前后杀进程、outbox 与旧 worker 矩阵未执行。
 5. 性能与无障碍：本轮非匹配的长会话样本 PSS 196,443 KB / RSS 285,960 KB；GfxInfo 累计 10,169 frames、modern jank 140 (1.38%)、p50/p90/p95 17/30/31 ms。它不是独立 benchmark。TalkBack、API 24、小屏和 10+10 L1/L2 matched test 未运行。
 6. 小说标题计数差异与实际模型人民币费用未知；不通过估算或改 parser 消除。
-7. PR #15 未合并；本次报告文档仍待提交与推送，最终 HEAD 与两项 exact-head CI 随后以 PR checks 实际结果核对，不自动合并。
+7. PR #15 保持开放且未合并；上述代码/closeout HEAD 两项 exact-head CI 均通过。最后的 CI 状态说明提交仅变更验收文档；推送后还须核对这个最新 HEAD 的两项 check，不自动合并。
 
 ## 私有证据边界
 
