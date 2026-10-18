@@ -53,4 +53,4 @@
 - 最新 APK SHA-256：`113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F`；书库 flow 5/5，战役列表 flow 7/7。没有新建 AVD 或提交行动/模型请求。
 - Live GLM matched 10+10 在 synthetic production fixture 上完成，30 HTTP 200、最大并发 1；现有 localhost/mock 429 与真实 endpoint 明确分开。累计 111 known / 110 HTTP200 / 1 old 401，另有 2 host transport unknown 未重派。
 - 真人决定/独立试玩由用户后续完成，不列为 agent 阻滞。其余自动化待项见 `FINAL_REPORT.md`：真实小说 package method/non-empty-evidence L1、设备 Narrator/outbox/worker 故障矩阵、Stage-1/8 与旧 schema/fork-rewind 资产、TalkBack/multiwindow/API24/真实小屏、第四后果链下游核验。
-- 最终文档提交、PR #15 更新与当前 exact-head CI 尚待完成；PR 保持开放，不自动合并。
+- M7：PR #15 保持开放且未合并；最新 head、Core/Android exact-head SHA、run 与结论维护在 PR 正文并以 Checks 页面为准。
