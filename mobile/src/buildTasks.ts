@@ -52,6 +52,11 @@ export interface BuildTaskView {
   replayRecovery: BuildReplaySnapshotV1 | null;
 }
 
+export interface PublicationDiagnosticView {
+  /** Stable validator categories only; never expose model prose or entity IDs. */
+  errorCodes: string[];
+}
+
 interface TaskRow extends SqliteRow {
   run_id: string;
   world_id: string;
@@ -200,6 +205,35 @@ export async function listFailedUnits(runId: string): Promise<Array<
     errorMessage: row.error_message,
     attempt: row.attempt,
   }));
+}
+
+/** Recent machine-readable publication diagnostics for a world's build detail. */
+export async function listPublicationDiagnostics(worldId: string): Promise<PublicationDiagnosticView[]> {
+  const runtime = await getDatabaseRuntime();
+  const rows = await runtime.db.queryAll<SqliteRow & {
+    error_codes_json: string;
+  }>(
+    `SELECT error_codes_json
+       FROM segment_publication_diagnostics
+      WHERE world_id = ?
+      ORDER BY created_at DESC, segment_id, generation DESC
+      LIMIT 5`,
+    [worldId],
+  );
+  return rows.map(row => {
+    let errorCodes: unknown;
+    try { errorCodes = JSON.parse(row.error_codes_json); } catch { errorCodes = []; }
+    const categories = Array.isArray(errorCodes)
+      ? [...new Set(errorCodes.flatMap(value => {
+        if (typeof value !== 'string') return [];
+        const category = value.split(':', 1)[0];
+        return /^[a-z][a-z0-9_]{1,79}$/i.test(category) ? [category] : [];
+      }))].sort()
+      : [];
+    return {
+      errorCodes: categories.length > 0 ? categories : ['publication_validation_failed'],
+    };
+  });
 }
 
 export const PHASE_LABEL: Record<BuildRunRecord['phase'], string> = {

@@ -10,6 +10,25 @@ const PROFILE = { id: 'primary', name: 'Primary', endpoint: 'https://primary.inv
   reasoningDialect: 'glm', reasoningTier: 'low', contentOutputTokens: 3_000, concurrency: 1 };
 const QUOTE = '林凡站在青石巷，手持铜钥，懂得听风术，遵守入夜禁行的规矩。';
 
+test('publication validation diagnostics remain visible in task detail when review queue is empty', async () => {
+  const h = await createMobileHarness({ bytes: Buffer.from(`第一章 街口\\n${QUOTE}`) });
+  try {
+    const imported = await h.sourceImport.importNovelUnified('memory://fixture', 'diagnostic.txt', PROFILE, 'full', () => {});
+    await h.adapter.execute(
+      `INSERT INTO segment_publication_diagnostics (diagnostic_id, world_id, segment_id, generation, error_codes_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['diag-test', imported.worldId, 'private-segment-id', 1,
+        JSON.stringify(['opening_entity_unproven:private-entity-id', 'opening_action_dependency_unproven']), new Date().toISOString()],
+    );
+    assert.equal((await h.runtime.worldStore.listReviewIssues(imported.worldId, 'open')).length, 0);
+    const tasksApi = loadMobileModule('mobile/src/buildTasks.ts', { './database': { getDatabaseRuntime: async () => h.runtime } });
+    const diagnostics = await tasksApi.listPublicationDiagnostics(imported.worldId);
+    assert.deepEqual(diagnostics, [{
+      errorCodes: ['opening_action_dependency_unproven', 'opening_entity_unproven'],
+    }]);
+  } finally { h.db.close(); }
+});
+
 test('production mobile pipeline recovers reasoning-only mapping through backoff without asking the user', async () => {
   let mappingRequests = 0;
   let extractRequests = 0;
