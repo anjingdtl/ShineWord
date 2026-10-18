@@ -12,12 +12,12 @@
 | 节点 | 状态 | 当前证据 / 缺口 |
 |---|---|---|
 | M0 | PASS-ENGINEERING | 本轮新鲜 fetch 确认 origin/main=9030c2674eea12bc3882ebe8c1cc155342e722c0，隔离分支从该确切 commit 起步；主 checkout 仍干净，其他 worktree 未动。最终回归与提交证据见 BASELINE_AND_ENVIRONMENT.md。 |
-| M1 | PASS-DEVICE（限定范围） | 当前修复 APK SHA-256 EFA99A71AF8FF21509C9B7701214D9BA45D3A64342922B320E06CDE390CE9223 已安装在现存 M4 API 37 AVD，保留应用数据库；Maestro 设备故障链与错误提示断言通过。主小说 AVD emulator-5556 仍在运行且数据库约 55 MB，本轮保留其活动会话，没有更新或清理。 |
+| M1 | PASS-DEVICE（限定范围） | 当前修复 APK/base.apk SHA-256 `2DFAC97CCED93D0990489478A230359E7FE06AD727A4BFC984061F53AE6759CA` 已安装在现存 M4 API 37 AVD，保留 2,338,816-byte 合成数据库；Maestro large-text 与 360dp PlayHeader 标题断言通过。主小说 AVD `emulator-5556` 仍在运行，本轮未更新或清理。 |
 | M2 | PARTIAL | SAF 导入真实 GBK 小说。新 9,601 code-point 隔离 real-GLM scope 串行完成 timeline/extract/mapping 3 次 HTTP 200、429=0、unknown=0；正常内容审查留有 1 blocking + 3 major issue，未发布 package。Canon 场景 clue 修复合成 SQLite RED→GREEN，但非空 evidence L1 与真实小说 package method 尚未验证。既有 6 次 campaign-scope fixed-empty-evidence L1 及 synthetic production live matched 10+10 不替代它；全书未发送。 |
 | M3 | PARTIAL / USER-PLAY-DEFERRED | 累计 19 个 agent-driven QA action turns，均不算玩家决定。stage-5 QA branch 的 `con-barov-offer` trigger/discharge 和下一轮 frozen context 有脱敏证据，下一轮 Narrator HTTP status 未对账；stage-8 sibling branches 有终局取消/成功消费与知识写入对照。真人体验由用户后续完成，不是自动化交付阻滞。 |
 | M4 | PARTIAL / SAVE-10-DEVICE-PASS / M4-SYNTHETIC-UI-PASS | 合法 save-10、合成行动/outbox 恢复、Narrator 在途强停和响应写账本失败均有设备证据；unknown 冷启动不重派，历史 turn/roll 指纹不变。旧 worker lease/fencing 与 SQLite 写 CAS 的 focused Core 回归 64/64 通过，但双 worker 设备竞态尚未安全注入；Stage-1/8 带身份历史资产不可用。响应写失败详情见 [M4_RESPONSE_WRITE_FAILURE.md](M4_RESPONSE_WRITE_FAILURE.md)。 |
-| M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色模式控件有有限证据；同一 synthetic production fixture 上 live GLM matched L1/L2 各 10 次完成。TalkBack 语音/焦点、多窗口、API 24/真实小屏、小说 package method 供给下的匹配样本仍未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-LIMITED | 最终 branch 全量 Core 1,364/1,364、mobile typecheck、version check、diff check 通过；ledger/lease/SQLite fence/memory worker focused suite 64/64。已确认的 UI 错误修复均先 RED 后最小修复并经当前 Android 包复测；不扩写为完整真人游玩 PASS。 |
+| M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、PlayHeader font scale 2.0、360dp 窄视口、终局页、portrait/landscape、360×800dp 虚拟显示与暗色模式控件有有限证据；同一 synthetic production fixture 上 live GLM matched L1/L2 各 10 次完成。TalkBack 语音/焦点、多窗口、API 24/真实小屏、完整大字页面与小说 package method 供给下的匹配样本仍未验。 |
+| M6 | PASS-ENGINEERING / DEVICE-LIMITED | 最终 branch 全量 Core 1,366/1,366、mobile typecheck、version check、diff check 通过；ledger/lease/SQLite fence/memory worker focused suite 64/64。已确认的 UI 缺陷均先 RED 后最小修复并经当前 Android 包复测；不扩写为完整真人游玩 PASS。 |
 | M7 | TRACKED ON PR #17 | [PR #17](https://github.com/anjingdtl/ShineWord/pull/17) 对应当前 closeout 分支；PR 正文维护最终 HEAD SHA 与该 HEAD 的 Core Verify / Android Verify run 和状态。没有自动合并。 |
 
 
@@ -25,7 +25,7 @@
 
 | ID | 状态 | 当前依据 / 尚缺 |
 |---|---|---|
-| R0 | PASS-ENGINEERING | 最终 Core 1,364/1,364；Canon 线索、导入、安全、adoption、terminal、bounded plan guidance、publication diagnostics、terminal consequence、save restore、play error 和 mock-scope 回归通过。完整玩家旅程仍缺。 |
+| R0 | PASS-ENGINEERING | 最终 Core 1,366/1,366；Canon 线索、导入、安全、adoption、terminal、bounded plan guidance、publication diagnostics、terminal consequence、save restore、play error、PlayHeader layout 和 mock-scope 回归通过。完整玩家旅程仍缺。 |
 | R1 | PARTIAL / DEVICE-AGENT-L1-PATH | exact method/readiness 与冻结合同通过；第三局实际 6 个 campaign-scope fixed-empty-evidence L1 无 Planner；world package 仍无 method entry，非空 evidence L1 未验。 |
 | R2 | PARTIAL | settlement/reducer/replay 工程合同通过；真实行动 roll、状态变化与 3 个 delayed consumer effect 有提交记录；无真人复核。 |
 | R3 | PARTIAL | novel ledger 与独立 mock ledger 已分开审计；mock unknown 保留，长期历史预算账本不改写、不借额。 |
@@ -104,7 +104,7 @@
 | A32 | PARTIAL | 合法 save-10 导入、依赖包绑定和历史 hash 精确读回在设备通过；Stage-1/8 历史资产与旧 schema migration 矩阵仍缺。 |
 | A33 | PARTIAL | 合成秘密拒绝有工程合同；真实三意图及日志输出全层隐私对照未运行。 |
 | A34 | PASS-DEVICE（限定范围） | failed Runtime 终局页已复测：变更行动隐藏、composer disabled，与 Runtime ending 投影一致；自然结局质量未验。 |
-| A35 | PARTIAL | API 37、软键盘、1.3 字号、旋转往返、360×800dp 虚拟显示与暗色模式核心控件通过；TalkBack spoken/focus、API 24、真实小屏与完整大字页面未验。 |
+| A35 | PARTIAL | API 37、软键盘、1.3 字号、PlayHeader font scale 2.0、360dp 窄视口、旋转往返、360×800dp 虚拟显示与暗色模式核心控件通过；TalkBack spoken/focus、API 24、真实小屏与完整大字页面未验。 |
 | A36 | PARTIAL / USER-PLAY-DEFERRED | 独立试玩与六维评分为 0/4；用户会自行体验，独立四人评审仍未完成。 |
 | A37 | PARTIAL / LIVE-GLM-SYNTHETIC | 同一 synthetic production fixture 完成 10 L1 + 10 L2，20/20 turn commit；30 个物理请求 HTTP 200、并发峰值 1，物理上限 40。L1 tap vs exact-authored-text parity 另由无 GLM 的 production harness 逐字段对照 PASS。真实小说 package method/non-empty-source-evidence 仍缺。 |
 | A38 | PARTIAL | 最新 standalone APK 与 `emulator-5556` installed base hash 匹配并在无 Metro 运行；真实小说、save-10 与 stage-8 branches 共完成 19 个 agent-driven action turns。真人完整旅程由用户自行体验，未声称已验。 |

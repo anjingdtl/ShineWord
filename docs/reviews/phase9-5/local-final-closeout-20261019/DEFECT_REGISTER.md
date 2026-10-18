@@ -11,12 +11,19 @@
 - 修复：新增共用错误格式化函数，保留正常 Error/string；对未知原生对象给出中文安全 fallback。回归见 tests/play-error-message.test.cjs；提交 99b1d89。
 - 二次 RED：首次修复仍把 SQLite trigger 细节直接显示给玩家。
 - 最小修复：不展示未知 native object 内部字段，使用安全提示；同一 M4 AVD 的注入 UI 检查通过；提交 477bebf。
-- GREEN：最终 Core 1,364/1,364、mobile typecheck、version check 通过；M4 屏幕没有 [object Object] 或数据库细节。
+- GREEN：本次完整 Core 回归 1,366/1,366、mobile typecheck、version check 通过；M4 屏幕没有 [object Object] 或数据库细节。
 
 ### Narrator 成功态写入失败
 
 - M4 response-write 注入证明应用在 responseJson/hash 无法持久化时将 attempt 保留为 outcome_unknown，冷启动不重派；不是生产代码缺陷，无新增修复。
 - 待处理 turn 和骰点保持冻结；unknown 没有获准重试。
+
+### PlayHeader 大字号/窄屏标题消失
+
+- RED：现有 M4 合成战役在 font scale 2.0 下切到 stacked header 后，标题从截图和无障碍树中消失；同屏确认重试入口仍可见。设备截图见 `evidence/play-header-large-font-red.png`。
+- 根因：共用 Header 的标题容器在 inline 与 stacked 两种方向都使用 `flex: 1`。切换到纵向堆叠后，标题容器的零基准 flex 尺寸让标题无法获得内容高度。
+- 最小修复：抽出 `headerTitleContainerStyle`，inline 保留 `flex: 1`，stacked 改为 `width: 100%` 的内容尺寸行；未改 campaign/runtime 状态或提交路径。
+- GREEN：布局合同 RED 后 2/2；mobile typecheck 通过；当前 branch Debug APK 在既有 M4 AVD 重装后，large-text 与 360dp Maestro 标题断言均通过。APK/base.apk hash 相同；数据库仍 2,338,816 bytes；未知回合未点击/重派。见 `evidence/play-header-layout-regression.md` 与配套截图。
 
 ## 未关闭的工程/验收项
 

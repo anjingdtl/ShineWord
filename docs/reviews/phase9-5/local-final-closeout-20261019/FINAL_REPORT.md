@@ -8,7 +8,7 @@ PR：[PR #17 — Phase 9.5 local closeout: M4 recovery and safe action errors ](
 
 ## 分层验收结论
 
-- **Runtime 工程收束：PASS-ENGINEERING（本报告列明的生产代码和回归范围）。** 两项玩家错误提示缺陷已按 RED → 最小修复 → GREEN 完成；最终 Core 1,364/1,364、mobile typecheck、version check、focused worker/fence suite 64/64 通过。现有设备上的 outbox、Narrator、response-write 和 unknown cold-start 子矩阵有合成设备证据。旧 worker 双 worker 设备 race 尚未现场注入。
+- **Runtime 工程收束：PASS-ENGINEERING（本报告列明的生产代码和回归范围）。** 两项玩家错误提示缺陷及 PlayHeader 大字标题缺陷均按 RED → 最小修复 → GREEN 完成；最终 Core 1,366/1,366、mobile typecheck、version check、focused worker/fence suite 64/64 通过。现有设备上的 outbox、Narrator、response-write、unknown cold-start 和 PlayHeader constrained-layout 子矩阵有合成设备证据。旧 worker 双 worker 设备 race 尚未现场注入。
 - **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM、Android 和 save-10 使用均有实际证据，但新开篇 package 被 1 blocking + 3 major content review issue 挡住，没有发布。真实小说包非空来源 evidence L1 未验证。真人游玩由世恒哥负责，agent-driven 19 turns 不计为玩家决策；阶段 9.5 不宣称 FULL PASS。
 - **阶段 9 历史遗留：PARTIAL。** 80 个真实有效决定未完成，独立试玩 0/4，自然结局的玩家质量未验；Stage-1/8 有身份历史资产不可用。synthetic production fixture 的 live GLM 10+10 是工程样本，不能替代小说包或玩家决定。
 
@@ -20,11 +20,11 @@ PR：[PR #17 — Phase 9.5 local closeout: M4 recovery and safe action errors ](
 
 ## 最终本地验证与设备
 
-- npm run verify:core：1,364/1,364 passed，0 failed。
+- npm run verify:core：1,366/1,366 passed，0 failed。
 - npm --prefix mobile run typecheck：PASS。
 - npm run verify:version：PASS，version 1.0.0 / versionCode 1000000。
 - node --test tests/phase8-reacceptance.test.cjs tests/phase9-sqlite.test.cjs tests/phase9-planning-lease.test.cjs tests/llm-json-ledger.test.cjs：64/64 passed。
-- 最终 M4 Debug APK SHA-256：EFA99A71AF8FF21509C9B7701214D9BA45D3A64342922B320E06CDE390CE9223，安装在现有 API37 M4 AVD；安装保留数据库。
+- 最终 M4 Debug APK/base.apk SHA-256：`2DFAC97CCED93D0990489478A230359E7FE06AD727A4BFC984061F53AE6759CA`，安装在现有 API37 M4 AVD；安装保留数据库。PlayHeader font scale 2.0 与 360dp 窄视口 Maestro 标题断言通过，字号/屏幕设置均已恢复。
 - M4 response-write test 在 localhost mock 上只发生 Planner/Narrator 各一次 HTTP 200。Narrator 成功态 ledger update 被临时 trigger abort 后，attempt 为 outcome_unknown、无已存 response_json/hash，branch 保持 v4。两次 cold-start/reopen 总请求仍是 2；已有 5 个已提交 turns 与 3 条历史骰点 hash 不变。唯一 trigger 已清理，100 张业务表数据相同、SQLite integrity=ok、设备回读文件 hash 与清理文件相同。unknown、turn-0005 和其骰点保留，没有批准或重派。
 - 临时服务已停止且 TCP 18591 无监听；M4 AVD 仍显示安全恢复入口。此测试没有调用真实 GLM。
 

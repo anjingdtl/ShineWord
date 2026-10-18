@@ -28,7 +28,7 @@ This baseline is a fresh local run on the exact current main tree. It does not p
 ## Final branch regression
 
 - Refreshed origin after local work: origin/main remained 9030c2674eea12bc3882ebe8c1cc155342e722c0; the closeout branch is based directly on it. The primary checkout stayed clean and other worktrees were not modified.
-- Final branch Core Verify: 1,364/1,364 passed, 0 failed. Mobile typecheck and version check passed.
+- Current branch Core Verify after PlayHeader layout regression: 1,366/1,366 passed, 0 failed. Mobile typecheck and version check passed. Earlier 1,364/1,364 checkpoint predates the two PlayHeader layout cases.
 - Focused ledger, lease, SQLite stale-worker fencing, and memory worker regression suite: 64/64 passed.
 - The two confirmed play error-message defects were fixed on this branch and covered by the final Core run. The response-write fault injection itself produced no code defect.
 - Real GLM allowance in the session was explicitly raised by the user. The known provider ledger remains 113 physical requests: 112 HTTP 200 and one old-profile HTTP 401; two separate host transport attempts remain identity-less unknown and were not repeated. Real GLM HTTP 429 remains 0. Cost cannot be derived from the application ledger. No real GLM request was made during the final M4 response-write injection.
