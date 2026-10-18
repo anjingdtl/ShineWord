@@ -533,6 +533,29 @@ test('campaign-plan effect-limit rejection receives bounded preserving repair gu
   assert.match(requests[1].user, /保留普通 success.*completion/);
   assert.match(requests[1].user, /拆分到后续可执行办法/);
 });
+test('campaign-plan action-reference mismatch receives minimal type-preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  const method = first.firstSituation.methods[1];
+  method.firstStep.actionKind = 'skill_check';
+  method.firstStep.skillId = 'skill-observation';
+  method.firstStep.destinationId = 'scene-invalid-for-check';
+  const repaired = structuredClone(first);
+  delete repaired.firstSituation.methods[1].firstStep.destinationId;
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'action-reference-type-repair', worldId: 'w', physicalRequestBudget: 2,
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /firstSituation\.methods\[1\]\.firstStep\.destinationId: not valid for skill_check/);
+  assert.match(requests[1].user, /remove|omit|删除|省略/i);
+  assert.match(requests[1].user, /保留.*skill_check|保留.*行动类型/);
+  assert.match(requests[1].user, /不要.*放宽.*校验|不得.*放宽.*校验/);
+});
 test('campaign-plan missing long consequences receives validator-specific repair guidance', async () => {
   const first = structuredClone(candidateModel());
   first.consequences = [];

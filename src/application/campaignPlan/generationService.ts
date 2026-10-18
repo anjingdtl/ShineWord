@@ -198,6 +198,12 @@ export function buildStructuralRepairGuidance(
       const [, methodId, targetId] = actorTargetMatch;
       return [`- method ${methodId} 的 firstStep.targetEntryId ${targetId} 不在当前行动对象范围内。只可逐字选择本请求“当前在场人物”白名单中的 actor ID；如果该办法面向未具名人物、现场或其它没有白名单人物的场景，就删除 firstStep.targetEntryId。保留行动意图和其它合法字段，不得猜测、补造或替换为世界人物模板 ID。`];
     }
+    const actionReferenceMismatch = /^(firstSituation\.methods\[\d+\]\.firstStep\.(skillId|abilityId|destinationId)): not valid for (skill_check|ability|observe|talk|interact|move)\.$/.exec(error.trim());
+    if (actionReferenceMismatch) {
+      const [, fieldPath, field, actionKind] = actionReferenceMismatch;
+      const requiredAction = field === 'skillId' ? 'skill_check' : field === 'abilityId' ? 'ability' : 'move';
+      return [`- ${fieldPath}：${field} 只允许用于 ${requiredAction}，当前 actionKind=${actionKind}。只删除这个不兼容字段，保留当前 actionKind、行动意图和其它合法引用；不要为了保留该字段而改变行动类型，不得补造或替换 ID，也不得放宽校验。`];
+    }
     const duplicateTriggerMatch = /^consequence ([^:]+): long consequences need distinct triggers\.$/.exec(error.trim());
     if (duplicateTriggerMatch) {
       const consequenceId = duplicateTriggerMatch[1]!;
