@@ -1,6 +1,6 @@
 # ShineWord Phase 9.5 本地最终收口报告
 
-日期：2026-10-18（Asia/Shanghai）
+日期：2026-10-19（Asia/Shanghai；含 10-19 补充复核）
 工作树：`F:\sw95local-20261018`
 分支：`fix/phase95-local-final-closeout-20261018-short`
 远端：`https://github.com/anjingdtl/ShineWord`
@@ -9,25 +9,25 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 ## 分阶段结论
 
 - **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成了开局、连续行动、历史 save-10 恢复续玩以及 stage-5 隔离分支推进。累计 17 个行动级回合全部由测试执行者驱动；3 项延迟后果已核对消费，第 4 项的下游读回和玩家反馈仍缺。stage 5 已在 QA branch 完成并进入 stage 6，但原 main 保持 v12/r4；campaign-scope L1 使用显式 fixed empty evidence。非空来源证据 L1、main 当前内容补建、真人和独立试玩仍未验收。另有两次宿主机 GLM transport unknown（详情见脱敏证据），不重派且不计入持久应用账本。
-- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 八项确认代码缺陷均具 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态行动门控、effect 上限 repair guidance、long-plan consequence repair guidance、stage completion producer repair guidance、action-reference mismatch guidance，以及 start-node recovery guidance。最新全量 Core 1,356/1,356、mobile typecheck、version check 通过；standalone APK 已在保留原应用数据的 AVD 安装，二进制身份匹配并通过脱离 Metro 的冷启动。
-- **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验、L1/L2 匹配性能 10+10 未验；Stage-1/8 历史资产和多项故障注入仍缺。合法 save-10 已真实恢复、续玩并保留历史记录。自动化、代理 QA、模型生成内容和 CI 不替代玩家验收。
+- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 九项确认代码缺陷均有 RED → 最小修复 → GREEN；最新全量 Core 1,357/1,357、mobile typecheck、version check、standalone APK 构建及两台现存 AVD 冷启动/导航验证通过。
+- **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验；production synthetic fixture 的 live GLM matched 10+10 已通过，但真实小说 package method 路径未覆盖。Stage-1/8 历史资产和若干故障注入仍缺。合法 save-10 已真实恢复并续玩；自动化证据不替代玩家验收。
 
 ## 基线、提交与 CI
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
-- 已独立提交的八项代码修复：`dd17ccf`（bounded opening evidence recovery）、`8ab0419`（Canon 开局方案采用）、`3847339`（Runtime 终局行动门控）、`00f3625`（bounded campaign effect repair）、`b6c7d00`（missing long-plan consequence repair）、`cbacbb0`（local stage completion repair guidance）、`76a51fc`（action-reference mismatch repair guidance）、`447bd67`（start-node recovery guidance）。campaign-plan guidance 缺陷均先增加 helper/retry 集成 RED，再最小修复并分别 GREEN。
+- 已独立提交的九项代码修复：既有八项分别由 `dd17ccf`、`8ab0419`、`3847339`、`00f3625`、`b6c7d00`、`cbacbb0`、`76a51fc`、`447bd67` 修复；本轮 `d8d9c3e` 增加 package-finalization failure 的 category-only diagnostics UI read path。每项已确诊缺陷均有 RED→最小修复→GREEN 证据。`4514eed` 单独记录脱敏证据与报告。
 - PR #15 针对 main 保持开放且未合并。最终验收只认 PR #15 Checks 页面上当前 head 的 Core Verify 与 Android Verify；旧 SHA、main 基线或 PR #14 的 CI 不代替 exact-head 核验。PR 正文记录最终 SHA 与当前检查结果。
-- 最终本地应用代码回归基于 `9d749ed87b043a0f3a1c94d8534a397b0a212da8`；本地 Core、version、mobile typecheck 和 standalone APK 均通过。更早的代码 HEAD `f6ea06acf09a428bd04951cab52e68474ca9b379` 对应 Core Verify #149 / run `39124990104` 与 Android Verify #113 / run `39124990038` 均 success。此后新增内容仅为脱敏验收文档与设备证据；PR 正文和 Checks 页维护最终文档 HEAD 的最新 exact-head CI，旧 run 不代替最终 HEAD。
+- 当前分支 HEAD 与 exact-head GitHub CI 状态见 PR #15 正文和 Checks 页面；2026-10-19 本地复核包含上述 `d8d9c3e` 代码提交及单独的 `4514eed` 证据提交。旧 SHA 上的 CI 不代替最新 head 的结果。
 
 ## 本地回归与 Android 包
 
 - `npm ci --ignore-scripts --no-audit --no-fund` 与 `npm --prefix mobile ci --no-audit --no-fund`：均退出码 0。
-- `npm run verify:core`：1,356/1,356 passed，0 failed / skipped，约 38.9 s。
+- `npm run verify:core`：1,357/1,357 passed，0 failed / skipped，约 34.9 s。
 - `npm --prefix mobile run typecheck`：通过；`npm run verify:version`：通过（1.0.0 / versionCode 1000000）。
 - 使用项目入口 `npm run apk:debug` 成功构建 standalone Debug APK；入口验证内嵌 `assets/index.android.bundle`。直接调用普通 Gradle `assembleDebug` 只生成依赖 Metro 的开发包，曾出现 “Unable to load script”，随后已用 standalone 包修复运行环境并复测。
 - API 37 AVD 的 Play QA 分支经过 portrait → landscape → portrait 控件断言；360×800dp 虚拟显示下重新进入同一 branch 后，progress/composer/submit 断言通过。Android 夜间 dark 模式下 composer/submit 断言也通过，测试结束恢复显示密度、尺寸和夜间设置。TalkBack 焦点/语音未取得可核证结果，仍为 NOT RUN。
 - 最新应用代码在 `447bd67` 后完成全量 Core、mobile typecheck、version check、standalone APK 构建、安装身份核验及脱离 Metro 冷启动。其后本轮只修改脱敏 Markdown/JSON 证据；同一 APK 上完成 save-10 原生恢复、续玩与隔离 stage-5 行动/plan adoption。MainActivity 可运行且原有用户数据保留。
-- 当前 standalone Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`；本地构建与模拟器安装包 SHA-256 均为 `C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44`。
+- 最新 standalone Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`；本地构建与本轮两台模拟器安装包 SHA-256 均为 `113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F`。
 - 专用 AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 `emulator-5556`，API 37 / Android 17 / 1080×2400 @420 dpi。使用 `adb install -r`，没有清除数据库、小说、Keychain 或模拟器数据。
 - 应用户要求检查并精简 AVD：通过 Android SDK 管理器删除 7 台历史 ShineWord 专项 AVD；已注册设备从 10 台减至 3 台，保留当前小说实测机、M4 故障回归机和共享 `Medium_Phone`。F 盘可用空间实测增加约 45.53 GiB；未注册且归属不明的 `Pixel_10.avd` 残留目录保留。设备清理记录见 `AVD_CLEANUP_LOCAL.md`。
 - 收口期间另起的宿主机 GLM benchmark pilot 失败：fixture 不具备 L1 所需 binding，两次均被送往 Planner；两次 transport outcome 均为 unknown，且临时内存账本未导出 attempt identity。未重派、未将其计入 79 条持久应用账本；该 QA 流程偏差列入 `DEFECT_REGISTER.md`，也使本轮不能宣称所有潜在 endpoint 尝试都已对账。

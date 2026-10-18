@@ -1,6 +1,6 @@
 # M0–M7 / G0–G5 / V95 / R0–R9 / A01–A40 验收矩阵
 
-更新：2026-10-18（Asia/Shanghai）
+更新：2026-10-19（Asia/Shanghai）
 当前结论：Runtime 收束工程针对性修复 PASS-ENGINEERING（仅限明列范围）；阶段 9.5 PARTIAL；阶段 9 历史遗留 PARTIAL。自动化、partial world ready 和 CI 都不等价于真实玩家验收。
 
 状态词：PASS-ENGINEERING=当前源码确定性/集成合同通过；PASS-DEVICE=当前 APK/专用设备明确完成；PASS-REAL=真实模型及玩家旅程完成；PARTIAL=有受限证据且仍缺合同项；BLOCKED=资源/真人缺失；NOT RUN=未执行。
@@ -24,7 +24,7 @@
 
 | ID | 状态 | 当前依据 / 尚缺 |
 |---|---|---|
-| R0 | PASS-ENGINEERING | 当前 Core 1,356/1,356；Canon 去重、导入安全、adoption、terminal 与 bounded stage-plan repair guidance 合同全量通过。真人完整旅程仍缺。 |
+| R0 | PASS-ENGINEERING | 当前 Core 1,357/1,357；Canon 去重、导入安全、adoption、terminal、bounded stage-plan guidance 与 publication-diagnostic recovery 合同全量通过。真人完整旅程仍缺。 |
 | R1 | PARTIAL / DEVICE-AGENT-L1-PATH | exact method/readiness 与冻结合同通过；第三局实际 6 个 campaign-scope fixed-empty-evidence L1 无 Planner；world package 仍无 method entry，非空 evidence L1 未验。 |
 | R2 | PARTIAL | settlement/reducer/replay 工程合同通过；真实行动 roll、状态变化与 3 个 delayed consumer effect 有提交记录；无真人复核。 |
 | R3 | PARTIAL | novel ledger 与独立 mock ledger 已分开审计；mock unknown 保留，长期历史预算账本不改写、不借额。 |
@@ -40,8 +40,8 @@
 
 | ID | 状态 | 当前依据 / 缺口 |
 |---|---|---|
-| G0 | PARTIAL | 用户授权本轮 GLM 不限额度；持久小说 world + campaigns/branches 有 76 success / 1 旧 401，mock 429/unknown 分离；另有 2 条 host transport unknown，dispatch 与 provider receipt 未确认。持久 ledger 当前无在途，观测最大并发=2。input/output/reasoning tokens 为 1,117,695 / 258,924 / 40,902。CNY 费用未知，历史 510/600 ignored ledger 未改动。 |
-| G1 | PARTIAL | shared L1/L2 authority 与 strict candidate contracts 在 Core 通过；campaign-scope 有 6 个真实 L1，但 evidenceIds 均为空，package method entry=0。 |
+| G0 | PARTIAL | 用户授权本项目 GLM 测试不限额度；111 个已知 attempt 中 110 HTTP 200、1 个旧配置 401，另有 2 个 host transport unknown 未重派；mock 429 与真实 endpoint 分开。已知成功 token input/output/reasoning 为 1,152,193 / 265,801 / 41,097；matched run 最大并发 1、历史 novel scope 观测最大并发 2。CNY 费用未知，旧 510/600 ignored ledger 未修改。 |
+| G1 | PARTIAL | shared L1/L2 authority 与 strict candidate contracts 在 Core 通过；小说 campaign-scope 有 6 个 fixed-empty-evidence L1；另有 synthetic production fixture 上 non-empty-evidence live GLM 10/10 L1 与 10/10 L2。真实小说 package method entry 仍为 0。 |
 | G2 | PARTIAL | Runtime status、即时 counter、3 个 delayed consumer effects 与结束 UI 可对账；隔离 branch 完成 stage 5 并进入 stage 6；第 4 条后果消费和真人反馈未验。 |
 | G3 | PARTIAL | 更新配置后的 opening_goal HTTP 200；后续真实 campaign plan、Planner/Narrator、stage-5 action 和 plan-r7 adoption 均有账本证据。真人选择及玩家反馈没有。 |
 | G4 | PARTIAL | 当前 APK 完成有限代理 QA 和终局门控；字号、键盘样本通过。TalkBack 与独立试玩未完成。 |
@@ -113,5 +113,5 @@
 ## 总体历史验收
 
 - 本轮真人完整剧情决定：0；阶段 9 要求的 80 个真人有效决定尚未开始。17 个 agent-driven player-like actions 不计入 80；用户已说明真人体验由其后续完成，不作为本轮自动化交付门。
-- 独立外部试玩：0/4；自然结局：NOT RUN；真实匹配性能 10+10：NOT RUN；stage-5 用户路径与后果反馈未完成。上述状态仍不构成“真人验收已通过”。
+- 独立外部试玩：0/4；自然结局：NOT RUN；production synthetic fixture 上的 live GLM matched 10+10 已完成，但不代表真实小说 package method 的性能；stage-5 真人路径与后果反馈未完成。上述状态仍不构成“真人验收已通过”。
 - 合法 save-10 已恢复并成功续玩；Stage-1/8 仍缺。模拟器保留三局 QA、恢复 campaign 和隔离 stage-5 运行数据；不将 agent-driven 角色或行动计作玩家决定。
