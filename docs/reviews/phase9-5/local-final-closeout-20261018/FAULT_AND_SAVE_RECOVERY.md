@@ -13,7 +13,7 @@
 - 两局真实 APK QA 的 action turn 均落在 SQLite 原子 commit；第一局 turn v2→v7 有多轮下一行动，第二局 severe failure 的 turn v2→v3 后，replan turn 继续提交到 v5。Roll record、state version 与 ending event 都可读。
 - 使用 `adb install -r` 更新 APK，之前的小说、Keychain、campaign、world 与旧故障现场仍保留。没有卸载、清库、模拟器 factory reset 或历史 turn 改写。
 - 旧 v12 数据库只读快照与后续稳定快照 `PRAGMA integrity_check=ok`；文件只保存在本机，既不提交也不将响应内容写入报告。某临时副本恰逢 journal 写入时 integrity check 不通过，已排除证据；待 journal 空闲后重取稳定副本通过，不是设备 DB 损坏。
-- 最新全量 Core 1,356/1,356 覆盖 unknown park、attempt fencing、atomic commit、turn replay/stateVersion、outbox、存档/导入合同；这些自动化结果不等于现场故障矩阵完成。
+- 2026-10-19 全量 Core 1,361/1,361 覆盖 unknown park、attempt fencing、atomic commit、turn replay/stateVersion、outbox、存档/导入合同及新增的本地 mock 计划作用域回归；这些自动化结果不等于 Android 现场故障注入矩阵完成。
 - 从授权的既有 QA 日志只读恢复真实 save-10 和与其绑定的精确世界包；未制作或冒充合成历史存档。世界包依赖先在 Android Library 原生导入，之后通过 Campaigns → Import Save → 系统文件选择器导入 save。身份检查确认 source world、published package r1/content hash 和两个 artifact ID/hash 与 save manifest 完全一致。
 - 原生恢复创建新 campaign `camp-mvdsy3v4` / branch `camp-mvdsy3v4-main`，导入后实际 stateVersion 5→6 的 `turn-0006` 成功提交；Narrator HTTP 200，3d6 / difficulty 4 / margin +2。对照显示六条冻结历史 turns 的标识、合同 JSON/hash、状态版本及两条历史 roll 的结果/hash 均与 save 完全一致；导入后计数为 7 turns、3 rolls、7 snapshots。冷停止并重开后 `play-composer`、`play-submit` 仍可见，分支可继续运行。
 - 保存设备导入前的只读 SQLite 快照；既有 3 campaigns、9 branches、98 turns 仍在。基线历史行没有删除或改写，只有两条 `llm_resource_buckets` 的 `playingUntil/activities` 随应用活动生命周期变化。Save-10 后续行动与本轮其他 QA 新行动均为 agent-driven，不计真人决定。详细哈希与计数见 `evidence/save10-device-restore-sanitized.json`。
@@ -38,3 +38,5 @@
 - 新增 matched live run 的 30 个请求全 HTTP 200、最大并发 1；见 `evidence/matched-live-l1-l2-synthetic-20261019.json`。它验证 Planner/Narrator 路由与提交，未补齐设备端 Narrator 中断、outbox 写盘和旧 worker fencing 故障注入。
 - 用户确认真人体验由其自行完成；本报告不将真人游玩列作 agent 阻滞。其余自动化矩阵仍需可用的 Stage-1/8 原始资产，以及安全、可重复的设备注入现场。
 - 新的真实设备回归补充：战役进入 completed 时，stage-8 的 pending consequence 若未满足 succeeded trigger 会被显式取消；从同一 v19 通过应用 rewind 创建的成功 sibling 则正常 discharge 并写入下游 knowledge。来源 branch 未变。该测试覆盖 campaign-terminal consequence lifecycle，不等同于 Narrator/outbox 写盘中断、旧 worker 竞态或历史 Stage-1/8 故障矩阵。详细分支与提交见 `evidence/android-terminal-consequence-cleanup-20261019.json`。
+- 2026-10-19 在现有 M4 AVD 上新增一条独立的合成 UI 链：本地 mock 规划提案、创建 campaign、Planner、一次骰点、Narrator、turn 原子提交，再由对话行动触发并 discharge 延迟后果；branch stateVersion 1→3、两条玩家 turn 已提交、SQLite integrity=`ok`、pending outbox=0。过程中先保留两次 mock fixture 失败记录：8765 不在 QA metadata allowlist，随后正确标记的 candidate 暴露 `lore-crates` 超出 opening scope。新增测试先 RED 复现 mock 越界 reward，再在测试 helper 中移除该可选 reward 后 GREEN；未改生产验证器或追踪端口 allowlist。设备数据哈希、请求摘要和精确事件列表见 `evidence/m4-synthetic-local-mock-opening-turn-consequence-20261019.json`。
+- 该 M4 UI 链只使用合成资料与 localhost mock，不代表 GLM 或真人玩家验收。Narrator 前后强停、响应收到后写盘失败、outbox 写入失败及旧 worker 竞态的 Android 设备注入仍未完成；旧 `outcome_unknown` 与历史数据未重放或修改。
