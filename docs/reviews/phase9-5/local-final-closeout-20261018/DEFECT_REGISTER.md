@@ -88,3 +88,12 @@
 - 代码没有新增 Runtime、Store、Reducer、schema 或第二套规则语义。
 - 已提交历史 turns、骰点和 frozen content 仅只读核验，没有重放或编辑。第三局的新 turns 是隔离 QA 分支中的正常游戏提交；旧 world_extract unknown 保留，未确认、清账或重派。
 - 模型生成的剧情截图及本地 SQLite snapshot 留在本机临时目录；密钥、小说正文、提示词和原始响应不提交。
+
+## SW95-M6-02：包发布失败提示空审查队列，诊断没有移动端读取路径
+
+- 日期：2026-10-19；严重度：P2（发布失败后无法从任务详情定位 validator 分类）。
+- 现象：`package_finalize_failed` 任务提示用户查看审查问题，但实际可没有任何 open review issue；分段发布诊断已持久化在 `segment_publication_diagnostics`，移动端没有对应查询和展示路径。
+- RED：`tests/world-build-recovery.test.cjs` 先构造“诊断存在、审查队列为空”的反例；原行为缺少 `listPublicationDiagnostics`，定向测试失败。随后增加投影隐私断言，旧投影返回 `segmentId`/generation/time，继续以 RED 明确证明这些字段不应离开诊断读模型。
+- 最小修复：`mobile/src/buildTasks.ts` 只读取最近 5 条诊断的机器类别前缀，投影仅返回类别；展开 `package_finalize_failed` 任务卡时显示合并后的安全类别。`coordinator.ts` 提示用户展开任务诊断，不再引导查看空审查队列。没有修改 validator、存档、Canon、Runtime、schema、账本或失败历史。
+- GREEN：隐私 RED 改为类别-only 后，诊断读模型定向测试和生产 mobile pipeline 集成反例均通过；全量 Core 1,357/1,357、mobile typecheck、version check 通过。standalone APK 构建、保留数据安装与最新 Maestro 冷启动/导航复测见 `DEVICE_AND_APK.md` 与 `evidence/maestro-cold-launch-smoke-sanitized-20261019.json`。
+- 设备边界：当前 live world UI 展示的是 `canon_conflict` 和 1 个 open review issue，不是该 `package_finalize_failed` 场景；本轮未宣称设备上已截图验证这条精确诊断卡片。合成生产集成测试验证了无审查 issue 时诊断可读，最新 APK 的书库和战役导航 smoke 通过。

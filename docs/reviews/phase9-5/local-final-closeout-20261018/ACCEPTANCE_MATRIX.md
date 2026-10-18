@@ -12,11 +12,11 @@
 |---|---|---|
 | M0 | PASS-ENGINEERING | 现场 `git ls-remote` 确认实际 origin/main=87eef899281f267a17e02357cc643dd475cabd7c；隔离 worktree 施工，原 main / checkout / ignored 历史账本未改写。用户授权 GLM 不限额度；小说 world + branch ledger 实测并发峰值 2。 |
 | M1 | PASS-DEVICE（限定范围） | API 37 专用 AVD 运行 standalone Debug APK，安装物与构建物 SHA-256 均为 C42A097F490595E3C46D1BC04CCB73E7BE0700F892170DFCD8CDA054EE755B44。真实小说开局、action、roll、Narrator、commit 及历史 save-10 原生恢复后继续运行通过。stage 5 在隔离 QA branch 完成并进入 stage 6；原 main 仍 v12/r4。 |
-| M2 | PARTIAL | SAF 导入真实 GBK 小说；0–9,600 code-point partial package；真实 GLM opening_goal / campaign_plan。world package method entries=0；第三局 campaign artifact 实际提供 6 个 fixed-empty-evidence L1，另有 2 个 L2；全书未发送、非空 evidence L1 未验。 |
+| M2 | PARTIAL | SAF 导入真实 GBK 小说；0–9,600 code-point partial package；真实 GLM opening_goal / campaign_plan。world package method entries=0；第三局 campaign artifact 提供 6 个 fixed-empty-evidence L1，另有 2 个 L2；另以 synthetic production CampaignSession + non-empty evidence 完成 live GLM matched 10+10，不能替代小说 world package method 供给；全书未发送。 |
 | M3 | PARTIAL / USER-PLAY-DEFERRED | 累计 17 个 agent-driven QA action turns，含真实骰点、Narrator、原子提交、下一轮与 stage-5 branch 实际推进到 stage 6。真实 L1/L2 分流、三个已审计的延迟消费者通过；第 4 条后果链没有独立下游消费对照。main branch 仍 v12/r4；真人体验由用户后续完成，不是自动化交付阻滞。 |
 | M4 | PARTIAL / SAVE-10-DEVICE-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；合成 API 37 AVD 上另完成 Planner 在途 force-stop、冷启动后归为 unknown 且未重派（stateVersion 0，SQLite integrity ok）。小说范围 77 次真实 attempt 为 76 HTTP 200、1 旧配置 401；mock/合成 unknown 均保留。Narrator 前后中断、outbox/响应写盘故障、旧 worker 设备竞态与 Stage-1/8 资产仍未完成。 |
-| M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape 以及 360×800dp 虚拟显示均有有限证据；暗色模式控件断言通过。TalkBack 语音/焦点、多窗口、API 24/真实小屏和匹配 L1/L2 10+10 未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | 八项修复均先 RED→最小修复→GREEN，独立提交；Core 1,356/1,356、mobile typecheck、version check、standalone APK 构建与无 Metro 安装冷启动通过。M3-07 提示的目标修复在真实候选中验证；虽该候选未采用，后续 stage-5 action 与 plan r7 已在隔离设备 branch 运行通过。 |
+| M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色模式控件有有限证据；同一 synthetic production fixture 上 live GLM matched L1/L2 各 10 次完成。TalkBack 语音/焦点、多窗口、API 24/真实小屏、小说 package method 供给下的匹配样本仍未验。 |
+| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | 九项已确认修复均有 RED→最小修复→GREEN；新增 M6-02 诊断投影隐私反例。当前全量 Core 1,357/1,357、mobile typecheck、version check、standalone APK 构建、保留数据安装和冷启动/导航 smoke 通过。M3-07 提示的目标修正在真实候选中验证；该候选虽未采用，后续 stage-5 action 与 plan r7 已在隔离设备 branch 运行通过。 |
 | M7 | TRACKED ON PR #15 | 每次 push 后只认 PR 当前 head 的 Core Verify / Android Verify exact-head 结果；[PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 为权威状态页，PR 正文记录最后核验的 SHA 与 run。PR 保持开放且不自动合并。 |
 
 
@@ -32,7 +32,7 @@
 | R5 | PARTIAL | unknown park、原子提交/fence 工程覆盖；合成 Planner 在途强停后冷启动归为 unknown 且没有重派。已提交 live turn 的 Narrator/outbox 故障、响应写盘失败及旧 worker 设备竞态仍未做。 |
 | R6 | PARTIAL | package privacy/validation Core 通过；本轮真实行动未完成三意图私密投影审计。 |
 | R7 | PARTIAL / USER-PLAY-DEFERRED | novel world + campaigns/mapped branches 持久 ledger 有 77 次物理请求：76 HTTP 200、1 次旧配置 401、该 scope 内 unknown=0；另有 2 条身份未保存的 host transport unknown，未重派。campaign_plan 42 / Planner 8 / Narrator 17。17 个 action turns 均 agent-driven；L1 6 次、主 QA L2 8 次，L1 仅 fixed empty evidence；真人决定 0，留由用户后续体验。 |
-| R8 | PARTIAL | 长会话性能样本已记录；未完成 matched L1/L2 10+10。配对 pilot 两条路都落入 Planner，transport outcome unknown，identity 未持久化，未重派。独立玩家仍为 0/4。 |
+| R8 | PARTIAL | 长会话样本之外，已完成同一 synthetic production CampaignSession/non-empty evidence 的 live GLM matched L1/L2 各 10 次；L1 平均 6,705.2 ms、L2 平均 8,900.5 ms，最大并发 1。该结果不代表真实小说 package method 吞吐或真实账单；两条旧 host pilot unknown 仍未重派。独立玩家 0/4。 |
 | R9 | TRACKED ON PR #15 | 最终 SHA 的 Core Verify / Android Verify 见 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；必须核当前 PR HEAD。 |
 
 
@@ -105,7 +105,7 @@
 | A34 | PASS-DEVICE（限定范围） | failed Runtime 终局页已复测：变更行动隐藏、composer disabled，与 Runtime ending 投影一致；自然结局质量未验。 |
 | A35 | PARTIAL | API 37、软键盘、1.3 字号、旋转往返、360×800dp 虚拟显示与暗色模式核心控件通过；TalkBack spoken/focus、API 24、真实小屏与完整大字页面未验。 |
 | A36 | PARTIAL / USER-PLAY-DEFERRED | 独立试玩与六维评分为 0/4；用户会自行体验，独立四人评审仍未完成。 |
-| A37 | BLOCKED-REAL-PERFORMANCE | 没有匹配 10+10 的真实 L1/L2 数据。 |
+| A37 | PARTIAL / LIVE-GLM-SYNTHETIC | 同一 synthetic production fixture 完成 10 L1 + 10 L2，20/20 turn commit；30 个物理请求 HTTP 200、并发峰值 1，物理上限 40。L1 tap vs exact-authored-text parity 另由无 GLM 的 production harness 逐字段对照 PASS。真实小说 package method/non-empty-source-evidence 仍缺。 |
 | A38 | PARTIAL | standalone 当前 APK 与 installed base hash 匹配并在无 Metro 冷启动；真实小说与 save-10 branch 共完成 17 个 agent-driven action turns，真人完整旅程未跑。 |
 | A39 | PARTIAL | 同一世界运行三个 campaign QA 主线，并保留多个隔离 branches；未完成三局身份/状态/知识隔离审计。 |
 | A40 | PASS-ENGINEERING | 当前全量 Core 的长期记忆/retrieval 确定性覆盖通过；不计玩家决定。 |

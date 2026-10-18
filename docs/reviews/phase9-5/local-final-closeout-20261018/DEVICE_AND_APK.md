@@ -45,3 +45,10 @@
 - Node.js `v24.14.1`、npm `11.14.1`、Temurin JDK `17.0.19.10`、Gradle wrapper `9.3.1`、ADB `37.0.0-14910828`。
 - 长路径原 checkout 曾触发 Windows CMake path-length 问题；短路径隔离 worktree 构建成功，没有调整工程路径配置绕过它。
 - 当前结果证明该 APK 构建、安装、启动和代理 QA 旅程；不能替代 TalkBack、多尺寸设备、真人决定或独立试玩。
+
+## 2026-10-19：M6-02 修复包复测
+
+- `npm run apk:debug` 成功生成 standalone `V1.0.0` / versionCode `1000000`；本地 APK SHA-256 `113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F`。以 `adb install -r` 更新现有两个 ShineWord AVD，未卸载、清数据或新建设备；从两台设备 pull 出来的 `base.apk` 哈希均与构建物一致。
+- 最新构建在 `emulator-5556` 执行 `android-open-library.yaml` Maestro run `2026-10-19_004700`（5/5 commands PASS）；在 `emulator-5560` 执行 `android-open-campaign.yaml` run `2026-10-19_004738`（7/7 PASS）。两个 flow 均只做冷启动/导航，没有提交行动、发模型请求或改写历史状态。脱敏汇总见 `evidence/maestro-cold-launch-smoke-sanitized-20261019.json`。
+- 两台安装包身份一致。当前自动化重测只覆盖最新包的冷启动与书库/战役列表导航；发布诊断 exact-error card 的设备渲染未宣称通过，因为可见 live 项目是 `canon_conflict` + 一个 open review，而非 `package_finalize_failed` 且空 review queue。
+- 当前注册 AVD 仍只有 3 台；没有新增设备。`Medium_Phone` 仍保持共享且不触碰。未注册的 `F:\avd\Pixel_10.avd` 仍因归属不明和递归删除被安全审查拦截而保留，详见 `AVD_CLEANUP_LOCAL.md`。

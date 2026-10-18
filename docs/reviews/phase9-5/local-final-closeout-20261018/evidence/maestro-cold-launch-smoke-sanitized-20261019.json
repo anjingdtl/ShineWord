@@ -1,0 +1,35 @@
+{
+  "schema": "phase95-maestro-cold-launch-smoke-sanitized.v1",
+  "date": "2026-10-19",
+  "apk": {
+    "versionName": "1.0.0",
+    "versionCode": 1000000,
+    "sha256": "113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F"
+  },
+  "devices": [
+    {
+      "avd": "ShineWord_Phase95_LocalFinal_20261018",
+      "serial": "emulator-5556",
+      "api": 37,
+      "flow": "android-open-library.yaml",
+      "run": "2026-10-19_004700",
+      "steps": ["launchApp", "waitForAnimationToEnd", "assertVisible: 书库"],
+      "commandCount": 5,
+      "result": "PASS"
+    },
+    {
+      "avd": "ShineWord_M4FaultQA_20261018",
+      "serial": "emulator-5560",
+      "api": 37,
+      "flow": "android-open-campaign.yaml",
+      "run": "2026-10-19_004738",
+      "steps": ["launchApp", "waitForAnimationToEnd", "assertVisible: 书库", "tapOn: 战役", "waitForAnimationToEnd"],
+      "commandCount": 7,
+      "result": "PASS"
+    }
+  ],
+  "result": "PASS",
+  "scope": "cold launch to library and campaign-list navigation only; no campaign action or model request was submitted",
+  "readinessObservation": "An initial campaign-navigation attempt encountered the normal world-loading screen before the library was visible. The flow now asserts the library before navigating; the subsequent run passed.",
+  "harnessNote": "Library is the initial screen after launch, so the smoke asserts its visible label instead of tapping the already-selected tab."
+}

@@ -31,3 +31,9 @@
 
 - 冻结历史 turn、骰点、前两局 campaign endings、原第三局 main 状态和所有真实模型 ledger 按原样保留；恢复过程只新增一个独立 campaign，未覆盖原 campaign。
 - 唯一 old `outcome_unknown` 是 mock world；没有 replay。读取 live SQLite 时只在 journal 空闲后对本地副本做查询；一次事务中副本未通过检查的临时快照未作为证据，设备数据库未被写入。
+
+## 2026-10-19 补充
+
+- GLM 429 归因已用隔离的 direct-GLM opening sample 与 matched 10+10 复核：本地应用账本记录的 HTTP 429 指向 `10.0.2.2:8765` fault fixture，真实 GLM HTTP 429=0。旧 mock `outcome_unknown` 和两个 host transport unknown 都没有重派；真实复测使用新的 scope/branch identities。
+- 新增 matched live run 的 30 个请求全 HTTP 200、最大并发 1；见 `evidence/matched-live-l1-l2-synthetic-20261019.json`。它验证 Planner/Narrator 路由与提交，未补齐设备端 Narrator 中断、outbox 写盘和旧 worker fencing 故障注入。
+- 用户确认真人体验由其自行完成；本报告不将真人游玩列作 agent 阻滞。其余自动化矩阵仍需可用的 Stage-1/8 原始资产，以及安全、可重复的设备注入现场。

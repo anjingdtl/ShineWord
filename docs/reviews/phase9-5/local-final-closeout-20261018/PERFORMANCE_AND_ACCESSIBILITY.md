@@ -23,3 +23,10 @@
 - 没有匹配 L1/L2 各 10 次的真实请求性能、TTFT 或费用对比；本轮仅有 campaign-scope fixed-empty-evidence L1 样本，world package 仍没有 method entry，也没有非空 evidence L1。
 - 后续尝试的 L1/L2 小样没有形成有效样本：合成 fixture 缺少 L1 必需绑定字段，两条路径都进入 Planner；两次宿主机 transport attempt 无 HTTP status 且 outcome unknown，attempt identity 未从临时内存账本持久化。两次未重派，完整脱敏偏差记录见 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。
 - PSS 与 GfxInfo 样本来自长会话，不应与独立、固定步骤基准比较，也不能外推低端设备表现。
+
+## 2026-10-19 补充：真实 GLM matched 10+10
+
+- 使用同一 production `CampaignSession` synthetic fixture、冻结 root state、固定非空 evidence 与骰点，真实 endpoint 完成 L1 10/10、L2 10/10，所有 turn 原子提交；30 次物理调用全部 HTTP 200，最大并发 1。证据：`evidence/matched-live-l1-l2-synthetic-20261019.json`。
+- L1 latency 平均 6,705.2 ms（min 5,254 / max 8,661）；L2 平均 8,900.5 ms（min 7,082 / max 9,749）。这是此小样本下从 app action 到完成的总耗时，不是 TTFT 或统计显著的性能承诺；没有从 token 差异推算人民币账单。
+- 配套 tap vs exact-authored-text parity 用确定性 production harness 逐项比较并 PASS，但未再次调用 GLM。两项证据均不等于真实小说 world package method 的 L1 表现，因当前 package 没有 method entry。
+- 本轮新增自动化仍未覆盖 TalkBack spoken/focus、多窗口、API 24/真实小屏设备，也未完成 Narrator/outbox/旧 worker 等设备故障注入。真人决定与独立试玩由用户后续完成，不属于 agent 自动化关卡。

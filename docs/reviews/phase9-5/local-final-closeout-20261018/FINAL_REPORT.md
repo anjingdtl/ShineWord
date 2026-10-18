@@ -69,3 +69,22 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 - 本轮小屏 Play 截图 SHA-256 `F98D9451488927A8A782E149832AA5E1A443553207981D74A93EEC7D59016F6A`，本地路径 `C:\Temp\sw95-phase95-active\small-before-maestro.png`。新提交的 save-10 与 stage-5 JSON 仅包含脱敏状态、标识和 hash，不含正文、提示词、响应、数据库或截图。
 - 第三局状态 v12 的只读 SQLite 副本 SHA-256 `AF7BB3B76BA8F90636C77AE8CF7C34C6773124C0C92B7FE4B846D8F30DE4F8C5`，`integrity_check=ok`；完整 DB 仅留在本机。仓库新增的 `evidence/third-campaign-sanitized-summary.json` 不含剧情原文、提示词或密钥。
 - 已提交的开局身份页截图只显示身份控件与空姓名输入，不含小说正文或生成剧情。未将密钥、小说正文、LLM 提示词/响应、数据库、终局截图加入 PR。
+
+## 2026-10-19 自动化收口补充
+
+- 本次重新读取远端：`origin/main=87eef899281f267a17e02357cc643dd475cabd7c`；工作在隔离 worktree `F:\sw95local-20261018`，原始 checkout 未改动。代码修复独立提交 `d8d9c3e fix(phase95): surface package publication diagnostics`。之后的证据/验收文档将另行提交。
+- 新确认缺陷 `SW95-M6-02`：发布失败且 review queue 为空时，任务卡引导查看空审查列表，且没有诊断读模型。先用生产集成反例 RED，再增加类别-only 诊断投影与任务卡详情路径，修正通用错误提示。另以隐私断言证明并移除 segment ID 等非 UI 字段。定向 GREEN、Core 1,357/1,357、mobile typecheck、version check 均通过。
+- 独立 standalone APK `V1.0.0` / versionCode `1000000` SHA-256 为 `113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F`；两台现存 ShineWord AVD 安装后 pull 出的 base.apk 哈希一致。最新包 Maestro：主设备书库冷启动 run `2026-10-19_004700` 5/5，M4 设备打开战役列表 run `2026-10-19_004738` 7/7。该 exact `package_finalize_failed` UI 错误数据未出现在当前 live 项目，设备层该卡片精确展示仍 NOT VERIFIED；生产集成回归通过。
+- 新增 live GLM matched 10+10：同一 synthetic production `CampaignSession`、非空 evidence、20/20 turn commit；L1 每次 1 Narrator / Planner=0，L2 每次 Planner+Narrator；30/30 物理请求 HTTP 200、并发峰值 1、未触及 cap 40。L1 平均 6,705.2 ms，L2 平均 8,900.5 ms。tap/exact-text 完整状态 parity 由无模型 production harness PASS。此结果不替代真实小说 package method path。
+- 请求归因：累计 111 个已知物理 attempt（110 HTTP 200、1 旧配置 HTTP 401）与两个 identity 缺失的 host transport unknown；未重派任何 unknown。此前记录的 429 来自 `10.0.2.2:8765` 本地 mock，GLM 真实 429=0。成功 token 合计 input/output/reasoning `1,152,193 / 265,801 / 41,097`；实际人民币费用仍无法从应用 ledger 确认。
+- AVD 继续保持 3 个注册项；不增加模拟器。7 台不再使用的 ShineWord 注册 AVD 已删除。`F:\avd\Pixel_10.avd` 为约 20.16 GiB 未注册目录、归属不明，递归删除被安全审查拦截后保留，未绕过。
+
+### 自动化未关闭项
+
+1. 真实小说 world package 当前 `method` entry 数为 0；因此真实原著 package 上 non-empty source-evidence L1 与 package method 供给仍未验证。Synthetic production live 10+10 不能代替此项。
+2. 设备侧 Narrator 前/后 force-stop、响应已到但写盘失败、outbox 事务失败和旧 worker fencing 竞态矩阵仍不完整；现有 Planner 在途 force-stop 与 Core 原子性/fence 回归不能代替这些设备注入。
+3. Stage-1/8 合法历史资产不可用；旧 schema migration、从当前设备 export/import round-trip 与完整 fork/rewind 隔离矩阵仍缺可核证设备数据。
+4. TalkBack 实际焦点/播报、多窗口、API 24 与另一台真实小屏设备未完成。当前三台 AVD 中只有两台专用 API 37 ShineWord 设备；没有新增模拟器以填矩阵。
+5. 第四项 deferred consequence 尚缺一次独立 trigger→discharge→权威下游消费对照；stage-5 QA branch 推进到 stage 6 的证据不替代此对照。
+6. 本轮真人游玩与 4 人试玩由世恒哥自行安排，明确不算 agent 自动化交付阻滞，也没有宣称 PASS。
+7. PR #15 exact-head GitHub Core Verify/Android Verify 与审查状态将在本次最终 push 后更新；PR 不自动合并。

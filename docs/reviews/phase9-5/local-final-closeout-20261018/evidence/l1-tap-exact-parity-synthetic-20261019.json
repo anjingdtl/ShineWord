@@ -1,0 +1,58 @@
+{
+  "schema": "phase95-l1-tap-exact-parity-sanitized.v1",
+  "runId": "p95-parity-20261018160451-16168",
+  "fixture": "synthetic production CampaignSession with fixed non-empty evidence",
+  "baselineStateHash": "70e70cc4f807355901b3aa0958a56ed7812f719af88bd3ae61caed85df810b65",
+  "methodId": "sweep",
+  "evidenceId": "lore-crates",
+  "deterministicDie": 4,
+  "comparison": "full normalized GameStateSnapshot + ActionContract + turn effects + event payloads + rolls + reward ledgers",
+  "branchScopedIdentityAndTimestampsNormalized": true,
+  "bindingHashHandling": "campaignBindingHash is branch-specific by production contract and independently revalidated for each branch",
+  "bindingHashesValid": true,
+  "storedContractHashesValid": true,
+  "result": "PASS",
+  "attempts": {
+    "planner": 0,
+    "narrator": 2,
+    "other": 0
+  },
+  "observations": [
+    {
+      "mode": "tap",
+      "stateHash": "107ca64924b834cb3cb44093997909d2171b692dcaf7748fc6a8acbe73a0da10",
+      "contractHash": "ee6389d6f7fbf1b2955e225a11e854421b464e72fd1887e2ab6e12972d898a9e",
+      "branchContractHash": "6f1f52c4172195140f47b2b7819c3e50199fdf97716179d899f35a791625c8d2",
+      "bindingHashValid": true,
+      "storedContractHashValid": true,
+      "storedContractHash": "662b94bc352590a1e868911e766338b1b2500564318744e91a4c92d5137b3b60",
+      "effectsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "eventHash": "5cc61761ed2e13bf218a9df147ba8e37bc3b9933726dbf5f8f48cc8583d6955d",
+      "rollHash": "83406bb4cf492fc45dab31602efa399fb0dd09c50d1b098b12996c970aafb18d",
+      "rewardsHash": "8d6f4afbe8cec9477f7ab558dc346e213acc4ee6da85e53e555ba4a824fbcda0",
+      "rollCount": 1,
+      "eventCount": 1,
+      "beforeVersion": 0,
+      "afterVersion": 1,
+      "grade": "success"
+    },
+    {
+      "mode": "exact-authored-text",
+      "stateHash": "107ca64924b834cb3cb44093997909d2171b692dcaf7748fc6a8acbe73a0da10",
+      "contractHash": "ee6389d6f7fbf1b2955e225a11e854421b464e72fd1887e2ab6e12972d898a9e",
+      "branchContractHash": "1174af8525eb43b799b4064eb9a618ae6e379d0ff0ff1d602db585961ec3c092",
+      "bindingHashValid": true,
+      "storedContractHashValid": true,
+      "storedContractHash": "5b5f0c8a9685aef2d545b0fb48cb1fe4810695128fccdf7aae7fc4f14e7ad0c5",
+      "effectsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "eventHash": "5cc61761ed2e13bf218a9df147ba8e37bc3b9933726dbf5f8f48cc8583d6955d",
+      "rollHash": "83406bb4cf492fc45dab31602efa399fb0dd09c50d1b098b12996c970aafb18d",
+      "rewardsHash": "8d6f4afbe8cec9477f7ab558dc346e213acc4ee6da85e53e555ba4a824fbcda0",
+      "rollCount": 1,
+      "eventCount": 1,
+      "beforeVersion": 0,
+      "afterVersion": 1,
+      "grade": "success"
+    }
+  ]
+}

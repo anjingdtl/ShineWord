@@ -63,3 +63,11 @@
 3. stage 5：候选修复提示本身经 validator 拒绝，之后可用 UI 行动成功完成该节点并使隔离 branch 采用 revision 7、进入 stage 6；原 main 仍 v12/r4，未完成相同路径。没有放宽 validator。M3-06 action-reference mismatch guidance 的特定 live 错误仍未触发。
 4. 真实玩家决定 0/80、独立试玩 0/4；第一、二局的 failure ending 不代表自然结局可玩性已验。
 5. 实际费用、全书构建成本、章节计数差异、模型与独立玩家的剧情质量评估仍未知/未运行。原文与生成剧情截图只留在本机私有目录。
+
+## 2026-10-19：matched live GLM 与 429 归因复核
+
+- 在 production `CampaignSession` 上使用固定非空 evidence `lore-crates`、固定骰点和同一冻结 root state，完成 10 个 L1 tap 与 10 个 L2 semantic-paraphrase turns。20/20 原子提交成功；L1 每次 1 个 Narrator、Planner=0；L2 每次顺序 1 个 Planner + 1 个 Narrator。30 个真实 GLM 物理请求均 HTTP 200，最大并发 1，cap 40 / spent 30。L1 平均 6,705.2 ms，L2 平均 8,900.5 ms；用量 input/output/reasoning 为 `32,040 / 6,378 / 167`。数据和逐 attempt hash 在 `evidence/matched-live-l1-l2-synthetic-20261019.json`。
+- 该 fixture 是 production runtime 的合成 world/campaign，不是小说 world package method 路径；因此证明路由和提交链，不证明原著 package method 覆盖、非空来源 fact 绑定或真实章节语义。
+- 另以无模型的 production harness 对同一 frozen state 做 tap vs exact-authored-text parity；normalized state、contract、effects、events、rolls、rewards 完全一致，两个 branch binding/contract hashes 各自通过校验，`evidence/l1-tap-exact-parity-synthetic-20261019.json` 为 PASS。
+- 429 复核：现有证据中的 HTTP 429 来自模拟器连到 `10.0.2.2:8765` 的 localhost/mock fault fixture，真实 GLM 账本中 HTTP 429 为 0。原 unknown 没有 HTTP status，按 `outcome_unknown` 不重派；之后用不同隔离 scope 对真实 endpoint 完成 9,601 code-point direct-GLM opening sample 与上述 10+10，均未重放旧逻辑请求。故没有证据支持“GLM 对小说内容涉敏后返回 429”。
+- 汇总已知物理记录：111 次，其中 HTTP 200 为 110 次、旧配置 HTTP 401 为 1 次；另有两个身份未持久化的 host transport unknown，保留且未重派。没有观察到真实 GLM 429。累计成功用量 input/output/reasoning `1,152,193 / 265,801 / 41,097`；应用 ledger 无法证明实际 CNY 扣费。

@@ -46,3 +46,11 @@
 6. M3-07 start-node repair guidance 已在候选结构中实际生效；M3-06 action-reference mismatch guidance 尚未被 live candidate 触发。后续 stage-5 UI action/plan adoption 已在 QA branch 验证。
 7. 真人 80 决定及独立 4 人试玩由世恒哥后续体验；明确不计作 agent 自动化交付门，也不宣称已验收。
 8. PR #15 的最终提交 SHA 和 exact-head CI 以最终 push 后 GitHub 实际结果为准；不自动合并。
+
+## 2026-10-19 最新状态
+
+- 当前代码提交：`d8d9c3e`，新增 `SW95-M6-02` 发布诊断卡片修复。验证：定向 RED→GREEN、Core 1,357/1,357、mobile typecheck、version check、standalone APK build/install identity、两台既有 API-37 AVD Maestro cold-launch/navigation PASS。
+- 最新 APK SHA-256：`113B8EEB41EE167694C574F7B9506929352927F76697A83895059E1B6F7B979F`；书库 flow 5/5，战役列表 flow 7/7。没有新建 AVD 或提交行动/模型请求。
+- Live GLM matched 10+10 在 synthetic production fixture 上完成，30 HTTP 200、最大并发 1；现有 localhost/mock 429 与真实 endpoint 明确分开。累计 111 known / 110 HTTP200 / 1 old 401，另有 2 host transport unknown 未重派。
+- 真人决定/独立试玩由用户后续完成，不列为 agent 阻滞。其余自动化待项见 `FINAL_REPORT.md`：真实小说 package method/non-empty-evidence L1、设备 Narrator/outbox/worker 故障矩阵、Stage-1/8 与旧 schema/fork-rewind 资产、TalkBack/multiwindow/API24/真实小屏、第四后果链下游核验。
+- 最终文档提交、PR #15 更新与当前 exact-head CI 尚待完成；PR 保持开放，不自动合并。

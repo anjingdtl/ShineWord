@@ -1,5 +1,6 @@
 appId: com.shineword.app
 ---
-- tapOn: "书库"
+- launchApp
 - waitForAnimationToEnd:
     timeout: 1500
+- assertVisible: "书库"
