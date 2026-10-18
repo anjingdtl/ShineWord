@@ -11,6 +11,7 @@ const logPath = process.argv[2];
 if (!logPath) throw new Error('Provide a path for the redacted JSONL request log.');
 
 const PORT = Number(process.env.PHASE95_MOCK_PORT ?? 18591);
+const HOLD_NARRATOR = process.env.PHASE95_HOLD_NARRATOR === '1';
 const SITUATION_ID = 'camp-sit-open';
 let requestNo = 0;
 
@@ -97,7 +98,8 @@ const server = http.createServer((request, response) => {
 
       // Deliberately exclude prompts, novel/story text, Authorization and raw
       // provider bodies. The test needs identity/count evidence only.
-      fs.appendFileSync(logPath, `${JSON.stringify({
+      const heldNarrator = HOLD_NARRATOR && role === 'Narrator';
+      const requestMetadata = {
         at: new Date().toISOString(), n: no, requestKind, role,
         model: String(wire.model ?? ''),
         logicalRequestId: request.headers['x-phase9-logical-request-id'] ?? null,
@@ -106,8 +108,27 @@ const server = http.createServer((request, response) => {
         campaignId: request.headers['x-phase9-campaign-id'] ?? null,
         branchId: request.headers['x-phase9-branch-id'] ?? null,
         stateVersion: request.headers['x-phase9-state-version'] ?? null,
-        status: 200,
-      })}\n`, 'utf8');
+        status: heldNarrator ? 'held' : 200,
+        requestBodyStored: false,
+        authorizationLogged: false,
+      };
+      fs.appendFileSync(logPath, `${JSON.stringify(requestMetadata)}\n`, 'utf8');
+
+      if (heldNarrator) {
+        response.on('close', () => {
+          fs.appendFileSync(logPath, `${JSON.stringify({
+            event: 'client_disconnected', requestKind, role,
+            logicalRequestId: requestMetadata.logicalRequestId,
+            attemptId: requestMetadata.attemptId,
+            branchId: requestMetadata.branchId,
+            stateVersion: requestMetadata.stateVersion,
+            requestBodyStored: false,
+            authorizationLogged: false,
+            at: new Date().toISOString(),
+          })}\n`, 'utf8');
+        });
+        return;
+      }
 
       sendJson(response, 200, {
         id: `local-${no}`,
