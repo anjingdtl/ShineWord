@@ -62,6 +62,30 @@ test('phase 9 co-scheduling repair guidance joins mutually exclusive schedulers 
   assert.match(guidance, /不得把它们拆到互斥方法或互斥 outcome grade/);
 });
 
+test('phase 9 missing long-plan consequences receives executable bounded repair guidance', () => {
+  const candidate = {
+    stages: [
+      { nodeId: 'stage-1', role: 'main', activation: null, dependsOn: [] },
+      { nodeId: 'stage-2', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-1' }, dependsOn: ['stage-1'] },
+      { nodeId: 'stage-3', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-2' }, dependsOn: ['stage-2'] },
+      { nodeId: 'stage-4', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-3' }, dependsOn: ['stage-3'] },
+      { nodeId: 'stage-5', role: 'main', activation: { kind: 'node_succeeded', nodeId: 'stage-4' }, dependsOn: ['stage-4'] },
+    ],
+    firstSituation: { methods: [{ methodId: 'opening-action', outcomes: { success: { effects: [] } } }] },
+    consequences: [],
+  };
+  const guidance = buildStructuralRepairGuidance([
+    'long plan: at least two executable delayed consequences are required.',
+  ], candidate);
+
+  assert.match(guidance, /当前只有 0 项可执行延迟后果，至少还缺 2 项/);
+  assert.match(guidance, /只补足数量/);
+  assert.match(guidance, /ordinary success|success.*schedule_consequence/i);
+  assert.match(guidance, /至少两段.*required main/);
+  assert.match(guidance, /后续.*completion|completion.*消费/);
+  assert.match(guidance, /不得.*record_event.*伪装/);
+});
+
 test('phase 9 repair guidance maps unknown knowledge entries to bounded clue aliases', () => {
   const candidate = { clues: [{ clueId: 'clue-ledger-proof', title: '核账线索', text: '一段已获授权的合成线索内容。' }] };
   const guidance = buildStructuralRepairGuidance([

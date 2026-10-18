@@ -512,6 +512,7 @@ test('planning budget: complete repair input is reflected in scheduler admission
     assert.ok(tokens + input.maxOutputTokens + deriveSafetyMargin(profile.capabilities.contextWindow) <= profile.capabilities.contextWindow);
   }
 });
+
 test('campaign-plan effect-limit rejection receives bounded preserving repair guidance', async () => {
   const first = structuredClone(candidateModel());
   first.firstSituation.methods[0].outcomes.success.effects = Array.from({ length: 9 }, (_, index) => ({
@@ -531,4 +532,29 @@ test('campaign-plan effect-limit rejection receives bounded preserving repair gu
   assert.match(requests[1].user, /最多 8 个效果模板/);
   assert.match(requests[1].user, /保留普通 success.*completion/);
   assert.match(requests[1].user, /拆分到后续可执行办法/);
+});
+test('campaign-plan missing long consequences receives validator-specific repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.consequences = [];
+  const repaired = structuredClone(candidateModel());
+  repaired.consequences.push({ ...structuredClone(repaired.consequences[0]), consequenceId: 'lin-followup' });
+  const responses = [first, repaired];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen long-plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'long-consequence-repair', worldId: 'w', physicalRequestBudget: 2,
+    validateModel(model) {
+      return (model.consequences?.length ?? 0) < 2
+        ? ['long plan: at least two executable delayed consequences are required.'] : [];
+    },
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /只有 0 项可执行延迟后果，至少还缺 2 项/);
+  assert.match(requests[1].user, /success 或 full_success effects 以 schedule_consequence 排程/);
+  assert.match(requests[1].user, /至少两段 required main 阶段成功/);
+  assert.match(requests[1].user, /后续必做阶段 completion\/activation.*正向消费/);
+  assert.match(requests[1].user, /不得.*record_event.*伪装/);
 });

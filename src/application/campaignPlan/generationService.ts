@@ -252,6 +252,13 @@ export function buildStructuralRepairGuidance(
       const [, clueId, sourceId] = clueMatch;
       return [`- clue ${clueId}：sourceEntryIds 中被拒绝的目录 ID 是 ${sourceId}。从该 clue 的 sourceEntryIds 删除这个被拒绝值；若仍有其它错误，逐项删除相应被拒绝值，只保留冻结资料目录里逐字存在的条目 ID；没有合法条目时使用 []。sourceFactIds 是不同命名空间：不要把被拒绝值迁移、改写或补造到 provenance.sourceFactIds，也不要修改已有且合法的 provenance.sourceFactIds。此修复同时消除由该 sourceEntryIds 派生的 artifact 目录依赖错误；保留线索正文和其它合法字段。`];
     }
+    if (/^long plan: at least two executable delayed consequences are required\.$/.test(error.trim())) {
+      const consequences = Array.isArray(root?.consequences) ? root.consequences : [];
+      const existingIds = consequences.map(asRecord).flatMap(item =>
+        typeof item?.consequenceId === 'string' ? [item.consequenceId] : []);
+      const missing = Math.max(1, 2 - consequences.length);
+      return [`- 长篇计划当前只有 ${consequences.length} 项可执行延迟后果，至少还缺 ${missing} 项。保留所有已有 consequence 及其玩家目标/阶段门槛，只补足数量；新增项必须使用不同 trigger 和不同权威效果，并在同一条可达旅程中与已有项共同排程。将每项通过 firstSituation 某个真实可执行办法的 success 或 full_success effects 以 schedule_consequence 排程；每条 trigger 路径都必须在排程后经过至少两段 required main 阶段成功，且后续必做阶段 completion/activation 或有效 ending.condition 正向消费该项的权威效果。现有 consequence ID：${existingIds.join(', ') || '无'}。若当前阶段链无法满足这些约束，只补建真实需要的 required main 阶段和硬 dependsOn，并把实际效果接入后续完成条件；不得删除/放宽现有条件、用互斥方法或等级拼成同程排程，或用纯 record_event 文案伪装延迟状态变化。保留普通 success 可行的当前完成路线，并输出完整修正 JSON。`];
+    }
     if (/^long plan: at least two delayed consequences must be co-schedulable/.test(error.trim())) {
       const consequences = Array.isArray(root?.consequences) ? root.consequences.map(asRecord).filter((item): item is JsonRecord => item !== null) : [];
       const ids = consequences.flatMap(item => typeof item.consequenceId === 'string' ? [item.consequenceId] : []);
