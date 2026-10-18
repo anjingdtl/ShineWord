@@ -16,7 +16,7 @@
 | M3 | PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN | 三个 campaign 主线含 14 个 agent-driven QA action turns；另有一个隔离测试 branch 的 method-bound 行动，共 15 个。骰点、Narrator、原子提交与下一轮 L2 均有设备/DB 证据；stage 1–4 及 3 个延迟消费者通过。stage 5 内容 unresolved；无真人选择。 |
 | M4 | PARTIAL / BLOCKED-ASSET | 小说 world 与对应 campaigns/branches 共 65 次物理请求：64 HTTP 200、1 旧配置 401、unknown=0、in-flight=0；mock 世界 429 与 network_unknown 保留未重派。live turn force-stop/outbox、合法 save-10 / Stage-1/8 缺失。 |
 | M5 | PARTIAL | 长会话 PSS/RSS 与 GfxInfo、键盘、1.3 字号及终局页有限样本。TalkBack、其他 API/尺寸和匹配 L1/L2 10+10 未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | opening evidence recovery、Canon plan adoption、terminal action gate、stage completion repair guidance 四项 RED→GREEN；Core 1,354/1,354、mobile typecheck、version check、Debug APK 与安装复测通过。修复后的 stage-5 候选仍被 validator 拒绝。 |
+| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | opening evidence recovery、Canon plan adoption、terminal action gate、effect-limit、long-plan consequence、stage completion 三类 repair guidance 共六项 RED→GREEN，独立提交；Core 1,354/1,354、mobile typecheck、version check、Debug APK 与安装复测通过。修复后的 stage-5 候选仍被 validator 拒绝。 |
 | M7 | PR #15 / EXACT-HEAD CHECK | PR #15 开放未合并；只以最终 push 后 PR 当前 SHA 的 Core Verify 与 Android Verify 为准，旧 head 和 PR #14 checks 不代替本轮最终 SHA。 |
 
 

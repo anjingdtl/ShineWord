@@ -9,13 +9,13 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 ## 分阶段结论
 
 - **阶段 9.5：PARTIAL。** 真实 GBK 小说 partial world、已测通 GLM 配置和当前分支 Debug APK 在专用 API 37 AVD 上完成真实开局与 agent-driven QA。三局主线有 14 个行动级提交，另一个隔离分支有 1 个 method-bound action turn，共 15 个，全部由测试执行者驱动。骰点、Narrator、原子提交、下一轮和 3 项延迟后果消费均有 SQLite/物理请求账本证据。campaign-scope L1 均使用显式固定空 evidence policy；stage 5 内容候选经 validator 拒绝，完整剧情仍阻滞。所有 QA 选择均不计真人决定或独立试玩。
-- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 四项确认代码缺陷都具备 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态禁止继续提交变更行动、stage completion producer 缺失时未提供定向修复指导。最新全量 Core 1,354/1,354、mobile typecheck、version check 通过；当前 APK 已在保留原应用数据的 AVD 安装，二进制身份匹配。
+- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 六项确认代码缺陷均具 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态行动门控、effect 上限 repair guidance、long-plan consequence repair guidance、stage completion producer repair guidance。最新全量 Core 1,354/1,354、mobile typecheck、version check 通过；当前 APK 已在保留原应用数据的 AVD 安装，二进制身份匹配。
 - **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验、L1/L2 匹配性能 10+10 未验；合法 save-10 与 Stage-1/8 历史资产缺失。自动化、代理 QA、模型生成内容和 CI 不替代这些验收。
 
 ## 基线、提交与 CI
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
-- 已独立提交的代码修复：`8ab0419`（Canon 开局方案采用）、`3847339`（Runtime 终局行动门控）、`00f3625`（bounded campaign effect repairs）、`b6c7d00`（missing long-plan consequence repairs）、`cbacbb0`（local stage completion repair guidance）。三项修复前节点已提交在 PR 分支，本轮新增两次 RED→GREEN stage-plan guidance repair 复现也分别定向通过。
+- 已独立提交的六项代码修复：`dd17ccf`（bounded opening evidence recovery）、`8ab0419`（Canon 开局方案采用）、`3847339`（Runtime 终局行动门控）、`00f3625`（bounded campaign effect repair）、`b6c7d00`（missing long-plan consequence repair）、`cbacbb0`（local stage completion repair guidance）。三个 campaign-plan guidance 缺陷均先增加 helper 与 retry 集成 RED，再最小修复并分别 GREEN。
 - PR #15 针对 main 开放且未合并。报告提交后需 push 并核对最终 PR HEAD SHA；CI 结论只按该精确 SHA 的 Core Verify 与 Android Verify 记录。基线 PR #14 或旧 PR head 的 CI 不代替最终 HEAD 验证。
 
 ## 本地回归与 Android 包
@@ -42,7 +42,7 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 - `SW95-M6-01`：发布验证返回结构化 `opening_entity_unproven` 时，旧恢复条件只看中文错误消息，漏掉有界开篇补建。RED 后新增只识别该 machine-code 前缀的判定 helper；定向 2/2 GREEN，不改 validator、scope 或 ledger。
 - `SW95-M3-01`：Canon 开局计划把规划阶段建议技能错误写入 `initialSkills`，导致采用时与 Canon payload 比较触发假 drift。RED 后只在 Canon intent 不绑定规划建议技能，并兼容已存旧建议字段；定向 5/5 GREEN。
 - `SW95-M3-02`：Runtime 已 `failed` / `paused` 时，Play projection 仍显示可变更行动且 controller 允许直接提交。RED 后把权威 campaign status 投影至 UI，并在 UI/controller 两层门控；保留只读查看线索。定向 7/7 GREEN，安装后的终局页复测通过。
-- `SW95-M3-03`：stage-5 completion 缺本地 effect producer 时，结构化 validator 错误未被 plan repair guidance 识别。新增 helper 反例与 generation retry 集成反例先 RED；修复只补充保留 completion contract 的定向生成指导；两个定向用例 GREEN。修复后新的 stage-5 job 两次 HTTP 200，但候选转而因 `skill_check` 的 `destinationId` 无效而被 validator 拒绝，未采用，不能声称 stage 5 已通过。
+- `SW95-M3-03/04/05`：stage completion producer、effect-array 上限、long-plan consequence 数量的 validator 错误原先没有合同保真的 repair guidance。三项各自以 helper + generation retry 集成反例先 RED，再分开提交最小 guidance 修复并 GREEN。修复后 stage-5 新 job 两次 HTTP 200，但候选转而因 `skill_check` 的 `destinationId` 无效而被 validator 拒绝，未采用，不能声称 stage 5 已通过。
 - 复核未新增第二套 Runtime、状态权威、规则语义或账本；未放宽既有内容验证，也未改写冻结 turn、骰点或历史 unknown。
 
 ## 未完成项 / 明确阻滞

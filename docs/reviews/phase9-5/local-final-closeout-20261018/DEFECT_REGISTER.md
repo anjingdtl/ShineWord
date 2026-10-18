@@ -38,6 +38,20 @@
 - GREEN：`tests/phase9-plan-contract-guard.test.cjs` helper 反例与 `tests/phase9-planning-budget.test.cjs` generation-retry 集成反例均在修复后通过；全量 Core 1,354/1,354、mobile typecheck、version check 与 Debug APK build 通过。提交 `cbacbb0 Guide local stage completion repairs`。
 - AVD 复测：修复后新的 stage-5 job 在 v10/base plan revision 4 上顺序使用 2/2 `campaign_plan` attempts，均 HTTP 200。最终候选因 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check` 被既有 validator 拒绝，未采用、branch 未前进、revision 未变。修复 guidance 已运行，但 stage 5 仍未修好；不将新候选错误登记成已确认代码缺陷。
 
+## SW95-M3-04：effect 数量 validator 错误缺少保留完成路线的 repair guidance
+
+- 严重度：P1（结构候选被限次拒绝且修复方向不清）。当具体 `effects` 数组超过 8 个模板时，repair helper 没有按 validator 路径解释如何在既有上限内保留普通成功 completion。
+- RED：`tests/phase9-plan-contract-guard.test.cjs` 直接验证路径级 guidance；`tests/phase9-planning-budget.test.cjs` 验证生成 retry 的第二次请求确实包含该 guidance。修复前两种情形均无对应指引。
+- 最小修复：只对精确的 `effects must be an array of ≤8 templates` validator 错误追加对应数组路径、保留普通 success completion、移除冗余效果或拆成有真实前提的后续办法；没有放宽 8 项上限或删除 gate。
+- GREEN：helper 与 generation retry 两个定向反例通过；最新 Core 1,354/1,354、mobile typecheck、version check、Debug APK build/install identity 通过。提交 `00f3625 Guide bounded campaign effect repairs`。
+
+## SW95-M3-05：缺少两项可执行延迟后果时没有合同保真修复指导
+
+- 严重度：P1（长篇计划候选修复失败）。当 validator 报告 `long plan: at least two executable delayed consequences are required.`，repair helper 没有指出如何在保持玩家目标与阶段门槛的前提下补齐同一可达旅程上的触发、排程、等待和权威消费。
+- RED：`tests/phase9-plan-contract-guard.test.cjs` 覆盖直接 helper 错误；`tests/phase9-planning-budget.test.cjs` 覆盖 retry 请求的修复内容和有界物理请求数。修复前均没有能保留约束的 targeted guidance。
+- 最小修复：只识别该 long-plan validator 错误，提示补足独立 consequences、真实 success/full_success trigger、至少两段 required main stage delay 与后续 completion/activation/ending 的状态消费；明确拒绝互斥方法拼接、放宽条件或用 `record_event` 文案冒充状态效果。
+- GREEN：helper 与 retry 集成定向测试通过；最新 Core 1,354/1,354、mobile typecheck、version check 与 Debug APK build/install identity 通过。提交 `b6c7d00 Guide missing long-plan consequence repairs`。既有 live job 仍因候选不满足阶段延迟条件而 invalid，未采用。
+
 ## 观测结果，未登记为代码缺陷
 
 - 两个 agent-driven QA campaign 的 severe failure 后由已采用的规划结局进入 failed：第一局 5 个玩家模拟行动后结束；第二局仅 1 个玩家模拟行动，观察行动 severe failure 后经两次 plan replan 到 failed。数据库的 user turns、roll records、ending ID 和终局 UI 一致，未发现状态/结局投影不一致；“一次严重失败即结束”留作独立玩家可玩性评估，不在无 RED 代码反例时登记为代码缺陷。

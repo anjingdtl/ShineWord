@@ -9,7 +9,7 @@
 ## 当前结论
 
 - **阶段 9.5：PARTIAL。** 已在专用 API 37 AVD 上使用 SAF 导入真实 GBK 小说、实测 GLM、运行当前 Debug APK；三个 campaign QA 主线含 14 个行动级提交，另有 1 个隔离分支 method-bound 行动，共 15 个 agent-driven action turns。没有任何一项计作真人决定。stage 5 候选仍不能通过既有 validator，非空 evidence L1 和玩家验收未完成。
-- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 四项确认代码缺陷各自有 RED → 最小修复 → GREEN：开局证据补建、Canon 开局计划采用、Runtime 终态行动门控、campaign stage 本地 completion producer 的修复指导。Core 当前 1,354/1,354，mobile typecheck、version check 通过；当前 APK 已安装，build/install SHA 完全一致。
+- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 六项确认代码缺陷各自有 RED → 最小修复 → GREEN：开局证据补建、Canon 开局计划采用、Runtime 终态行动门控、effect 数量上限指导、long-plan consequence 指导、campaign stage completion producer 指导。Core 当前 1,354/1,354，mobile typecheck、version check 通过；当前 APK 已安装，build/install SHA 完全一致。
 - **阶段 9 历史遗留：PARTIAL。** 真人有效决定 0/80、独立试玩 0/4；自然结局、合法 save-10 / Stage-1/8、TalkBack、匹配 L1/L2 10+10 和 live crash/outbox 矩阵未完成。
 
 ## M0–M7
@@ -20,7 +20,7 @@
 - **M3 — PARTIAL / HUMAN-ACCEPTANCE-NOT-RUN。** 骰点、Narrator、状态原子提交、下一轮、3 个 deferred consumer 均有 Android/DB/物理请求证据。15 个 action turns 均由 QA 执行者驱动；第三局 stage 5 内容候选仍被拒绝，没有把内容验证降级。
 - **M4 — PARTIAL / BLOCKED-ASSET。** 小说 world 及其 campaigns/branches 合计 65 次真实物理请求：64 成功 HTTP 200、1 次旧配置 HTTP 401；`outcome_unknown=0`、在途=0，观测峰值并发=2。mock world 的 429 与 `outcome_unknown` 保留且未重派。live turn force-stop/outbox 与合法历史存档矩阵未运行。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号及终局页有限检查通过；TalkBack、多尺寸设备与匹配 10+10 未运行。
-- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 四项已确诊缺陷均 RED → GREEN；全量 Core、mobile typecheck、version check、APK 构建和安装身份复核通过。stage 5 修复后候选仍被另一条既有 validator 规则拒绝，不代表 stage 5 已修复。
+- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 六项已确诊缺陷均 RED → GREEN，并各自保留独立修复提交；全量 Core、mobile typecheck、version check、APK 构建和安装身份复核通过。stage 5 修复后候选仍被另一条既有 validator 规则拒绝，不代表 stage 5 已修复。
 - **M7 — IN PROGRESS。** 报告和代码已在 PR #15 分支。待提交报告、push，然后核对 PR 当前精确 HEAD 的 Core Verify 和 Android Verify；旧 SHA checks 不作为最终证据，不自动合并。
 
 ## 最新 GLM 账本汇总

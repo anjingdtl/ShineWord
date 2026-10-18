@@ -48,7 +48,7 @@ L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 P
 
 turn-0010 将 stage 3 推至 succeeded，消费 `conseq-town-tension`；turn-0011 将 stage 4 推至 succeeded，消费 `conseq-barov-attention` 和 `con-tension-peaked`。三个消费者分别在后续状态产生了 `town_tension_escalated`、`barov_offer_made`、`tension_peaked` 效果。第四项 `con-barov-offer` 仍 pending。
 
-stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒，对该 validator 错误缺少定向 repair guidance 的代码缺陷已由 `SW95-M3-03` 以 RED→GREEN 修复。修复后新 v10 job 两个物理 attempt 均 HTTP 200，但候选因 `firstSituation.methods[1].firstStep.destinationId` 对 `skill_check` 无效而被拒；未采用、branch 未前进。早期 v11 replan 的两次物理 attempt均 HTTP 200，但候选因 full_success/success effects 超出既有上限被拒。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
+stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒，对该 validator 错误缺少定向 repair guidance 的代码缺陷已由 `SW95-M3-03` 以 RED→GREEN 修复。修复后新 v10 job 两个物理 attempt 均 HTTP 200，但候选因 `firstSituation.methods[1].firstStep.destinationId` 对 `skill_check` 无效而被拒；未采用、branch 未前进。早期 v11 replan 的两次物理 attempt均 HTTP 200，但候选因 full_success/success effects 超出既有上限被拒；这一类错误缺少限额内保留 completion 的 repair guidance 已由 `SW95-M3-04` 加 RED→GREEN 修复，早期 job 没有被重派。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
 
 ## 因果与恢复边界
 
