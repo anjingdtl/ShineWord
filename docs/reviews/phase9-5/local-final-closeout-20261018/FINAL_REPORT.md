@@ -9,15 +9,15 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 ## 分阶段结论
 
 - **阶段 9.5：PARTIAL。** 真实 GBK 小说、GLM 和专用 API 37 AVD 上完成开局、连续行动、合法 save-10 恢复续玩及 stage-5/8 隔离分支。现有 19 个 action turns 全由 QA 执行者驱动。stage 8 的提前脱身与守住阵地 sibling branches 已用真实 Android/GLM 对照终局取消与成功触发、消费及下游知识写入；历史 main v12/r4 未改。原著 package 非空来源 evidence L1、特定 `con-barov-offer` 后续链和真人反馈仍未完成。campaign-scope L1 使用显式 fixed empty evidence。两次宿主机 GLM transport unknown 保留且未重派。
-- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 十项确认代码缺陷均有 RED → 最小修复 → GREEN；最新全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建及当前专用 AVD 复测通过。
+- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 十一项确认代码缺陷均有 RED → 最小修复 → GREEN；最新全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建及当前专用 AVD 复测通过。
 - **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验；production synthetic fixture 的 live GLM matched 10+10 已通过，但真实小说 package method 路径未覆盖。Stage-1/8 历史资产和若干故障注入仍缺。合法 save-10 已真实恢复并续玩；自动化证据不替代玩家验收。
 
 ## 基线、提交与 CI
 
 - 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
-- 已独立提交的十项代码修复：既有修复提交为 `dd17ccf`、`8ab0419`、`3847339`、`00f3625`、`b6c7d00`、`cbacbb0`、`76a51fc`、`447bd67`、`d8d9c3e`；最新 `39a8d15` 先提交终局 consequence RED 反例，`e6a0bbd` 完成最小修复。每个已确诊缺陷均有 RED→GREEN 证据；脱敏证据提交 `4514eed`。
+- 已独立提交的十一项代码修复：既有修复提交为 `dd17ccf`、`8ab0419`、`3847339`、`00f3625`、`b6c7d00`、`cbacbb0`、`76a51fc`、`447bd67`、`d8d9c3e`；`39a8d15` 先提交终局 consequence RED 反例、`e6a0bbd` 完成最小修复；`6848793` 修复键盘打开时弹层首击被吞并。M6-03 的 RED/GREEN 与构建哈希记录于脱敏证据 `play-panel-keyboard-submit-red-green-sanitized-20261019.json`，由 `7fa1c80` 提交。
 - PR #15 针对 main 保持开放且未合并。最终验收只认 PR #15 Checks 页面上当前 head 的 Core Verify 与 Android Verify；旧 SHA、main 基线或 PR #14 的 CI 不代替 exact-head 核验。PR 正文记录最终 SHA 与当前检查结果。
-- 当前分支 HEAD 与 exact-head GitHub CI 状态见 PR #15 正文和 Checks 页面；2026-10-19 本地复核包含上述 `d8d9c3e` 代码提交及单独的 `4514eed` 证据提交。旧 SHA 上的 CI 不代替最新 head 的结果。
+- 最后推送提交及对应 Core Verify / Android Verify run 以 PR #15 正文和 Checks 页面为准；当前 head 必须在最终 push 后重新核验，旧 SHA 的 CI 不替代。
 
 ## 本地回归与 Android 包
 
@@ -89,4 +89,4 @@ PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https:
 4. TalkBack 实际焦点/播报、多窗口、API 24 与另一台真实小屏设备未完成。当前三台 AVD 中只有两台专用 API 37 ShineWord 设备；没有新增模拟器以填矩阵。
 5. 已新增 stage-8 独立分支的 trigger→discharge→权威知识消费者对照；先前记载的 stage-5 `con-barov-offer` 在原著 main v12/r4 中仍未验证完整后续链，stage-5 QA branch 进入 stage 6 的证据不能代替它。
 6. 本轮真人游玩与 4 人试玩由世恒哥自行安排，明确不算 agent 自动化交付阻滞，也没有宣称 PASS。
-7. PR #15 exact-head GitHub Core Verify/Android Verify 与审查状态将在本次最终 push 后更新；PR 不自动合并。
+7. PR #15 的 Core Verify / Android Verify 只按当前 head 核验；最终 SHA、run 与结论以 PR 正文及 Checks 页面为准。

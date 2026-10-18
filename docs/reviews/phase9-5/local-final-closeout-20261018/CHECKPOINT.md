@@ -9,7 +9,7 @@
 ## 当前结论
 
 - **阶段 9.5：自动化工程交付目标达成后总体仍标 PARTIAL。** 已在专用 API 37 AVD 上导入真实 GBK 小说、测通 GLM、恢复 save-10 并续玩，stage-5 推进至 stage 6；stage-8 sibling branches 真实验证终局取消与成功后果消费/知识写入。累计 19 个 action turns 全为 agent-driven QA。世恒哥明确真人体验由其自行完成，不是本轮自动化交付阻滞。非空 evidence L1、历史 Stage-1/8 与部分设备故障注入证据仍缺；两条宿主机模型 pilot transport unknown 保留且未重派。
-- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 十项确认代码缺陷各自有 RED → 最小修复 → GREEN。Core 当前 1,358/1,358，mobile typecheck、version check 通过；最新 standalone APK 安装在当前主 QA AVD，应用数据保留，终局两路径回归通过。
+- **Runtime 工程收束：PASS-ENGINEERING（限已列修复）。** 十一项确认代码缺陷各自有 RED → 最小修复 → GREEN。Core 当前 1,358/1,358，mobile typecheck、version check 通过；最新 standalone APK 安装在当前主 QA AVD，应用数据保留，终局两路径回归通过。
 - **阶段 9 历史遗留：PARTIAL。** 真人有效决定 0/80、独立试玩 0/4；自然结局、Stage-1/8、TalkBack 与设备故障矩阵未完成。production synthetic fixture 的 live GLM matched 10+10 已完成，真实小说 package method 路径仍未覆盖。save-10 已恢复/续玩。真人游玩由世恒哥后续完成，不是自动化交付门。
 
 ## M0–M7
@@ -20,7 +20,7 @@
 - **M3 — PARTIAL / USER-PLAY-DEFERRED。** 骰点、Narrator、状态原子提交、下一轮、stage-5 adoption 与 stage-8 的成功/提前离开后果对照均有 Android 证据；累计 19 个 action turns 均由 QA 执行者驱动。世恒哥后续自行真人体验。
 - **M4 — PARTIAL / SAVE-10-DEVICE-PASS。** 历史 save-10 与精确依赖包通过 Android 原生导入、六条历史 turn/两条 roll 精确对照、冷启动和后续行动。小说/campaign ledger 当前 79 条记录（78 HTTP 200、1 次旧配置 HTTP 401），独立开篇样本另有 2 条 HTTP 200；matched live synthetic 30 条及其他独立 scope 另计。设备账本中的 HTTP 429 与同逻辑 unknown 指向本地 `10.0.2.2:8765` mock，不是 GLM；该 unknown 保留未重派。另两次宿主机 Planner transport attempt 为无 HTTP status 的潜在 unknown，identity 未持久化，未重派。Stage-1/8、live force-stop/outbox/旧 worker 矩阵仍缺。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色主题控件通过；synthetic production fixture 上 live GLM matched 10+10 通过。TalkBack spoken/focus、多窗口、API 24/真实小尺寸仍缺。
-- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十项已确诊缺陷均 RED → GREEN，并各自保留修复提交；全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建与安装身份通过。终局 pending-consequence 清理已在 Android/GLM 两个 sibling branches 复测。M3-07 特定候选仍被 validator 正确拒绝；之后 stage-5 action/plan adoption 在隔离 branch 进入 stage 6。
+- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十一项已确诊缺陷均 RED → 最小修复 → GREEN，并各自保留修复提交；全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建与安装身份通过。终局 pending-consequence 清理已在 Android/GLM 两个 sibling branches 复测；最新 M6-03 修复键盘打开时弹层首击失效，在保留数据的 API 37 AVD 上以 RED/GREEN 单击回归。M3-07 特定候选仍被 validator 正确拒绝；之后 stage-5 action/plan adoption 在隔离 branch 进入 stage 6。
 - **M7 — TRACKED ON PR #15.** PR 正文记录最新推送 HEAD 与该 HEAD 的 Core Verify / Android Verify 状态、run 链接；Checks 页为权威状态。旧 SHA 的成功记录不替代当前 head 检查，PR 保持开放且不自动合并。
 
 ## 最新 GLM 账本汇总

@@ -16,7 +16,7 @@
 | M3 | PARTIAL / USER-PLAY-DEFERRED | 累计 19 个 agent-driven QA action turns，含真实骰点、Narrator、原子提交、下一轮、stage-5 推进及 stage-8 的 early-exit cancellation / success discharge 对照。Stage-8 成功 branch 的知识消费者通过；stage-5 `con-barov-offer` 在原 main v12/r4 上的完整后续链仍缺。真人体验由用户后续完成，不是自动化交付阻滞。 |
 | M4 | PARTIAL / SAVE-10-DEVICE-PASS | 合法历史 save-10 与精确依赖世界包通过 Android 原生导入、历史 turn/roll hash 对照、冷启动和续玩；合成 API 37 AVD 上另完成 Planner 在途 force-stop、冷启动后归为 unknown 且未重派（stateVersion 0，SQLite integrity ok）。小说范围 79 次真实 attempt 为 78 HTTP 200、1 旧配置 401；mock/合成 unknown 均保留。Narrator 前后中断、outbox/响应写盘故障、旧 worker 设备竞态与 Stage-1/8 资产仍未完成。 |
 | M5 | PARTIAL | 长会话 PSS/RSS/GfxInfo、键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色模式控件有有限证据；同一 synthetic production fixture 上 live GLM matched L1/L2 各 10 次完成。TalkBack 语音/焦点、多窗口、API 24/真实小屏、小说 package method 供给下的匹配样本仍未验。 |
-| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | 十项已确认修复均有 RED→最小修复→GREEN；最新一项为 campaign terminal 时关闭不可达 pending consequences。当前全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建、保留数据安装及真实 stage-8 两分支回归通过。M3-07 guidance 已在真实候选中体现；该候选未采用，后续 stage-5 action 与 plan r7 在隔离设备 branch 运行通过。 |
+| M6 | PASS-ENGINEERING / DEVICE-PASS-限定范围 | 十一项已确认修复均有 RED→最小修复→GREEN；最新两项覆盖 campaign terminal 时关闭不可达 pending consequences，以及弹层键盘打开时首次点击提交无效。当前全量 Core 1,358/1,358、mobile typecheck、version check、standalone APK 构建、保留数据安装及相应设备回归通过。M3-07 guidance 已在真实候选中体现；该候选未采用，后续 stage-5 action 与 plan r7 在隔离设备 branch 运行通过。 |
 | M7 | TRACKED ON PR #15 | 每次 push 后只认 PR 当前 head 的 Core Verify / Android Verify exact-head 结果；[PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 为权威状态页，PR 正文记录最后核验的 SHA 与 run。PR 保持开放且不自动合并。 |
 
 
