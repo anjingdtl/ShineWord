@@ -1,41 +1,58 @@
 # ShineWord Phase 9.5 本地最终收口报告
 
 日期：2026-10-18（Asia/Shanghai）
-工作树：F:\sw95local-20261018
-分支：fix/phase95-local-final-closeout-20261018-short
+工作树：`F:\sw95local-20261018`
+分支：`fix/phase95-local-final-closeout-20261018-short`
+远端：`https://github.com/anjingdtl/ShineWord`
+PR：[ #15 Phase 9.5 local final closeout and opening evidence recovery ](https://github.com/anjingdtl/ShineWord/pull/15)
 
-## 结论
+## 分阶段结论
 
-- Runtime 收束工程：M6 的有界开局证据恢复修复达到 PASS-ENGINEERING；当前分支 Core、mobile typecheck、Debug APK 与安装回归通过。设备的旧 finalization task 使用已完成 extraction 响应后达到 4/4 和 ready。该 scoped result 不代表完整 Runtime 玩法已收口。
-- 阶段 9.5：PARTIAL。真实小说 SAF 导入和有限 GLM 世界样本成功并可打开开局页；真实 L1 未确认，角色/战役/玩家行动/Narrator/原子 turn commit/下一轮剧情均未由玩家完成。
-- 阶段 9 历史遗留：PARTIAL。真实有效决定 0/80，独立试玩 0/4，自然结局 NOT RUN，真实 L1/L2 matched performance 10+10 NOT RUN；历史 save-10 和 Stage-1/8 为 BLOCKED-ASSET。
+- **阶段 9.5：PARTIAL。** 已用真实 GBK 小说、已认证 GLM 配置和当前分支 Debug APK，在专用 Android 37 模拟器上完成导入、开局、实际 Planner/Narrator 调用、骰点、原子 turn 提交、后续规划及终局 UI 检查。两局均由执行者按 QA 场景操作，不能算真人决定或独立试玩。当前 partial 世界没有任何合格的 package method entry，L1 物理路径未运行；最终状态也没有已消费的延迟后果。
+- **Runtime 工程收束：PASS-ENGINEERING（列明范围）。** 三项确认代码缺陷都具备 RED → 最小修复 → GREEN 证据：结构化开局证据补建、Canon 开局方案采用、终局/暂停状态禁止继续提交变更行动。最新全量 Core 1,348/1,348、mobile typecheck、version check 通过；当前 APK 已在保留原应用数据的 AVD 安装，二进制身份匹配。
+- **阶段 9 历史遗留：PARTIAL。** 人类有效决定 0/80、独立试玩 0/4、自然结局未验、L1/L2 匹配性能 10+10 未验；合法 save-10 与 Stage-1/8 历史资产缺失。自动化、代理 QA、模型生成内容和 CI 不替代这些验收。
 
-## 基线与变更
+## 基线、提交与 CI
 
-- 重新 fetch 后 origin/main 为 `87eef899281f267a17e02357cc643dd475cabd7c`，PR #14 已包含；原 main 和其他既有 worktree 未改写。
-- 本分支从该基线开始，M0、M1、M6 与 M2–M5 各自保留独立提交。M7 文档提交完成后，最终 SHA 以当前 PR HEAD 为准。
-- [PR #15](https://github.com/anjingdtl/ShineWord/pull/15) 已针对 main 创建且未合并。Core Verify 与 Android Verify 的结果绑定实际 PR HEAD，状态见 [PR checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；基线 PR #14 的 CI 不代替本轮结果。
+- 再次 `git fetch origin` 后，实际 `origin/main` 为 `87eef899281f267a17e02357cc643dd475cabd7c`。原本地仓库、main 与其他工作树保持原样；施工在隔离工作树完成。
+- 已独立提交的代码修复：`8ab0419`（Canon 开局方案采用）与 `3847339`（Runtime 终局行动门控）。M6 有界补建修复与各节点文档提交保留原提交历史。
+- PR #15 针对 main 开放且未合并。精确最终 HEAD 的 Core Verify / Android Verify 结果以 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks) 上显示的当前 SHA 为准；基线 PR #14 和旧 PR head 的 CI 不代替本轮验证。
 
-## 核心验证
+## 本地回归与 Android 包
 
-- M6 RED：结构化 `opening_entity_unproven` 反例原先预期触发、实际未触发；legacy 中文信号通过。最小 helper 修复后定向 2/2 GREEN。
-- `npm run verify:core`：1,344/1,344 passed，0 failed、0 skipped；本次收口复跑 33.97 s。
-- mobile TypeScript typecheck：通过；Debug APK Gradle 构建：成功。
-- 当前 M6 APK 与设备 installed base.apk SHA-256 一致：`B42AAE7C176D80A49B9C7605375F6B93332FB53405F522291798290B1F1F5843`。
-- AVD `ShineWord_Phase95_LocalFinal_20261018`（API 37 / Android 17，1080×2400 @420 dpi）书库、项目 hub、开局身份页通过；姓名框不输入内容时正确禁用下一步。当前模拟器保留在开局身份页等真人选择。
+- `npm run verify:core`：1,348/1,348 passed，0 failed / skipped，36.92 s。
+- `npm --prefix mobile run typecheck`：通过；`npm run verify:version`：通过（1.0.0 / versionCode 1000000）。
+- 当前 Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`；本地构建与模拟器安装包 SHA-256 均为 `C5B27FAEAAF8B1DF60946A8B826952DC4C1EC77A3AB4EA3BC26072FDFA26AF10`。
+- 专用 AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 `emulator-5556`，API 37 / Android 17 / 1080×2400 @420 dpi。使用 `adb install -r`，没有清除数据库、小说、Keychain 或模拟器数据。
 
-## 真实小说和模型
+## 小说、真实模型和游玩证据
 
-- 原始小说 SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，7,178,905 bytes，Windows-936/GBK。仅本机处理；partial package 的模型 scope 为 0–9,600 code points，未发送全书。
-- 原有 3 次 GLM 成功（world_extract ×2、style_analyzer ×1）后，用户更新并在模拟器测通配置；开局页自动发送的新 `opening_goal` 返回 HTTP 200（185 input / 39 output / 0 reasoning tokens，6.11 s）。当前合计 4 次成功，累计 input 9,754、output 6,240、reasoning 20 tokens；配置更新前的 401 失败继续保留。CNY 实际费用未知；实际模型并发峰值为 1。
-- 当前模拟器停在“身份与姓名”步骤：UI 默认显示“原创旅人”、姓名为空、下一步禁用。没有替真人选身份或命名，没有创建角色/战役/行动；新请求成功不等于真实玩家开局或 L1/L2 行动验收。截图：[开局页证据](evidence/android-opening-goal-success-and-player-decision.png)。
-- 早先 Maestro 输入密钥的一次本地运行曾在运行诊断中暂存凭据字节。对应诊断在任何后续模型调用前完成脱敏；本轮再次保存配置的诊断也在检查后清除。当前可检索诊断中密钥匹配数为 0；没有把值写入仓库或报告。用户已知此安全事件。
-- 本地 429 fixture 记录 1 次 loopback HTTP 429；原项目后续 network_unknown 保留在 needs_review，没有重派，不属于 GLM 请求。
+- 原小说 SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，7,178,905 bytes，Windows-936/GBK。设备解析 1,504 章、3,260 chunks；本轮 GLM scope 只覆盖 0–9,600 code points，未上传全书。章节计数 1,498 与设备解析 1,504 的差异仍待归因。
+- GLM 配置更新后，`opening_goal` 实际 HTTP 200。小说真实世界有 29 次成功和 1 次旧配置 HTTP 401；独立 localhost mock world 另有 1 次 429 和 1 条 `world_extract outcome_unknown`，不计作 GLM 失败。两份 ledger 未重派/确认/清除 unknown。真实成功调用并发峰值 1；token totals：输入 261,323、输出 69,611、reasoning 7,729。用户授权不设模型额度上限；账户人民币实际扣费无法从设备账本确认。
+- 公开 partial package 有 49 explicit 与 3 inference facts、52 个来源引用、8 skills、4 scenes、11 个角色模板；`method` 条目数为 0。故真实 L1 eligibility 缺内容依据，不能把 `Planner` 次数或本地建议冒充 L1；真实 L2 Planner 路径已运行。
+- 第一局有 5 个代理 QA 行动，含真实 GLM Planner/Narrator、骰点、原子提交及后续行动机会；其中 talk 成功将 testimony counter 从 0 增至 10，后续失败最终把 Runtime 推到 `failed` / `ending-case-lost`。第二局有 1 个代理 QA 行动：Planner 与 Narrator 成功，骰点 `[1]`、d4、难度 4、余量 -3，state version 2→3 原子提交；后续两次 replan 提交到版本 5，并产生 `ending-failure`。一次严重失败即进入结局是值得独立玩家评价的可玩性观察，不据此直接定性为代码缺陷或合格自然结局。
+- 在第二局终局页，`guidance-submit-*` 与观察行动按钮数量为 0，输入框 disabled；此为终局行动门控的设备 GREEN 证据。设备最终停在该终局页，没有再提交行动。
+- 真实因果范围仍有限：testimony +10 在后续状态中保留，但两局最终 `deferredConsequences` 均为空；延迟结果触发/消费及其后续玩家反馈没有通过。
 
-## 阻滞与下一步
+## 缺陷修复登记
 
-1. 真人继续决定身份、姓名、地点/锚点和行动；再验证 L1/L2、骰点、Narrator、原子 commit 和下一轮机会。当前 GLM 配置和一次 opening_goal 已成功，真人决定仍未发生。
-2. 真实模型费用需要从用户实际账户账单确认；本机 request ledger 只有 token usage，没有 CNY 费用字段。
-3. 小说本地章节标题计数 1,498 与 Android parser 1,504 的差异尚未归因；不能静默规范化或减弱证据。
-4. 真实 action fault matrix、完整历史数据恢复和外部试玩仍未完成；缺少合法 save-10 / Stage-1/8 identity-bound assets。
-5. PR #15 已创建并开放 review；不得自动合并。最终分支 SHA 和 Core/Android workflow 检查以 PR #15 的 live checks 为准。
+- `SW95-M6-01`：发布验证返回结构化 `opening_entity_unproven` 时，旧恢复条件只看中文错误消息，漏掉有界开篇补建。RED 后新增只识别该 machine-code 前缀的判定 helper；定向 2/2 GREEN，不改 validator、scope 或 ledger。
+- `SW95-M3-01`：Canon 开局计划把规划阶段建议技能错误写入 `initialSkills`，导致采用时与 Canon payload 比较触发假 drift。RED 后只在 Canon intent 不绑定规划建议技能，并兼容已存旧建议字段；定向 5/5 GREEN。
+- `SW95-M3-02`：Runtime 已 `failed` / `paused` 时，Play projection 仍显示可变更行动且 controller 允许直接提交。RED 后把权威 campaign status 投影至 UI，并在 UI/controller 两层门控；保留只读查看线索。定向 7/7 GREEN，安装后的终局页复测通过。
+- 复核未新增第二套 Runtime、状态权威、规则语义或账本；未放宽既有内容验证，也未改写冻结 turn、骰点或历史 unknown。
+
+## 未完成项 / 明确阻滞
+
+1. L1：当前世界 package 不含 method entry；不能对缺少 `difficultyPolicy` / `evidenceBinding` 的 legacy 内容做默认推断。
+2. 真人与外部验收：0/80 真人决定、0/4 独立试玩；本轮默认角色、行动与骰点由执行者用于 QA。
+3. 延迟后果：无一个可核验的已触发且已消费 delayed consequence 消费者链。
+4. 旧存档与故障恢复：save-10、Stage-1/8 不存在于隔离 AVD；live turn force-stop、Narrator 前后杀进程、outbox 与旧 worker 矩阵未执行。
+5. 性能与无障碍：本轮非匹配的长会话样本 PSS 196,443 KB / RSS 285,960 KB；GfxInfo 累计 10,169 frames、modern jank 140 (1.38%)、p50/p90/p95 17/30/31 ms。它不是独立 benchmark。TalkBack、API 24、小屏和 10+10 L1/L2 matched test 未运行。
+6. 小说标题计数差异与实际模型人民币费用未知；不通过估算或改 parser 消除。
+7. PR #15 未合并；最终 HEAD 与两项 exact-head CI 需以 PR checks 实际结果核对，不自动合并。
+
+## 私有证据边界
+
+- 带模型生成文本的最新终局截图仅保存在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`（SHA-256 `7E8DE69217CB96A843B3B6D5E69AFEAC3832DE4731201C1145DD2C28CC2A3F4D`），不加入仓库。
+- 只读 SQLite 证据副本 `C:\Temp\shineword-phase95-local-final\shineword-current.db`（SHA-256 `673695A70BC6DE208C0AE99A0DA3749CDF951C03FF7942EFB47BD8935C61F04C`，`integrity_check=ok`）只留在本机；不包含密钥值，但含本地世界与测试状态，因此不提交。
+- 已提交的开局身份页截图只显示身份控件与空姓名输入，不含小说正文或生成剧情。未将密钥、小说正文、LLM 提示词/响应、数据库、终局截图加入 PR。

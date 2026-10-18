@@ -2,40 +2,33 @@
 
 日期：2026-10-18（Asia/Shanghai）
 工作分支：`fix/phase95-local-final-closeout-20261018-short`
-M0 基线提交：`c821f65906f0d2445bbfcb7a588ec88ea5495d66`
+工作树：`F:\sw95local-20261018`
 
-## 构建与工具链
+## 当前构建身份
 
-- Node.js `v24.14.1`、npm `11.14.1`、Temurin JDK `17.0.19.10`、Gradle `9.3.1`、ADB `37.0.0-14910828`、Maestro `2.8.0`。
-- 根目录 `npm ci --ignore-scripts --no-audit --no-fund` 成功。
-- `npm run verify:core` 成功：1,342 项通过，0 失败，0 跳过；`npm run verify:version` 成功。
-- `npm --prefix mobile ci --no-audit --no-fund` 与 `npm --prefix mobile run typecheck` 成功。
-- 在短路径 checkout `F:\sw95local-20261018` 执行 `npm --prefix mobile run apk:debug` 成功（约 2 分 13 秒）。构建生成的 `mobile/src/version.json` 时间戳改动已在本工作树恢复，未提交构建副产物。
-
-## APK 身份
-
-- APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`
-- SHA-256：`BFDC5A5AE51B3C882C5FC304B2EFDFEBD179CEFE90918AE67FEB6478E0E5822D`
-- 包名：`com.shineword.app`；versionName `1.0.0`；versionCode `1000000`；minSdk `24`；targetSdk `36`。
-- 已安装 APK 的设备端 SHA-256 与构建产物一致（`bfdc5a5a…e0e5822d`）。
-- 独立 debug APK 内含 JS bundle，不依赖 Metro；首次启动进入 ShineWord 书库页，未观察到 fatal exception。
+- Debug APK：`F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`
+- 包名 `com.shineword.app`，versionName `1.0.0`，versionCode `1000000`，minSdk `24`，targetSdk `36`，x86_64。
+- 本地构建物 SHA-256：`C5B27FAEAAF8B1DF60946A8B826952DC4C1EC77A3AB4EA3BC26072FDFA26AF10`。
+- 模拟器 `/data/app/.../base.apk` 拉取后 SHA-256 完全相同。使用 `adb install -r`，没有清除应用数据。
 
 ## 专用设备
 
-- AVD：`ShineWord_Phase95_LocalFinal_20261018`，`emulator-5554`，API 37 / Android 17，`sdk_gphone16k_x86_64`，1080×2400 @ 420 dpi。
-- 仅新建并使用这台专用 AVD；既有模拟器未清除、未改写。应用数据库、小说导入和 Keychain 数据都保留在该测试 AVD；旧本地 429 项目保留作隔离故障现场。
-- 安装、启动和书库/战役/我的页面导航已在设备上验证。环境变量输入烟测只向搜索框输入无敏感标记并成功清除。
-- 本机 UI 截图位于 `F:\avd` 私有证据目录；没有把含小说正文或模型响应的截图加入 Git。
+- AVD `ShineWord_Phase95_LocalFinal_20261018`，设备 serial `emulator-5556`，API 37 / Android 17 / `sdk_gphone16k_x86_64` / 1080×2400 @420 dpi。
+- 当前安装包通过 SAF 导入的真实 GBK 小说项目可见，partial world package `ready` 并能启动战役。
+- 两个 campaign branch 均由当前安装 APK 创建并写入本地 SQLite；真实 GLM 开局建议、campaign planning、Planner 和 Narrator 有物理账本记录。
+- 最后一局 Runtime `failed` 后，设备 UI 显示终局；hierarchy 中 `guidance-submit-*` 数量为 0、观察 action 数量为 0、composer disabled。它是 `SW95-M3-02` 安装后的设备 GREEN 证据。
+- 最终带有生成剧情的截图仅保存在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`，SHA-256 `7E8DE69217CB96A843B3B6D5E69AFEAC3832DE4731201C1145DD2C28CC2A3F4D`，未加入 Git。仓库内的开局身份截图仅展示空姓名控件与默认身份，不含小说正文或模型剧情。
 
-## 环境备注
+## UI 与数据保全
 
-- 长路径 checkout 的一次 Android CMake 构建受到 Windows 路径长度限制；改在 `F:\sw95local-20261018` 短路径 checkout 后，独立 APK 构建及安装均成功。未通过修改工程路径配置绕过限制。
-- 本节点证明 APK 可构建、安装、冷启动和基本导航；小说/真实模型、可玩战役、性能与独立玩家验收分别记录在后续节点，不由本节点替代。
+- 书库、小说世界项目页、角色/战役开局、行动提交、结果/掷骰和终局回归在当前 APK 上完成。
+- Gboard 首次弹出系统手写教程；取消教程后通过键盘菜单显式启用屏幕键盘，随后输入可正常工作。这是模拟器键盘初始设置，不作为应用缺陷。
+- APK 更新通过 `install -r` 保留 SQLite、小说源、GLM Keychain 配置及故障项目；没有卸载、清库或重建模拟器。
+- 单独的 SQLite 快照在本机只读分析，`PRAGMA integrity_check=ok`；快照包含本地剧情与测试状态，不提交。
+- AVD 当前停在终局页供查看。原始工作树和其他 AVD 未被启动、清除或改写。
 
-## M6 修复后的 APK 与模拟器复测
+## 工具链与边界
 
-- 当前修复分支再次执行 `npm run apk:debug` 成功，Gradle assembleDebug 成功（33 秒）；APK 为 `F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`，SHA-256 `B42AAE7C176D80A49B9C7605375F6B93332FB53405F522291798290B1F1F5843`。
-- 使用 `adb install -r` 安装到原专用 AVD，保留 SQLite、小说源与已有 Keychain 数据。从设备 pm path 拉取已安装 base.apk，SHA-256 与构建 APK 完全一致。包名 `com.shineword.app`，versionName `1.0.0`，versionCode `1000000`，minSdk 24，targetSdk 36，ABI x86_64。
-- 复测书库、项目页和开局身份页。真实测试项目显示 1,504 章、world ready、published partial package；构建任务为 4/4。向导能加载且姓名为空时“下一步”禁用。没有创建角色、campaign 或玩家行动。
-- 键盘焦点冒烟通过，未输入数据；系统字号临时放大到 1.3 后恢复 1.0，布局中的核心输入和按钮仍可见，长标题使用省略号截断。TalkBack 未启用，故读屏验收 NOT RUN。
-- 本轮截图保存在本地临时证据目录 `C:\Temp\shineword-phase95-local-final`，只用于本机复核，未提交图片、SQLite 快照、源文、请求日志或模型响应。当前设备 crash buffer 检查未发现 FATAL EXCEPTION / AndroidRuntime 错误。
+- Node.js `v24.14.1`、npm `11.14.1`、Temurin JDK `17.0.19.10`、Gradle wrapper `9.3.1`、ADB `37.0.0-14910828`。
+- 长路径原 checkout 曾触发 Windows CMake path-length 问题；短路径隔离 worktree 构建成功，没有调整工程路径配置绕过它。
+- 当前结果证明 APK 构建、安装、启动和代理 QA 旅程；不能替代 TalkBack、多尺寸设备、真人决定或独立试玩。

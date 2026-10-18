@@ -1,46 +1,48 @@
-# M2：真实小说导入与 GLM 开篇样本
+# M2：真实小说导入与 GLM 开篇 / 游玩样本
 
 日期：2026-10-18（Asia/Shanghai）
-状态：PARTIAL；小说 SAF 导入和部分世界包发布已在专用模拟器完成，完整真实模型开局与 L1 资格尚未通过。
+状态：PARTIAL。真实小说 partial world、实际 GLM 和 Android Runtime 均跑通；样本没有 L1 合格方法，实际玩家决定/延迟后果验收仍缺。
 
 ## 材料与隔离
 
-- 用户原始 TXT：7,178,905 bytes；SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`；本机检测编码 Windows-936/GBK。
-- 为建立独立 GLM 测试世界，在私有目录中制作了仅追加 CRLF 的副本：7,178,907 bytes；SHA-256 `2D4AD3AAA7793C0BE690DE6E380DE88F1FAC7E78CD725C3D74E3F92B0BECBFD8`。原文件未修改；小说正文、模型提示词和响应没有加入仓库。
-- 通过 Android SAF 导入该副本。设备解析出 1,504 个章节和 3,260 个 source chunks；最初离线标题计数为 1,498，计数定义不同造成的 6 项差异尚未归因，不能把二者当作相同指标。
-- 本轮模型只收到开篇 0–9,600 code points 的分段样本；未构建或发送全书。项目页面显示 partial package ready，可进入开局向导。
+- 用户原始 TXT：7,178,905 bytes，SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`，本机检测 Windows-936/GBK。
+- SAF 导入的私有副本仅追加 CRLF，7,178,907 bytes，SHA-256 `2D4AD3AAA7793C0BE690DE6E380DE88F1FAC7E78CD725C3D74E3F92B0BECBFD8`；原文件未修改。正文、提示词、原始响应和密钥未加入仓库。
+- 设备解析 1,504 个章节、3,260 个 source chunks；本机标题计数 1,498，差异未归因。模型只收到 0–9,600 code points 的 partial scope，未构建/发送全书。
+- 发布包汇总 49 explicit facts、3 inference facts、52 个有来源事实引用、8 skills、4 scenes、11 个角色模板。当前 package 中 `kind='method'` 数量为 0，因此不能通过现有世界内容执行具备固定难度与 evidence binding 的 L1。
 
-## 发布与内容门
+## 真实 GLM 物理请求账本
 
-- 世界包 revision 1–3 均为 published，scope 均为 source 0–9,600 code points、partial；运行状态最终为 completed，segment 状态为 ready，项目 build_status 为 ready。
-- 样本汇总：49 条 explicit facts、3 条 inference facts；52 个事实来源引用分布于 4 个章节；公开包包含 8 个技能、4 个场景和 11 个公开角色模板。这里是计数，不代表内容质量或来源完备验收。
-- 开局向导成功加载世界起点与身份页；“原创旅人”处于产品默认值、姓名为空，下一步不可提交。没有角色、战役或行动被创建。
-- 配置更新后的复核（2026-10-18 14:29 Asia/Shanghai）：用户确认 GLM 配置连接测试成功；进入可游玩世界后，开局页按当前锚点自动取得 goal suggestions。账本新增一条 `opening_goal` HTTP 200（185 input / 39 output / 0 reasoning tokens，6.11 s）。身份页仍显示产品默认“原创旅人”、姓名为空、下一步禁用；没有替玩家选择、命名或创建角色/战役。截图：[身份选择与真实开局请求后的页面](evidence/android-opening-goal-success-and-player-decision.png)。
-- 本样本未确认一个同时具备 fixed difficulty、evidence binding 与规则绑定的 published L1 method。现有 package 结构没有显示这些资格字段，因此不把技能/场景数量当作 L1 PASS；真实 L1/L2 行动验证仍未完成。
+用户在本轮明确授权本项目调用不限额度；实测调用串行，物理并发峰值为 1。当前小说副本对应世界 `world-src-2d4ad3aaa7793c0b-mvddhkeg`：
 
-## 物理请求和耗时
+| Request kind | 成功次数 | 已知失败 | 成功 input / output / reasoning tokens | 成功耗时 ms（min / avg / max）|
+|---|---:|---|---:|---:|
+| world_extract | 3 | 0 | 10,855 / 7,750 / 34 | 25,937 / 34,231 / 40,951 |
+| style_analyzer | 1 | 0 | 1,660 / 410 / 0 | 12,150 / 12,150 / 12,150 |
+| opening_goal | 3 | 1 次旧配置 HTTP 401 | 563 / 104 / 0 | 3,904 / 4,761 / 6,109 |
+| campaign_plan | 10 | 0 | 212,745 / 57,119 / 7,447 | 31,405 / 82,688 / 121,932 |
+| planner | 6 | 0 | 19,781 / 1,416 / 128 | 5,188 / 9,150 / 20,651 |
+| narrator | 6 | 0 | 15,719 / 2,812 / 120 | 8,138 / 9,560 / 11,779 |
 
-用户在本轮明确授权不受模型额度限制；执行时物理并发维持 1。设备账本记录：
+这 30 条真实世界记录中 29 次成功、1 次明确 401 失败（更新前配置；无 usage / provider request ID），没有真实模型 `outcome_unknown`。用户更新配置并通过模拟器连接测试后，新的 opening_goal 为 HTTP 200；旧 401 没有重派。
 
-| Request kind | Result | HTTP | Input / output / reasoning tokens | Duration |
-|---|---|---:|---:|---:|
-| world_extract | succeeded | 200 | 5,011 / 3,033 / 13 | 40.95 s |
-| world_extract | succeeded | 200 | 2,898 / 2,758 / 7 | 35.80 s |
-| style_analyzer | succeeded | 200 | 1,660 / 410 / 0 | 12.15 s |
-| opening_goal | failed, known auth rejection（更新配置前） | 401 | no usage reported | 2.19 s |
-| opening_goal | succeeded（更新配置后） | 200 | 185 / 39 / 0 | 6.11 s |
+成功调用合计 input `261,323`、output `69,611`、reasoning `7,729` tokens。App ledger 不记录实际人民币扣费，费用未知；调用额度授权不代表费用为零。Campaign-plan 请求因大 prompt 偶尔运行约 2 分钟；请求串行，等待期间未重派。
 
-成功请求合计 4 次，输入 9,754、输出 6,240、reasoning 20 tokens；另有 1 次已知 401 失败，无 provider request ID、无 usage，不是 outcome_unknown。配置连接测试是独立于应用物理请求账本的验证，不计入上表。实际人民币费用无法由设备账本确认；用户的不限额度授权替代附件默认 20 次/¥10 上限，不能据此声称费用为零。
+## 独立本地故障注入世界
 
-实测从测试世界创建 13:16:34.738 到 ready 13:25:19.020，约 8 分 44 秒；两个 extraction 请求耗时合计约 77 秒，style analyzer 约 12 秒，其余等待/本地阶段没有拆分计时，故首次可玩耗时不能归因于模型。完整小说构建成本没有估算，也未启动。
+- 世界 `world-src-7f45fe0b11ea30ec-mvdbwylw` 绑定原始 TXT hash，是单独的 localhost/mock fixture 项目，不是上述 GLM campaign 世界。
+- 账本保留一次合成 HTTP 429（`http_rate_limit`）和一次 `network_unknown/outcome_unknown`（无 HTTP/provider ID/usage）；两条都不确认、不清账、不重派。unknown 仍 `needs_review`，estimated usage 按 1 保留。
+- 因故障注入世界与当前小说副本世界分开计数，不把本地代理错误算成真实 GLM 失败。它不属于实际 GLM 29 次成功/401 的统计。
 
-## 隔离故障项目
+## Android 上的实际 Runtime 行动（均为代理 QA，不是真人决定）
 
-原文件另有一个仅用于本地故障注入的项目：本地 loopback fixture 返回 1 次合成 HTTP 429；随后一条 network_unknown/outcome_unknown 记录无 HTTP 状态、无 provider request ID、无 tokens。该 frozen config 指向本机代理而不是 GLM。此项目保留 needs_review，未确认、未清账、未重派，也没有产生第三次请求。
+- 第一局：5 个行动级操作；Planner 5 / Narrator 5；行动/骰点和状态连续提交，测试中出现失败、成功、严重失败。`turn-0005` talk 成功使 testimony counter 从 0 增至 10，后续状态中仍为 10；`turn-0007` severe failure 后 Runtime 为 `failed`、ending ID `ending-case-lost`。行动与剧情均由测试执行者输入/选择。
+- 第二局：在同一小说世界新建独立 branch；一次“观察周围环境” QA 行动触发真实 Planner 与 Narrator（累计 Planner/Narrator 各 6），骰点 `[1]` / d4 / difficulty 4 / margin -3，state version 2→3 原子提交。下一轮本地建议投影可见；后续计划请求完成后 Runtime 经 `manage-replan:4` 到 version 5 并以 `ending-failure` 结束。终局页禁用新行动。
+- 这证明安装 APK 上的真实 L2 服务路径与有限因果/结局投影。它不证明用户认可剧情质量，也不算阶段 9 的 80 个真人决定或独立试玩。
 
-## 阻滞
+## 未通过/待验
 
-1. 更新前的 opening_goal HTTP 401 失败仍保留原始 ledger 记录；更新配置后的新请求已 HTTP 200，未重派旧失败，也没有 `outcome_unknown`。
-2. 当前停在真实玩家身份与姓名决定之前；需要真人继续选择角色、目标/锚点和行动，才可验证 L1/L2、骰点、Narrator、commit 和下一轮剧情。
-3. 需要真实 L1 eligible method 与后续行动因果样本；当前已发布 partial package 不足以证明。
-4. 小说标题计数 1,498 与设备 parser 1,504 的差异待查；当前没有正文级人工 QA。
+1. L1：没有具备 `difficultyPolicy`, `evidencePolicy`、稳定来源与规则绑定的合法方法条目；未发 L1 Planner request（符合 L1 应免 Planner 的边界）。
+2. 延迟后果：testimony 即时 counter 变更已持久化，但最终 Runtime deferred consequence 列表为空，没有完成触发→到期→消费→后续消费者链。
+3. 两个代理 QA campaign 都走到模型/规则选定的 failure ending；不能据此断言这是实际玩家可接受的自然结局。第二局终局后没有再提交行动。
+4. 实际费用、全书构建成本、章节计数差异、模型与独立玩家的剧情质量评估均未知/未运行。
+5. 原始 novel 内容与生成剧情截图保存在本机私有临时目录，不纳入仓库；仓库内开局 screenshot 仅展示身份控件。

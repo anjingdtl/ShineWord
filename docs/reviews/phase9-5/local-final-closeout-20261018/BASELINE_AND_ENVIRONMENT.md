@@ -26,15 +26,17 @@
 - 本地 TXT 存在，大小 `7,178,905` bytes，SHA-256 `7F45FE0B11EA30ECA95F5A736232DD4C466A57C0F2CC9F67530E432015ECC6F4`；本机检测为 Windows-936/GBK，章节标题计数 1,498。只读取元数据用于识别；正文未写入本目录。
 - 本机 GLM 配置在用户回复确认已轮换后更新；脱敏识别为 endpoint host `open.bigmodel.cn`、模型 `GLM-5.3-Flash`。凭据值及其指纹不写入证据。用户确认轮换不等同于费用核验，真实调用仍须通过预算门。
 - 只读检查 `F:\sw95\test-logs\phase9-5-longrun-2026-10-11\budget-manifest.json`：既有 scope cap `600`、spent `510`、remaining `90`；510 条物理 dispatch 均为 `completed`，未发现 `prepared/sent/outcome_unknown`；`lastReservation` 能匹配一条 completed dispatch。该忽略文件保留原样，不重置、不增加 cap、不克隆、不借用额度。
-- 本次执行的真实模型子上限仍是合同规定的至多 20 次且累计费用不超过 ¥10，以先到者为准；模型官方单价/账号实际扣费类型需再核验。未满足定价与费用估算之前不发真实请求。
+- 起始 M0 盘点按附件默认值记录至多 20 次 / ¥10，后续用户对本项目明确授权不限额度；该初始保守门已被后续直接授权覆盖。实际调用与费用状态见最终 checkpoint 和 REAL_NOVEL_AND_LLM.md。
 
 ## 本节点证据边界
 
 这是 M0 环境与基线记录，不代表本地依赖安装、Core/Android 构建、模拟器旅程、真实模型、真实玩家或完整阶段验收已通过。后续各节点的实测结果另行记录。
 
-## 本轮后续授权与配置状态
+## 最终状态（覆盖施工中的临时观察）
 
-- 后续用户明确授权本项目测试不设 GLM 请求次数/金额上限；执行时仍将物理并发压在 1。该授权替代上文在 M0 时生效的默认 20 次/¥10 保守上限，不代表实际费用已核验。
-- 设备实际出现 3 次成功 GLM 物理请求和 1 次明确 HTTP 401 的 opening_goal 请求；成功调用 usage 已在 REAL_NOVEL_AND_LLM.md 脱敏汇总，人民币费用未知。
-- 用户确认已轮换密钥，但本地 GLM 测试配置文件时间戳未更新；模拟器读取当前配置并写入 Keychain 后，opening_goal 返回 HTTP 401。当前文件仍不能证明可认证；没有对该文件重试，等待本地配置更新。密钥和指纹均不写入证据。
-- 施工工作树为 `F:\sw95local-20261018`，分支 `fix/phase95-local-final-closeout-20261018-short`。之后再次 fetch，实际 origin/main 仍为 `87eef899281f267a17e02357cc643dd475cabd7c`；PR #14 仍已包含于该基线。
+- 用户明确授权本项目 GLM 测试不设额度上限；实际物理并发峰值为 1。累计请求及 token 使用见 [真实小说与 GLM 报告](REAL_NOVEL_AND_LLM.md)，账户 CNY 实扣仍无账单证据。
+- 配置更新前的 `opening_goal` HTTP 401 保留为已知失败；用户随后更新本地文件并确认 GLM 连接测试成功，应用侧新请求 HTTP 200。未对旧 401 重派；原始密钥/指纹未写入本文件或仓库。
+- 本地测试小说只通过 SAF 导入 CRLF 私有副本，模型 scope 为 source 0–9,600 code points；未传全书。章节计数差异待查。
+- 再次 `git fetch origin` 后 `origin/main=87eef899281f267a17e02357cc643dd475cabd7c`。本轮施工 worktree 为 `F:\sw95local-20261018`，分支 `fix/phase95-local-final-closeout-20261018-short`；原始 checkout、main 和其他 worktree 保持原样。
+- PR #15 已存在且未合并；当前最终修复和报告位于该分支。检查结果以 PR #15 当前 SHA 的 live checks 为准，不引用旧 head。
+- 私有 mock fault 世界与小说 GLM 世界分开。旧 localhost 429 与 `network_unknown` 均保留在 needs_review，未修改、确认或重派；没有从 ignored history ledger 借用额度。
