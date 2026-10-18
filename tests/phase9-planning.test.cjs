@@ -8,7 +8,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createMobileHarness, sha } = require('./helpers/mobileHarness.cjs');
+const { createMobileHarness, sha, loadMobileModule } = require('./helpers/mobileHarness.cjs');
 
 const { SqliteCampaignPlanStore } = require('../dist/infra/sqlite/sqliteCampaignPlanStore');
 const { runOpeningPlanJob } = require('../dist/application/campaignPlan/planningService');
@@ -264,6 +264,64 @@ test('P9-3: invalid JSON repairs once within two physical requests, then fails h
     assert.equal(job.status, 'invalid');
     assert.ok(job.lastError.length > 0, 'diagnosable failure persisted');
     assert.equal((await planStore.getSetup('setup-p1')).status, 'failed');
+  } finally {
+    h.db.close();
+  }
+});
+
+test('canon campaign intent does not persist the original-character loadout as a skill binding', () => {
+  const { makeCampaignIntent } = loadMobileModule('mobile/src/campaignPlanning.ts', {
+    './database': {}, './runtime': {}, './llmExecutionBridge': {},
+  });
+  const base = {
+    worldId: 'w', worldTitle: 'w', packageRevision: 1, packageContentHash: 'a'.repeat(64),
+    anchor: { worldTimeOrder: 1, locationId: 'square' }, anchorTitle: '开局',
+    protagonistSkills: ['skill-observation'], companions: [], goal: '查明情况',
+  };
+  const canonIntent = makeCampaignIntent({ ...base,
+    protagonist: { actorId: 'pc', kind: 'canon', name: '林凡', canonEntityId: 'ent-lin' },
+  });
+  assert.equal(canonIntent.protagonistBinding.initialSkills, undefined);
+  const originalIntent = makeCampaignIntent({ ...base,
+    protagonist: { actorId: 'pc', kind: 'original', name: '旅人', initialSkills: ['skill-observation'] },
+  });
+  assert.deepEqual(originalIntent.protagonistBinding.initialSkills, ['skill-observation']);
+});
+
+test('P9-3: canon adoption ignores legacy planning-only initial skills', async () => {
+  const h = await builtWorld();
+  try {
+    const hero = (await h.runtime.worldStore.listEntities(h.imported.worldId))
+      .find(entity => entity.type === 'character' && entity.name === '林凡');
+    assert.ok(hero, 'the extracted fixture publishes 林凡 with a stable entity id');
+    // Older quick-opening setup records copied the recommended loadout into
+    // intent even for canon protagonists. Canon creation derives skills from
+    // the anchored world projection, so these fields are not adoption inputs.
+    const { planStore } = await seedSetup(h, {
+      protagonistBinding: {
+        actorId: 'pc', kind: 'canon', name: '林凡', canonEntityId: hero.entityId,
+        initialSkills: ['skill-observation'],
+      },
+    });
+    const provider = planningProvider([], new (require('../dist/infra/sqlite/sqliteLlmLedgerStore').SqliteLlmLedgerStore)(h.adapter));
+    const run = await runOpeningPlanJob({
+      db: h.adapter, planStore, worldStore: h.runtime.worldStore, provider, profile: PROFILE, now: () => NOW,
+    }, 'job-p1', { anchorTitle: 'x', playerName: '林凡', protagonistSkills: ['skill-observation'], openingGoalSuggestions: [] });
+    assert.equal(run.status, 'candidate_ready', JSON.stringify(run.errors).slice(0, 600));
+    const create = {
+      db: h.adapter, worldStore: h.runtime.worldStore, campaignId: 'canon-campaign', title: '青石巷的威胁',
+      worldId: h.imported.worldId, packageRevision: h.revision,
+      anchor: { worldTimeOrder: 0, locationId: '青石巷' },
+      protagonist: { actorId: 'pc', kind: 'canon', name: '林凡', canonEntityId: hero.entityId },
+      goal: '查明并解除青石巷的隐患', createdAt: NOW,
+    };
+    const adopted = await adoptOpeningPlan({ db: h.adapter, planStore, setupId: 'setup-p1', candidateId: run.candidateId, create });
+    assert.equal(adopted.outcome, 'created');
+    assert.equal(adopted.campaign.campaignId, 'canon-campaign');
+    await assert.rejects(() => adoptOpeningPlan({
+      db: h.adapter, planStore, setupId: 'setup-p1', candidateId: run.candidateId,
+      create: { ...create, protagonist: { ...create.protagonist, name: '另一个人' } },
+    }), /Setup anchor\/protagonist drifted/, 'canon identity/name binding remains enforced');
   } finally {
     h.db.close();
   }
