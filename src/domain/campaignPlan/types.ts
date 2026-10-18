@@ -185,7 +185,7 @@ export interface DeferredConsequenceRecordV1 {
   /** Set when the obligation was closed without firing. */
   cancelledAtVersion?: number;
   /** Auditable reason a pending obligation was closed as unreachable. */
-  cancelReason?: 'trigger_node_retired';
+  cancelReason?: 'trigger_node_retired' | 'campaign_ended';
   sourceTurnId: string;
 }
 

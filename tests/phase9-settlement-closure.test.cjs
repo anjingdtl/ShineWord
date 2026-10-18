@@ -47,8 +47,9 @@ test('P95: ending a campaign cancels pending consequences whose trigger can no l
       transactionEvents: [{ eventType: 'player_left_early', payload: {} }], historyEvents: [] });
 
     assert.equal(state.campaignRuntime.campaignStatus, 'completed');
-    assert.equal(consequence.status, 'cancelled', 'a terminal branch cannot reach a still-active future node');
-    assert.equal(consequence.cancelReason, 'campaign_ended');
+    const settledConsequence = state.campaignRuntime.deferredConsequences.find(c => c.consequenceId === 'await-stage-two');
+    assert.equal(settledConsequence.status, 'cancelled', 'a terminal branch cannot reach a still-active future node');
+    assert.equal(settledConsequence.cancelReason, 'campaign_ended');
     assert.ok(events.some(event => event.eventType === 'campaign_consequence_cancelled'
       && event.payload.consequenceId === 'await-stage-two' && event.payload.reason === 'campaign_ended'));
     assert.equal(events.some(event => event.eventType === 'stage_two_followup'), false,

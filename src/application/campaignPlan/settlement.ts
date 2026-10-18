@@ -251,6 +251,10 @@ export function settleCampaignProgress(input: CampaignSettlementInput): Array<{ 
     historyEvents: input.historyEvents, turnId: input.turnId, nextStateVersion: nextVersion });
   nextState.campaignRuntime = ending.runtime;
   events.push(...ending.events);
+  const terminalConsequences = dischargeStrandedConsequences({
+    runtime: nextState.campaignRuntime!, nextStateVersion: nextVersion,
+  });
+  events.push(...terminalConsequences.events);
   return events;
 }
 
