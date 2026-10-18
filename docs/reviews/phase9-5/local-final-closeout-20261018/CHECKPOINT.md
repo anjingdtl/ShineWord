@@ -11,7 +11,7 @@
 - M4：PARTIAL / BLOCKED-ASSET。localhost 429 与 network_unknown 现场保留且未重派；缺少合法 save-10、Stage-1/8 历史资产，live gameplay crash 矩阵未完成。
 - M5：PARTIAL。有限的 build latency、设备 PSS/gfx、软键盘与 1.3 字号检查；TalkBack、匹配 10+10 和独立试玩未完成。
 - M6：PASS-ENGINEERING；设备回归 PARTIAL。Structured opening evidence recovery RED→GREEN、Core 1,344/1,344、当前 APK 安装复测通过；设备复测未观察到新 extension request。
-- M7：进行中。验收报告与节点证据已独立提交；PR 与实际 PR HEAD 的 Core/Android CI 等待远端验证。
+- M7：进行中。报告、矩阵和节点证据已提交；[PR #15](https://github.com/anjingdtl/ShineWord/pull/15) 已开放，exact-head checks 见 [PR checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)。
 
 ## Git
 
@@ -19,7 +19,7 @@
 - 施工分支：`fix/phase95-local-final-closeout-20261018-short`。
 - 当前 checkout：`F:\sw95local-20261018`；使用专用短路径 worktree 构建 Android，未修改原 checkout。
 - 最新节点提交：M7 `df6371b`；报告和矩阵已提交，最终 SHA 以 PR HEAD 为准。
-- PR：待推送当前 M7 分支后创建；不得自动合并。
+- PR #15：https://github.com/anjingdtl/ShineWord/pull/15；未合并，exact-head checks：https://github.com/anjingdtl/ShineWord/pull/15/checks。
 
 ## 实际模型请求
 
@@ -35,4 +35,4 @@
 - 必须由真人选择角色/目标并完成真实行动；执行者没有代选。当前 0/80 真实决定、0/4 独立试玩。
 - L1 method 资格尚未确证；世界仅覆盖 0–9,600 code points 的 partial package。
 - save-10、Stage-1/8 合法历史资产缺失；历史因果/迁移验收 BLOCKED-ASSET。
-- exact-head PR Core Verify / Android Verify 尚待创建 PR 后执行。
+- exact-head PR Core Verify / Android Verify 由 PR #15 checks 跟踪；需核对运行 SHA 与最终 PR HEAD。

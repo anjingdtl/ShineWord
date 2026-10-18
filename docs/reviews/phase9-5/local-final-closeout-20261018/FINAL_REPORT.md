@@ -14,7 +14,7 @@
 
 - 重新 fetch 后 origin/main 为 `87eef899281f267a17e02357cc643dd475cabd7c`，PR #14 已包含；原 main 和其他既有 worktree 未改写。
 - 本分支从该基线开始，M0、M1、M6 与 M2–M5 各自保留独立提交。M7 文档提交完成后，最终 SHA 以当前 PR HEAD 为准。
-- 本地 PR/CI 尚待 M7 推送后建立与验证。待创建 PR 将只针对 main，不自动合并；Core Verify 和 Android Verify 必须绑定 PR 的实际最终 HEAD。基线 PR #14 的 CI 不能代替本轮结果。
+- [PR #15](https://github.com/anjingdtl/ShineWord/pull/15) 已针对 main 创建且未合并。Core Verify 与 Android Verify 的结果绑定实际 PR HEAD，状态见 [PR checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；基线 PR #14 的 CI 不代替本轮结果。
 
 ## 核心验证
 
@@ -38,4 +38,4 @@
 2. 真实模型费用需要从用户实际账户账单确认；本机 request ledger 只有 token usage，没有 CNY 费用字段。
 3. 小说本地章节标题计数 1,498 与 Android parser 1,504 的差异尚未归因；不能静默规范化或减弱证据。
 4. 真实 action fault matrix、完整历史数据恢复和外部试玩仍未完成；缺少合法 save-10 / Stage-1/8 identity-bound assets。
-5. M7 完成后，推送修复分支、创建 PR，等待实际 PR HEAD 的 Core Verify 与 Android Verify 全绿；最终 URL、SHA 和 workflow checks 以 PR 实测回填到报告与 CHECKPOINT。
+5. PR #15 已创建并开放 review；不得自动合并。最终分支 SHA 和 Core/Android workflow 检查以 PR #15 的 live checks 为准。

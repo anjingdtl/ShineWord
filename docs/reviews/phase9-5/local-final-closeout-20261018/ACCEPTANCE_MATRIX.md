@@ -31,7 +31,7 @@
 | R6 | PARTIAL | package validation 与隐私/权限合同在现行 Core 回归；未在本轮真实 turn 中验证三意图私密投影。 |
 | R7 | PARTIAL / BLOCKED-REAL-ACTION | 3 次模型成功、1 次明确 401；没有真实 action turns、有效 L1 物理 Planner=0 配对或玩家决策。 |
 | R8 | PARTIAL | 实测设备帧、内存、键盘和字号；无 10+10 matched L1/L2 与四名独立玩家。 |
-| R9 | PENDING PR/CI | 必须等本轮实际 PR HEAD 的 Core Verify 和 Android Verify；历史基线检查不代替。 |
+| R9 | TRACKED ON PR #15 | 本轮最终分支 HEAD 的 Core Verify 和 Android Verify 链接在 [PR #15 checks](https://github.com/anjingdtl/ShineWord/pull/15/checks)；PR #14 的基线检查不代替。 |
 
 ## G 门
 
