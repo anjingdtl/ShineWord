@@ -19,6 +19,7 @@ const {
   buildNpcPublicProjection,
   isActorObservable,
 } = require('../dist/application/campaign/playProjection');
+const { canSubmitCampaignAction } = require('../dist/application/campaign/actionAvailability');
 
 function entry(entryId, kind, visibility, definition) {
   return {
@@ -224,6 +225,24 @@ test('player and current party members project completely', () => {
   assert.equal(view.inventory[0].name, '横刀');
   assert.equal(view.inventory[0].ownerName, '李慕白');
   assert.equal(view.inventory[0].source.kind, 'starting_loadout');
+});
+
+test('play projection carries campaign status for terminal action gating', () => {
+  const view = projection([actorCard()], baseState({
+    campaignRuntime: { campaignStatus: 'failed' },
+  }));
+
+  assert.equal(view.campaignStatus, 'failed');
+});
+
+test('runtime status gates player actions while legacy campaigns remain playable', () => {
+  assert.equal(canSubmitCampaignAction('active'), true);
+  assert.equal(canSubmitCampaignAction('paused'), false);
+  assert.equal(canSubmitCampaignAction('failed'), false);
+  assert.equal(canSubmitCampaignAction('completed'), false);
+  assert.equal(canSubmitCampaignAction('ended'), false);
+  assert.equal(canSubmitCampaignAction('preparing'), false);
+  assert.equal(canSubmitCampaignAction(undefined), true);
 });
 
 test('actors who left the party are not leaked', () => {

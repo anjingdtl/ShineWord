@@ -40,6 +40,7 @@ import { tryActivateStagePackages, checkStageTriggers } from '../../../../source
 import type { SceneEncounterOption } from '../../../../../../src/application/campaign/session';
 import type { GuidanceStepView, TurnGuidanceV1 } from '../../../../../../src/application/guidance/types';
 import { resolveRecoverableGuidanceChoice } from '../../../../../../src/application/guidance/recoveredChoice';
+import { canSubmitCampaignAction } from '../../../../../../src/application/campaign/actionAvailability';
 import type { PlayTurnOptions } from '../../../../../../src/application/campaign/session';
 import type { CampaignPlanUnknownReplayPreview } from '../../../../../../src/application/campaignPlan/unknownReplayRecovery';
 import { getPlayUiProjection } from '../../../../playProjection';
@@ -418,6 +419,12 @@ export function usePlayController(): PlayController {
     progressAutomaticActors, refresh]);
 
   async function submit(intentOverride?: string, approveRecovery = false, guidanceChoice?: PlayTurnOptions['guidanceChoice']) {
+    if (!projection || !canSubmitCampaignAction(projection.campaignStatus)) {
+      setError(projection?.campaignStatus === 'paused'
+        ? '当前主线已暂停，请先恢复后再行动。'
+        : projection ? '本段战役已结束，请回看记录或开始新战役。' : '正在读取当前战役，请稍后再提交行动。');
+      return;
+    }
     if (actionInFlight.current || busy || !profile) return;
     const fromComposer = intentOverride === undefined;
     const value = (intentOverride ?? intent).trim();
@@ -741,6 +748,12 @@ export function usePlayController(): PlayController {
    */
   const submitGuidanceStep = (step: GuidanceStepView): void => {
     if (busy || actionInFlight.current) return;
+    if (!projection || !canSubmitCampaignAction(projection.campaignStatus)) {
+      setError(projection?.campaignStatus === 'paused'
+        ? '当前主线已暂停，请先恢复后再行动。'
+        : projection ? '本段战役已结束，请回看记录或开始新战役。' : '正在读取当前战役，请稍后再提交行动。');
+      return;
+    }
     if (!guidance) return;
     if (guidance.decisionPoint.branchId !== branchId
       || guidance.decisionPoint.stateVersion !== projection?.stateVersion) {
