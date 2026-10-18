@@ -36,7 +36,7 @@
 - 复现：validator 返回 `artifact: current stage stage-5 completion has no local effect producer; provide a realizable outcome path.`；两个新 RED 反例分别验证 helper guidance 和 generation retry 集成，修复前均没有补充指导。
 - 最小修复：`src/application/campaignPlan/generationService.ts` 为该特定 validator 错误增加定向 guidance：保留 completion condition tree、IDs、thresholds 和 dependencies；只增加合法可达的 local status/counter/promise/event producer；不放宽 gates、不伪造事件、不用 prose 充当 state。
 - GREEN：`tests/phase9-plan-contract-guard.test.cjs` helper 反例与 `tests/phase9-planning-budget.test.cjs` generation-retry 集成反例均在修复后通过；全量 Core 1,354/1,354、mobile typecheck、version check 与 Debug APK build 通过。提交 `cbacbb0 Guide local stage completion repairs`。
-- AVD 复测：修复后新的 stage-5 job 在 v10/base plan revision 4 上顺序使用 2/2 `campaign_plan` attempts，均 HTTP 200。最终候选因 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check` 被既有 validator 拒绝，未采用、branch 未前进、revision 未变。修复 guidance 已运行，但 stage 5 仍未修好；validator 拒绝本身正确。候选字段冲突缺少修复指导另登记于 `SW95-M3-06`。
+- AVD 复测：该修复后的 v10 candidate 顺序使用 2/2 `campaign_plan` attempts，均 HTTP 200；candidate 因 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check` 被既有 validator 拒绝，未采用、branch 未前进、revision 未变。validator 拒绝正确。后续不同 QA branch 的 stage-5 action 与 plan adoption 另有验证，不改变此候选结果；字段冲突缺少修复指导另登记于 `SW95-M3-06`。
 
 ## SW95-M3-04：effect 数量 validator 错误缺少保留完成路线的 repair guidance
 
@@ -58,7 +58,7 @@
 - RED：在 `tests/phase9-planning-budget.test.cjs` 用真实候选错误形状先跑定向测试；修复前 27 项中 26 项通过、新用例失败，明确暴露 retry 指引没有“保留 skill_check/只删除 destinationId”的约束。
 - 最小修复：`src/application/campaignPlan/generationService.ts` 仅为精确的 `firstStep.(skillId|abilityId|destinationId): not valid for <actionKind>` validator 诊断生成字段级 guidance。只移除不兼容字段，保留 action kind、意图和其它合法引用；不改变 validator、不猜造 ID、不放宽合同。
 - GREEN：定向规划预算文件 27/27；全量 Core 1,355/1,355；mobile typecheck 与 version check 通过。独立提交 `76a51fc fix(phase95): guide action reference mismatch repair`。
-- AVD：通过 `npm run apk:debug` 构建 standalone APK，`adb install -r` 后停止 Metro、冷启动，书库页恢复且 fresh crash buffer 无应用异常。后续两个新 stage-5 candidate 均未返回 `skill_check.destinationId` mismatch，因此 M3-06 的 live repair path 尚未触发；stage 5 仍 unresolved。
+- AVD：通过 `npm run apk:debug` 构建 standalone APK，`adb install -r` 后停止 Metro、冷启动，书库页恢复且 fresh crash buffer 无应用异常。后续新 candidate 未返回 `skill_check.destinationId` mismatch，因此 M3-06 的 live repair path 尚未触发。该项不表示完整 stage-5 路径未通过：隔离 QA branch 后续已有真实 UI stage-5 action/plan adoption 证据。
 
 ## SW95-M3-07：缺少编译 startNodeIds 的入口修复提示
 
@@ -72,8 +72,8 @@
 
 - 两个 agent-driven QA campaign 的 severe failure 后由已采用的规划结局进入 failed：第一局 5 个玩家模拟行动后结束；第二局仅 1 个玩家模拟行动，观察行动 severe failure 后经两次 plan replan 到 failed。数据库的 user turns、roll records、ending ID 和终局 UI 一致，未发现状态/结局投影不一致；“一次严重失败即结束”留作独立玩家可玩性评估，不在无 RED 代码反例时登记为代码缺陷。
 - Partial world package 的 `package_entries.kind='method'` 数量仍为 0；但第三局 campaign-scope artifact 实际执行了 6 个规则绑定的 L1 turn，且每个方法都有显式 fixed `difficultyPolicy` 与 fixed empty `evidencePolicy`。这验证了 campaign 内容 L1 路径，不覆盖非空来源 evidence，也不把 package method 缺项误报成代码缺陷。
-- 第三局从 state v1 推进到 v12，stage 1–4 成功，三个 deferred consequences 已触发、消费并产生下游事件；`con-barov-offer` 仍 pending。执行者的 QA 操作不等于玩家对后果的反馈。
-- stage 5 仍有内容阻滞。早期 v10 候选的 completion-producer 修复指导缺陷已按 `SW95-M3-03` 修复；`skill_check.destinationId` guidance 已按 `SW95-M3-06` RED → GREEN，但最新两个新 GLM candidate 均未触发该错误。M3-07 start-node repair guidance 已 RED → GREEN 并在真实 candidate 中修正入口；candidate 随后因既有延迟 consequence、trigger 去重与消费者规则失败而被正确拒绝。revision 4 仍仅带 stage 4 situation，stage 5 `content_prep` unresolved。未改验证规则、未自动重派 unknown，也未声明 stage 5 可完成。
+- 第三局 main 从 state v1 推进至 v12，stage 1–4 成功，三个 deferred consequences 已触发、消费并产生下游事件。stage-5 isolated QA branch 后续提交 turn-0014，并采用 plan r7 进入 stage 6；没有据此宣称第四项 delayed consequence 已完成下游消费。执行者的 QA 操作不等于玩家对后果的反馈。
+- 早期 stage-5 候选的 completion-producer 修复指导缺陷已按 `SW95-M3-03` 修复；`skill_check.destinationId` guidance 已按 `SW95-M3-06` RED → GREEN，但 post-fix GLM candidates 均未触发该错误。M3-07 start-node guidance 在真实 candidate 中修正入口，该 candidate 本身仍因既有延迟 consequence、trigger 去重与消费者规则失败而被正确拒绝。之后独立 branch 的真实 UI action 与 bounded plan repair 成功，stage 5 在该 branch 已完成；原 main 仍 v12/r4。未改验证规则、未重派 unknown，也未将 agent QA 记为玩家验收。
 
 ## 安全边界
 

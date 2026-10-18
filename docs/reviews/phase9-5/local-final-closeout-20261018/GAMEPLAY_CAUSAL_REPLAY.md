@@ -44,9 +44,9 @@
 | `turn-0011` | L1 / `m-earn-jailer-trust` | full_success | `[4,5,6]` / 3d6 / diff 3 / margin +3；v10→11 |
 | `turn-0012` | L2 / freeform observe | success | 无骰点；v11→12 |
 
-L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 Planner request；turn-0002 与 turn-0012 均有真实 Planner 和 Narrator HTTP 200。点时快照 novel-world ledger 聚合为 Planner 8 / Narrator 14，其中第三局分别 2 / 8；最新 ledger roll-up 已增加后续 QA jobs / action，现为 Planner 8 / Narrator 15。所有 QA action 均为 agent-driven，不算真人决定。中间 `manage-replan` system turns 不计入 8 个第三局 player-like actions。
+L1 turns 的 `ruleBinding` 存在、evidence policy 显式 fixed `[]`，没有 Planner request；turn-0002 与 turn-0012 均有真实 Planner 和 Narrator HTTP 200。novel-world 最终 ledger 为 Planner 8 / Narrator 17，其中第三局 main 分别 2 / 8，另有 stage-5 QA branch 和 save-10 continuation 各一次 Narrator。所有 QA action 均为 agent-driven，不算真人决定。中间 `manage-replan` system turns 不计入第三局 main 的 8 个 player-like actions。
 
-turn-0010 将 stage 3 推至 succeeded，消费 `conseq-town-tension`；turn-0011 将 stage 4 推至 succeeded，消费 `conseq-barov-attention` 和 `con-tension-peaked`。三个消费者分别在后续状态产生了 `town_tension_escalated`、`barov_offer_made`、`tension_peaked` 效果。第四项 `con-barov-offer` 仍 pending。
+turn-0010 将 stage 3 推至 succeeded，消费 `conseq-town-tension`；turn-0011 将 stage 4 推至 succeeded，消费 `conseq-barov-attention` 和 `con-tension-peaked`。三个消费者分别在后续状态产生了 `town_tension_escalated`、`barov_offer_made`、`tension_peaked` 效果。在 main 的 v12 snapshot 中，第四项 `con-barov-offer` 尚未消费；后续隔离 QA branch 完成 stage 5 后，未独立审计这项 consequence 的下游状态。
 
 stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可达的 ordinary-success completion effect 被拒，对该 validator 错误缺少定向 repair guidance 的代码缺陷已由 `SW95-M3-03` 以 RED→GREEN 修复。修复后新 v10 job 两个物理 attempt 均 HTTP 200，但候选因 `firstSituation.methods[1].firstStep.destinationId` 对 `skill_check` 无效而被拒；未采用、branch 未前进。早期 v11 replan 的两次物理 attempt均 HTTP 200，但候选因 full_success/success effects 超出既有上限被拒；这一类错误缺少限额内保留 completion 的 repair guidance 已由 `SW95-M3-04` 加 RED→GREEN 修复，早期 job 没有被重派。revision 4 只包含 stage 4 campaign situation。stage 5 没有已采用的方法内容；降级自由输入 L2 仍提交成功 v11→v12，但未验证 stage 5 任务完成或第四项后果。
 
@@ -59,7 +59,7 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 
 ## 证据界限
 
-- 本轮真实 Android/GLM 仅验证这些局部流程。没有玩家对因果/剧情作判断；L1 使用空 evidence，不覆盖非空来源证据；外部试玩、全书构建、旧 save 导入、实时行动中断与 stage 5 route 未完成。
+- 本轮真实 Android/GLM 验证的是限定局部流程。没有玩家对因果/剧情作判断；L1 使用空 evidence，不覆盖非空来源证据；外部试玩、全书构建和实时行动中断未完成。历史 save-10 已原生导入并续玩，stage 5 已在隔离 QA branch 完成，不将这些 agent actions 算作玩家接受。
 - 终局截图带模型生成文本，只保留在本机 `C:\Temp\shineword-phase95-local-final\after-plans.png`，不提交。数据库副本同样只留本机。
 
 ## 本轮后续 QA 增量
@@ -67,4 +67,6 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 - 修复 `SW95-M3-03` 后，在 fresh stage-only v10 branch `camp-mvdjtr22-bmvdofyhk` 运行新 job `replan:camp-mvdjtr22-bmvdofyhk:v10:2026-10-18T10:24:17.433Z:4d0f2b492d38`。触发原因为 `stage_content_prepared_ahead` 与 `stage_content_target:stage-5`，请求预算 2；两个顺序 `campaign_plan` attempt 均 HTTP 200。终态为 invalid，错误为 `firstSituation.methods[1].firstStep.destinationId: not valid for skill_check.`；无 unknown/in-flight、无 plan adoption，branch 仍 v10、plan revision 4。
 - 在隔离 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交新 `turn-0010` 到 v10，method-bound skill check 结果为 failure；Narrator HTTP 200、Planner=0。它是 agent-driven QA，不计真人决定。
 - APK 更新之后创建的空 rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留为 v11，无新 action 和模型 request。主第三局 `camp-mvdjtr22-main` 仍 v12，历史 turn / roll 未改写。隔离 branch `camp-mvdjtr22-bmvdq6wys` 从 main v12 回退创建为 v11，随后两个 replan logical job 各用 2/2 HTTP 200；没有采用候选，branch stateVersion 仍为 11 / revision 4。
-- novel-world + campaigns/mapped branches 的最新物理 ledger 是 69 requests / 68 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；campaign_plan 共 36 次。输入、输出、推理 token 分别 949,571 / 225,651 / 34,277。与本文上方早期 snapshot 不同，最终统计见 `REAL_NOVEL_AND_LLM.md`。
+- 在上述 replan 候选被正确拒绝后，真实 UI action `turn-0014` 在隔离 branch `camp-mvdjtr22-bmvdq6wys` 将 stage 5 从 active 成功提交（v13→v14）；无骰点、无 Planner request，Narrator 为 HTTP 200。随后 `stage_content_prepared_ahead + stage_content_target:stage-7` 触发 bounded plan job；2 个串行 `campaign_plan` attempts 均 HTTP 200，plan revision 7 被采用。分支到 v15、stage 6 active、stage 7/8 planned。主 branch `camp-mvdjtr22-main` 保持 v12/r4。
+- 该 branch 现有 16 turns、5 roll records、16 snapshots；屏幕冷重开后 play composer 和 progress card 可见。此为 agent-driven UI 工程验证，不是真人选择，也没有据此宣称第四个延迟后果已完成消费。
+- novel-world ledger 最终为 77 requests / 76 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；campaign_plan 42、Planner 8、Narrator 17。输入、输出、推理 token 分别 `1,117,695 / 258,924 / 40,902`。与本文上方早期 snapshot 不同，逐 request kind 数据见 `REAL_NOVEL_AND_LLM.md`。

@@ -1,7 +1,7 @@
 # M2：真实小说导入与 GLM 开篇 / 游玩样本
 
 日期：2026-10-18（Asia/Shanghai）
-状态：PARTIAL。真实小说 partial world、已测通的 GLM 配置和 standalone Android APK 均完成 agent-driven 游玩。第三局 campaign-scope 内容提供了显式固定难度、固定空 evidence policy 和规则绑定的 L1 方法，已真实提交 6 个 L1 与 2 个 L2 行动。World package 仍无 method entry，非空来源证据 L1、真人决策、独立试玩及 stage 5 可执行内容仍未通过。M3-07 start-node guidance 已经新的真实 GLM job 验证到候选结构，但候选被既有 long-consequence validator 拒绝。
+状态：PARTIAL。真实小说 partial world、已测通的 GLM 配置和 standalone Android APK 均完成 agent-driven 游玩。第三局 campaign-scope 内容提供了显式固定难度、固定空 evidence policy 和规则绑定的 L1 方法，已有 6 个 L1 与 2 个 L2 行动；另有 stage-5 完成行动后真实采用 plan r7 并进入 stage 6。World package 仍无 method entry，非空来源证据 L1、真人决策、独立试玩及 main branch 的 stage-5 内容仍未验收。
 
 ## 材料与隔离
 
@@ -19,14 +19,14 @@
 | world_extract | 3 | 0 | 10,855 / 7,750 / 34 | 25,937 / 34,231 / 40,951 |
 | style_analyzer | 1 | 0 | 1,660 / 410 / 0 | 12,150 / 12,150 / 12,150 |
 | opening_goal | 3 | 1 次旧配置 HTTP 401 | 563 / 104 / 0 | 3,904 / 4,761 / 6,109 |
-| campaign_plan | 36 | 0 | 857,012 / 205,275 / 33,755 | 31,405 / 96,497 / 193,203 |
+| campaign_plan | 42 | 0 | 1,017,014 / 237,789 / 40,380 | 31,405 / 97,873 / 193,203 |
 | planner | 8 | 0 | 27,522 / 1,828 / 175 | 5,188 / 8,946 / 20,651 |
-| narrator | 15 | 0 | 47,273 / 7,385 / 294 | 6,941 / 11,739 / 20,138 |
+| narrator | 17 | 0 | 55,395 / 8,144 / 294 | 6,941 / 12,140 / 20,138 |
 | memory_checkpoint | 2 | 0 | 4,686 / 2,899 / 19 | 22,071 / 25,640 / 29,208 |
 
-按真实小说 world、其三个 campaigns 及映射 branches 的物理 attempt 去重统计，共 69 次请求：68 次 HTTP 200 成功、1 次更新前配置 HTTP 401；没有真实模型 `outcome_unknown` 或在途请求。配置更新后通过真实请求 HTTP 200 验证，旧 401 没有重派。两个新 replan job 各用 2 个顺序 attempt，没有提高并发或重派未知请求。
+按真实小说 world、其三个 campaigns 及映射 branches 的物理 attempt 去重统计，共 77 次请求：76 次 HTTP 200 成功、1 次配置轮换前 HTTP 401；没有真实模型 `outcome_unknown` 或在途请求。配置更新后通过真实请求 HTTP 200 验证，旧 401 没有重派。新计划修复及 stage-5 后续采用共增加 6 个顺序 `campaign_plan` attempt 和 2 个串行 Narrator 调用；没有重派未知请求。
 
-68 次成功调用合计 input `949,571`、output `225,651`、reasoning `34,277` tokens。App ledger 不记录实际人民币扣费，费用未知；不限额度授权不代表费用为零。独立 localhost mock world 的 429 / `outcome_unknown` 不计入以上统计。旧证据文件 `evidence/third-campaign-sanitized-summary.json` 保留其 08:55 UTC 点时快照；该快照的较早计数不代表本节最新滚动汇总。
+76 次成功调用合计 input `1,117,695`、output `258,924`、reasoning `40,902` tokens。App ledger 不记录实际人民币扣费，费用未知；世恒哥对本项目的不限额度授权不代表费用为零。独立 localhost mock world 的 429 / `outcome_unknown` 不计入以上统计。旧证据文件 `evidence/third-campaign-sanitized-summary.json` 保留其较早点时快照；该快照的计数不代表本节最终汇总。
 
 ## 独立本地故障注入世界
 
@@ -38,14 +38,15 @@
 
 - 第一局：5 个行动级操作；Planner 5 / Narrator 5；行动/骰点和状态连续提交，测试中出现失败、成功、严重失败。`turn-0005` talk 成功使 testimony counter 从 0 增至 10，后续状态中仍为 10；`turn-0007` severe failure 后 Runtime 为 `failed`、ending ID `ending-case-lost`。行动与剧情均由测试执行者输入/选择。
 - 第二局：在同一小说世界新建独立 branch；一次“观察周围环境” QA 行动触发真实 Planner 与 Narrator（本轮前累计 Planner/Narrator 各 6），骰点 `[1]` / d4 / difficulty 4 / margin -3，state version 2→3 原子提交。下一轮本地建议投影可见；后续计划请求完成后 Runtime 经 `manage-replan:4` 到 version 5 并以 `ending-failure` 结束。终局页禁用新行动。
-- 第三局 `camp-mvdjtr22`：8 个 agent-driven action turns 中，turn-0002 和 turn-0012 真实走 L2（Planner + Narrator）；turn-0003、0006、0008、0009、0010、0011 真实走 campaign-scope L1（仅 Narrator，无 Planner）。turn-0011 以 `[4,5,6]` / 3d6 / difficulty 3 / margin +3 `full_success` 从 v10 原子提交到 v11；L1 与 L2 合计继续到 v12。stage 1–4 成功，三项 deferred consequence 已触发并消费；第四项 stage 5 后果仍 pending。
-- 第三局 stage 5 的早期 v10、v11 候选仍按既有 validator 拒绝。M3-06 代码修复后的两个真实新 job 均未产生 action-reference mismatch，因此该特定指导路径没有 live 触发。M3-07 新 job `replan:camp-mvdjtr22-bmvdq6wys:v11:2026-10-18T11:34:15.046Z:5e606cda282e` 使用 2/2 顺序 HTTP 200；修复候选把 concrete required-main `stage-5` 设为 `activation:null`，但两项 consequence 仍过早触发、共享 trigger，且没有后续必做阶段消费权威效果，故 validator 正确拒绝。没有采用或重派，branch 仍 v11 / plan revision 4。上一 job `6bcf6ccbf908` 也用 2/2 HTTP 200 完成，仍缺 start node 与长篇延迟后果合同。当前 revision 4 只有 stage 4 campaign 内容，stage 5 `content_prep` 未解决。一个 agent-driven 自由输入 L2 行动仍在降级 UI 上成功提交 v11→v12，但没有 stage 5 方法或结局路线。
-- 三局主 QA 共 14 个 agent-driven action turns；另在隔离测试 branch `camp-mvdjtr22-bmvdo8467` 从 v9→v10 提交 1 个 method-bound `skill_check` 行动（结果 failure、Narrator HTTP 200、Planner 请求为 0）。因此本轮合计 15 个 agent-driven action turns；它们证明有限 L1/L2 服务路径、骰点/原子提交与三条延迟后果消费者，不证明用户认可剧情质量，也不计入阶段 9 的 80 个真人决定或 4 名独立试玩。另通过 app rollback 产生 `camp-mvdjtr22-bmvdq6wys` v11 branch（parent main v12）；该 QA 分支创建没有玩家行动或物理请求。
+- 第三局 main `camp-mvdjtr22-main`：8 个 agent-driven action turns 中，turn-0002 和 turn-0012 真实走 L2（Planner + Narrator）；turn-0003、0006、0008、0009、0010、0011 真实走 campaign-scope L1（仅 Narrator，无 Planner）。turn-0011 以 `[4,5,6]` / 3d6 / difficulty 3 / margin +3 `full_success` 从 v10 原子提交到 v11；状态继续至 v12。该 main 的 stage 1–4 成功，三项 deferred consequence 已触发并消费；v12 记录中 stage-5 consequence 尚未消费。后续 stage-5 QA action 在独立 branch，未把其结果回写 main。
+- 第三局 stage 5 的早期 v10、v11 候选仍按既有 validator 拒绝。M3-06 代码修复后的两个真实新 job 均未产生 action-reference mismatch，因此该特定指导路径没有 live 触发。M3-07 job `replan:camp-mvdjtr22-bmvdq6wys:v11:2026-10-18T11:34:15.046Z:5e606cda282e` 的 2/2 顺序 HTTP 200 候选将 concrete required-main `stage-5` 设为 `activation:null`，但仍因 consequence 延迟、trigger 去重及后续消费者合同不符被既有 validator 拒绝；该 job 本身没有被采用或重派。
+- 随后的真实 Android UI QA 在同一隔离 branch `camp-mvdjtr22-bmvdq6wys` 提交可用 stage-5 行动 `turn-0014`，状态 v13→v14，成功、无骰点，Narrator HTTP 200（input 3,755 / output 348 / reasoning 0）；该 turn 没有 Planner attempt。其后新 plan job 的 2/2 顺序 `campaign_plan` attempts 均 HTTP 200，采用 plan revision 7 并准备 stage 7。当前 QA branch 为 stateVersion 15、16 turn rows、5 roll rows、16 snapshots；stage 1–5 succeeded、stage 6 active、stage 7–8 planned。原 main `camp-mvdjtr22-main` 仍保持 v12 / plan r4，未被改变。
+- 另在隔离测试 branch `camp-mvdjtr22-bmvdo8467` 从 v9→v10 提交 1 个 method-bound `skill_check` 行动（结果 failure、Narrator HTTP 200、Planner 请求为 0）。此前证据中的 15 个 agent-driven action turns 加上本轮 stage-5 行动与 save-10 continuation turn，共 17 个 agent-driven QA actions；save 内的六条历史回合不计入新增行动。它们不代表用户认可剧情质量，也不计入阶段 9 的 80 个真人决定或 4 名独立试玩。stage-5 分支证据见 `evidence/stage5-live-adoption-and-replay-sanitized.json`。
 
 ## 未通过/待验
 
 1. L1：已在第三局 campaign-scope artifact 上执行 6 次；方法的 evidenceIds 均为空，world package 仍无 `method` entry，非空来源 evidence L1 与 package method 覆盖未验。
-2. 延迟后果：`conseq-town-tension`、`conseq-barov-attention`、`con-tension-peaked` 已在 turn-0010/0011 的后续消费者中触发并消费；`con-barov-offer` 仍 pending。stage 5 方法内容和玩家对后果的后续回应尚缺。
-3. 第三局 stage 5 仍有 `content_prep` unresolved：v10 候选缺普通成功完成路径，v11 两次 HTTP 200 后的候选因 success/full_success 效果数超过 8 被验证器拒绝。M3-07 新 GLM job 已验证入口修复提示使 concrete stage-5 activation 变为 null，但计划仍违反既有延迟触发、trigger 去重和后续效果消费校验，保持 invalid、无 adoption，revision 4 不变。M3-06 action-reference mismatch 在这两个新候选中未触发。没有放宽 validator、没有重派已耗尽 job，stage 5 仍无已采用候选。
+2. 延迟后果：`conseq-town-tension`、`conseq-barov-attention`、`con-tension-peaked` 已在后续消费者中触发并消费；此前列出的 `con-barov-offer` 与 stage 5 相关。stage-5 QA branch 已提交行动并进入 stage 6，但未完成该后果独立的 trigger→discharge→下游消费逐项对照，也没有玩家对后果作出选择。
+3. stage 5：候选修复提示本身经 validator 拒绝，之后可用 UI 行动成功完成该节点并使隔离 branch 采用 revision 7、进入 stage 6；原 main 仍 v12/r4，未完成相同路径。没有放宽 validator。M3-06 action-reference mismatch guidance 的特定 live 错误仍未触发。
 4. 真实玩家决定 0/80、独立试玩 0/4；第一、二局的 failure ending 不代表自然结局可玩性已验。
 5. 实际费用、全书构建成本、章节计数差异、模型与独立玩家的剧情质量评估仍未知/未运行。原文与生成剧情截图只留在本机私有目录。
