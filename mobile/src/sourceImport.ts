@@ -17,6 +17,7 @@ import { buildBookRegistry, registrySummaryFor } from '../../src/application/wor
 import { runTimelinePass } from '../../src/application/world/timelinePass';
 import { replayCompletedLocationAdapter } from '../../src/application/worldBuild/replayLocationAdapter';
 import { isRunExtractionComplete } from '../../src/application/worldBuild/buildProgress';
+import { shouldExtendOpeningBootstrap } from '../../src/application/worldBuild/openingEvidenceRecovery';
 import { remapEntryReferences } from '../../src/application/worldPackage/remapEntryReferences';
 import { sourceIdForChapter } from '../../src/application/incrementalMapping/canonSelection';
 import { rangeCovered } from '../../src/application/segmentPublication/protocol';
@@ -1614,8 +1615,7 @@ async function runExtractionInternal(
               generation: intent.generation, errors: [error instanceof Error ? error.message.slice(0, 500) : 'publication_failed'], createdAt: input.createdAt });
             // Only missing opening evidence extends the bounded bootstrap. A
             // conflict, unknown paid outcome or provider error stays parked.
-            const message = error instanceof Error ? error.message : '';
-            if (openingBuild && /事实不足|开局缺少|来源闭包|引用实体缺失/.test(message)) {
+            if (openingBuild && shouldExtendOpeningBootstrap(error)) {
               const source = (await runtime.sourceCatalog.snapshot(run.worldId)).members.find(m => m.sourceId === run.sourceId);
               const end = Math.max(...ranges.filter(r => r.sourceId === run.sourceId).map(r => r.endCp));
               if (source && end < source.codePointCount && end < 12000) {

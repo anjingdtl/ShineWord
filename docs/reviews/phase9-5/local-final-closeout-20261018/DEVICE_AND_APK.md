@@ -31,3 +31,11 @@ M0 基线提交：`c821f65906f0d2445bbfcb7a588ec88ea5495d66`
 
 - 长路径 checkout 的一次 Android CMake 构建受到 Windows 路径长度限制；改在 `F:\sw95local-20261018` 短路径 checkout 后，独立 APK 构建及安装均成功。未通过修改工程路径配置绕过限制。
 - 本节点证明 APK 可构建、安装、冷启动和基本导航；小说/真实模型、可玩战役、性能与独立玩家验收分别记录在后续节点，不由本节点替代。
+
+## M6 修复后的 APK 与模拟器复测
+
+- 当前修复分支再次执行 `npm run apk:debug` 成功，Gradle assembleDebug 成功（33 秒）；APK 为 `F:\sw95local-20261018\dist\apk\debug\ShineWord-V1.0.0-debug.apk`，SHA-256 `B42AAE7C176D80A49B9C7605375F6B93332FB53405F522291798290B1F1F5843`。
+- 使用 `adb install -r` 安装到原专用 AVD，保留 SQLite、小说源与已有 Keychain 数据。从设备 pm path 拉取已安装 base.apk，SHA-256 与构建 APK 完全一致。包名 `com.shineword.app`，versionName `1.0.0`，versionCode `1000000`，minSdk 24，targetSdk 36，ABI x86_64。
+- 复测书库、项目页和开局身份页。真实测试项目显示 1,504 章、world ready、published partial package；构建任务为 4/4。向导能加载且姓名为空时“下一步”禁用。没有创建角色、campaign 或玩家行动。
+- 键盘焦点冒烟通过，未输入数据；系统字号临时放大到 1.3 后恢复 1.0，布局中的核心输入和按钮仍可见，长标题使用省略号截断。TalkBack 未启用，故读屏验收 NOT RUN。
+- 本轮截图保存在本地临时证据目录 `C:\Temp\shineword-phase95-local-final`，只用于本机复核，未提交图片、SQLite 快照、源文、请求日志或模型响应。当前设备 crash buffer 检查未发现 FATAL EXCEPTION / AndroidRuntime 错误。
