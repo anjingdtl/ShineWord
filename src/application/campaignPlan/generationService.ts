@@ -161,6 +161,8 @@ export function buildStructuralRepairGuidance(
     ? [`- grant_knowledge 引用的 entryId 不在冻结资料目录或当前候选的 clues 别名中：${unknownKnowledgeIds.join(', ')}。逐个修复：若它表示本战役新线索，在顶层 clues 中定义唯一 clueId、可公开的线索内容和合法 provenance，再把 grant_knowledge.entryId 改为该 clueId；若对应已有资料，只能改用提示中逐字列出的目录 ID；若无合法知识来源，移除这条无效效果。${declaredClueIds.length > 0 ? `当前已声明的 clues 别名：${declaredClueIds.join(', ')}。` : '当前没有已声明的 clues 别名。'}不得补造世界目录 ID、使用原著事实 ID 冒充 entryId，或放宽本地校验。`]
     : [`- grant_knowledge 引用的 entryId 不在冻结资料目录中：${unknownKnowledgeIds.join(', ')}。本次是单阶段内容生成，顶层 clues 会被裁剪且不会保存；不要新增 clue 或引用候选 clues 别名。逐个改用本请求冻结资料中逐字列出的目录 ID；如果没有合适的合法条目，就从 firstSituation 各 outcome 的 effects 中移除该 grant_knowledge 效果。不得补造目录 ID、改用 sourceFactId、或放宽本地校验。`];
   const guidance = [...unknownKnowledgeGuidance, ...errors.flatMap(error => {
+    const effectLimitMatch = /^(.+): effects must be an array of ≤8 templates\.$/.exec(error.trim());
+    if (effectLimitMatch) return [`- ${effectLimitMatch[1]} 的 effects 数组超过本地上限：每个 effects 数组最多 8 个效果模板。只对该路径对应的数组做最小调整；移除冗余效果，或把真实独立成果拆分到后续可执行办法。保留普通 success 到达 completion 所需的效果生产者及所有既有因果门槛；不得删除条件、夸大计数、只依赖 full_success 或用 record_event 伪装状态变化。`];
     const eventMatch = /^method ([^:]+): an ordinary-success event must be consumed by this or a reachable public campaign goal, or accompany a durable state effect\.$/.exec(error.trim());
     if (eventMatch) {
       const methodId = eventMatch[1]!;
@@ -331,6 +333,7 @@ export function buildPlanRequestMaterials(input: {
     '- 只有当前第一阶段 activation=null。后续阶段用 node_succeeded 与 dependsOn 引用前驱；firstSituation 仅服务当前第一阶段，远期不得用 self 的同一计数冒充独立问题。短篇每阶段约 2-5 次有意义的决定，不用反复交谈/观察刷 10/30 次计数；完成条件对应取得证据、达成承诺或解除具体阻碍。',
     '- 第一个 concrete 阶段必须完整可玩：endings 之前先由 firstSituation 给出 2-4 个办法（methods），办法之间机制不同（不同技能/不同行动类型/不同对象），至少一个办法的 firstStep 只用下面列出的技能且不需要准备；',
     '- 每个 method 的 outcomes 必须给出 full_success/success/failure/severe_failure 四档，各档 resultFact 一句玩家可读事实，effects 从效果模板白名单选择；',
+    '- 每个 effects 数组最多 8 个效果模板（firstSituation 四档 outcomes 与 consequences.effects 均适用）；若单次行动需要更多独立变化，应拆分为具备真实前提的多步办法或延后后果，并保留普通 success completion 路线，不得删除门槛、合并成虚假效果或只依赖 full_success；',
     '- firstStep.actionKind=skill_check 时必须把“可用技能”中的完整 entryId 逐字写入 skillId；ability 必须引用“可用能力”中的完整 entryId；move 必须引用“可进入场景”中逐字列出的 locationId。observe/talk/interact 不得附带 skillId、abilityId 或 destinationId。引用显示名、删掉 ID 前缀、填写占位说明或漏掉行动所需 ID 都无效。firstStep.itemId 和 requires.itemId 只能使用“已知物品”列表中的完整 entryId。',
     '- 每个新 method 都要显式给出 difficultyPolicy、evidencePolicy、evidenceAllowlist。difficultyPolicy 用 {"kind":"fixed","band":"simple|normal|challenging|peak"}，无法在本地闭合时用 {"kind":"planner_required"}；evidencePolicy 用 {"kind":"fixed","evidenceIds":[]}（空数组明确表示不使用证据），或 {"kind":"planner_required"}。',
     '- evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选；列表为空时写 []。不得从世界目录、可引用线索、原著 factId 或远期内容复制 ID，也不得猜造。fixed evidenceIds 必须逐字包含在 evidenceAllowlist 中。ruleBindingHash 由本地编译器写入，模型不要输出。',

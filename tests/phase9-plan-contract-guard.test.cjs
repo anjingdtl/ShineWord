@@ -103,6 +103,15 @@ test('phase 9 repair guidance resolves out-of-scope action targets from the curr
   assert.match(guidance, /不得猜测、补造/);
 });
 
+test('phase 9 parser-limit repair guidance preserves executable completion', () => {
+  const guidance = buildStructuralRepairGuidance([
+    'firstSituation.methods[0].outcomes.success.effects: effects must be an array of ≤8 templates.',
+  ], { firstSituation: { methods: [{ methodId: 'method-main' }] } });
+  assert.match(guidance, /firstSituation\.methods\[0\]\.outcomes\.success/);
+  assert.match(guidance, /最多 8 个效果模板/);
+  assert.match(guidance, /保留普通 success.*completion/);
+  assert.match(guidance, /拆分到后续可执行办法/);
+});
 function validationContext(ctx, artifact) {
   return {
     visibleWorldEntryIds: new Set(ctx.visibleEntries.map(entry => entry.entryId)),
@@ -144,6 +153,7 @@ test('phase 9 plan prompt gives exact node-ending and deadline-safe examples', a
     assert.match(materials.system, /firstSituation 默认省略 deadlineClockSeconds/);
     assert.match(materials.system, /failure\/severe_failure 不得产生同一证据/);
     assert.match(materials.system, /每一条包含 resolved 的可完成路径/);
+    assert.match(materials.system, /每个 effects 数组最多 8 个效果模板/);
     assert.match(materials.system, /事实 ID 与目录条目 ID 是两个独立命名空间/);
     assert.match(materials.system, /把 factId 当 entryId/);
     assert.match(materials.system, /初始计划只能引用锚点章节及之前已进入当前冻结资料的原著事实/);

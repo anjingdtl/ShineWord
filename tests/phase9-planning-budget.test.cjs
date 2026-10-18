@@ -512,3 +512,23 @@ test('planning budget: complete repair input is reflected in scheduler admission
     assert.ok(tokens + input.maxOutputTokens + deriveSafetyMargin(profile.capabilities.contextWindow) <= profile.capabilities.contextWindow);
   }
 });
+test('campaign-plan effect-limit rejection receives bounded preserving repair guidance', async () => {
+  const first = structuredClone(candidateModel());
+  first.firstSituation.methods[0].outcomes.success.effects = Array.from({ length: 9 }, (_, index) => ({
+    template: 'record_event', eventType: 'fact_checked_' + index, summary: 'A distinct bounded fact ' + index,
+  }));
+  const responses = [first, candidateModel()];
+  const requests = [];
+  const generated = await generateCampaignPlanCandidate({
+    provider: { async complete(request) { requests.push(request); return { text: JSON.stringify(responses.shift()) }; } },
+    profile, materials: { system: 'frozen campaign plan contract', user: 'frozen player intent and world material' },
+    logicalRequestId: 'effect-cap-repair', worldId: 'w', physicalRequestBudget: 2,
+  });
+  assert.equal(generated.status, 'ready');
+  assert.equal(generated.physicalRequests, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].user, /firstSituation\.methods\[0\]\.outcomes\.success\.effects: effects must be an array of ≤8 templates/);
+  assert.match(requests[1].user, /最多 8 个效果模板/);
+  assert.match(requests[1].user, /保留普通 success.*completion/);
+  assert.match(requests[1].user, /拆分到后续可执行办法/);
+});
