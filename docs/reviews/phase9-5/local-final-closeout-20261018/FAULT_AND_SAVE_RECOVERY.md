@@ -37,3 +37,4 @@
 - GLM 429 归因已用隔离的 direct-GLM opening sample 与 matched 10+10 复核：本地应用账本记录的 HTTP 429 指向 `10.0.2.2:8765` fault fixture，真实 GLM HTTP 429=0。旧 mock `outcome_unknown` 和两个 host transport unknown 都没有重派；真实复测使用新的 scope/branch identities。
 - 新增 matched live run 的 30 个请求全 HTTP 200、最大并发 1；见 `evidence/matched-live-l1-l2-synthetic-20261019.json`。它验证 Planner/Narrator 路由与提交，未补齐设备端 Narrator 中断、outbox 写盘和旧 worker fencing 故障注入。
 - 用户确认真人体验由其自行完成；本报告不将真人游玩列作 agent 阻滞。其余自动化矩阵仍需可用的 Stage-1/8 原始资产，以及安全、可重复的设备注入现场。
+- 新的真实设备回归补充：战役进入 completed 时，stage-8 的 pending consequence 若未满足 succeeded trigger 会被显式取消；从同一 v19 通过应用 rewind 创建的成功 sibling 则正常 discharge 并写入下游 knowledge。来源 branch 未变。该测试覆盖 campaign-terminal consequence lifecycle，不等同于 Narrator/outbox 写盘中断、旧 worker 竞态或历史 Stage-1/8 故障矩阵。详细分支与提交见 `evidence/android-terminal-consequence-cleanup-20261019.json`。

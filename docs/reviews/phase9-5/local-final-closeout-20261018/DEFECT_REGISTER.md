@@ -9,6 +9,7 @@
 - 根因：fixture 方法缺失 L1 所需 evidence/difficulty binding，未形成 L1 对照；临时 harness 将 `SqliteLlmLedgerStore` 绑定到 `:memory:` DB，退出前只输出了脱敏汇总，没有导出 logicalRequestId / attemptId。
 - 处置：两次未知均未重派；停止新增真实模型调用；把聚合结果与身份丢失记录在 `evidence/host-glm-pilot-transport-unknown-sanitized.json`。无法凭现存证据确认 provider 是否收到请求。
 - 后续门槛：恢复 matched 10+10 前，先使用可保留的隔离账本、合格 L1 绑定与逐 attempt 脱敏导出；不重用这两条未知逻辑请求。
+- 后续状态：matched 10+10 已在独立 persistent production fixture、独立 logical request IDs 和非空 evidence 上完成；未确认或重派此处两条 unknown。两条 unknown 仍无法恢复 attempt identity。
 
 ## SW95-M6-01：结构化开局证据码未触发有界补建
 
@@ -97,3 +98,13 @@
 - 最小修复：`mobile/src/buildTasks.ts` 只读取最近 5 条诊断的机器类别前缀，投影仅返回类别；展开 `package_finalize_failed` 任务卡时显示合并后的安全类别。`coordinator.ts` 提示用户展开任务诊断，不再引导查看空审查队列。没有修改 validator、存档、Canon、Runtime、schema、账本或失败历史。
 - GREEN：隐私 RED 改为类别-only 后，诊断读模型定向测试和生产 mobile pipeline 集成反例均通过；全量 Core 1,357/1,357、mobile typecheck、version check 通过。standalone APK 构建、保留数据安装与最新 Maestro 冷启动/导航复测见 `DEVICE_AND_APK.md` 与 `evidence/maestro-cold-launch-smoke-sanitized-20261019.json`。
 - 设备边界：当前 live world UI 展示的是 `canon_conflict` 和 1 个 open review issue，不是该 `package_finalize_failed` 场景；本轮未宣称设备上已截图验证这条精确诊断卡片。合成生产集成测试验证了无审查 issue 时诊断可读，最新 APK 的书库和战役导航 smoke 通过。
+
+## SW95-M3-08：战役终局后待触发延迟后果没有关闭
+
+- 日期：2026-10-19；严重度：P2（终局 Runtime 保留不可达的 pending obligation）。
+- 现象：真实 Android 分支在 stage 8 选择提前脱身后，campaign 已进入 `completed`，stage 8 仍 active；其未来触发的 `consequence-barov-network` 留在 `pending`，不可能再被消费。
+- RED：提交 `39a8d15 test: cover pending consequences on campaign ending` 增加 settlement 合同反例。旧实现结束 campaign 后仍保留 pending，预期 `cancelled/campaign_ended` 的断言失败。
+- 最小修复：`dischargeStrandedConsequences` 在 `completed`、`failed`、`ended` 状态关闭全部 pending consequence，保留原 trigger/description 并写入 `campaign_ended` 和 `campaign_consequence_cancelled`；`settlement.ts` 在 ending pass 后运行该生命周期清理。未改变已触发/已消费记录、阶段条件、结束判断或历史状态。
+- GREEN：定向 settlement closure 7/7；全量 Core 1,358/1,358；mobile typecheck、version check、standalone APK build 通过。提交 `e6a0bbd fix: cancel pending consequences when campaigns end`。
+- Android/GLM：更新现存专用 API 37 AVD（`adb install -r` 保留数据库），经 UI rewind 创建新分支。提前脱身分支 v20 的 consequence 变为 `cancelled/campaign_ended`；同一 v19 起点的守住阵地分支 turn-0020 在 v19→v20 成功，stage-8 consequence `triggered → discharged`，写入 `barov_network_opened`、`knowledge_discovered` 和权威 `branch_knowledge`。两个 Narrator 请求均为单次 HTTP 200，无 unknown 或重派。原来源分支保持原样。脱敏证据：`evidence/android-terminal-consequence-cleanup-20261019.json`。
+- 提交：RED `39a8d15`；fix `e6a0bbd`。

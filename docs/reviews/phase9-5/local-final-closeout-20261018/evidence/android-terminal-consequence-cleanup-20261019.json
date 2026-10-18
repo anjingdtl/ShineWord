@@ -1,0 +1,75 @@
+{
+  "schema": "phase95-android-terminal-consequence-cleanup.v1",
+  "date": "2026-10-19",
+  "defectId": "SW95-M3-08",
+  "build": {
+    "versionName": "V1.0.0",
+    "versionCode": 1000000,
+    "apkSha256": "F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88",
+    "installedBaseApkSha256Matches": true
+  },
+  "device": {
+    "avd": "ShineWord_Phase95_LocalFinal_20261018",
+    "serial": "emulator-5556",
+    "apiLevel": 37,
+    "dataInstall": "adb install -r; existing app data preserved"
+  },
+  "redToGreen": {
+    "redTestCommit": "39a8d15",
+    "redObservation": "On the pre-fix settlement implementation, a terminal early-exit left a future-trigger consequence pending.",
+    "fixCommit": "e6a0bbd",
+    "targetTests": "7/7 passed",
+    "coreSuite": "1358 passed, 0 failed",
+    "mobileTypecheck": "passed",
+    "versionCheck": "passed",
+    "debugApkBuild": "passed"
+  },
+  "androidBranches": [
+    {
+      "branchId": "camp-mvdjtr22-bmve4dw7q",
+      "parentBranchId": "camp-mvdjtr22-bmvdq6wys",
+      "path": "stage-8 early exit via method-walk-away",
+      "stateVersion": 20,
+      "campaignStatus": "completed",
+      "stage8Status": "active",
+      "consequenceId": "consequence-barov-network",
+      "trigger": "campaign_node_status stage-8 succeeded",
+      "finalConsequenceStatus": "cancelled",
+      "cancelReason": "campaign_ended",
+      "events": ["campaign_consequence_cancelled"],
+      "narratorHttpStatus": 200,
+      "narratorPhysicalAttempts": 1
+    },
+    {
+      "branchId": "camp-mvdjtr22-bmve4gsqe",
+      "parentBranchId": "camp-mvdjtr22-bmve4dw7q",
+      "path": "stage-8 hold-the-line success via method-hold-the-line",
+      "stateVersionTransition": "19 -> 20",
+      "campaignStatus": "completed",
+      "stage8Status": "succeeded",
+      "consequenceId": "consequence-barov-network",
+      "finalConsequenceStatus": "discharged",
+      "downstreamEvents": ["barov_network_opened", "knowledge_discovered"],
+      "branchKnowledge": {
+        "actorId": "actor-player",
+        "knowledgeId": "camp-clue-85fd11ae76f638529f5773d4",
+        "status": "told",
+        "sourceTurnId": "turn-0020",
+        "stateVersion": 20
+      },
+      "narratorHttpStatus": 200,
+      "narratorPhysicalAttempts": 1
+    }
+  ],
+  "preservation": {
+    "sourceBranchId": "camp-mvdjtr22-bmvdq6wys",
+    "sourceBranchBeforeFix": "terminal at v20 with the consequence still pending",
+    "sourceBranchRewritten": false,
+    "newBranchesCreatedThroughAppRewind": true,
+    "unknownAttemptsReplayed": 0
+  },
+  "limits": [
+    "Both actions were agent-driven QA inputs, not human player decisions.",
+    "The success branch validates its own trigger, discharge, and authoritative knowledge consumer; it does not claim player feedback or rewrite the preserved source branch."
+  ]
+}

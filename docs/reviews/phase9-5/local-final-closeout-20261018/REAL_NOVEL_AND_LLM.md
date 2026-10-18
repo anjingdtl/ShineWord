@@ -54,7 +54,7 @@
 - 第三局 main `camp-mvdjtr22-main`：8 个 agent-driven action turns 中，turn-0002 和 turn-0012 真实走 L2（Planner + Narrator）；turn-0003、0006、0008、0009、0010、0011 真实走 campaign-scope L1（仅 Narrator，无 Planner）。turn-0011 以 `[4,5,6]` / 3d6 / difficulty 3 / margin +3 `full_success` 从 v10 原子提交到 v11；状态继续至 v12。该 main 的 stage 1–4 成功，三项 deferred consequence 已触发并消费；v12 记录中 stage-5 consequence 尚未消费。后续 stage-5 QA action 在独立 branch，未把其结果回写 main。
 - 第三局 stage 5 的早期 v10、v11 候选仍按既有 validator 拒绝。M3-06 代码修复后的两个真实新 job 均未产生 action-reference mismatch，因此该特定指导路径没有 live 触发。M3-07 job `replan:camp-mvdjtr22-bmvdq6wys:v11:2026-10-18T11:34:15.046Z:5e606cda282e` 的 2/2 顺序 HTTP 200 候选将 concrete required-main `stage-5` 设为 `activation:null`，但仍因 consequence 延迟、trigger 去重及后续消费者合同不符被既有 validator 拒绝；该 job 本身没有被采用或重派。
 - 随后的真实 Android UI QA 在同一隔离 branch `camp-mvdjtr22-bmvdq6wys` 提交可用 stage-5 行动 `turn-0014`，状态 v13→v14，成功、无骰点，Narrator HTTP 200（input 3,755 / output 348 / reasoning 0）；该 turn 没有 Planner attempt。其后新 plan job 的 2/2 顺序 `campaign_plan` attempts 均 HTTP 200，采用 plan revision 7 并准备 stage 7。当前 QA branch 为 stateVersion 15、16 turn rows、5 roll rows、16 snapshots；stage 1–5 succeeded、stage 6 active、stage 7–8 planned。原 main `camp-mvdjtr22-main` 仍保持 v12 / plan r4，未被改变。
-- 另在隔离测试 branch `camp-mvdjtr22-bmvdo8467` 从 v9→v10 提交 1 个 method-bound `skill_check` 行动（结果 failure、Narrator HTTP 200、Planner 请求为 0）。此前证据中的 15 个 agent-driven action turns 加上本轮 stage-5 行动与 save-10 continuation turn，共 17 个 agent-driven QA actions；save 内的六条历史回合不计入新增行动。它们不代表用户认可剧情质量，也不计入阶段 9 的 80 个真人决定或 4 名独立试玩。stage-5 分支证据见 `evidence/stage5-live-adoption-and-replay-sanitized.json`。
+- 另在隔离测试 branch `camp-mvdjtr22-bmvdo8467` 从 v9→v10 提交 1 个 method-bound `skill_check` 行动（结果 failure、Narrator HTTP 200、Planner 请求为 0）。截至 stage-5/save-10 补充时共有 17 个 agent-driven QA actions；其后 stage-8 新增两个 action，现在累计 19。save 内的六条历史回合不计入新增行动。它们不代表用户认可剧情质量，也不计入阶段 9 的 80 个真人决定或 4 名独立试玩。stage-5 分支证据见 `evidence/stage5-live-adoption-and-replay-sanitized.json`。
 
 ## 未通过/待验
 
@@ -71,3 +71,10 @@
 - 另以无模型的 production harness 对同一 frozen state 做 tap vs exact-authored-text parity；normalized state、contract、effects、events、rolls、rewards 完全一致，两个 branch binding/contract hashes 各自通过校验，`evidence/l1-tap-exact-parity-synthetic-20261019.json` 为 PASS。
 - 429 复核：现有证据中的 HTTP 429 来自模拟器连到 `10.0.2.2:8765` 的 localhost/mock fault fixture，真实 GLM 账本中 HTTP 429 为 0。原 unknown 没有 HTTP status，按 `outcome_unknown` 不重派；之后用不同隔离 scope 对真实 endpoint 完成 9,601 code-point direct-GLM opening sample 与上述 10+10，均未重放旧逻辑请求。故没有证据支持“GLM 对小说内容涉敏后返回 429”。
 - 汇总已知物理记录：111 次，其中 HTTP 200 为 110 次、旧配置 HTTP 401 为 1 次；另有两个身份未持久化的 host transport unknown，保留且未重派。没有观察到真实 GLM 429。累计成功用量 input/output/reasoning `1,152,193 / 265,801 / 41,097`；应用 ledger 无法证明实际 CNY 扣费。
+
+## 2026-10-19：stage-8 双分支真实 Narrator 补充
+
+- 修复后通过现有 Android app 在同一 v19 起点创建 early-exit 与 hold-the-line sibling branches，各执行一次真实 Narrator。两次物理请求均 HTTP 200、attempt 1，串行完成；没有 Planner 请求、unknown、429 或重派。具体终局/因果证据见 `evidence/android-terminal-consequence-cleanup-20261019.json`。
+- 加入这两个已核实的 Narrator attempt 后，真实 endpoint 的已知物理请求累计为 113 次：112 次 HTTP 200、1 次旧配置 HTTP 401。另有 2 次 host transport unknown 身份遗失，保留未重派；本地 mock 429/unknown 单独计数，不计作真实 endpoint 响应。真实 GLM 429 仍为 0。
+- 小说 world/campaign/mapped branch 的持久 ledger 随这两个新 Narrator attempt 更新为 79 次：78 次 HTTP 200、1 次旧配置 HTTP 401；该 scope 没有 unknown 或 in-flight。matched synthetic run 与其他已知 endpoint 请求另计入上面的 113 次全局已知请求。
+- 已汇总 token 数 `1,152,193 / 265,801 / 41,097` 对应前一轮 111 个已知请求；此次两个 Narrator 的逐次 token 指标未纳入该汇总。因此当前完整 token 总量和实际人民币费用仍未能从脱敏账本确认。用户已授权本项目 GLM 测试不受请求额度限制，两个新增调用峰值并发为 1。

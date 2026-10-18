@@ -53,7 +53,7 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 ## 因果与恢复边界
 
 - 两局 roll record、turn expected/committed stateVersion、ending ID 均来自 SQLite ledger；最终本机只读 snapshot `PRAGMA integrity_check=ok`。测试没有用重放修补或修改已提交 turn。
-- 第一局话语行动令 testimony +10 并延续到后续状态，这是已证实的即时 effect。第三局另外验证三项 deferred consequence 的真实 trigger→discharge→consumer effect；第四项仍 pending，且 stage 5 玩家后续回应未验，R4/V95-07/A19 仍 PARTIAL。
+- 第一局话语行动令 testimony +10 并延续到后续状态，这是已证实的即时 effect。第三局 stage-4 三项 deferred consequence 与后续 stage-8 success branch 的另一项 consequence 均有真实 trigger→discharge→consumer effect；early-exit branch 还验证终局 cancellation。此前报告的 stage-5 `con-barov-offer` 与其玩家回应仍未验，R4/V95-07/A19 保持 PARTIAL。
 - 第二局 terminal state 在异步重规划完成后落为 failed；其两次 manage-replan turn 仍按递增 stateVersion 保存，没覆盖 turn v3。UI 以 Runtime status 门控后续玩家行动。
 - 本小说 world 与三个 branch 的持久应用账本无 unknown 或在途请求，观测 peak concurrency 为 2。此结论只覆盖该账本；之后宿主机配对 pilot 的两条 transport unknown 单独记录于 `REAL_NOVEL_AND_LLM.md`，未重派。既有请求中出现一次 campaign_plan interval 与 Planner/Narrator interval 的重叠；其余长请求等待完成，没有手工重派。mock world 的 429/unknown 与小说账本分开记录。
 
@@ -68,5 +68,13 @@ stage 5 仍有 `content_prep` unresolved。早期 v10 replan 候选因缺少可�
 - 在隔离 branch `camp-mvdjtr22-bmvdo8467` 从 v9 提交新 `turn-0010` 到 v10，method-bound skill check 结果为 failure；Narrator HTTP 200、Planner=0。它是 agent-driven QA，不计真人决定。
 - APK 更新之后创建的空 rewind branch `camp-mvdjtr22-bmvdo5ftn` 保留为 v11，无新 action 和模型 request。主第三局 `camp-mvdjtr22-main` 仍 v12，历史 turn / roll 未改写。隔离 branch `camp-mvdjtr22-bmvdq6wys` 从 main v12 回退创建为 v11，随后两个 replan logical job 各用 2/2 HTTP 200；没有采用候选，branch stateVersion 仍为 11 / revision 4。
 - 在上述 replan 候选被正确拒绝后，真实 UI action `turn-0014` 在隔离 branch `camp-mvdjtr22-bmvdq6wys` 将 stage 5 从 active 成功提交（v13→v14）；无骰点、无 Planner request，Narrator 为 HTTP 200。随后 `stage_content_prepared_ahead + stage_content_target:stage-7` 触发 bounded plan job；2 个串行 `campaign_plan` attempts 均 HTTP 200，plan revision 7 被采用。分支到 v15、stage 6 active、stage 7/8 planned。主 branch `camp-mvdjtr22-main` 保持 v12/r4。
-- 该 branch 现有 16 turns、5 roll records、16 snapshots；屏幕冷重开后 play composer 和 progress card 可见。此为 agent-driven UI 工程验证，不是真人选择，也没有据此宣称第四个延迟后果已完成消费。
-- novel-world ledger 最终为 77 requests / 76 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；campaign_plan 42、Planner 8、Narrator 17。输入、输出、推理 token 分别 `1,117,695 / 258,924 / 40,902`。与本文上方早期 snapshot 不同，逐 request kind 数据见 `REAL_NOVEL_AND_LLM.md`。
+- 该 stage-5 QA branch 当时有 16 turns、5 roll records、16 snapshots；屏幕冷重开后 play composer 和 progress card 可见。此为 agent-driven UI 工程验证，不是真人选择，也没有据此宣称 stage-5 `con-barov-offer` 已完成消费。
+- stage-8 修复回归前，novel-world ledger 快照为 77 requests / 76 HTTP 200 / 1 旧配置 401 / 0 unknown / 0 active；campaign_plan 42、Planner 8、Narrator 17。对应 token 为 input/output/reasoning `1,117,695 / 258,924 / 40,902`。其后新增两个 stage-8 Narrator HTTP 200，novel-world/campaign scope 现有 79 次已知记录 / 78 HTTP 200 / 1 旧配置 401；全局总量与 token 边界见 `REAL_NOVEL_AND_LLM.md`。
+
+## 2026-10-19：终局清理与延迟后果消费对照
+
+- 原 stage-8 来源 branch `camp-mvdjtr22-bmvdq6wys` 在 v20 已 completed，但 `consequence-barov-network` 仍 pending；其 trigger 要求 stage 8 succeeded。该冻结 branch 保持只读，未在原历史上补偿或改写。
+- 通过 Android 应用的“回退到上一状态（v19）”创建新 QA branch `camp-mvdjtr22-bmve4dw7q`。选择 `method-walk-away` 后 v20 campaign completed、stage 8 active；修复后 pending consequence 以 `campaign_ended` 取消，事件 `campaign_consequence_cancelled` 落库，原 trigger 仍保留。
+- 再从 v19 创建独立 branch `camp-mvdjtr22-bmve4gsqe`，选择 `method-hold-the-line`。真实骰点/结算与 Narrator 后 turn-0020 v19→v20 成功，stage 8 succeeded；`consequence-barov-network` 完成 trigger→discharge，并产生 `barov_network_opened`、`knowledge_discovered`。权威知识行是 actor `actor-player` / entry `camp-clue-85fd11ae76f638529f5773d4` / `told` / source `turn-0020` / stateVersion 20。
+- 两条新行动各有一个串行 Narrator attempt，均 HTTP 200；没有 Planner attempt、429、unknown 或重派。两次选择来自 QA 执行者，不记为真人决定。
+- 修复证据和 APK 指纹见 `evidence/android-terminal-consequence-cleanup-20261019.json`。这条 stage-8 对照不修改或替代 main v12/r4，也不宣称玩家已对后果作出反馈。

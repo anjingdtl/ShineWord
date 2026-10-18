@@ -52,3 +52,10 @@
 - 最新构建在 `emulator-5556` 执行 `android-open-library.yaml` Maestro run `2026-10-19_004700`（5/5 commands PASS）；在 `emulator-5560` 执行 `android-open-campaign.yaml` run `2026-10-19_004738`（7/7 PASS）。两个 flow 均只做冷启动/导航，没有提交行动、发模型请求或改写历史状态。脱敏汇总见 `evidence/maestro-cold-launch-smoke-sanitized-20261019.json`。
 - 两台安装包身份一致。当前自动化重测只覆盖最新包的冷启动与书库/战役列表导航；发布诊断 exact-error card 的设备渲染未宣称通过，因为可见 live 项目是 `canon_conflict` + 一个 open review，而非 `package_finalize_failed` 且空 review queue。
 - 当前注册 AVD 仍只有 3 台；没有新增设备。`Medium_Phone` 仍保持共享且不触碰。未注册的 `F:\avd\Pixel_10.avd` 仍因归属不明和递归删除被安全审查拦截而保留，详见 `AVD_CLEANUP_LOCAL.md`。
+
+## 2026-10-19：终局延迟后果修复设备复测
+
+- 代码提交 `e6a0bbd` 构建的 standalone Debug APK SHA-256 为 `F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`；升级安装在现有 `ShineWord_Phase95_LocalFinal_20261018` / `emulator-5556`，没有清除数据。安装后包身份和本地构建 hash 一致。
+- 通过 app rewind 从已有 v19 冻结状态建立 QA sibling branches；早退选择提交后 v20 campaign completed、stage 8 active，待触发 `consequence-barov-network` 以 `campaign_ended` 取消并写 `campaign_consequence_cancelled`。success sibling 的 `turn-0020` v19→v20 使 stage 8 succeeded，该 consequence discharge，权威 `branch_knowledge` 写入 `told`，关联 `knowledge_discovered` 和 `barov_network_opened`。
+- 每个 action 使用一个串行 Narrator attempt，均 HTTP 200；无 Planner 请求、无 unknown 和无重派。原来源 branch 保持 v20 与原 pending 状态，测试结果只落在新分支。脱敏状态见 `evidence/android-terminal-consequence-cleanup-20261019.json`。
+- 当前屏幕保留在 success sibling 的 completed ending 页供用户查看。此设备回归是 agent-driven QA，不计真人游玩。
