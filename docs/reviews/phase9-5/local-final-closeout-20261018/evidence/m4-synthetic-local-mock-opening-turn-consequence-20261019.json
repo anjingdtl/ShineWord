@@ -1,0 +1,131 @@
+{
+  "date": "2026-10-19",
+  "mode": "synthetic_android_ui_with_local_mock_only",
+  "externalProviderRequests": 0,
+  "avd": {
+    "name": "ShineWord_M4FaultQA_20261018",
+    "serial": "emulator-5560",
+    "apiLevel": 37
+  },
+  "app": {
+    "packageName": "com.shineword.app",
+    "versionName": "V1.0.0",
+    "versionCode": 1000000,
+    "apkSha256": "FAD88428E42B1AEC82E97BAFF397A953F5650001872F78AA084FC813C513FC66",
+    "appSourceCommit": "7d29ecd7d47a09d13ceeec757f69bad707929ace"
+  },
+  "mockProfile": {
+    "name": "P95-local-mock",
+    "model": "glm-5.3-flash",
+    "endpoint": "http://10.0.2.2:18591/v1",
+    "apiKeyRecorded": false
+  },
+  "testHarnessRedGreen": {
+    "testFile": "tests/phase95-local-mock-server.test.cjs",
+    "red": {
+      "result": "fail",
+      "tests": 1,
+      "passed": 0,
+      "failed": 1,
+      "cause": "The canned campaign plan awarded lore-crates, which was outside the imported opening scope."
+    },
+    "minimalFix": "The Phase 9.5 local mock campaign-plan response now omits the optional knowledge reward; production validation remains unchanged.",
+    "green": {
+      "result": "pass",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "initialMockSetupFailures": [
+    {
+      "endpoint": "http://10.0.2.2:8765/v1",
+      "reason": "Port 8765 is outside fetchTransport's QA metadata-header allowlist (18591 and 18691). The test server therefore returned its generic summary response instead of a campaign-plan candidate.",
+      "trackedCampaignPlanAttempts": 2,
+      "httpStatuses": [200, 200],
+      "jobStatus": "invalid",
+      "validationError": "proposal object missing required longTermGoal/publicPitch/gmPremise/tone fields",
+      "replayOrUnknown": false,
+      "log": {
+        "file": "C:/Temp/shineword-m4-mock-20261019.jsonl",
+        "bytes": 466,
+        "sha256": "F1299E497FDDDF9C2D06E631989B342FD41AAA2BB504443012B4C14F7BFFCA68"
+      }
+    },
+    {
+      "endpoint": "http://10.0.2.2:18591/v1",
+      "reason": "The request type was correctly tagged, but the static test candidate included an out-of-scope knowledge reward.",
+      "trackedCampaignPlanAttempts": 2,
+      "httpStatuses": [200, 200],
+      "jobStatus": "invalid",
+      "validationError": "artifact reward knowledge lore-crates is outside scope",
+      "replayOrUnknown": false,
+      "log": {
+        "file": "C:/Temp/shineword-m4-mock-18591-20261019.jsonl",
+        "bytes": 692,
+        "sha256": "3EF2C69834CB215E00CB10219AA180B0A687B837A65297FFBC68B2A38F358DA0"
+      }
+    }
+  ],
+  "successfulFreshRun": {
+    "setupId": "setup-world-import-mvdvrsyp-mvedhowz",
+    "campaignId": "camp-mvedidrh",
+    "branchId": "camp-mvedidrh-main",
+    "requestSummary": {
+      "campaignPlan": 2,
+      "planner": 2,
+      "narrator": 2,
+      "allHttpStatuses": [200],
+      "allRequestsHaveLedgerIdentity": true,
+      "newOutcomeUnknownCount": 0,
+      "rawRequestOrResponseBodiesRecorded": false
+    },
+    "databaseBeforePlayerActions": {
+      "bytes": 1675264,
+      "sha256": "4e5db16d87386350ed95f6a0c63a26af7870c07544a7b964eed45074c567b35c",
+      "integrityCheck": "ok",
+      "branchStateVersion": 1
+    },
+    "databaseAfterTurn0003": {
+      "bytes": 1822720,
+      "sha256": "5c88f0f688a6b1e8357a25c5895d75daad287fadaea257ae74d86c0e9a6c801d",
+      "integrityCheck": "ok",
+      "branchStateVersion": 3,
+      "playerTurnsCommitted": ["turn-0002", "turn-0003"],
+      "rollCount": 1,
+      "resolvedSituation": "camp-sit-open",
+      "activeFollowUpSituation": "camp-sit-7ac67a5141336819",
+      "consequenceEvents": [
+        "campaign_consequence_scheduled",
+        "campaign_consequence_triggered",
+        "lin_called_in_favor",
+        "campaign_consequence_discharged"
+      ],
+    "genericOutbox": {
+      "table": "outbox",
+      "rowCount": 0
+    },
+    "memoryPostprocessHandoffs": {
+      "table": "frozen_turn_postprocess_outbox",
+      "rowCount": 3,
+      "pendingRows": 3,
+      "episodicIndexedRows": 3,
+      "physicalMemoryHttpCount": 0,
+      "hasBodyRows": 2
+    }
+    },
+    "mockRequestLog": {
+      "file": "C:/Temp/shineword-m4-mock-fixed-20261019.jsonl",
+      "lines": 6,
+      "bytes": 2038,
+      "sha256": "A499EBCD5318800AF6DA93C02FF5931D083FDCB7DE991AE40F97B58ADF2796B3"
+    }
+  },
+  "preservation": {
+    "priorInvalidSetupRecordsRetained": true,
+    "priorOutcomeUnknownAttemptsReplayed": false,
+    "otherCampaignsOrBranchesRewritten": false,
+    "mainNovelDeviceTouched": false
+  },
+  "scope": "This is automated synthetic QA using the local mock; it does not claim real-GLM behavior, a human player decision, or completion of the Android Narrator/outbox/old-worker fault-injection matrix."
+}

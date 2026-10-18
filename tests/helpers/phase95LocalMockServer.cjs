@@ -61,7 +61,11 @@ const server = http.createServer((request, response) => {
       let role;
       if (requestKind === 'campaign_plan') {
         role = 'WorldMapper';
-        assistantText = JSON.stringify(candidateModel());
+        const candidate = candidateModel();
+        // The imported opening is scope-limited and has no campaign-known
+        // knowledge entry, so the QA model must not award package lore.
+        candidate.rewards = [];
+        assistantText = JSON.stringify(candidate);
       } else if (requestKind === 'planner' || system.includes('ShineWord Planner (V2)')) {
         role = 'Planner';
         const intent = String(user.playerIntent ?? '');

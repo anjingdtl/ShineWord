@@ -126,3 +126,12 @@
 - 最小修复：`src/application/worldPackage/buildPackageFromCanon.ts` 仅链接同时满足公开、显式/推断、同一 source fact、anchor 可见的 Lore ID，并将该 ID 纳入 scene dependency。无匹配 Lore 时不造线索；不修改 validator、L1/L2 分流、Runtime、状态权威或存档。
 - GREEN：新定向测试 1/1；确认无关 source fact 被排除；全量 `npm test` 1,359/1,359。证据：`evidence/canon-scene-lore-clue-green-20261019.json`。RED 提交 `f93742f`，修复提交 `2e1a9c8`。
 - 真实小说边界：新的隔离 real-GLM world build 串行完成 timeline、extract、mapping 共 3 次 HTTP 200、无 429/unknown；正常内容审查仍有 1 个 blocking mapping constraint 和 3 个 major invalid proposal，package 未发布。不能据此宣称本修复已在新真实 package 上得到 L1 证明；没有自动审查或重派。
+
+## SW95-M4-01：save-10 往返丢失已提交回合效果
+
+- 日期：2026-10-19；严重度：P1（恢复副本丢失已提交 turn 的效果历史）。
+- 现象与根因：真实 Android save-10 原生导入后的只读数据库显示源分支 `turn-0006` 有 110 字节 `effects_json`，恢复分支相同 turn 字段为空数组。导出查询未读取 `turns.effects_json`，恢复 SQL 又固定写入 `[]`。
+- RED：离线往返回归先失败，导出对象的 `effectsJson` 为 `undefined`。修复前后的真实设备状态、字节数和 hash 见 `SAVE_EFFECTS_ROUNDTRIP_20261019.md`。
+- 最小修复：新增可选 save-10 `effectsJson` 字段，导出保留原始 JSON 字符串、恢复写回原值；字段存在时校验 JSON 数组。旧 save-10 缺字段仍保留原 `[]` 行为，未修改数据库 schema 或冻结合同。
+- GREEN：定向历史回归 4/4；Core 在该修复提交时 1,360/1,360；mobile typecheck、version check、standalone APK、保留数据安装与 Android 原生导出→导入→再导出均通过。当前本地 mock 作用域回归并入后，Core 为 1,361/1,361。
+- 提交：`7d29ecd fix(save): preserve committed turn effects on restore`。
