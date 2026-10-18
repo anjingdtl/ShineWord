@@ -41,3 +41,7 @@
 - 2026-10-19 在现有 M4 AVD 上新增一条独立的合成 UI 链：本地 mock 规划提案、创建 campaign、Planner、一次骰点、Narrator、turn 原子提交，再由对话行动触发并 discharge 延迟后果；branch stateVersion 1→3、两条玩家 turn 已提交、SQLite integrity=`ok`。与之区分：普通业务 `outbox` 表为 0 行；`frozen_turn_postprocess_outbox` 有 3 条 memory handoff 仍为 pending，但均已 episodic-indexed、memory HTTP=0（含 2 条 has_body），它们不能被记作普通业务 outbox 结果。过程中先保留两次 mock fixture 失败记录：8765 不在 QA metadata allowlist，随后正确标记的 candidate 暴露 `lore-crates` 超出 opening scope。新增测试先 RED 复现 mock 越界 reward，再在测试 helper 中移除该可选 reward 后 GREEN；未改生产验证器或追踪端口 allowlist。设备数据哈希、请求摘要和精确事件列表见 `evidence/m4-synthetic-local-mock-opening-turn-consequence-20261019.json`。
 - 该 M4 UI 链只使用合成资料与 localhost mock，不代表 GLM 或真人玩家验收。Narrator 前后强停、响应收到后写盘失败、outbox 写入失败及旧 worker 竞态的 Android 设备注入仍未完成；旧 `outcome_unknown` 与历史数据未重放或修改。
 - 本轮额外尝试启动只记录脱敏元数据的临时 HTTP hold server，以补做 Narrator 在途强停；执行环境工具策略拒绝了该 server 启动调用，未运行此项，也未换用其他方式绕过。该缺口继续保留为 NOT RUN。
+
+## 2026-10-19 追加：Narrator 响应写账本失败
+
+后续在现存合成 M4 branch 上完成了 HTTP 响应已返回、SQLite 成功态更新被拒的单次设备故障注入。Planner/Narrator 各 1 次本地 mock HTTP 200；Narrator ledger 保持 outcome_unknown，分支未提交新 turn，冷启动和再次打开 branch 均无重派。临时 trigger 已从仅含合成数据的设备副本移除并原样回写；unknown 与待处理合同/骰点留存。详见 [M4_RESPONSE_WRITE_FAILURE.md](../local-final-closeout-20261019/M4_RESPONSE_WRITE_FAILURE.md)。M4 仍因旧 worker 设备竞态和历史 Stage-1/8 资产未解决而为 PARTIAL。
