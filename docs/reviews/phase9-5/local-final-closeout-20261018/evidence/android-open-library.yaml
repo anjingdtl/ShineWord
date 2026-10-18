@@ -1,0 +1,5 @@
+appId: com.shineword.app
+---
+- tapOn: "书库"
+- waitForAnimationToEnd:
+    timeout: 1500
