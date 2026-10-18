@@ -16,3 +16,10 @@ Date: 2026-10-19 (Asia/Shanghai)
 ## Scope boundary
 
 This is a current-main build/install and library cold-launch smoke. It is not a complete M1 UI matrix or a release-device result. The current APK was not installed on the real-novel AVD in this pass, and no existing app data was cleared.
+
+## Final branch M4 install and recovery UI
+
+- The current branch APK SHA-256 is EFA99A71AF8FF21509C9B7701214D9BA45D3A64342922B320E06CDE390CE9223. It is installed on the existing ShineWord_M4FaultQA_20261018 AVD with the application database retained.
+- On synthetic branch camp-mvef22x8-main, a single Maestro guidance action exercised a Narrator-success ledger-write abort. The screen retained its recovery control and disabled composer; the persisted request is outcome_unknown and was not approved or replayed. Detailed snapshot/hash evidence is in M4_RESPONSE_WRITE_FAILURE.md.
+- The primary novel device emulator-5556 still had the app process active and a 55 MB application database during final review. It was intentionally left running with its data untouched; the final branch APK was not installed over that active session.
+- The M4 fault AVD remains on the synthetic recovery screen. The local mock server is stopped and TCP port 18591 has no listener.
