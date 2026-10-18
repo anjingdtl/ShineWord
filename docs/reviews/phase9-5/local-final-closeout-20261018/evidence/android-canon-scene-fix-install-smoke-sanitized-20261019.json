@@ -25,6 +25,7 @@
   "uiAutomation": {
     "maestroHierarchy": "NO_RESULT_AFTER_20S; stopped",
     "maestroColdLaunchFlow": "NO_RESULT_AFTER_30S; stopped",
+    "adbAccessibilityHierarchy": "NO_OUTPUT_AFTER_15S; stopped",
     "screenAssertion": "NOT RUN"
   },
   "acceptanceBoundary": "This records standalone APK build, preserved-data install and process launch only. It does not claim a UI-flow or real-model action pass."

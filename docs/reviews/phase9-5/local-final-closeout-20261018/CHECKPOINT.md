@@ -20,7 +20,7 @@
 - **M3 — PARTIAL / USER-PLAY-DEFERRED。** 19 个 agent-driven action turns 均不算玩家决定。stage-5 QA branch 的 consequence trigger/discharge 与下一轮 frozen context 已有证据，但下一轮 Narrator status 未对账；stage-8 sibling branch 取消/成功消费与知识写入有 Android 证据。世恒哥后续自行真人体验。
 - **M4 — PARTIAL / SAVE-10-DEVICE-PASS。** 历史 save-10 与精确依赖包通过 Android 原生导入、六条历史 turn/两条 roll 精确对照、冷启动和后续行动。小说/campaign ledger 当前 79 条记录（78 HTTP 200、1 次旧配置 HTTP 401），独立开篇样本另有 2 条 HTTP 200；matched live synthetic 30 条及其他独立 scope 另计。设备账本中的 HTTP 429 与同逻辑 unknown 指向本地 `10.0.2.2:8765` mock，不是 GLM；该 unknown 保留未重派。另两次宿主机 Planner transport attempt 为无 HTTP status 的潜在 unknown，identity 未持久化，未重派。Stage-1/8、live force-stop/outbox/旧 worker 矩阵仍缺。
 - **M5 — PARTIAL。** 长会话 PSS/RSS 与 GfxInfo、软键盘、1.3 字号、终局页、portrait/landscape、360×800dp 虚拟显示与暗色主题控件通过；synthetic production fixture 上 live GLM matched 10+10 通过。TalkBack spoken/focus、多窗口、API 24/真实小尺寸仍缺。
-- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十二项确诊缺陷 RED → 最小修复 → GREEN；最新 `npm test` 1,359/1,359、mobile typecheck、version check 通过。最新 Canon clue 修复包在现存 M4 API 37 AVD 保留数据安装并启动；本轮 Maestro UI 检查无结果，因此该 APK 只记 install/process smoke。
+- **M6 — PASS-ENGINEERING / DEVICE-LIMITED。** 十二项确诊缺陷 RED → 最小修复 → GREEN；最新 `npm test` 1,359/1,359、mobile typecheck、version check 通过。最新 Canon clue 修复包在现存 M4 API 37 AVD 保留数据安装并启动；本轮 Maestro 与 ADB accessibility hierarchy 均无结果，因此该 APK 只记 install/process smoke。
 - **M7 — TRACKED ON PR #15.** PR 正文记录最新推送 HEAD 与该 HEAD 的 Core Verify / Android Verify 状态、run 链接；Checks 页为权威状态。旧 SHA 的成功记录不替代当前 head 检查，PR 保持开放且不自动合并。
 
 ## 最新 GLM 账本汇总
@@ -49,7 +49,7 @@
 
 ## 2026-10-19 最新状态
 
-- 最新代码修复提交：`f93742f`（Canon scene Lore link RED）与 `2e1a9c8`（minimal fix）。定向 1/1、全量 `npm test` 1,359/1,359、mobile typecheck、version check 均通过；`npm run verify:core` 的最终重跑仍在执行中。APK install/process smoke 证据在本轮 addendum。
+- 最新代码修复提交：`f93742f`（Canon scene Lore link RED）与 `2e1a9c8`（minimal fix）。定向 1/1、`npm run verify:core` 1,359/1,359、mobile typecheck、version check 均通过；APK install/process smoke 通过，但 Maestro 与 ADB accessibility hierarchy 均无结果，屏幕断言 NOT RUN。
 - 最新 APK SHA-256：`F1D3817DFC3F3972FEBF2C415CE19ABFB3867DE66DD983252AF7860BF8054F88`。终局取消 branch 与 success/discharge/knowledge branch 均通过 Android UI + GLM；各一个 Narrator HTTP 200，无 unknown。
 - Live GLM matched 10+10 在 synthetic production fixture 上完成，30 HTTP 200、最大并发 1；其后 stage-8 QA 新增两个串行 Narrator HTTP 200。累计至少 113 个已知物理请求（112 HTTP 200、1 旧配置 401），另有 2 host transport unknown 保留未重派。旧 mock 429 与真实 endpoint 明确分开。
 - 真人决定/独立试玩由用户后续完成，不列为 agent 阻滞。自动化待项见 `FINAL_REPORT.md`：真实小说 package method/non-empty-evidence L1（当前 package 无 method entry）、Narrator/outbox/worker 的设备中断注入、Stage-1/8 原始资产和旧 schema、TalkBack/multiwindow/API24/真实小屏，以及 stage-5 `con-barov-offer` 的完整独立消费链。
