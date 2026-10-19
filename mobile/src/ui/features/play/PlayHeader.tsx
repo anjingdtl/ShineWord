@@ -6,9 +6,10 @@
  * authoritative value is always `clockSeconds`; only the rendering differs.
  */
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Header } from '../../components/Header';
 import { typeStyle } from '../../components/typography';
+import { playHeaderMode } from '../../layout/playHeaderLayout';
 import { useTheme } from '../../theme/ThemeContext';
 import type { ThemeId } from '../../theme/tokens';
 import { findAvatar, useAvatar } from '../avatar';
@@ -49,11 +50,13 @@ export function PlayHeader(props: {
 }): React.JSX.Element {
   const { theme } = useTheme();
   const { avatarId } = useAvatar();
+  const stackTitle = playHeaderMode(useWindowDimensions()) === 'stacked';
   const avatar = findAvatar(avatarId);
   const clock = props.clockSeconds === null ? null : formatWorldClock(theme.id, props.clockSeconds);
   return (
     <Header
       title={props.title}
+      stackTitle={stackTitle}
       onBack={props.onBack}
       backLabel="‹ 战役"
       actions={

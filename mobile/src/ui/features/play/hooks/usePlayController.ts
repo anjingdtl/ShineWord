@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import type { PlayUiProjection } from '../../../../../../src/application/campaign/playProjection';
+import { errorMessage } from '../../../../../../src/application/errorMessage';
 import { proposeEncounterIntent } from '../../../../../../src/application/campaign/encounterIntent';
 import {
   buildProvider,
@@ -520,7 +521,7 @@ export function usePlayController(): PlayController {
     } catch (e) {
       // A failed submit restores the intent so nothing the player typed is lost.
       if (fromComposer) setIntent(value);
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e, '操作未能完成，请检查当前回合状态后重试。');
       if (message.includes('这条路径已失效')) {
         const currentSession = await createSession(profile, await buildProvider(profile));
         const refreshed = await currentSession.ensureDecisionPointGuidance({ campaignId, branchId, sourceTurnId: 'refresh-current', localOnly: true }).catch(() => null);
