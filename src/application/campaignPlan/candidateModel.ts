@@ -558,6 +558,17 @@ function parseMethod(value: unknown, errors: string[], prefix: string): MethodSp
       && evidencePolicy.evidenceIds.some(id => !evidenceAllowlist!.includes(id))) {
       errors.push(`${prefix}.evidencePolicy.evidenceIds: each fixed evidence id must be in evidenceAllowlist.`); return null;
     }
+    // Convergence W4b (new-authoring gate only; archived artifacts never
+    // re-parse): a no-roll action cannot need the Planner to close — its
+    // resolution is engine-automatic, so with an empty or single-entry
+    // evidence allowlist an explicit planner_required is an authoring error.
+    // skill_check keeps the model's chosen band or its planner_required.
+    const noRoll = step.actionKind === 'observe' || step.actionKind === 'talk'
+      || step.actionKind === 'interact' || step.actionKind === 'move';
+    if (noRoll && evidenceAllowlist.length <= 1
+      && (difficultyPolicy!.kind === 'planner_required' || evidencePolicy.kind === 'planner_required')) {
+      errors.push(`${prefix}: observe/talk/interact/move must use fixed policies when the evidence allowlist is empty or single; planner_required is only for rolled actions.`); return null;
+    }
   }
   // Model-drift adapter: outcomes may arrive as an ARRAY of
   // {tier, resultFact, effects} — normalize to the per-grade record.

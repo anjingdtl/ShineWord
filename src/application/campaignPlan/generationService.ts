@@ -387,6 +387,7 @@ export function buildPlanRequestMaterials(input: {
     '- firstStep.actionKind=skill_check 时必须把“可用技能”中的完整 entryId 逐字写入 skillId；ability 必须引用“可用能力”中的完整 entryId；move 必须引用“可进入场景”中逐字列出的 locationId。observe/talk/interact 不得附带 skillId、abilityId 或 destinationId。引用显示名、删掉 ID 前缀、填写占位说明或漏掉行动所需 ID 都无效。firstStep.itemId 和 requires.itemId 只能使用“已知物品”列表中的完整 entryId。',
     '- firstStep.actionKind="move" 必须填写当前提示中某个可见场景的精确 locationId 作为 destinationId；不得省略、猜造地点或把移动描述当作已经接触人物/取得证据。若目标不在当前场景，先移动到可见地点，再由后续行动实际接触目标；',
     '- 每个新 method 都要显式给出 difficultyPolicy、evidencePolicy、evidenceAllowlist。difficultyPolicy 用 {"kind":"fixed","band":"simple|normal|challenging|peak"}，无法在本地闭合时用 {"kind":"planner_required"}；evidencePolicy 用 {"kind":"fixed","evidenceIds":[]}（空数组明确表示不使用证据），或 {"kind":"planner_required"}。',
+    '- observe/talk/interact/move 这类无骰动作不允许 planner_required：它们不掷骰、证据需求为空或仅一项时必须写 {"kind":"fixed"}（difficultyPolicy fixed、evidencePolicy fixed）。只有 skill_check 才可能因无法本地闭合而使用 planner_required。日常观察、无风险交谈一律用 fixed。',
     '- evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选；列表为空时写 []。不得从世界目录、可引用线索、原著 factId 或远期内容复制 ID，也不得猜造。fixed evidenceIds 必须逐字包含在 evidenceAllowlist 中。ruleBindingHash 由本地编译器写入，模型不要输出。',
     '- 每种办法必须至少有一个成功档以权威 effects 推进该阶段 completion；有风险的失败要提供改变局面的代价或新机会。日常观察、无风险交谈可使用 observe/talk/interact，不必强制 skill_check。',
     '- 至少一条当前可执行路线必须能通过不同、有因果关系的普通 success 决定完成阶段，不能让所有完成路线都只等待 full_success。大成功可给捷径或额外收益。普通成功已经创建承诺、发现知识之后，后续办法应消费这些已提交事实；重复创建同一承诺或重复授予同一知识不算新进展。累计计数达到门槛的成功路径不能仍强制等待大成功才写入 resolved。',
