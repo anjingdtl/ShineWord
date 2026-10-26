@@ -57,6 +57,8 @@ export function BuildTaskCard(props: {
   const canResume = !automaticRecovery && !task.lastErrorCode?.includes('outcome_unknown')
     && !['completed', 'canceled', 'failed_terminal'].includes(task.status)
     && (!isRunning || pausing || task.leaseHeld === false);
+  const canSwitchApi = canResume && !isRunning && !task.leaseHeld
+    && ['failed_retryable', 'needs_review', 'paused_user', 'stopped_user', 'waiting_unlock'].includes(task.status);
   const activityLine = taskActivityLine(task);
 
   useEffect(() => {
@@ -148,7 +150,7 @@ export function BuildTaskCard(props: {
             testID={`task-resume-${task.runId}`}
           />
         ) : null}
-        {canResume && !isRunning && !task.leaseHeld && task.lastErrorCode ? (
+        {canSwitchApi ? (
           <Button label="用当前 API 继续" variant="secondary"
             onPress={() => props.onResumeCurrentApi(task.runId)} disabled={props.busy}
             testID={`task-api-resume-${task.runId}`} />

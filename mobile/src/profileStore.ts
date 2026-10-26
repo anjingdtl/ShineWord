@@ -96,6 +96,26 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
       tpm: 3_000_000,
     },
   },
+  {
+    id: 'minimax-m3.1-flash-preview',
+    label: 'MiniMax M3.1 Flash Preview（1M）',
+    model: 'MiniMax-M3.1-Flash-Preview',
+    profile: {
+      capabilities: {
+        // The official OpenAI-compatible schema documents streaming and usage,
+        // but does not expose response_format/json_object for this endpoint.
+        supportsJson: false,
+        supportsStreaming: true,
+        reportsUsage: true,
+        contextWindow: 1_000_000,
+        maxOutputTokens: 524_288,
+        supportsPromptCache: true,
+      },
+      contentOutputTokens: 16_384,
+      reasoningTier: 'low',
+      reasoningDialect: 'generic',
+    },
+  },
 ];
 
 export function presetById(presetId: string | undefined): ModelPreset | null {

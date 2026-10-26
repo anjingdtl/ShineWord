@@ -216,7 +216,7 @@ export function ProfileFormCard(props: {
           </View>
         ) : null}
         <Text style={[typeStyle(theme, theme.type.caption), { color: theme.onRaised.secondary }]}>
-          切换配置会复用对应密钥。失败任务可在构建卡点“用当前 API 继续”；正在运行的构建保持原配置。
+          切换配置会复用对应密钥。暂停或失败任务可在构建卡点“用当前 API 继续”；正在运行的构建保持原配置。
         </Text>
         <TextField
           label="API Key"
