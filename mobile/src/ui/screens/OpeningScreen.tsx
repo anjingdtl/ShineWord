@@ -162,8 +162,24 @@ export function OpeningScreen(): React.JSX.Element {
 
   useEffect(() => {
     if (!profile) return;
-    const anchorOrder = setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.worldTimeOrder;
+    const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+    const anchorOrder = anchorEvent?.worldTimeOrder;
     if (anchorOrder === undefined) return;
+    // K3: suggestions become visible in this frame from the already-loaded
+    // setup — no await before the first local chips. The anchored projection
+    // below refreshes them without any request.
+    if (setup) {
+      const immediate = localOpeningGoals({
+        worldTitle: title,
+        anchorTitle: anchorEvent?.title ?? '开局时刻',
+        locationName: setup.locations[0],
+        characterNames: setup.canonCharacters.slice(0, 6).map(character => character.name),
+        playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
+      });
+      setGoalSuggestions(immediate);
+      setGoalSuggestionSource('local');
+      recordStartupEvent('wizard_goal_ready', { source: 'local', count: immediate.length });
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -173,12 +189,12 @@ export function OpeningScreen(): React.JSX.Element {
         setSetup(current => current ? { ...anchored, anchorEvents: current.anchorEvents } : anchored);
         if (!anchored.locations.includes(locationId) && anchored.locations[0]) setLocationId(anchored.locations[0]);
         setCompanions(current => current.filter(id => anchored.companionTemplates.some(template => template.entryId === id)));
-        // Convergence W2: goal chips are local template suggestions — no
-        // request on mount or anchor change (K2/K3). The AI suggestion stays
-        // available behind the explicit "AI 换一批" button (refreshGoalsWithAi).
+        // Convergence W2: refresh the local chips against the anchored
+        // projection — still no request (K2/K3). The AI suggestion stays
+        // behind the explicit "AI 换一批" button (refreshGoalsWithAi).
         const goals = localOpeningGoals({
           worldTitle: title,
-          anchorTitle: setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.title ?? '开局时刻',
+          anchorTitle: anchorEvent?.title ?? '开局时刻',
           locationName: anchored.locations[0],
           characterNames: anchored.canonCharacters.slice(0, 6).map(character => character.name),
           playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
@@ -186,7 +202,6 @@ export function OpeningScreen(): React.JSX.Element {
         if (!cancelled) {
           setGoalSuggestions(goals);
           setGoalSuggestionSource('local');
-          recordStartupEvent('wizard_goal_ready', { source: 'local', count: goals.length });
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
