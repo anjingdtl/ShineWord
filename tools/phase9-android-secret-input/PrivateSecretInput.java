@@ -39,10 +39,11 @@ public final class PrivateSecretInput extends Instrumentation {
   private AccessibilityNodeInfo findSaveButton(AccessibilityNodeInfo node) {
     if (node == null) return null;
     if ("com.shineword.app".contentEquals(value(node.getPackageName())) && node.isClickable()) {
+      // FirstRunScreen submits "<save and enter shelf>"; the settings screen uses "<save>".
+      // Both labels start with the same two CJK code points, so prefix-match covers both.
       CharSequence text = node.getText();
       CharSequence description = node.getContentDescription();
-      if ("\u4fdd\u5b58".contentEquals(text == null ? "" : text.toString().trim())
-          || "\u4fdd\u5b58".contentEquals(description == null ? "" : description.toString().trim())) return node;
+      if (startsWithSave(text) || startsWithSave(description)) return node;
     }
     for (int i = 0; i < node.getChildCount(); i++) {
       AccessibilityNodeInfo found = findSaveButton(node.getChild(i));
@@ -62,6 +63,11 @@ public final class PrivateSecretInput extends Instrumentation {
   }
 
   private static String value(CharSequence value) { return value == null ? "" : value.toString(); }
+
+  private static boolean startsWithSave(CharSequence label) {
+    String trimmed = (label == null ? "" : label.toString()).trim();
+    return trimmed.startsWith("\u4fdd\u5b58");
+  }
 
   private AccessibilityNodeInfo findInAppWindows(UiAutomation ui, boolean saveButton) {
     AccessibilityNodeInfo root = ui.getRootInActiveWindow();

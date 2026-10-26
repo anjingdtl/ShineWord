@@ -65,7 +65,7 @@ try {
       for (const [id, actor] of Object.entries(after.actors)) {
         const old = before.actors[id];
         if (old && (!equal(old.lifeStatus, actor.lifeStatus) || !equal(old.conditions, actor.conditions))) changes.push('actor.status');
-        if (old && old.locationId !== actor.locationId && contract.methodRef) changes.push('method.location');
+        if (old && old.locationId !== actor.locationId) changes.push('actor.location');
       }
       for (const node of after.campaignRuntime?.nodeStates ?? []) {
         if (['succeeded', 'failed', 'cancelled', 'superseded'].includes(node.status)
@@ -111,8 +111,7 @@ try {
   }
   const scopedDecisions = decisions.filter(d => d.version > afterVersion);
   const candidates = scopedDecisions.filter(d => d.candidateMeaningful);
-  // Keep the latest lifecycle state per idempotency identity. Production may
-  // trigger and discharge an obligation inside one transaction, so no saved
+  // Keep the latest lifecycle state per idempotency identity. Production may  // trigger and discharge an obligation inside one transaction, so no saved
   // snapshot ever contains its transient `triggered` state.
   const latestConsequences = new Map();
   const consequenceIdentityById = new Map();
@@ -183,5 +182,7 @@ try {
   if (output) fs.writeFileSync(output, JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify({ branchId, headVersion: report.headVersion, evidenceStatus: report.evidenceStatus, campaignStatus: report.campaignStatus,
     submittedPlayerTurns: report.submittedPlayerTurns, candidateMeaningfulDecisions: candidates.length, excludedPlayerTurns: report.excludedPlayerTurns,
-    delayedConsequenceCandidates: consequences.filter(c => c.meetsDelayCandidate).length, semanticReviewRequired: true }, null, 2));
+    delayedConsequenceCandidates: consequences.filter(c => c.meetsDelayCandidate).length,
+    delayedConsequencesDischarged: consequences.filter(c => c.meetsDelayCandidate && c.status === 'discharged').length,
+    consequenceCancellations: consequences.filter(c => c.status === 'cancelled').length, semanticReviewRequired: true }, null, 2));
 } finally { db.close(); }

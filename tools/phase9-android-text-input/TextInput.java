@@ -26,9 +26,40 @@ public class TextInput extends Instrumentation {
     }
     return null;
   }
+
+  /** Click mode: any enabled clickable node whose resource id matches (any view class). */
+  private AccessibilityNodeInfo findClickable(AccessibilityNodeInfo node, String requestedViewId) {
+    if (node == null) return null;
+    String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName();
+    if ("com.shineword.app".contentEquals(node.getPackageName() == null ? "" : node.getPackageName())
+        && requestedViewId != null && (requestedViewId.equals(viewId) || viewId.endsWith("/" + requestedViewId))
+        && node.isClickable() && node.isEnabled()) return node;
+    for (int i = 0; i < node.getChildCount(); i++) {
+      AccessibilityNodeInfo found = findClickable(node.getChild(i), requestedViewId);
+      if (found != null) return found;
+    }
+    return null;
+  }
   @Override public void onStart() {
     Bundle result = new Bundle();
     try {
+      String clickViewId = arguments.getString("clickViewId");
+      if (clickViewId != null) {
+        UiAutomation ui = getUiAutomation();
+        AccessibilityServiceInfo info = ui.getServiceInfo();
+        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        ui.setServiceInfo(info);
+        AccessibilityNodeInfo target = findClickable(ui.getRootInActiveWindow(), clickViewId);
+        if (target == null) for (AccessibilityWindowInfo window : ui.getWindows()) {
+          target = findClickable(window.getRoot(), clickViewId);
+          if (target != null) break;
+        }
+        if (target == null) throw new IllegalStateException("No clickable node for id " + clickViewId);
+        if (!target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) throw new IllegalStateException("Accessibility click refused");
+        result.putBoolean("clicked", true);
+        finish(0, result);
+        return;
+      }
       String text = "true".equals(arguments.getString("clear")) ? ""
         : new String(Base64.decode(arguments.getString("textBase64"), Base64.DEFAULT), StandardCharsets.UTF_8);
       UiAutomation ui = getUiAutomation();
