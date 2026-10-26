@@ -4,10 +4,9 @@
 
 ## 当前状态
 
-- 里程碑进度：**C0 完成**（W0+W1）｜**C1 完成**（W2 + W5 测量并入 W0）｜**C2 完成**（W3 三提交）｜C3 进行中
-- 分支：`codex/startup-convergence-w0`，提交序列：W0 埋点 `82614b7`、W1 策略表 `b93c883`、W0 文档 `5151c29`、C0 检查点 `64f9424`、W2 `30bcd64`/`ef7af26`/`f650b74`/`ed78089`、W3 `8749bcf`/`40236fe`/`62d61bc`。
-- 门禁：每提交后 `verify:core`（最新 1398/1398）+ `verify:version` + mobile typecheck 全绿；远端 CI 在基线 `e7f5e9d` 绿。
-- 方案文档 `docs/Shine-TRPG_STARTUP_CONVERGENCE_PLAN.md` 仍为工作树未跟踪文件（规划 agent 所留，按交付规则暂不提交；W7 收束时再定）。
+- 里程碑进度：**C0–C4 全部完成**（工程收束达成：C-01~C-12、C-16 PASS；见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)）
+- 分支：`codex/startup-convergence-w0`（单分支承载全部工作包；提交序列见 git log，convergence scope）。最终门禁：`verify:core` 1405/1405、`verify:version` OK、mobile typecheck OK。
+- 待用户决策：**D4**（W4C RFC 是否批准实施——同时解锁 C-15 离线回合）；**D6/C-17**（真实模型完整旅程的预算授权）；**C-18**（外部试玩安排）。**D1**（W6 序章）维持不实施。
 
 ## 已完成工作包
 
@@ -18,6 +17,11 @@
 | W2 向导去 LLM 化 | PASS | `W2_BRIEFING.md`；挂载→目标中位 78ms、0 请求；"AI 换一批"1 次请求取证 |
 | W5 测量部分 | PASS-ENGINEERING | 并入 W0 冷启动数据；改动部分在 C4 依数据实施 |
 | W3 本地优先开局计划 | PASS（模拟器） | `W3_BRIEFING.md`；C-05/06/07/09/10 自动化 PASS；C-08 设备 p95≈1.9s、0 LLM 请求 |
+| W4a 自由输入本地路由 | PASS | `W4_W5_W7_BRIEFING.md`；黄金样本零误绑 7 项 |
+| W4b 减少 planner_required | PASS（门槛+提示词） | 新创作解析门：无骰动作禁 planner_required；真实产出比例待 C-17 |
+| W4c Narrator 降级 | RFC 已交付 | `W4C_NARRATION_DEGRADE_RFC.md`，等 D4 |
+| W5 冷启动拆分 | PASS（模拟器） | boot_end p95 2083→1118ms；unknown 恢复保留关键路径 |
+| W7 文档收束 | PASS | 方案入库登记、INDEX.md、README 入口、progress 状态表 |
 
 ## 真实凭据与预算登记
 
@@ -32,11 +36,13 @@ scoped 预算 `convergence-20261026`（上限 60 物理请求）：已用 **4**�
 
 ## 未完成项与阻塞
 
-- C3：W4a/W4b 实现 + W4c RFC（进行中）。
-- C4：W5 改动（冷启动拆分，空间 ≤0.9s）+ W7 文档收束。
-- C-17（真实模型完整旅程）/C-18（外部试玩）：BLOCKED（待用户预算授权/安排）。
-- C-08/C-03 真机、首次运行空库冷启动、离线 10 回合：NOT RUN。
+- **D4 待决策**：W4C RFC（批准后按 RFC §4 顺序实施，解锁 C-15）。
+- **C-17**（真实模型完整旅程）：BLOCKED——待预算授权。本会话已用 4/60（world_extract/style_analyzer/opening_goal/后台 campaign_plan 各 1）；scoped 账本 `.tmp/convergence/minimax-scoped-20261026.json`。设备测试世界 fangkai-nvwang 保持可游玩。
+- **C-18**（外部试玩）：BLOCKED 待安排。
+- 真机、首次运行空库冷启动、K3 p95 大样本：NOT RUN。
 
-## 下一步
+## 下一步（换会话接手）
 
-C3 施工（W4a 高置信本地匹配→L1；W4b 无骰动作固定策略；W4c 只写 RFC 不实现）。
+1. 用户批准 D4 → 实施 W4c（模板→期限→not_sent 关闭→端到端强杀矩阵→usagePolicy 回填）→ C-15 离线 10 回合。
+2. C-17：授权预算后用 fangkai-nvwang 世界跑完整旅程（本地开局 + 后台增强 + 80 决定级样本）。
+3. 推送分支并开 Draft PR（交付规则允许；尚未推送）。

@@ -1,6 +1,8 @@
 # ShineWord 启动流程收束方案（Startup Convergence Plan）
 
-> 版本：V1.0｜编制日期：2026-10-26（Asia/Shanghai）｜状态：**设计提案，未实施**
+> **施工修正记录（2026-10-26，施工 agent）**：本轮已按 §7 完成全部工作包，工程收束达成（C-01~C-12、C-16 PASS）。与编制时认知的偏差以代码与实测为准，详见 [docs/reviews/convergence/](reviews/convergence/)（CHECKPOINT / W0_BASELINE §5 / 各简报）：verify:core 基线实为 1377（现 1405）；standalone debug 的 `__DEV__` 为 false，trace sink 改为无条件安装；`summarizer`/`world_adjudication` 当前无生产调用点；W5 实测冷启动 db_runtime 上限约 0.9s、拆分后 boot_end p95 1118ms；K1 本地路径 1.7–1.9s 中约 1.3s 为游玩页投影加载（进一步压 K1 的优化点在游玩页，非计划编译）。§2.2 的"待核实"项均已核实并记录。
+
+> 版本：V1.0｜编制日期：2026-10-26（Asia/Shanghai）｜状态：**已实施（工程收束达成；C-13 RFC 待 D4、C-15 阻塞于 D4、C-17/C-18 待用户）**
 > 仓库：<https://github.com/anjingdtl/ShineWord>
 > 核对基线：`main@3fb323ba3de2482ef0725473f354d597aa14ee9e`（2026-10-26 11:03 +0800，`chore(phase9): extend android input instrumentation`）。实施时必须重新读取 HEAD，不得假设不变。
 > 用途：交给施工 agent 做"收束建设"的唯一执行入口。本文是计划与验收合同，不是完成报告。

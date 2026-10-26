@@ -9,8 +9,10 @@
 | C0 | W0 基线仪器+普查、W1 策略表 | PASS-ENGINEERING | 冷启动 5 次采样（模拟器）；C-01 普查测试绿 |
 | C1 | W2 向导去 LLM 化（∥ W5 测量） | PASS | 挂载→目标中位 78ms、0 请求；"AI 换一批"仅显式点击发 1 次 |
 | C2 | W3 本地优先开局计划（3 提交） | PASS（模拟器） | C-05/06/07/09/10 自动化绿；C-08 设备 p95≈1.9s、0 LLM 请求；详见 convergence/W3_BRIEFING.md |
-| C3 | W4a/4b 回合收束 + W4c RFC | 进行中 | W4c 未经批准不改提交顺序 |
-| C4 | W5 改动（依数据）+ W7 文档收束 | 未开始 | — |
+| C3 | W4a/4b 回合收束 + W4c RFC | PASS（W4c 为 RFC 待 D4） | 黄金样本零误绑；无骰动作禁 planner_required；RFC 见 convergence/W4C_NARRATION_DEGRADE_RFC.md |
+| C4 | W5 改动（依数据）+ W7 文档收束 | PASS（模拟器） | boot_end p95 2083→1118ms；INDEX/README/progress 对齐；矩阵见 convergence/ACCEPTANCE_MATRIX.md |
+
+**工程收束达成：C-01~C-12、C-16 PASS**（C-03 中位达标、p95 边缘如实标注；C-12 真实配额基线转入 C-17）。待决：D4（W4c 批准→解锁 C-15 离线回合）；C-17（真实模型完整旅程，预算 4/60 已用）与 C-18（外部试玩）BLOCKED 单独登记。设备证据均为 ShineQA 模拟器（API 37）；真机 NOT RUN。
 
 C-17（真实模型旅程）/C-18（外部试玩）单独登记，当前 BLOCKED。阶段 9.5 及此前记录下沉如下，不因收束工作改动其结论。
 

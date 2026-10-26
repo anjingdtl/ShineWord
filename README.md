@@ -5,6 +5,8 @@
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
+> **当前施工**（2026-10-26 起）：[启动流程收束方案](docs/Shine-TRPG_STARTUP_CONVERGENCE_PLAN.md)是本轮唯一执行入口——"开始故事"默认走本地基线（零 LLM 请求，实测 p95≈1.9s 到可行动），LLM 主线保留为"AI 定制"入口与后台增强；检查点见 [docs/reviews/convergence/CHECKPOINT.md](docs/reviews/convergence/CHECKPOINT.md)。文档索引见 [docs/INDEX.md](docs/INDEX.md)。
+
 第九/9.5 阶段验收状态（2026-10-19 检查点）：**工程门禁 PASS，阶段验收 PARTIAL，尚未完整收尾**。Runtime 工程收束 PASS-ENGINEERING（检查点 Core 1,366/1,366；当前 HEAD Core 1,377/1,377、mobile typecheck、version 门禁均绿，2026-10-26 实测）；真实 GBK 小说、GLM、Android 与 save-10 链路均有实际证据，但新开篇内容审查未放行，80 个真实有效决定与真人试玩（0/4）未完成。最新检查点见[本地最终收口报告](docs/reviews/phase9-5/local-final-closeout-20261019/FINAL_REPORT.md)，轮次进度见[progress.md](progress.md)；版本能力说明不等于整阶段验收通过。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
