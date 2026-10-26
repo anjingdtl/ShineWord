@@ -1,6 +1,20 @@
 # ShineWord 项目进度
 
-## 当前：阶段 9.5 收口施工（2026-10-16）
+## 当前：启动收束（Startup Convergence，2026-10-26 开始）
+
+依据：[启动流程收束方案](docs/Shine-TRPG_STARTUP_CONVERGENCE_PLAN.md)。施工分支 `codex/startup-convergence-w0`（从 main `e7f5e9d` 建立）。检查点与证据：[docs/reviews/convergence/](docs/reviews/convergence/)（[CHECKPOINT](docs/reviews/convergence/CHECKPOINT.md)）。
+
+| 里程碑 | 工作包 | 状态 | 证据/备注 |
+|---|---|---|---|
+| C0 | W0 基线仪器+普查、W1 策略表 | PASS-ENGINEERING | 冷启动 5 次采样（模拟器）；verify:core 1385/1385；C-01 普查测试绿 |
+| C1 | W2 向导去 LLM 化（∥ W5 测量） | 进行中 | — |
+| C2 | W3 本地优先开局计划（3 提交） | 未开始 | — |
+| C3 | W4a/4b 回合收束 + W4c RFC | 未开始 | W4c 未经批准不改提交顺序 |
+| C4 | W5 改动（依数据）+ W7 文档收束 | 未开始 | — |
+
+C-17（真实模型旅程）/C-18（外部试玩）单独登记，当前 BLOCKED。阶段 9.5 及此前记录下沉如下，不因收束工作改动其结论。
+
+## 历史：阶段 9.5 收口施工（2026-10-16）
 
 依据：[施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)。施工分支 codex/phase95-closeout-short 从现场 fetch 的 origin/main 599d038efa6a65d7107f276961bc7b66caab37f6 建立；当前生产输入提交 b4641bd8c27aafaed64eb001865b39088dcd6115。证据目录：[本轮 closeout](docs/reviews/phase9-5/closeout-2026-10-15-run-1558utc-codex/)。
 
