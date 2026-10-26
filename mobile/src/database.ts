@@ -49,7 +49,10 @@ export interface MobileDatabaseRuntime {
   llmLedger: SqliteLlmLedgerStore;
   storyMemory: SqliteStoryMemoryStore;
   episodic: SqliteEpisodicStore;
+  /** Conservative until the deferred FTS5 probe lands (no critical-path consumer). */
   sqliteCapabilities: { fts5: boolean };
+  /** Resolves once deferred recovery (FTS5 probe + interrupted style analyses) has run. */
+  deferredRecovery: Promise<void>;
   progressiveTurnContext: ProgressiveTurnContextService;
   sourceCatalog: SourceCatalogAdapter;
   sourceIndex: PersistentSourceSearchService;
@@ -109,6 +112,8 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   // Cold-start recovery (infrastructure plan §53): attempts still marked
   // prepared/sent from a previous process become outcome_unknown; the
   // LedgeredProvider then refuses automatic replays of those requests.
+  // This stays ON the critical path — deferring it would weaken the
+  // unknown-protection contract for the entire session.
   const recovered = await recoverInterruptedAttempts(llmLedger);
   if (recovered.recoveredAttemptIds.length > 0) {
     console.warn(
@@ -116,12 +121,25 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     );
   }
 
-  await projectStyle.recoverAllInterruptedAnalyses();
+  // Convergence W5 (per W0 data): the FTS5 capability probe and the
+  // interrupted-style-analysis recovery are deferred until after the first
+  // screen — neither gates boot correctness, and together they cost a large
+  // share of the measured db_runtime_ready span. Style consumers await
+  // `deferredRecovery` before touching projectStyle (writerStyle bridge).
+  const sqliteCapabilities = { fts5: false };
+  const deferredRecovery = (async () => {
+    try {
+      sqliteCapabilities.fts5 = await probeFts5(db);
+      await projectStyle.recoverAllInterruptedAnalyses();
+    } catch (error) {
+      console.warn('[database] deferred recovery failed:', error instanceof Error ? error.message : String(error));
+    }
+  })();
 
   // Phase 2: no implicit demo campaign. Every game is an explicit campaign
   // with a locked world package; existing demo-main data stays readable
   // through its campaign but is never auto-created or auto-selected.
-  recordStartupEvent('db_runtime_ready', { durationMs: Date.now() - runtimeBeginMs, fts5 });
+  recordStartupEvent('db_runtime_ready', { durationMs: Date.now() - runtimeBeginMs, fts5: false });
   return {
     databaseName,
     db,
@@ -134,7 +152,8 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
     llmLedger,
     storyMemory: new SqliteStoryMemoryStore(db),
     episodic: new SqliteEpisodicStore(db),
-    sqliteCapabilities: { fts5 },
+    sqliteCapabilities,
+    deferredRecovery,
     progressiveTurnContext,
     sourceCatalog, sourceIndex, sourceIndexStore, writerStyleStore, projectStyle,
     segmentPlans, segmentConfigs, segmentArtifacts, segmentPublication, segments,

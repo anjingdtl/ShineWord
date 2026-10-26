@@ -13,17 +13,25 @@ import { schedulerForProfile } from './llmScheduler';
 import { KeychainSecretStore } from './secureKeyStore';
 import { FetchHttpTransport } from './fetchTransport';
 
+/** Style accessors serialize behind the deferred cold-start recovery so an
+ * interrupted-analysis cleanup cannot race a fresh mutation (convergence W5). */
+async function styleRuntime() {
+  const runtime = await getDatabaseRuntime();
+  await runtime.deferredRecovery;
+  return runtime;
+}
+
 export async function getProjectWriterStyle(projectId: string) {
-  return (await getDatabaseRuntime()).projectStyle.getProjectStyle(projectId);
+  return (await styleRuntime()).projectStyle.getProjectStyle(projectId);
 }
 export async function updateProjectWriterStyle(input: ProjectStyleEditV1) {
-  return (await getDatabaseRuntime()).projectStyle.updateProjectStyle(input);
+  return (await styleRuntime()).projectStyle.updateProjectStyle(input);
 }
 export async function listProjectStyleSuggestions(projectId: string) {
-  return (await getDatabaseRuntime()).projectStyle.getSourceStyleSuggestions(projectId);
+  return (await styleRuntime()).projectStyle.getSourceStyleSuggestions(projectId);
 }
 export async function adoptProjectStyleSuggestion(projectId: string, profileVersion: string, expectedVersion: string) {
-  return (await getDatabaseRuntime()).projectStyle.adoptSourceStyleSuggestion({ projectId, profileVersion, expectedVersion });
+  return (await styleRuntime()).projectStyle.adoptSourceStyleSuggestion({ projectId, profileVersion, expectedVersion });
 }
 export async function reanalyzeProjectStyle(projectId: string): Promise<void> {
   const result = await analyzeProjectStyle(projectId, true);
@@ -33,7 +41,7 @@ export async function reanalyzeProjectStyle(projectId: string): Promise<void> {
 /** The bootstrap host starts this without awaiting it. The durable M8 claim,
  * shared P3 scheduler and ledger keep it separate from opening and turns. */
 export async function ensureAutomaticProjectStyleAnalysis(projectId: string): Promise<void> {
-  const runtime = await getDatabaseRuntime();
+  const runtime = await styleRuntime();
   if (!await runtime.worldStore.getWorld(projectId) || !await loadApiProfile()) return;
   const binding = await runtime.projectStyle.getProjectStyle(projectId);
   // Cold-start unknown outcomes remain failed, and explicit user selections
@@ -43,7 +51,7 @@ export async function ensureAutomaticProjectStyleAnalysis(projectId: string): Pr
 }
 
 async function analyzeProjectStyle(projectId: string, retryKnownFailure: boolean) {
-  const runtime = await getDatabaseRuntime();
+  const runtime = await styleRuntime();
   const profile = await loadApiProfile();
   if (!profile) throw new Error('请先配置可用的 API。');
   const { members } = await runtime.sourceCatalog.snapshot(projectId);
