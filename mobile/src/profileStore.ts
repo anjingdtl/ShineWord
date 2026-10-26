@@ -98,8 +98,10 @@ export const MODEL_PRESETS: readonly ModelPreset[] = [
   },
   {
     id: 'minimax-m3.1-flash-preview',
-    label: 'MiniMax M3.1 Flash Preview（1M）',
-    model: 'MiniMax-M3.1-Flash-Preview',
+    label: 'MiniMax M3.1 Flash（1M）',
+    // Wire id re-verified 2026-10-26 via GET /models on api.minimaxi.com:
+    // the provider dropped the '-Preview' suffix from the id.
+    model: 'MiniMax-M3.1-Flash',
     profile: {
       capabilities: {
         // The official OpenAI-compatible schema documents streaming and usage,
