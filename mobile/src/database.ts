@@ -27,6 +27,7 @@ import { SqliteLlmLedgerStore } from '../../src/infra/sqlite/sqliteLlmLedgerStor
 import { SqliteStoryMemoryStore } from '../../src/application/memory/storyMemoryRepository';
 import { SqliteEpisodicStore } from '../../src/application/memory/episodicStore';
 import { recoverInterruptedAttempts } from '../../src/application/llm/requestLedger';
+import { recordStartupEvent } from '../../src/application/observability/startupTrace';
 import { probeFts5 } from '../../src/infra/sqlite/ftsCapability';
 import { SqliteSourceStore } from '../../src/infra/sqlite/sqliteSourceStore';
 import { LocalSourceSearchService } from '../../src/application/search/localSourceSearch';
@@ -67,6 +68,7 @@ let singleton: Promise<MobileDatabaseRuntime> | null = null;
 const DATABASE_SELECTION_KEY = 'shineword.currentDevelopmentDatabase';
 
 async function createRuntime(): Promise<MobileDatabaseRuntime> {
+  const runtimeBeginMs = Date.now();
   const databaseName = await AsyncStorage.getItem(DATABASE_SELECTION_KEY) ?? 'shineword.db';
   const nativeDb = await SQLite.openDatabase({
     name: databaseName,
@@ -119,6 +121,7 @@ async function createRuntime(): Promise<MobileDatabaseRuntime> {
   // Phase 2: no implicit demo campaign. Every game is an explicit campaign
   // with a locked world package; existing demo-main data stays readable
   // through its campaign but is never auto-created or auto-selected.
+  recordStartupEvent('db_runtime_ready', { durationMs: Date.now() - runtimeBeginMs, fts5 });
   return {
     databaseName,
     db,

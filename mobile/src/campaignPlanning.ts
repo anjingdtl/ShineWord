@@ -16,6 +16,7 @@ import { canonicalJsonOf, sha256HexOf } from '../../src/application/campaignPlan
 import { acquirePlanningExecution } from './llmExecutionBridge';
 import { approvedCampaignPlanReplayJob, confirmCampaignPlanUnknownReplay, previewCampaignPlanUnknownReplay,
   type CampaignPlanUnknownReplayPreview } from '../../src/application/campaignPlan/unknownReplayRecovery';
+import { recordStartupEvent } from '../../src/application/observability/startupTrace';
 
 export type PlanningPhase =
   | 'preparing'      // 准备相关资料
@@ -151,6 +152,7 @@ export async function prepareCampaignPlan(
   });
   if (run.status === 'candidate_ready' || run.status === 'already_ready') {
     onPhase?.('ready');
+    recordStartupEvent('plan_ready', { source: 'llm' });
     return { setupId: intent.setupId, jobId, phase: 'ready', candidateId: run.candidateId };
   }
   if (run.status === 'outcome_unknown') {
@@ -341,6 +343,7 @@ export async function adoptCampaignPlan(input: AdoptPlanInput): Promise<{ campai
       createdAt: new Date().toISOString(),
     },
   });
+  recordStartupEvent('adopt_done', { source: 'llm' });
   return { campaignId: result.campaign.campaignId, branchId: result.campaign.branchId };
 }
 

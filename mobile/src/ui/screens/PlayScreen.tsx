@@ -20,6 +20,7 @@ import { GameMenu } from '../features/play/panels/GameMenu';
 import { PlayPanel } from '../features/play/panels/PlayPanel';
 import { useContextualActions } from '../features/play/hooks/useContextualActions';
 import { usePlayController } from '../features/play/hooks/usePlayController';
+import { recordStartupEvent } from '../../../../src/application/observability/startupTrace';
 import { ThemeScope, useTheme } from '../theme/ThemeContext';
 import type { RootStackParamList } from '../navigation/types';
 import { canSubmitCampaignAction } from '../../../../src/application/campaign/actionAvailability';
@@ -90,8 +91,28 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
   useEffect(() => {
     const shown = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
     const hidden = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    recordStartupEvent('play_first_render', { hasProjection: view !== null });
     return () => { shown.remove(); hidden.remove(); };
   }, []);
+
+  // K1 end marker: the play surface renders with at least one executable
+  // method candidate (contextual action or guidance step) for the loaded
+  // projection. The count lets the measurement judge the "≥2 methods" bar.
+  const latestGuidance = controller.guidance;
+  const choices = useContextualActions({
+    projection: view,
+    encounter,
+    sceneEncounters: sceneEncounterOptions,
+  });
+  const actChoiceCount = choices.filter(choice => choice.kind === 'act').length;
+  const guidanceStepCount = latestGuidance?.steps.length ?? 0;
+  const firstActionEmitted = React.useRef(false);
+  useEffect(() => {
+    if (!firstActionEmitted.current && view && !busy && actChoiceCount + guidanceStepCount > 0) {
+      firstActionEmitted.current = true;
+      recordStartupEvent('first_action_enabled', { actChoices: actChoiceCount, guidanceSteps: guidanceStepCount });
+    }
+  }, [view, busy, actChoiceCount, guidanceStepCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,13 +126,6 @@ function PlayScreenBody(props: { controller: ReturnType<typeof usePlayController
     setGuideVisible(false);
     void AsyncStorage.setItem('shineword.play.guide.v1', 'seen').catch(() => undefined);
   };
-
-  const latestGuidance = controller.guidance;
-  const choices = useContextualActions({
-    projection: view,
-    encounter,
-    sceneEncounters: sceneEncounterOptions,
-  });
 
   const openInfo = (tab: InfoTab): void => {
     setInfoTab(tab);

@@ -9,6 +9,7 @@
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ApiProfile } from '../../../../src/application/llm/types';
+import { recordStartupEvent } from '../../../../src/application/observability/startupTrace';
 import { loadApiProfile } from '../../profileStore';
 import { getDatabaseRuntime, createFreshDevelopmentDatabase } from '../../database';
 
@@ -42,9 +43,11 @@ export function AppSessionProvider(props: { children: React.ReactNode }): React.
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const profileBeginMs = Date.now();
       try {
         const saved = await loadApiProfile();
         if (!cancelled && saved) setProfile(saved);
+        recordStartupEvent('profile_loaded', { durationMs: Date.now() - profileBeginMs, found: saved !== null });
         try { await getDatabaseRuntime(); }
         catch (e) { if (!cancelled) setDatabaseError(e instanceof Error ? e.message : String(e)); }
       } catch (e) {

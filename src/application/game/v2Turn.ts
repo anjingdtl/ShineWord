@@ -19,6 +19,7 @@ import type { FrozenTurnContext } from '../context/contextSnapshot';
 import { parseStrictJsonObject } from '../llm/json';
 import { parseStructuredOutput } from '../llm/structuredOutput';
 import { TurnRequestBudget } from '../llm/requestBudget';
+import { recordStartupEvent } from '../observability/startupTrace';
 import type { NarrativeRecord, NarrativeStore } from '../ports/narrativeStore';
 import type { TurnRollJournal } from '../ports/turnRollJournal';
 import type { TurnSettlementPlan, TurnStore } from '../ports/turnStore';
@@ -436,6 +437,8 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
     // failure is final - the proposal channel stays strict.
     const requestPlanner = async (repairErrors?: string[]): Promise<PlannerProposal> => {
       budget.consume('Planner');
+      const plannerStartMs = Date.now();
+      recordStartupEvent('turn_planner_start', { turnId: input.turnId, repair: repairErrors !== undefined });
       const makeRequest = (worldContext: string, maxOutputTokens: number, reserveTokens: number | null): LlmRequest => ({
         role: 'Planner',
         system: plannerV2System(),
@@ -497,6 +500,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         });
       }
       recordUsage(input, 'Planner', planned);
+      recordStartupEvent('turn_planner_end', { turnId: input.turnId, durationMs: Date.now() - plannerStartMs });
       return parseStructuredOutput<PlannerProposal>(planned.text, {
         label: 'Planner proposal',
         fieldAliases: ACTION_FIELD_ALIASES,
@@ -604,6 +608,8 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
   };
   if (!narrative) {
     budget.consume('Narrator');
+    const narratorStartMs = Date.now();
+    recordStartupEvent('turn_narrator_start', { turnId: input.turnId });
     const narratorWorldClock = buildNarratorWorldClock(state, contract, grade, prepared);
     const makeNarratorRequest = (
       worldContext: string,
@@ -731,6 +737,7 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       candidate = parseCandidate(repaired.text);
     }
     extractedGuidance = extractGuidancePayload(candidate);
+    recordStartupEvent('turn_narrator_end', { turnId: input.turnId, durationMs: Date.now() - narratorStartMs });
     narrative = await input.narratives.saveCandidate({
       branchId: input.branchId,
       turnId: input.turnId,

@@ -23,6 +23,12 @@ import { BrandLockup } from './src/ui/brand';
 import { AppSessionProvider, useAppSession } from './src/ui/state/AppSessionContext';
 import { AppNavigator } from './src/ui/navigation/AppNavigator';
 import { FirstRunScreen } from './src/ui/screens/ProfileScreen';
+import { recordStartupEvent } from '../src/application/observability/startupTrace';
+import { installStartupTraceSink } from './src/startupTraceSink';
+
+// First instrumented statement of the process: the K1/C-02 clock starts here.
+installStartupTraceSink();
+recordStartupEvent('app_boot_begin');
 
 export default function App(): React.JSX.Element {
   return (
@@ -40,6 +46,15 @@ export default function App(): React.JSX.Element {
 
 function AppRoot(): React.JSX.Element {
   const { loading, profile, databaseError, createFreshDatabase } = useAppSession();
+  // Startup trace (convergence W0): boot "ends" when the first meaningful
+  // screen is decided (navigator, first-run form, or the DB-baseline error).
+  const bootEnded = React.useRef(false);
+  React.useEffect(() => {
+    if (!loading && !bootEnded.current) {
+      bootEnded.current = true;
+      recordStartupEvent('app_boot_end', { hasProfile: profile !== null });
+    }
+  }, [loading, profile]);
   if (loading) return <BootstrapScreen />;
   if (databaseError) return <ScreenShell><View style={{ flex: 1, justifyContent: 'center', padding: 24, gap: 20 }}>
     <Text accessibilityRole="header">需要新的开发数据基线</Text>

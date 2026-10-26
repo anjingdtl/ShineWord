@@ -26,6 +26,7 @@ import { buildProvider, createSession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
 import { nativeSha256 } from '../../nativeCrypto';
 import { findLocalOpeningSource } from '../../../../src/application/worldPackage/openingRecovery';
+import { recordStartupEvent } from '../../../../src/application/observability/startupTrace';
 import { importNovelForOpeningStreaming } from '../../sourceImport';
 import { startOrResumeBuild } from '../../buildWatchdog';
 import { pickTextRef } from '../../fileBridge';
@@ -93,6 +94,7 @@ export function OpeningScreen(): React.JSX.Element {
 
   useEffect(() => {
     if (!profile) return;
+    recordStartupEvent('wizard_mounted');
     setNoPackage(false);
     setSetup(null);
     setAnchorEventId('');
@@ -187,7 +189,10 @@ export function OpeningScreen(): React.JSX.Element {
           queueSignal: queueController.signal,
           isCurrent: async () => !cancelled && Boolean(await runtime.worldStore.getWorld(worldId)),
         });
-        if (!cancelled) setGoalSuggestions(goals);
+        if (!cancelled) {
+          setGoalSuggestions(goals);
+          recordStartupEvent('wizard_goal_ready', { source: 'llm', count: goals.length });
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -338,6 +343,7 @@ export function OpeningScreen(): React.JSX.Element {
   /** P9 two-phase start: generate the campaign proposal (real phases). */
   async function create() {
     if (!profile || busy || actionInFlight.current) return;
+    recordStartupEvent('start_pressed', { mode: advancedWizard ? 'advanced' : 'quick' });
     actionInFlight.current = true;
     setBusy(true);
     setError(null);
