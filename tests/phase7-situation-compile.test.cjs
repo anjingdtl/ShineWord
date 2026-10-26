@@ -180,3 +180,18 @@ test('cleanSituation accepts wrapped condition forms and entity-id references (d
   bad.entityNameToTemplateId = new Map();
   assert.equal(cleanSituation(validRaw({ activation: { lua_eval: { code: 'true' } } }), bad), null);
 });
+
+test('cleanSituation resolves unprefixed item proposal ids to package item entries', () => {
+  const context = cleanContext({
+    knownEntryIds: ['skill-medicine', 'skill-tracking', 'npc-companion', 'lore-north-trail', 'item-divine-punishment-lock'],
+  });
+  context.entryKinds.set('item-divine-punishment-lock', 'item');
+  const raw = validRaw();
+  raw.methods[0].firstStep.targetId = 'divine-punishment-lock';
+  const entry = cleanSituation(raw, context);
+  assert.ok(entry);
+  assert.equal(entry.definition.methods[0].firstStep.itemId, 'item-divine-punishment-lock');
+  assert.equal(entry.definition.methods[0].firstStep.targetEntryId, undefined);
+  assert.equal(context.rejected.some(issue => issue.kind === 'situation_target'), false,
+    'a resolvable item target should not create an invalid-proposal review issue');
+});

@@ -201,7 +201,7 @@ async function fixture(options = {}) {
   const intent = {
     schemaVersion: 'campaign-intent-1', setupId: 'setup-t', intentRevision: 1,
     rawIntent: '查明青石巷的隐患', normalizedIntent: '查明并解除青石巷的隐患', goalMode: 'declared',
-    protagonistBinding: { actorId: 'pc', kind: 'original', name: '旅人' },
+    protagonistBinding: options.protagonistBinding ?? { actorId: 'pc', kind: 'original', name: '旅人' },
     openingAnchor: { worldTimeOrder: 1, locationId: '青石巷' },
     companionBindings: options.companions ?? [], lengthPreference: options.lengthPreference ?? 'short', userConstraints: [], requestedCanonTargets: [],
     knowledgePolicy: 'anchor_projection',
@@ -247,7 +247,7 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
       db: adapter, worldStore: worlds, campaignId: 'c-t', title: '青石巷的威胁', worldId: 'w',
       packageRevision: published.manifest.revision,
       anchor: { worldTimeOrder: 1, locationId: '青石巷' },
-      protagonist: { actorId: 'pc', kind: 'original', name: '旅人',
+      protagonist: options.adoptionProtagonist ?? { actorId: 'pc', kind: 'original', name: '旅人',
         attributes: { physique: 1, agility: 1, insight: 3, knowledge: 1, willpower: 1, social: 1 },
         initialSkills: ['skill-observation'] },
       companions: options.companions ?? [],
@@ -286,14 +286,14 @@ await adapter.execute("UPDATE campaign_setups SET status='proposal_ready', curre
       return { text: JSON.stringify({ turnId: value.turnId, outcomeGrade: value.outcomeGrade, text: `叙事：${value.turnId}` }) };
     },
   };
-  const session = new CampaignSession(
-    { db: adapter, turns, game, worldStore: worlds, narratives, ...(guidance ? { guidance } : {}), hashProvider: sha,
-      random: options.random ?? { nextIntInclusive: () => 6 } },
-    options.provider ?? provider,
-    { endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
-      capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } },
-  );
-  return { db, adapter, worlds, turns, planStore, guidance, session, branchId, campaignId: 'c-t' };
+  const sessionDependencies = { db: adapter, turns, game, worldStore: worlds, narratives, ...(guidance ? { guidance } : {}), hashProvider: sha,
+    random: options.random ?? { nextIntInclusive: () => 6 } };
+  const profile = options.profile ?? { endpoint: 'https://example.invalid', model: 'test', keyRef: 'k', reasoningTier: 'low',
+    capabilities: { contextWindow: 60000, maxOutputTokens: 12000, supportsJson: true } };
+  const sessionProvider = options.provider ?? provider;
+  const session = new CampaignSession(sessionDependencies, sessionProvider, profile);
+  return { db, adapter, worlds, turns, planStore, guidance, session, sessionDependencies, sessionProvider,
+    defaultProvider: provider, profile, branchId, campaignId: 'c-t' };
 }
 
 module.exports = { fixture, candidateModel, baseEntries, SITUATION_ID, NOW };

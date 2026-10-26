@@ -147,15 +147,20 @@ export class SegmentBuildService {
       let status = projectStatus(record,executions);
       let lastErrorCode = executions.find(v => v.lastErrorCode)?.lastErrorCode
         ?? (!record.runIds.length ? record.lastErrorCode : null);
-      const waiting=executions.find(v => ['waiting_network','waiting_unlock','paused_user','stopped_user','paused_system'].includes(v.status));
+      const sourceCompatible=referencedMembersCompatible(record.intent.ranges,record.intent.sourceBinding,snapshot.binding);
+      const hasPublishedCoverage=rangesCover(record.intent.ranges,artifacts.flatMap(v => v.coverage));
+      const currentUnresolved=viable(record) && sourceCompatible && !hasPublishedCoverage;
+      const waiting=currentUnresolved
+        ? executions.find(v => ['waiting_network','waiting_unlock','paused_user','stopped_user','paused_system'].includes(v.status))
+        : undefined;
       if (waiting) executionPauseReason=waiting.status==='waiting_network' ? 'network' : waiting.status==='waiting_unlock' ? 'unlock'
         : waiting.status==='paused_system' ? 'system' : 'user';
       if (!lastErrorCode && waiting) lastErrorCode=waiting.status;
-      if (!referencedMembersCompatible(record.intent.ranges,record.intent.sourceBinding,snapshot.binding)) {
+      if (!sourceCompatible) {
         status='stale'; lastErrorCode='source_changed';
       } else if (executions.some(v => v.requestOutcome==='outcome_unknown')) {
         status='needs_review'; lastErrorCode='outcome_unknown';
-      } else if (rangesCover(record.intent.ranges,artifacts.flatMap(v => v.coverage))) status='ready';
+      } else if (hasPublishedCoverage) status='ready';
       else if (record.runIds.length !== executions.length) { status='failed_retryable'; lastErrorCode='execution_projection_unavailable'; }
       const segment: SegmentRecordV1 = {...record,status,lastErrorCode,artifactIds:artifacts.map(a => a.artifactId),
         publishedCoverage:dedupeRanges(artifacts.flatMap(a => a.coverage)),updatedAt:this.now()};

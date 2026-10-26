@@ -125,6 +125,58 @@ test('phase 9 repair guidance resolves out-of-scope action targets from the curr
   assert.match(guidance, /当前在场人物.*白名单/);
   assert.match(guidance, /删除 firstStep\.targetEntryId/);
   assert.match(guidance, /不得猜测、补造/);
+  assert.match(guidance, /不能只删除 targetEntryId 而保留面向该缺席人物的意图/);
+  assert.match(guidance, /改写为当前场景可执行行动，或推迟到先移动并重新规划之后/);
+});
+
+test('phase 9 structural repair guidance handles stage provenance, local effect producers, and move destinations', () => {
+  const candidate = {
+    stages: [
+      { nodeId: 'stage-2', provenance: { kind: 'canon_inspired', sourceFactIds: ['fact-unverified'] } },
+      { nodeId: 'stage-5', provenance: { kind: 'canon_inspired', sourceFactIds: [] } },
+    ],
+    firstSituation: { methods: [
+      { methodId: 'move-to-hall', firstStep: { actionKind: 'move', intent: '前往会客厅' } },
+      { methodId: 'ask-barov', firstStep: { actionKind: 'talk', intent: '询问巴罗夫' } },
+    ] },
+  };
+  const guidance = buildStructuralRepairGuidance([
+    'stage stage-2: provenance must use locally verified facts or an honest design_fill.; stage stage-5: provenance must use locally verified facts or an honest design_fill.; artifact: current stage stage-1 completion has no local effect producer; provide a realizable outcome path.; method move-to-hall: move action requires a visible destination.',
+  ], candidate);
+
+  assert.match(guidance, /stage stage-2.*sourceFactIds/);
+  assert.match(guidance, /stage stage-5.*sourceFactIds/);
+  assert.match(guidance, /只能逐字使用本请求列出的有效 fact ID/);
+  assert.match(guidance, /design_fill.*sourceFactIds 设为 \[\]/);
+  assert.match(guidance, /stage-1.*completion.*success/);
+  assert.match(guidance, /move-to-hall.*destinationId/);
+  assert.match(guidance, /本请求列出的可见场景/);
+});
+
+test('phase 9 opening scope excludes visible world templates that are not present at the current scene', async () => {
+  const entries = require('./helpers/phase9CampaignFixture.cjs').baseEntries()
+    .map(entry => entry.entryId === 'scene-alley'
+      ? { ...entry, definition: { ...entry.definition, actors: [] }, dependencyIds: [] }
+      : entry);
+  const h = await fixture({ entries });
+  try {
+    const { intent } = await h.planStore.getSetup('setup-t');
+    const { ctx } = await buildPlanningContext({ worldStore: h.worlds, intent, protagonistSkills: [] });
+    assert.ok(ctx.openingTemplateIds.has('tpl-lin'), 'the world template remains available as background material');
+    assert.ok(!ctx.presentActorRefs.includes('tpl-lin'), 'a template from elsewhere is not a current actor');
+
+    const model = candidateModel();
+    model.firstSituation.methods[0].firstStep.targetEntryId = 'tpl-lin';
+    const parseErrors = [];
+    const parsed = parseCampaignPlanCandidate(model, parseErrors);
+    assert.ok(parsed, parseErrors.join('; '));
+    const compiled = compileCampaignPlan({ model: parsed, ctx, intent, planId: 'scope-probe',
+      revision: 1, parentRevision: null, createdAt: NOW });
+    assert.ok(compiled.errors.some(error => error.includes('target tpl-lin not in the opening scope')),
+      compiled.errors.join('; '));
+    assert.ok(!compiled.artifact.situations[0].definition.participantEntryIds.includes('tpl-lin'),
+      'the candidate cannot silently add an off-scene NPC to its opening roster');
+  } finally { h.db.close(); }
 });
 
 test('phase 9 parser-limit repair guidance preserves executable completion', () => {

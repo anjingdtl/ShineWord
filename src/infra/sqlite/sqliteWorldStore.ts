@@ -670,10 +670,13 @@ export class SqliteWorldStore implements WorldStore {
         WHERE world_id = ? AND subject_entity_id = ? AND predicate = ?`,
       [fact.worldId, fact.subjectEntityId, fact.predicate],
     );
+    const valueJson = JSON.stringify(fact.value);
+    // Resolve exact duplicates before looking for a competing single-valued
+    // fact. Otherwise an earlier row with a different value can create a new
+    // conflict even when this exact value was already reviewed and retained
+    // as speculation; SQL row order must not reopen that review on replay.
+    if (existingRows.some(existing => existing.value_json === valueJson)) return 'duplicate';
     for (const existing of existingRows) {
-      if (existing.value_json === JSON.stringify(fact.value)) {
-        return 'duplicate';
-      }
       if (existing.value_key === valueKey && fact.status === 'explicit') {
         // A conflicting explicit fact keeps BOTH rows, but replays (another
         // run over the same world) must not collide on the deterministic

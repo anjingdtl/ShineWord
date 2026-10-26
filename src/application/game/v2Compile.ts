@@ -235,15 +235,21 @@ function compileSelectedProposal(input: CompileProposalInput): CompiledAction {
     }
     // The published first step owns the shape of a selected method. A
     // Planner paraphrase cannot silently turn a checked skill into observe.
+    // Authored fixed policies are content-owned: when present they, not the
+    // Planner, supply the resolution band and the evidence set.
     compileInput = { ...input, proposal: {
       proposalVersion: input.proposal.proposalVersion, turnId: input.proposal.turnId,
       expectedStateVersion: input.proposal.expectedStateVersion, actorId: input.actingCard.actorId,
-      actionKind: step.actionKind, intent: requestedIntent, evidenceIds: input.proposal.evidenceIds,
+      actionKind: step.actionKind, intent: requestedIntent,
+      evidenceIds: selected.evidencePolicy?.kind === 'fixed'
+        ? [...selected.evidencePolicy.evidenceIds] : input.proposal.evidenceIds,
       ...(step.skillId ? { skillId: step.skillId } : {}),
       ...(step.abilityId ? { abilityId: step.abilityId } : {}),
       ...(step.destinationId ? { destinationId: step.destinationId } : {}),
       ...(targetId ? { targetId } : {}),
-      ...(input.proposal.difficultyBand ? { difficultyBand: input.proposal.difficultyBand } : {}),
+      ...(selected.difficultyPolicy?.kind === 'fixed'
+        ? { difficultyBand: selected.difficultyPolicy.band }
+        : input.proposal.difficultyBand ? { difficultyBand: input.proposal.difficultyBand } : {}),
     } };
   } else if (baseAction) {
     compileInput = { ...input, proposal: { proposalVersion: '2.0', turnId: input.proposal.turnId,
@@ -410,6 +416,13 @@ function bindSituationMethod(
     }
     const withMethod: ActionContract = {
       ...contract,
+      // Final authority pass: an authored fixed policy overrides whatever the
+      // Planner (or a defaulting base action) put into these fields, so a
+      // paraphrased selection can never soften the roll or swap evidence.
+      ...(method.evidencePolicy?.kind === 'fixed'
+        ? { evidenceIds: [...method.evidencePolicy.evidenceIds] } : {}),
+      ...(method.difficultyPolicy?.kind === 'fixed' && contract.requiresRoll
+        ? { difficultyBand: method.difficultyPolicy.band } : {}),
       outcomes,
       methodRef: { situationId, methodId: method.methodId, ...(outcomeSetHash ? { outcomeSetHash } : {}),
         ...(campaignBindingHash && method.difficultyPolicy && method.evidencePolicy && method.ruleBindingHash

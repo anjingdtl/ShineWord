@@ -224,3 +224,30 @@ test('production Session SQLite discharge is recognized once by the read-only jo
     assert.equal(after,before,'the read-only audit does not change the production test database bytes');
   } finally { h.db.close(); }
 });
+test('journey audit retains discharged delayed consequences and reports their terminal state', t => {
+  const h=fixture(t); try {
+    const consequence={consequenceId:'c',idempotencyKey:'b:c',sourceTurnId:'turn-0001',createdAtVersion:1,status:'pending'};
+    for(let v=0;v<=4;v++)h.snapshot(v,{campaignRuntime:{deferredConsequences:v===0?[]:v<4?[consequence]:[{...consequence,status:'discharged',triggeredAtVersion:4,dischargedAtVersion:4}]}});
+    h.turn('turn-0001',1,null);h.turn('turn-0002',2,{op:'recordEvent',eventType:'fact2'});
+    h.turn('turn-0003',3,{op:'recordEvent',eventType:'fact3'});h.turn('turn-0004',4,null);
+    h.event('turn-0001',1,'campaign_consequence_scheduled',{consequenceId:'c'});
+    h.event('turn-0004',4,'campaign_consequence_triggered',{consequenceId:'c'});
+    h.event('turn-0004',4,'campaign_consequence_discharged',{consequenceId:'c'});
+    const r=h.audit();
+    assert.equal(r.consequences.length,1);
+    assert.equal(r.consequences[0].status,'discharged');
+    assert.equal(r.consequences[0].dischargedAtVersion,4);
+    assert.equal(r.consequences[0].lifecycleEvidence,'complete','a delayed discharge needs schedule, trigger and discharge evidence');
+    assert.equal(r.consequences[0].interveningCandidateDecisions,2);
+    assert.equal(r.consequences[0].meetsDelayCandidate,true);
+  } finally { h.db.close(); }
+});
+test('journey audit counts a durable player location change without requiring a method reference', t => {
+  const h=fixture(t); try {
+    h.snapshot(0);h.snapshot(1,{actors:{pc:{lifeStatus:'active',conditions:[],locationId:'border-town'}}});
+    h.turn('turn-0001',1,{op:'changeLocation',actorId:'pc',locationId:'border-town'},'move');
+    const r=h.audit();
+    assert.equal(r.candidateMeaningfulDecisions,1);
+    assert.ok(r.decisions[0].changes.includes('actor.location'));
+  } finally { h.db.close(); }
+});

@@ -623,6 +623,32 @@ export class CampaignSession {
     await this.assertCampaignBranch(campaignId, branchId);
     const planStore = new SqliteCampaignPlanStore(this.deps.db);
     let job = await planStore.findActiveJob(branchId, 'replan');
+    let supersededProfileJobId: string | null = null;
+    if (!options.automatic && job?.status === 'retryable_failed') {
+      const { readPlanFreeze } = await import('../campaignPlan/jobFreeze');
+      const frozen = await readPlanFreeze(this.deps.db, job.jobId);
+      if (frozen && llmModelProfileFingerprint(frozen.profile) !== llmModelProfileFingerprint(this.profile)) {
+        const branchUnknown = await this.deps.db.queryOne<{ n: number }>(
+          `SELECT COUNT(*) n FROM llm_request_attempts WHERE branch_id=? AND request_kind='campaign_plan'
+           AND (status IN ('prepared','sent') OR (status='outcome_unknown' AND replay_approved_at IS NULL))`, [branchId]);
+        if ((branchUnknown?.n ?? 0) > 0) throw new Error('此分支仍有未确认的主线规划请求；先核对原请求，不会切换配置或自动重发。');
+        const attempts = await this.deps.db.queryAll<{ status: string }>(
+          'SELECT status FROM llm_request_attempts WHERE logical_request_id=?', [`campaign-plan:${job.jobId}`]);
+        if (attempts.some(attempt => !['succeeded','failed'].includes(attempt.status))) {
+          throw new Error('原主线规划仍有未确认的物理请求；先核对请求账本。');
+        }
+
+        // A job freeze binds the provider and request materials together. Keep
+        // that failed job immutable; a deliberate retry with another profile
+        // gets a fresh freeze and logical request identity.
+        const failedJobId = job.jobId;
+        if (!await planStore.transitionJob(failedJobId, job.fencingToken, 'stale', {
+          lastError: 'Selected model profile changed after definitive failure; successor job is being created.',
+        })) throw new Error('主线规划状态已变化，请重新查看后再试。');
+        supersededProfileJobId = failedJobId;
+        job = null;
+      }
+    }
     if (job?.status === 'queued' && !job.freezeRootId && !options.automatic) {
       const { stagePreparationTargetId } = await import('../campaignPlan/stagePreparation');
       // A player-requested repair is a different operation from preparing a
@@ -648,6 +674,12 @@ export class CampaignSession {
       const { enqueueReplan } = await import('../campaignPlan/replanService');
       const queued = await enqueueReplan({ deps: { db: this.deps.db, planStore, worldStore: this.deps.worldStore, provider: this.provider, profile: this.profile },
         campaignId, branchId, plan: context.plan, runtime: context.runtime, state, reasons: [`player_requested:${new Date().toISOString()}`] });
+      if (supersededProfileJobId) {
+        if (queued.jobId === supersededProfileJobId) throw new Error('无法创建独立的当前配置规划任务；旧冻结任务保持停用。');
+        await this.deps.db.execute(
+          "UPDATE campaign_plan_jobs SET last_error=?,updated_at=? WHERE job_id=? AND status='stale'",
+          [`Selected model profile changed after definitive failure; successor job ${queued.jobId} created.`, new Date().toISOString(), supersededProfileJobId]);
+      }
       job = await planStore.getJob(queued.jobId);
     }
     if (!job) return 'no_change';

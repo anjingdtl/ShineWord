@@ -139,6 +139,39 @@ test('L1 typed selection binds exact fixed difficulty and non-empty visible evid
     'all four frozen grade clauses match the equivalent L2 proposal compile');
 });
 
+test('an authored fixed policy overrides Planner-supplied difficulty and evidence on every binding path', async t => {
+  const entries = baseEntries();
+  entries.find(entry => entry.entryId === 'scene-alley').definition.clues = ['lore-crates'];
+  const h = await fixture({ entries, model: modelWithPolicy({ kind: 'fixed', band: 'challenging' }, ['lore-crates']) });
+  t.after(() => h.db.close());
+  const input = await readinessInput(h);
+  const indexes = packageIndexes([...input.entries, ...input.artifacts.flatMap(campaignSituationEntries)]);
+  const compileFor = (method, extra = {}) => compileProposal({
+    proposal: { proposalVersion: '2.0', turnId: `paraphrase-turn-${Math.random().toString(36).slice(2, 8)}`,
+      expectedStateVersion: input.state.stateVersion,
+      actorId: input.playerCard.actorId, actionKind: 'skill_check', skillId: 'skill-observation', difficultyBand: 'simple',
+      evidenceIds: ['forged-evidence'], intent: method.firstStep.intent, ...extra },
+    requestedIntent: method.firstStep.intent,
+    actingCard: input.playerCard, cards: input.cards,
+    catalog: indexes.catalog, abilities: indexes.abilities, scenes: indexes.scenes, constraints: indexes.constraints,
+    state: input.state, methods: [method], methodSituations: [SITUATION_ID],
+  }).contract;
+
+  const authored = structuredClone(input.selectedMethods.find(item => item.method.methodId === 'sweep').method);
+  const viaPlannerRef = compileFor(authored, { candidateRef: `method:${SITUATION_ID}:sweep` });
+  assert.equal(viaPlannerRef.difficultyBand, 'challenging', 'a Planner candidateRef binding keeps the authored band');
+  assert.deepEqual(viaPlannerRef.evidenceIds, ['lore-crates'], 'a Planner candidateRef binding keeps the authored evidence');
+  const viaFreeText = compileFor(authored);
+  assert.equal(viaFreeText.difficultyBand, 'challenging', 'an exact free-text intent binding keeps the authored band');
+  assert.deepEqual(viaFreeText.evidenceIds, ['lore-crates'], 'an exact free-text intent binding keeps the authored evidence');
+
+  const legacy = structuredClone(authored);
+  delete legacy.difficultyPolicy; delete legacy.evidencePolicy; delete legacy.evidenceAllowlist; delete legacy.ruleBindingHash;
+  const viaLegacy = compileFor(legacy, { candidateRef: `method:${SITUATION_ID}:sweep` });
+  assert.equal(viaLegacy.difficultyBand, 'simple', 'a policy-less legacy method keeps the Planner band on L2');
+  assert.deepEqual(viaLegacy.evidenceIds, ['forged-evidence'], 'a policy-less legacy method keeps the Planner evidence on L2');
+});
+
 test('promise side rewards are frozen, claimed on settlement, and suppressed on a new turn across asymmetric grades', async t => {
   const h = await fixture();
   t.after(() => h.db.close());

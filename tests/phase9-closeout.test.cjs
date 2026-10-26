@@ -366,6 +366,9 @@ test('closeout: strict reference types retain Chinese location IDs and the compi
     assert.ok(parsed, errors.join('; '));
     const input = { model: parsed, intent, ctx, planId: 'move-ref', revision: 1, parentRevision: null, createdAt: NOW };
     assert.deepEqual(compileCampaignPlan(input).errors, []);
+    parsed.firstSituation.methods[0].firstStep.destinationId = undefined;
+    assert.match(compileCampaignPlan(input).errors.join(' '), /move action requires a visible destination/);
+    parsed.firstSituation.methods[0].firstStep.destinationId = '青石巷';
     parsed.firstSituation.methods[0].firstStep.destinationId = '未发布的远方';
     assert.match(compileCampaignPlan(input).errors.join(' '), /destination .* not a visible scene/);
     model.firstSituation.methods[0].firstStep.destinationId = ['青石巷'];
@@ -782,8 +785,17 @@ test('closeout: a world NPC in another scene cannot prove a currently executable
     const setup = await h.planStore.getSetup('setup-t');
     const { ctx } = await buildPlanningContext({ worldStore: h.worlds,
       intent: { ...setup.intent, openingAnchor: { ...setup.intent.openingAnchor, locationId: '别处' } }, protagonistSkills: [] });
+    const offScene = candidateModel();
+    for (const method of offScene.firstSituation.methods) method.firstStep.targetEntryId = 'tpl-lin';
+    const offSceneErrors = []; const offSceneParsed = parseCampaignPlanCandidate(offScene, offSceneErrors);
+    assert.ok(offSceneParsed, offSceneErrors.join('; '));
+    const offSceneCompiled = compileCampaignPlan({ model: offSceneParsed, ctx, intent: setup.intent,
+      planId: 'probe', revision: 1, parentRevision: null, createdAt: NOW });
+    assert.ok(offSceneCompiled.errors.some(error => error.includes('target tpl-lin not in the opening scope')));
+    assert.ok(!offSceneCompiled.artifact.situations[0].definition.participantEntryIds.includes('tpl-lin'));
+
     const model = candidateModel();
-    model.firstSituation.methods[0].firstStep.targetEntryId = 'tpl-lin';
+    model.firstSituation.methods[1].firstStep.targetEntryId = 'tpl-lin';
     const errors = []; const parsed = parseCampaignPlanCandidate(model, errors); assert.ok(parsed, errors.join('; '));
     const { plan, artifact } = compileCampaignPlan({ model: parsed, ctx, intent: setup.intent,
       planId: 'probe', revision: 1, parentRevision: null, createdAt: NOW });
@@ -791,8 +803,6 @@ test('closeout: a world NPC in another scene cannot prove a currently executable
       openingActorIds: ctx.openingActorIds, openingTemplateIds: ctx.openingTemplateIds,
       artifactSituationIds: new Set(artifact.situations.map(s => s.entryId)), protagonistSkills: ctx.protagonistSkills,
       presentActorRefs: ctx.presentActorRefs, protagonistSkillRanks: ctx.protagonistSkillRanks };
-    assert.ok(validateCampaignPlan(plan, context, artifact).some(error => error.includes('executable at start')));
-    artifact.situations[0].definition.methods[0].firstStep.targetEntryId = undefined;
     assert.ok(!validateCampaignPlan(plan, context, artifact).some(error => error.includes('executable at start')));
     artifact.situations[0].definition.methods[0].requires.minRank = 'master';
     assert.ok(validateCampaignPlan(plan, context, artifact).some(error => error.includes('executable at start')));

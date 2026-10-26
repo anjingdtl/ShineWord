@@ -44,6 +44,7 @@ export async function adoptOpeningPlan(input: AdoptOpeningPlanInput): Promise<Ad
     || candidate.plan.baseWorldBinding.packageRevision !== input.create.packageRevision) {
     throw new Error('Candidate world binding differs from the requested campaign.');
   }
+  const originalProtagonist = setup.intent.protagonistBinding.kind === 'original';
   if (setup.intent.openingAnchor.worldTimeOrder !== input.create.anchor.worldTimeOrder
     || setup.intent.openingAnchor.locationId !== input.create.anchor.locationId
     || setup.intent.openingAnchor.anchorEventId !== input.create.anchor.anchorEventId
@@ -51,9 +52,11 @@ export async function adoptOpeningPlan(input: AdoptOpeningPlanInput): Promise<Ad
     || setup.intent.protagonistBinding.kind !== input.create.protagonist.kind
     || setup.intent.protagonistBinding.name !== input.create.protagonist.name
     || setup.intent.protagonistBinding.canonEntityId !== input.create.protagonist.canonEntityId
-    || (setup.intent.protagonistBinding.attributes !== undefined && canonicalJsonOf(setup.intent.protagonistBinding.attributes) !== canonicalJsonOf(input.create.protagonist.attributes))
-    || (setup.intent.protagonistBinding.kind === 'original'
-      && setup.intent.protagonistBinding.initialSkills !== undefined
+    // Canon loadout and attributes are derived from anchor-visible source facts by
+    // createCampaign; planning-only context is intentionally omitted from its creation input.
+    || (originalProtagonist && setup.intent.protagonistBinding.attributes !== undefined
+      && canonicalJsonOf(setup.intent.protagonistBinding.attributes) !== canonicalJsonOf(input.create.protagonist.attributes))
+    || (originalProtagonist && setup.intent.protagonistBinding.initialSkills !== undefined
       && canonicalJsonOf(setup.intent.protagonistBinding.initialSkills) !== canonicalJsonOf(input.create.protagonist.initialSkills ?? []))
     || (setup.intent.protagonistBinding.description !== undefined && setup.intent.protagonistBinding.description !== input.create.protagonist.description)
     || sha256HexOf(canonicalJsonOf(setup.intent)) !== candidate.plan.intentHash

@@ -11,6 +11,37 @@ const { fixture, candidateModel } = require('./helpers/phase9CampaignFixture.cjs
 const { evaluateReplanTriggers, adoptReplanCandidate, newlyOrphanedPendingConsequences } = require('../dist/application/campaignPlan/replanService');
 const { forkBranch } = require('../dist/application/branch/fork');
 const { SqliteGameStore } = require('../dist/infra/sqlite/sqliteGameStore');
+const { CampaignSession } = require('../dist/application/campaign/session');
+const { LlmRequestFailure } = require('../dist/application/llm/types');
+const { llmModelProfileFingerprint } = require('../dist/application/llm/profileFingerprint');
+const { readPlanFreeze } = require('../dist/application/campaignPlan/jobFreeze');
+
+const oldGlmProfile = {
+  id: 'glm-profile', endpoint: 'https://glm.example.invalid/v1', model: 'glm-5.3-flash', keyRef: 'glm-key',
+  reasoningTier: 'low', reasoningDialect: 'glm',
+  capabilities: { supportsJson: true, supportsStreaming: true, reportsUsage: true, contextWindow: 1_000_000,
+    maxOutputTokens: 131_072, supportsPromptCache: true },
+};
+const rotatedMiniMaxProfile = {
+  id: 'minimax-profile', endpoint: 'http://127.0.0.1:18591', model: 'MiniMax-M3.1-Flash-Preview', keyRef: 'minimax-key',
+  reasoningTier: 'low', reasoningDialect: 'generic',
+  capabilities: { supportsJson: false, supportsStreaming: true, reportsUsage: true, contextWindow: 1_000_000,
+    maxOutputTokens: 524_288, supportsPromptCache: true },
+};
+
+function failedProvider(metric) {
+  return { async complete() { throw new LlmRequestFailure('simulated provider failure', [metric]); } };
+}
+
+async function recordAttempt(h, { jobId, profile, status, httpStatus = null, failureClass = null }) {
+  await h.adapter.execute(`INSERT INTO llm_request_attempts
+    (attempt_id,logical_request_id,request_kind,campaign_id,branch_id,world_id,state_version,model_profile_fingerprint,
+     attempt_no,status,failure_class,error_code,http_status,started_at,finished_at)
+    VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)`, [
+    `attempt:${jobId}`, `campaign-plan:${jobId}`, 'campaign_plan', h.campaignId, h.branchId, 'w', 0,
+    llmModelProfileFingerprint(profile), status, failureClass, 'LlmRequestFailure', httpStatus, Date.now(), Date.now(),
+  ]);
+}
 
 test('P9-5: replan reachability respects all/any/not and blocks only newly orphaned pending triggers', () => {
   const nodes = [
@@ -134,6 +165,61 @@ test('P9-5: goal change is a management commit with event + single-flight replan
     const jobsAfter = h.db.prepare(
       "SELECT job_id FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan'").all(h.branchId);
     assert.equal(jobsAfter.length, 1, 'duplicate trigger absorbed (A21)');
+  } finally {
+    h.db.close();
+  }
+});
+
+test('P9-5: an explicit replan after a definitive failure creates a successor job when the selected model changed', async () => {
+  const h = await fixture({ profile: oldGlmProfile, provider: failedProvider({ attempt: 1, durationMs: 1,
+    httpStatus: 429, outcome: 'http_error', errorCategory: 'provider_http', dispatchState: 'sent' }) });
+  try {
+    await assert.rejects(() => h.session.runCampaignReplan(h.campaignId, h.branchId));
+    const prior = await h.adapter.queryAll("SELECT job_id,status,freeze_root_id FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan'", [h.branchId]);
+    assert.equal(prior.length, 1);
+    assert.equal(prior[0].status, 'retryable_failed');
+    assert.ok(prior[0].freeze_root_id, 'the failed job keeps its original frozen GLM materials');
+    await recordAttempt(h, { jobId: prior[0].job_id, profile: oldGlmProfile, status: 'failed', httpStatus: 429, failureClass: 'http_rate_limit' });
+    const oldAttempt = await h.adapter.queryOne("SELECT status,http_status,model_profile_fingerprint FROM llm_request_attempts WHERE logical_request_id=?", [`campaign-plan:${prior[0].job_id}`]);
+    assert.equal(oldAttempt.status, 'failed');
+    assert.equal(oldAttempt.http_status, 429);
+
+    const rotatedProvider = { async complete(request) {
+      return request.role === 'WorldMapper' ? { text: JSON.stringify(candidateModel()) } : h.defaultProvider.complete(request);
+    } };
+    const rotated = new CampaignSession(h.sessionDependencies, rotatedProvider, rotatedMiniMaxProfile);
+    assert.equal(await rotated.runCampaignReplan(h.campaignId, h.branchId), 'adopted');
+    const jobs = await h.adapter.queryAll("SELECT job_id,status,last_error FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan' ORDER BY rowid", [h.branchId]);
+    assert.equal(jobs.length, 2, 'a new frozen job is created instead of changing the old freeze');
+    assert.equal(jobs[0].job_id, prior[0].job_id);
+    assert.equal(jobs[0].status, 'stale');
+    assert.ok(jobs[0].last_error.includes(jobs[1].job_id), 'the preserved failed job records its successor');
+    assert.equal(jobs[1].status, 'adopted');
+    const newFreeze = await readPlanFreeze(h.adapter, jobs[1].job_id);
+    assert.equal(newFreeze.profile.model, rotatedMiniMaxProfile.model);
+    assert.notEqual(llmModelProfileFingerprint(newFreeze.profile), oldAttempt.model_profile_fingerprint);
+  } finally {
+    h.db.close();
+  }
+});
+
+test('P9-5: changing profile never bypasses an unknown replan result', async () => {
+  const h = await fixture({ profile: oldGlmProfile, provider: failedProvider({ attempt: 1, durationMs: 1,
+    httpStatus: null, outcome: 'transport_error', errorCategory: 'timeout', dispatchState: 'unknown' }) });
+  try {
+    await assert.rejects(() => h.session.runCampaignReplan(h.campaignId, h.branchId));
+    const before = await h.adapter.queryAll("SELECT job_id,status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan'", [h.branchId]);
+    assert.equal(before.length, 1);
+    await h.adapter.execute("UPDATE campaign_plan_jobs SET status='outcome_unknown' WHERE job_id=?", [before[0].job_id]);
+    await recordAttempt(h, { jobId: before[0].job_id, profile: oldGlmProfile, status: 'outcome_unknown', failureClass: 'timeout_unknown' });
+    before[0].status = 'outcome_unknown';
+
+    const rotated = new CampaignSession(h.sessionDependencies, h.defaultProvider, rotatedMiniMaxProfile);
+    await assert.rejects(() => rotated.runCampaignReplan(h.campaignId, h.branchId), /未知|确认/);
+    const after = await h.adapter.queryAll("SELECT job_id,status FROM campaign_plan_jobs WHERE branch_id=? AND job_kind='replan'", [h.branchId]);
+    assert.deepEqual(after, before, 'no successor job or automatic replay is created');
+    const attempts = await h.adapter.queryAll("SELECT status FROM llm_request_attempts WHERE branch_id=?", [h.branchId]);
+    assert.deepEqual(attempts.map(row => row.status), ['outcome_unknown']);
   } finally {
     h.db.close();
   }

@@ -416,6 +416,31 @@ test('P2-4: conflict facts produce a blocking canon_conflict issue that stops pu
   assert.ok(detail.factIds.includes('fact-home-2'), 'detail lists the conflicting fact id');
 });
 
+test('replaying a canon fact already marked unverified does not create another conflict row', async () => {
+  const { db, worldStore } = makeWorldStore();
+  await seedWorld(worldStore);
+  await worldStore.upsertEntity({ worldId: 'w-build', entityId: 'graycastle', type: 'faction', name: '灰堡',
+    firstSeenChapterId: null, aliases: [] }, 't');
+
+  await worldStore.saveFact(makeFact('w-build', 'fact-graycastle-kingdom', 'graycastle', 'mentioned_as',
+    { mention: '灰堡王国' }), 't');
+  const repeatedMention = makeFact('w-build', 'fact-graycastle-named-mention', 'graycastle', 'mentioned_as',
+    { mention: '灰堡' });
+  assert.equal(await worldStore.saveFact(repeatedMention, 't'), 'conflict');
+  const conflict = (await worldStore.listFacts('w-build')).find(fact =>
+    fact.predicate === 'mentioned_as' && fact.value.mention === '灰堡');
+  assert.ok(conflict);
+  await worldStore.resolveCanonFactConflict('w-build', conflict.factId, 'unverified');
+
+  assert.equal(await worldStore.saveFact(repeatedMention, 't'), 'duplicate',
+    'the exact existing value must win over a different explicit value regardless of row order');
+  const sameMention = (await worldStore.listFacts('w-build')).filter(fact =>
+    fact.predicate === 'mentioned_as' && fact.value.mention === '灰堡');
+  assert.equal(sameMention.length, 1, 'a replay must not add a second suffix conflict');
+  assert.equal(sameMention[0].status, 'speculation', 'the reviewer decision remains in force');
+  db.close();
+});
+
 test('closeout: actual conflict then resolution retires the blocker and allows mapping', async () => {
   const { db, worldStore } = makeWorldStore();
   await seedWorld(worldStore);

@@ -198,8 +198,16 @@ function compileMethods(
       errors.push(`method ${method.methodId}: requires item ${method.requires.itemId} not visible at the anchor.`);
       continue;
     }
-    if (method.firstStep.targetEntryId && !actorReferenceInScope(method.firstStep.targetEntryId, ctx)) {
+    const targetIsPresent = method.firstStep.targetEntryId && (ctx.presentActorRefs
+      ? ctx.presentActorRefs.includes(method.firstStep.targetEntryId)
+        || (method.firstStep.targetEntryId.startsWith('npc-') && ctx.presentActorRefs.includes(method.firstStep.targetEntryId.slice(4)))
+      : actorReferenceInScope(method.firstStep.targetEntryId, ctx));
+    if (method.firstStep.targetEntryId && !targetIsPresent) {
       errors.push(`method ${method.methodId}: target ${method.firstStep.targetEntryId} not in the opening scope.`);
+      continue;
+    }
+    if (method.firstStep.actionKind === 'move' && !method.firstStep.destinationId) {
+      errors.push(`method ${method.methodId}: move action requires a visible destination.`);
       continue;
     }
     if (method.firstStep.destinationId) {
@@ -365,7 +373,9 @@ export function compileCampaignPlan(input: {
     summary: model.firstSituation.summary,
     gmBrief: model.firstSituation.gmBrief,
     locationId: ctx.openingLocationId,
-    participantEntryIds: [...ctx.openingTemplateIds].slice(0, 5),
+    participantEntryIds: [...ctx.openingTemplateIds]
+      .filter(id => !ctx.presentActorRefs || ctx.presentActorRefs.includes(id) || ctx.presentActorRefs.includes(`npc-${id}`))
+      .slice(0, 5),
     activation: { kind: 'world_time_at_least', order: 0 },
     signs: model.firstSituation.signs,
     pressure: {

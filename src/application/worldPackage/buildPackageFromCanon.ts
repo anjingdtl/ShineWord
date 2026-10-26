@@ -740,6 +740,11 @@ export function cleanSituation(raw: unknown, situation: SituationCleanContext): 
   const resolveRef = (value: string): string | null => {
     if (situation.knownEntryIds.has(value)) return value;
     if (situation.knownEntryIds.has(`npc-${value}`)) return `npc-${value}`;
+    // Mappers commonly cite the item's proposal id (for example
+    // "divine-punishment-lock") while the package stores it as
+    // "item-divine-punishment-lock". Resolve that exact item namespace so a
+    // valid target is not silently dropped from the otherwise valid method.
+    if (situation.knownEntryIds.has(`item-${value}`)) return `item-${value}`;
     const byEntity = situation.entityNameToTemplateId.get(value);
     if (byEntity && situation.knownEntryIds.has(byEntity)) return byEntity;
     return null;

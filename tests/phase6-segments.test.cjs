@@ -163,6 +163,21 @@ test('unknown remote outcomes block ready and are never retried by planner; lost
   h.executions.delete(segment.runIds[0]);h.artifacts.length=0;assert.equal((await h.service.readReadiness({worldId:'w'})).segments[0].lastErrorCode,'execution_projection_unavailable');h.db.close();
 });
 
+test('stale stopped executions do not keep the current world readiness paused',async () => {
+  const h=await harness();
+  const [planned]=await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,
+    ranges:[await h.range(1000,2000)],reason:'action_dependency',demandRef:ref()});
+  await h.service.dispatch('w');
+  const segment=(await h.store.listSegments('w')).find(v=>v.intent.segmentId===planned.intent.segmentId);
+  const runId=segment.runIds[0];
+  Object.assign(h.executions.get(runId),{status:'stopped_user'});
+  await h.store.saveProjection({...segment,status:'stale',lastErrorCode:'explicit_api_replacement'});
+  const readiness=await h.service.readReadiness({worldId:'w'});
+  assert.equal(readiness.segments.find(v=>v.intent.segmentId===segment.intent.segmentId).status,'stale');
+  assert.equal(readiness.pauseReason,null);
+  h.db.close();
+});
+
 test('canceling a branch demand keeps shared work; deleting world cascades and late projections cannot resurrect it',async () => {
   const h=await harness();const range=await h.range(0,1000);
   const [segment]=await h.service.requestDemand({worldId:'w',executionConfigFingerprint:config,ranges:[range],reason:'buffer',demandRef:ref('b1')});

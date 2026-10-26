@@ -149,7 +149,7 @@ export function buildStructuralRepairGuidance(
   const root = asRecord(candidate);
   // Local compile/replan can aggregate several strict validator errors into
   // one semicolon-separated error. Match each diagnostic independently.
-  errors = errors.flatMap(error => error.split(/;\s*(?=(?:plan:|consequence |artifact:|method |clue |long plan:))/));
+  errors = errors.flatMap(error => error.split(/;\s*(?=(?:plan:|consequence |artifact:|method |stage |clue |long plan:))/));
   const authoredCluesAllowed = options.authoredCluesAllowed ?? true;
   const unknownKnowledgeIds = [...new Set(errors.flatMap(error => {
     const match = /^(?:artifact|consequence): grant_knowledge references unknown entry (.+)\.$/.exec(error.trim());
@@ -178,6 +178,20 @@ export function buildStructuralRepairGuidance(
     }
     const effectLimitMatch = /^(.+): effects must be an array of ≤8 templates\.$/.exec(error.trim());
     if (effectLimitMatch) return [`- ${effectLimitMatch[1]} 的 effects 数组超过本地上限：每个 effects 数组最多 8 个效果模板。只对该路径对应的数组做最小调整；移除冗余效果，或把真实独立成果拆分到后续可执行办法。保留普通 success 到达 completion 所需的效果生产者及所有既有因果门槛；不得删除条件、夸大计数、只依赖 full_success 或用 record_event 伪装状态变化。`];
+    const provenanceMatch = /^stage ([^:]+): provenance must use locally verified facts or an honest design_fill\.$/.exec(error.trim());
+    if (provenanceMatch) {
+      const [, nodeId] = provenanceMatch;
+      const stage = (Array.isArray(root?.stages) ? root.stages.map(asRecord).filter((item): item is JsonRecord => item !== null) : [])
+        .find(item => item.nodeId === nodeId);
+      const provenance = asRecord(stage?.provenance);
+      const citedFacts = Array.isArray(provenance?.sourceFactIds) ? provenance.sourceFactIds.filter((id): id is string => typeof id === 'string') : [];
+      return [`- stage ${nodeId} 的 provenance 未通过本地事实校验。若保留 provenance.kind=canon_inspired，sourceFactIds 只能逐字使用本请求列出的有效 fact ID，且不得引用当前锚点之后的事实；如果没有合适的已验证来源，就把 provenance.kind 改为 design_fill、sourceFactIds 设为 []，并如实说明这是新增过程。当前被拒绝或缺失的引用：${citedFacts.length > 0 ? citedFacts.join(', ') : '无有效引用'}。不得猜测、改写、跨用目录 entryId 或虚构 fact ID。`];
+    }
+    const moveMatch = /^method ([^:]+): move action requires a visible destination\.$/.exec(error.trim());
+    if (moveMatch) {
+      const [, methodId] = moveMatch;
+      return [`- method ${methodId} 的 firstStep.actionKind 是 move，但没有 destinationId。请从本请求列出的可见场景中逐字选择实际 locationId 并填写 destinationId；若当前没有符合意图的可见目的地，就改写成当前场景可执行的非移动行动，或把该移动留到后续规划。不能创建地点 ID，也不能让无目的地的 move 产生接触、证据或完成效果。`];
+    }
     const eventMatch = /^method ([^:]+): an ordinary-success event must be consumed by this or a reachable public campaign goal, or accompany a durable state effect\.$/.exec(error.trim());
     if (eventMatch) {
       const methodId = eventMatch[1]!;
@@ -211,7 +225,7 @@ export function buildStructuralRepairGuidance(
     const actorTargetMatch = /^method ([^:]+): target (.+) not in the opening scope\.$/.exec(error.trim());
     if (actorTargetMatch) {
       const [, methodId, targetId] = actorTargetMatch;
-      return [`- method ${methodId} 的 firstStep.targetEntryId ${targetId} 不在当前行动对象范围内。只可逐字选择本请求“当前在场人物”白名单中的 actor ID；如果该办法面向未具名人物、现场或其它没有白名单人物的场景，就删除 firstStep.targetEntryId。保留行动意图和其它合法字段，不得猜测、补造或替换为世界人物模板 ID。`];
+      return [`- method ${methodId} 的 firstStep.targetEntryId ${targetId} 不在当前行动对象范围内。只可逐字选择本请求“当前在场人物”白名单中的 actor ID。若 intent、goal 或 effects 明确面向该缺席人物，不能只删除 targetEntryId 而保留面向该缺席人物的意图；应改写为当前场景可执行行动，或推迟到先移动并重新规划之后。仅当方法本就不指向具名人物时才删除 firstStep.targetEntryId。不得猜测、补造或替换为世界人物模板 ID。`];
     }
     const actionReferenceMismatch = /^(firstSituation\.methods\[\d+\]\.firstStep\.(skillId|abilityId|destinationId)): not valid for (skill_check|ability|observe|talk|interact|move)\.$/.exec(error.trim());
     if (actionReferenceMismatch) {
@@ -371,6 +385,7 @@ export function buildPlanRequestMaterials(input: {
     '- 每个 method 的 outcomes 必须给出 full_success/success/failure/severe_failure 四档，各档 resultFact 一句玩家可读事实，effects 从效果模板白名单选择；',
     '- 每个 effects 数组最多 8 个效果模板（firstSituation 四档 outcomes 与 consequences.effects 均适用）；若单次行动需要更多独立变化，应拆分为具备真实前提的多步办法或延后后果，并保留普通 success completion 路线，不得删除门槛、合并成虚假效果或只依赖 full_success；',
     '- firstStep.actionKind=skill_check 时必须把“可用技能”中的完整 entryId 逐字写入 skillId；ability 必须引用“可用能力”中的完整 entryId；move 必须引用“可进入场景”中逐字列出的 locationId。observe/talk/interact 不得附带 skillId、abilityId 或 destinationId。引用显示名、删掉 ID 前缀、填写占位说明或漏掉行动所需 ID 都无效。firstStep.itemId 和 requires.itemId 只能使用“已知物品”列表中的完整 entryId。',
+    '- firstStep.actionKind="move" 必须填写当前提示中某个可见场景的精确 locationId 作为 destinationId；不得省略、猜造地点或把移动描述当作已经接触人物/取得证据。若目标不在当前场景，先移动到可见地点，再由后续行动实际接触目标；',
     '- 每个新 method 都要显式给出 difficultyPolicy、evidencePolicy、evidenceAllowlist。difficultyPolicy 用 {"kind":"fixed","band":"simple|normal|challenging|peak"}，无法在本地闭合时用 {"kind":"planner_required"}；evidencePolicy 用 {"kind":"fixed","evidenceIds":[]}（空数组明确表示不使用证据），或 {"kind":"planner_required"}。',
     '- evidenceAllowlist 只能从“当前开局场景可绑定证据 ID”列表逐字挑选；列表为空时写 []。不得从世界目录、可引用线索、原著 factId 或远期内容复制 ID，也不得猜造。fixed evidenceIds 必须逐字包含在 evidenceAllowlist 中。ruleBindingHash 由本地编译器写入，模型不要输出。',
     '- 每种办法必须至少有一个成功档以权威 effects 推进该阶段 completion；有风险的失败要提供改变局面的代价或新机会。日常观察、无风险交谈可使用 observe/talk/interact，不必强制 skill_check。',
