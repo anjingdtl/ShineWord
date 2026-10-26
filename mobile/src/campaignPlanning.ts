@@ -7,8 +7,11 @@
 import type { ApiProfile, LlmProvider } from '../../src/application/llm/types';
 import type { CampaignIntentV1 } from '../../src/domain/campaignPlan/types';
 import { SqliteCampaignPlanStore, type CampaignPlanJobRecord } from '../../src/infra/sqlite/sqliteCampaignPlanStore';
-import { runOpeningPlanJob } from '../../src/application/campaignPlan/planningService';
+import { buildPlanningContext, runOpeningPlanJob } from '../../src/application/campaignPlan/planningService';
 import { adoptOpeningPlan } from '../../src/application/campaignPlan/adoption';
+import { buildLocalBaselineModel, localBaselineCandidateIdentity } from '../../src/application/campaignPlan/localBaselinePlan';
+import { compileAndValidateCandidate } from '../../src/application/campaignPlan/candidateCompile';
+import { frozenPlanJob } from '../../src/application/campaignPlan/jobFreeze';
 import { getDatabaseRuntime } from './database';
 import { buildProvider } from './runtime';
 import { resolveSkillKey } from '../../src/domain/characters/card';
@@ -308,9 +311,97 @@ export interface AdoptPlanInput {
   companions: ReadonlyArray<{ actorId: string; templateId: string; directive?: string }>;
 }
 
-/** One click starts the adventure: idempotent atomic adoption (A09). */
-export async function adoptCampaignPlan(input: AdoptPlanInput): Promise<{ campaignId: string; branchId: string }> {
+/**
+ * Convergence W3 commit 3: the DEFAULT "开始故事" path. Builds the local
+ * baseline model from the same planning context the LLM path freezes, runs
+ * the same compile/validate pipeline, persists job+candidate WITHOUT any
+ * lease, ledger or freeze (physicalRequestBudget 0, zero LLM requests), then
+ * adopts through the same atomic adoptOpeningPlan. Throws with a readable
+ * message when this world cannot host a baseline (caller offers the AI path).
+ */
+export async function startLocalCampaign(input: PreparePlanInput): Promise<{ campaignId: string; branchId: string }> {
   const runtime = await getDatabaseRuntime();
+  const planStore = new SqliteCampaignPlanStore(runtime.db);
+  const intent = makeCampaignIntent(input);
+  const now = new Date().toISOString();
+  const jobId = `job-${intent.setupId}`;
+  const candidateId = `${jobId}:a1:1`;
+  await planStore.upsertSetup({
+    setupId: intent.setupId, worldId: input.worldId, packageRevision: input.packageRevision,
+    intent, intentHistory: [intent], currentCandidateId: null, status: 'planning', createdAt: now, updatedAt: now,
+  });
+  const intentHash = sha256HexOf(canonicalJsonOf(intent));
+  await planStore.insertJob({
+    jobId, setupId: intent.setupId, campaignId: null, branchId: null, jobKind: 'opening_plan',
+    triggerReasons: ['user_requested'], baseStateVersion: null, basePlanId: null, basePlanRevision: null,
+    intentHash, contentManifestHash: null, knowledgePolicyHash: null, triggerEventRefs: [],
+    status: 'queued', leaseOwner: null, leaseExpiresAt: null, fencingToken: 0, attemptCount: 0,
+    nextRetryAt: null, physicalRequestBudget: 0, freezeRootId: null, lastError: null, createdAt: now, updatedAt: now,
+  });
+  const { ctx } = await buildPlanningContext({ worldStore: runtime.worldStore, intent,
+    protagonistSkills: input.protagonistSkills.filter(skill => typeof skill === 'string') });
+  const model = buildLocalBaselineModel({ ctx, intent, anchorTitle: input.anchorTitle, worldTitle: input.worldTitle });
+  const frozen = frozenPlanJob(intent, input.profile, { system: '', user: '' }, ctx);
+  const { compiled, errors } = compileAndValidateCandidate(frozen, model, { jobId, setupId: intent.setupId,
+    branchId: null, now: () => now, committedEvents: [] });
+  if (errors.length) {
+    await runtime.db.transaction(async tx => {
+      await tx.execute("UPDATE campaign_plan_jobs SET status='invalid',last_error=?,updated_at=? WHERE job_id=?", [errors.join('; ').slice(0, 800), now, jobId]);
+      await tx.execute("UPDATE campaign_setups SET status='failed',updated_at=? WHERE setup_id=? AND status NOT IN ('cancelled','adopted')", [now, intent.setupId]);
+    });
+    throw new Error(`本地基线未能通过现有校验器：${errors.slice(0, 3).join('；')}`);
+  }
+  const { rawResponseText, candidateHash } = localBaselineCandidateIdentity(model, compiled.plan, compiled.artifact);
+  await runtime.db.transaction(async tx => {
+    const setup = await tx.queryOne<{ status: string; intent_json: string }>('SELECT status,intent_json FROM campaign_setups WHERE setup_id=?', [intent.setupId]);
+    if (!setup || ['cancelled','adopted'].includes(setup.status)
+      || sha256HexOf(canonicalJsonOf(JSON.parse(setup.intent_json))) !== compiled.plan.intentHash) throw new Error('campaign_intent_stale');
+    const won = await tx.execute("UPDATE campaign_plan_jobs SET status='candidate_ready',updated_at=? WHERE job_id=? AND status='queued'", [now, jobId]);
+    if (won !== 1) throw new Error('local_baseline_job_state_changed');
+    await planStore.upsertCandidate({ candidateId, jobId, setupId: intent.setupId, attemptGroup: 'a1', attemptNo: 1,
+      stage: 'ready', rawResponseRef: 'local-baseline-1', rawResponseText, parseResultJson: JSON.stringify(model),
+      validationErrors: [], repairUsed: false, candidateHash,
+      plan: compiled.plan, artifact: compiled.artifact, createdAt: now, updatedAt: now }, tx);
+    await tx.execute("UPDATE campaign_setups SET status='proposal_ready',current_candidate_id=?,updated_at=? WHERE setup_id=? AND status NOT IN ('cancelled','adopted')", [candidateId, now, intent.setupId]);
+  });
+  recordStartupEvent('plan_ready', { source: 'local' });
+  const result = await adoptOpeningPlan({
+    db: runtime.db,
+    planStore,
+    setupId: intent.setupId,
+    candidateId,
+    create: {
+      db: runtime.db,
+      worldStore: runtime.worldStore,
+      campaignId: `camp-${Date.now().toString(36)}`,
+      title: `${input.worldTitle} · ${input.protagonist.name}`,
+      worldId: input.worldId,
+      packageRevision: input.packageRevision,
+      anchor: input.anchor,
+      protagonist: {
+        actorId: input.protagonist.actorId,
+        kind: input.protagonist.kind,
+        name: input.protagonist.name,
+        description: input.protagonist.description,
+        ...(input.protagonist.kind === 'original'
+          ? { attributes: input.protagonist.attributes, initialSkills: [...(input.protagonist.initialSkills ?? [])] }
+          : { canonEntityId: input.protagonist.canonEntityId }),
+      },
+      companions: input.companions.map(companion => ({
+        actorId: companion.actorId,
+        templateId: companion.templateId,
+        ...(companion.directive ? { directive: companion.directive as import('../../src/domain/characters/card').CompanionDirective } : {}),
+      })),
+      goal: '战役主线',
+      createdAt: now,
+    },
+  });
+  recordStartupEvent('adopt_done', { source: 'local' });
+  return { campaignId: result.campaign.campaignId, branchId: result.campaign.branchId };
+}
+
+/** One click starts the adventure: idempotent atomic adoption (A09). */
+export async function adoptCampaignPlan(input: AdoptPlanInput): Promise<{ campaignId: string; branchId: string }> {  const runtime = await getDatabaseRuntime();
   const planStore = new SqliteCampaignPlanStore(runtime.db);
   const result = await adoptOpeningPlan({
     db: runtime.db,

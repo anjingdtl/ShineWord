@@ -19,7 +19,7 @@ import { recommendOpeningLoadout } from '../../../../src/application/campaign/op
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
 import { localOpeningGoals } from '../../../../src/application/campaign/localOpeningGoals';
 import { getSegmentReadiness } from '../../segmentRuntime';
-import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation,
+import { startLocalCampaign, prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation,
   previewCampaignPreparationReplay, confirmAndResumeCampaignPreparationReplay, cancelCampaignPreparation,
   type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
 import { CampaignProposalCard, PlanningStatus } from '../features/opening/CampaignProposalCard';
@@ -389,10 +389,33 @@ export function OpeningScreen(): React.JSX.Element {
     } satisfies PreparePlanInput;
   }
 
+  /**
+   * Convergence W3 commit 3 (D2): the DEFAULT start path — local baseline,
+   * zero LLM requests, straight into play. The AI mainline stays available
+   * through the advanced entry (create).
+   */
+  async function startLocal() {
+    if (!profile || busy || actionInFlight.current) return;
+    recordStartupEvent('start_pressed', { mode: advancedWizard ? 'advanced-local' : 'quick-local' });
+    actionInFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const input = await collectPlanInput();
+      const adopted = await startLocalCampaign(input);
+      navigation.replace('Play', { campaignId: adopted.campaignId, branchId: adopted.branchId });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      actionInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
   /** P9 two-phase start: generate the campaign proposal (real phases). */
   async function create() {
     if (!profile || busy || actionInFlight.current) return;
-    recordStartupEvent('start_pressed', { mode: advancedWizard ? 'advanced' : 'quick' });
+    recordStartupEvent('start_pressed', { mode: advancedWizard ? 'advanced-ai' : 'quick-ai' });
     actionInFlight.current = true;
     setBusy(true);
     setError(null);
@@ -690,7 +713,9 @@ export function OpeningScreen(): React.JSX.Element {
                 themeLabel={THEMES[themeId].label}
                 busy={busy}
                 canStart={advancedStartReady}
-                onStart={create}
+                onStart={startLocal}
+                aiStartLabel="AI 定制主线（较慢）"
+                onAiStart={create}
               />
             ) : null}
           </>
@@ -818,11 +843,21 @@ export function OpeningScreen(): React.JSX.Element {
           ) : null}
           <Button
             label={quickStep === 0 ? '下一步' : busy ? '正在开始…' : '开始故事'}
-            onPress={quickStep === 0 ? advanceQuickStep : create}
+            onPress={quickStep === 0 ? advanceQuickStep : startLocal}
             disabled={quickStep === 0 ? !quickIdentityReady : busy || !quickStartReady || proposal !== null || planningPhase === 'preparing' || planningPhase === 'planning' || planningPhase === 'validating'}
             style={{ flex: 1 }}
             testID={quickStep === 0 ? 'opening-next' : 'quick-opening-start'}
           />
+          {quickStep === 1 && !busy ? (
+            <Button
+              label="AI 定制主线（较慢）"
+              variant="secondary"
+              onPress={create}
+              disabled={!quickStartReady || proposal !== null}
+              style={{ flex: 1 }}
+              testID="quick-opening-start-ai"
+            />
+          ) : null}
         </View>
       ) : null}
     </ScreenShell>

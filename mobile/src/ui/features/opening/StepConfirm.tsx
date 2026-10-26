@@ -59,7 +59,11 @@ export function StepConfirm(props: {
   themeLabel: string;
   busy: boolean;
   canStart: boolean;
+  /** Default local-baseline start (convergence W3): one click into play. */
   onStart: () => void;
+  /** Explicit AI mainline entry; the slower LLM path with proposal card. */
+  aiStartLabel?: string;
+  onAiStart?: () => void;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const skillNames = props.chosenSkills
@@ -154,12 +158,25 @@ export function StepConfirm(props: {
       </Card>
 
       <Button
-        label={props.busy ? '创建中…' : '开始冒险'}
+        label={props.busy ? '正在开始…' : '开始冒险（本地基线）'}
         onPress={props.onStart}
         disabled={props.busy || !props.canStart}
         block
         testID="opening-start"
       />
+      {props.onAiStart ? (
+        <Button
+          label={props.aiStartLabel ?? 'AI 定制主线（较慢）'}
+          variant="secondary"
+          onPress={props.onAiStart}
+          disabled={props.busy || !props.canStart}
+          block
+          testID="opening-start-ai"
+        />
+      ) : null}
+      <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
+        本地基线由本地规则秒级生成并采用主线模板，不发起模型请求；AI 定制会先规划再确认。
+      </Text>
       <Text style={[typeStyle(theme, theme.type.caption), { color: theme.text.muted }]}>
         创建后会直接进入游玩页；向导不会留在返回栈里。
       </Text>

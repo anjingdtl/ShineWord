@@ -149,6 +149,20 @@ test('C-06/C-07 baseline candidate is intact and every first-situation method is
   }
 });
 
+test('C-10 stage preparation targets the baseline provisional successor on the stable boundary', async () => {
+  const f = await fixture();
+  const { intent, compiled, model } = await compileBaselineFor(f.worlds, 'medium');
+  const { adopted } = await adoptBaseline(f.adapter, f.planStore, f.worlds, intent, compiled, model);
+  const state = await f.turns.getState(adopted.campaign.branchId);
+  const runtime = state.campaignRuntime;
+  assert.equal(runtime.primaryNodeId, 'baseline-stage-1');
+  assert.equal(runtime.campaignStatus, 'active');
+  const { evaluateStagePreparationTarget } = require('../dist/application/campaignPlan/stagePreparation');
+  const target = evaluateStagePreparationTarget({ plan: compiled.plan, runtime, state });
+  assert.equal(target?.nodeId, 'baseline-stage-2', 'background preparation picks the provisional successor');
+  assert.equal(target?.coverage, 'provisional');
+});
+
 test('C-06 honest provenance: every stage is design_fill with no fabricated fact citations', async () => {
   const f = await fixture();
   const { model } = await compileBaselineFor(f.worlds, 'short');
