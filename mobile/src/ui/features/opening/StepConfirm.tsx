@@ -50,8 +50,12 @@ export function StepConfirm(props: {
   directives: Record<string, CompanionDirective>;
   goal: string;
   onGoalChange: (value: string) => void;
-  /** AI-proposed goals over the published world package; empty while loading or on failure. */
+  /** Goal chips: local templates by default; 'llm' after an explicit AI refresh. */
   goalSuggestions?: readonly string[];
+  goalSuggestionSource?: 'local' | 'llm';
+  aiGoalBusy?: boolean;
+  /** Explicit "AI 换一批" — the only opening_goal request path (convergence W2). */
+  onAiRefreshGoals?: () => void;
   themeLabel: string;
   busy: boolean;
   canStart: boolean;
@@ -120,6 +124,20 @@ export function StepConfirm(props: {
             ))}
           </View>
         )}
+        {props.onAiRefreshGoals ? (
+          <View style={{ marginBottom: theme.space.sm }}>
+            <Button
+              label={props.aiGoalBusy ? 'AI 生成中…' : 'AI 换一批'}
+              variant="secondary"
+              onPress={props.onAiRefreshGoals}
+              disabled={props.aiGoalBusy || props.busy}
+              testID="opening-goal-ai-refresh"
+            />
+            <Text style={[typeStyle(theme, theme.type.small), { color: theme.onRaised.secondary, marginTop: theme.space.xs }]}>
+              {props.goalSuggestionSource === 'llm' ? '以上是 AI 建议' : '以上是本地推荐；AI 换一批会发起一次模型请求'}
+            </Text>
+          </View>
+        ) : null}
         <TextField
           value={props.goal}
           onChangeText={props.onGoalChange}

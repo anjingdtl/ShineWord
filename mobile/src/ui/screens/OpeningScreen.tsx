@@ -17,12 +17,13 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { CompanionDirective } from '../../../../src/domain/characters/card';
 import { recommendOpeningLoadout } from '../../../../src/application/campaign/openingRecommendation';
 import { suggestOpeningGoals } from '../../../../src/application/campaign/openingGoalSuggestions';
+import { localOpeningGoals } from '../../../../src/application/campaign/localOpeningGoals';
 import { getSegmentReadiness } from '../../segmentRuntime';
 import { prepareCampaignPlan, readReadyProposal, adoptCampaignPlan, restoreCampaignPreparation, resumeCampaignPreparation,
   previewCampaignPreparationReplay, confirmAndResumeCampaignPreparationReplay, cancelCampaignPreparation,
   type ProposalView, type PreparePlanInput } from '../../campaignPlanning';
 import { CampaignProposalCard, PlanningStatus } from '../features/opening/CampaignProposalCard';
-import { buildProvider, createSession } from '../../runtime';
+import { buildProvider, createSession, createReadOnlySession } from '../../runtime';
 import { getDatabaseRuntime } from '../../database';
 import { nativeSha256 } from '../../nativeCrypto';
 import { findLocalOpeningSource } from '../../../../src/application/worldPackage/openingRecovery';
@@ -74,6 +75,8 @@ export function OpeningScreen(): React.JSX.Element {
   const [companionDirectives, setCompanionDirectives] = useState<Record<string, CompanionDirective>>({});
   const [goal, setGoal] = useState('');
   const [goalSuggestions, setGoalSuggestions] = useState<readonly string[]>([]);
+  const [goalSuggestionSource, setGoalSuggestionSource] = useState<'local' | 'llm'>('local');
+  const [aiGoalBusy, setAiGoalBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [planningPhase, setPlanningPhase] = useState<string | null>(null);
@@ -103,7 +106,7 @@ export function OpeningScreen(): React.JSX.Element {
     let cancelled = false;
     (async () => {
       try {
-        const session = await createSession(profile, await buildProvider(profile));
+        const session = await createReadOnlySession();
         const worldSetup = await session.getWorldSetup(worldId);
         if (cancelled) return;
         if (worldSetup.packageRevision === null) {
@@ -162,47 +165,78 @@ export function OpeningScreen(): React.JSX.Element {
     const anchorOrder = setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.worldTimeOrder;
     if (anchorOrder === undefined) return;
     let cancelled = false;
-    const queueController = new AbortController();
     (async () => {
       try {
-        const session = await createSession(profile, await buildProvider(profile));
+        const session = await createReadOnlySession();
         const anchored = await session.getWorldSetup(worldId, anchorOrder);
         if (cancelled) return;
         setSetup(current => current ? { ...anchored, anchorEvents: current.anchorEvents } : anchored);
         if (!anchored.locations.includes(locationId) && anchored.locations[0]) setLocationId(anchored.locations[0]);
         setCompanions(current => current.filter(id => anchored.companionTemplates.some(template => template.entryId === id)));
-        // Product ask 2026-10-01 #3: two AI-proposed goals over the world
-        // package for the chosen anchor; the third option is the player's
-        // own words. Pure enhancement - failures resolve to no suggestions.
-        const runtime = await getDatabaseRuntime();
-        const revision = anchored.packageRevision;
-        const published = revision === null ? null : await runtime.worldStore.getWorldPackage(worldId, revision);
-        if (cancelled || !published || published.manifest.status !== 'published') return;
-        const goals = await suggestOpeningGoals(await buildProvider(profile), {
+        // Convergence W2: goal chips are local template suggestions — no
+        // request on mount or anchor change (K2/K3). The AI suggestion stays
+        // available behind the explicit "AI 换一批" button (refreshGoalsWithAi).
+        const goals = localOpeningGoals({
           worldTitle: title,
           anchorTitle: setup?.anchorEvents.find(event => event.eventId === anchorEventId)?.title ?? '开局时刻',
           locationName: anchored.locations[0],
           characterNames: anchored.canonCharacters.slice(0, 6).map(character => character.name),
           playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
-        }, { worldId, packageRevision: published.manifest.revision, packageContentHash: published.manifest.contentHash,
-          anchorEventId, profile, sha256Hex: nativeSha256.sha256Hex,
-          queueSignal: queueController.signal,
-          isCurrent: async () => !cancelled && Boolean(await runtime.worldStore.getWorld(worldId)),
         });
         if (!cancelled) {
           setGoalSuggestions(goals);
-          recordStartupEvent('wizard_goal_ready', { source: 'llm', count: goals.length });
+          setGoalSuggestionSource('local');
+          recordStartupEvent('wizard_goal_ready', { source: 'local', count: goals.length });
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
-    return () => { cancelled = true; queueController.abort(); };
+    return () => { cancelled = true; };
     // The selected anchor controls which time-bounded facts can enter the opening projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldId, anchorEventId, profile]);
 
   const spentTotal = Object.values(points).reduce((sum, value) => sum + (value - 1), 0);
+
+  /**
+   * Convergence W2: the ONLY opening_goal request path. Runs on the explicit
+   * "AI 换一批" tap with unchanged governance (ledger, cache, current-world
+   * checks). Failures and empty results stay silent — local suggestions
+   * remain on screen (pure enhancement, C-04).
+   */
+  async function refreshGoalsWithAi() {
+    if (!profile || aiGoalBusy || busy) return;
+    const anchorEvent = setup?.anchorEvents.find(event => event.eventId === anchorEventId);
+    if (!setup || !anchorEvent) return;
+    setAiGoalBusy(true);
+    try {
+      const runtime = await getDatabaseRuntime();
+      const anchored = await (await createReadOnlySession()).getWorldSetup(worldId, anchorEvent.worldTimeOrder);
+      const revision = anchored.packageRevision;
+      const published = revision === null ? null : await runtime.worldStore.getWorldPackage(worldId, revision);
+      if (!published || published.manifest.status !== 'published') return;
+      const goals = await suggestOpeningGoals(await buildProvider(profile), {
+        worldTitle: title,
+        anchorTitle: anchorEvent.title,
+        locationName: anchored.locations[0],
+        characterNames: anchored.canonCharacters.slice(0, 6).map(character => character.name),
+        playerName: name.trim() || (kind === 'original' ? '旅人' : '原著人物'),
+      }, { worldId, packageRevision: published.manifest.revision, packageContentHash: published.manifest.contentHash,
+        anchorEventId, profile, sha256Hex: nativeSha256.sha256Hex,
+        isCurrent: async () => Boolean(await runtime.worldStore.getWorld(worldId)),
+      });
+      if (goals.length > 0) {
+        setGoalSuggestions(goals);
+        setGoalSuggestionSource('llm');
+        recordStartupEvent('wizard_goal_ready', { source: 'llm', count: goals.length, via: 'manual' });
+      }
+    } catch {
+      // Silent by design: the wizard must never block or error on this.
+    } finally {
+      setAiGoalBusy(false);
+    }
+  }
 
   function bump(key: string, delta: number) {
     setPoints(previous => {
@@ -635,6 +669,9 @@ export function OpeningScreen(): React.JSX.Element {
                 goal={goal}
                 onGoalChange={setGoal}
                 goalSuggestions={goalSuggestions}
+                goalSuggestionSource={goalSuggestionSource}
+                aiGoalBusy={aiGoalBusy}
+                onAiRefreshGoals={refreshGoalsWithAi}
                 themeLabel={THEMES[themeId].label}
                 busy={busy}
                 canStart={advancedStartReady}
@@ -671,6 +708,9 @@ export function OpeningScreen(): React.JSX.Element {
             goal={goal}
             onGoalChange={setGoal}
             goalSuggestions={goalSuggestions}
+            goalSuggestionSource={goalSuggestionSource}
+            aiGoalBusy={aiGoalBusy}
+            onAiRefreshGoals={refreshGoalsWithAi}
             loadout={quickAdvancedOpen ? { attributes: points as typeof recommendation.attributes, initialSkills: chosenSkills } : recommendation}
             companions={companions}
             directives={companionDirectives}
