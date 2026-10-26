@@ -5,7 +5,7 @@
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
 
-第九阶段验收状态（2026-10-09）：**29 PASS / 2 FAIL / 9 NOT RUN，尚未完整收尾**。当前执行入口为[全通测试与修复收尾方案](docs/Shine-TRPG_PHASE9_FULL_PASS_CLOSEOUT_PLAN.md)，实际检查点见[R69交接](docs/reviews/phase9/HANDOFF_R69_CLOUD_2026-10-09.md)；版本能力说明不等于整阶段验收通过。
+第九/9.5 阶段验收状态（2026-10-19 检查点）：**工程门禁 PASS，阶段验收 PARTIAL，尚未完整收尾**。Runtime 工程收束 PASS-ENGINEERING（检查点 Core 1,366/1,366；当前 HEAD Core 1,377/1,377、mobile typecheck、version 门禁均绿，2026-10-26 实测）；真实 GBK 小说、GLM、Android 与 save-10 链路均有实际证据，但新开篇内容审查未放行，80 个真实有效决定与真人试玩（0/4）未完成。最新检查点见[本地最终收口报告](docs/reviews/phase9-5/local-final-closeout-20261019/FINAL_REPORT.md)，轮次进度见[progress.md](progress.md)；版本能力说明不等于整阶段验收通过。
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
@@ -31,11 +31,11 @@
 - **世界构建管线与自动恢复**（V0.4.3–V0.4.5）：TXT 导入后「抽取 → 映射 → 内容审查 → 发布」后台全链路执行。请求超时、上下文超限自动拆小批次并降档排队规模；映射 JSON 截断或仅返回思考内容时，后台自动提高正文与同档思考预算、拆小超限批次并按持久化退避续试，已完成抽取与映射成果保留，检查点按实际输入哈希重放合并；技术故障不进入人工内容审查。限流治理（V0.4.5）：所有物理请求（构建/映射/游玩回合）经 per-endpoint 全局调度器，429 触发指数惩罚地板与自适应请求间距并接线服务商 Retry-After，限流单元指数退避、默认并发下调为 2；服务商内容安全 4xx 批次自动对半拆分重试，干净部分照常完成。构建卡按「抽取批次 + 映射 + 审查校验 + 发布」计真实进度，发布成功才到 100%，存在待审项时可直达审查页；相同内容与严重度的豁免策略默认在本世界内记忆复用，内容变化重新审查。
 - **多 API 配置**（V0.4.4）：保存多条具名 API 配置，各持独立端点/模型/推理档位/并发与 Keychain keyRef，冷启动保留、点击即切换；正在运行的任务冻结配置，暂停或失败的任务可明确选择「用当前 API 继续」。旧单配置自动迁移。
 - **战役引擎模块**：技能成长、冲突检定、关系与知识、记忆检索、分支回退及存档往返已有实现和核心回归；同伴/NPC 可依规则自动推进到玩家决策。玩家仍决定目标、撤退、关键物品支出、成长选择和谜题答案。
-- **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`，schema 31）；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时本地确定性行动仍可结算；生成中断保留原行动与已完成检定，云端结果未知时由玩家确认重试。
+- **本地优先**：游戏状态全部存于设备 SQLite（`shineword.db`，单基线 version 101），存档协议 save-10；分支持久隔离，导出存档按 SHA-256 引用世界资料。断网时本地确定性行动仍可结算；生成中断保留原行动与已完成检定，云端结果未知时由玩家确认重试。
 
 ## 版本管理
 
-版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=0.9.1`，`versionCode=90100`。
+版本号、迭代规则与发版清单见 **[docs/VERSIONING.md](docs/VERSIONING.md)**：全仓库统一语义化版本 `MAJOR.MINOR.PATCH`，`versionCode = MAJOR×1,000,000 + MINOR×10,000 + PATCH×100 + BUILD`，`npm run verify:version` 强制六处一致（根/移动 package.json、lockfile、build.gradle、CHANGELOG、README）。完整变更记录见 **[CHANGELOG.md](CHANGELOG.md)**。构建标识：`versionName=1.0.0`，`versionCode=1000000`。
 
 ## 安全与隐私
 
@@ -69,6 +69,8 @@ pwsh -File mobile/scripts/build-release-apk.ps1
 APK 输出到 dist/apk/{debug|release}/，不入库。发版流程（签名校验、安装冒烟、tag 与 GitHub Release）按 [docs/VERSIONING.md](docs/VERSIONING.md) 第 4 节清单执行。
 
 ## 进度与评审
+
+- 第九/9.5 阶段：[本地最终收口报告](docs/reviews/phase9-5/local-final-closeout-20261019/FINAL_REPORT.md)、[验收矩阵](docs/reviews/phase9-5/local-final-closeout-20261019/ACCEPTANCE_MATRIX.md)、[9.5 收口施工方案](docs/Shine-TRPG_PHASE9_5_CLOSEOUT_CONSTRUCTION_PLAN.md)、轮次进度 [progress.md](progress.md)
 
 - 第六阶段：[FINAL_REPORT.md](docs/reviews/phase6/FINAL_REPORT.md)、[TEST_RESULTS.md](docs/reviews/phase6/TEST_RESULTS.md)、[验收矩阵](docs/reviews/phase6/ACCEPTANCE_MATRIX.md)
 
