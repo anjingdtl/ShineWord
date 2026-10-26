@@ -41,6 +41,7 @@ import { runV2Turn } from '../game/v2Turn';
 import { evaluateLocalCompileReadiness } from '../game/localCompileReadiness';
 import { TurnPostProcessingCoordinator } from '../game/turnPostProcessing';
 import { packageIndexes, ProposalRejectedError, normalizeMethodIntent, resolvePlayerMethodIndex } from '../game/v2Compile';
+import { matchFreeformIntentToMethod } from '../game/freeformMethodMatch';
 import type { ApiProfile } from '../llm/types';
 import type { Sha256HexProvider } from '../../domain/turns/canonical';
 import type { RandomSource } from '../../domain/rules/random';
@@ -3042,10 +3043,24 @@ export class CampaignSession {
       // method reference, verified against the methods offered this turn.
       const selectedIndex = resolvePlayerMethodIndex(activeMethods, activeMethodSituations,
         options.intent, options.guidanceChoice?.candidateRef);
-      const selectedCandidate = selectedIndex >= 0 ? {
+      let selectedCandidate = selectedIndex >= 0 ? {
         selectedMethodRef: { situationId: activeMethodSituations[selectedIndex]!, methodId: activeMethods[selectedIndex]!.methodId },
         candidateRef: `method:${activeMethodSituations[selectedIndex]}:${activeMethods[selectedIndex]!.methodId}`,
       } : undefined;
+      // Convergence W4a: a player's free input that does not carry a tapped
+      // candidate ref is matched against the CURRENT method set at high
+      // confidence first; ambiguous text still goes to the Planner — one
+      // extra request beats a mis-bind. Methods with planner_required
+      // policies keep their Planner routing either way.
+      if (!selectedCandidate && !options.guidanceChoice?.candidateRef) {
+        const localMatch = matchFreeformIntentToMethod({ intent: options.intent, methods: activeMethods });
+        if (localMatch) {
+          selectedCandidate = {
+            selectedMethodRef: { situationId: activeMethodSituations[localMatch.index]!, methodId: activeMethods[localMatch.index]!.methodId },
+            candidateRef: `method:${activeMethodSituations[localMatch.index]}:${activeMethods[localMatch.index]!.methodId}`,
+          };
+        }
+      }
       let localCompileSelection: import('../game/localCompileReadiness').LocalCompileSelectionV1 | undefined;
       let campaignBindingHash: string | undefined;
       if (selectedCandidate) {
