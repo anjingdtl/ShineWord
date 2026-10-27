@@ -1,6 +1,6 @@
 # Shine-TRPG
 
-[![Version](https://img.shields.io/badge/Version-V1.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-V1.1.0-blue.svg)](CHANGELOG.md)
 [![Author](https://img.shields.io/badge/作者-ShineHe-orange.svg)](docs/VERSIONING.md)
 
 面向 Android 的轻量文字 TRPG：玩家读故事、点文字行动或输入自己的意图；本地规则确定检定与状态，模型负责受限提案和叙事。作者：**ShineHe**。
@@ -11,7 +11,9 @@
 
 用户导入小说 TXT 后，Shine-TRPG 将原著整理成带证据的世界资料；玩家可以扮演原著角色或原创角色，通过简短文字选择或明确提交的自由行动推进故事。调查、关系日常、探索和冲突共用文字入口。LLM 只能在本地规则给定的边界内提出行动结构与叙事；本地引擎负责资格、骰点、成长、状态与事务结算。
 
-> 当前版本：**V1.0.0** · versionCode 1000000。V1.0.0 引入第九阶段「战役主线规划与持续后果」：开局填写意图后由真实模型生成战役提案（核心目标/基调/第一个问题），一键开始冒险；游玩页新增战役主线卡（当前目标/最近进展/已完成阶段）；主线进度、四档后果与延迟后果全部来自本地规则结算。存档/数据库协议不兼容旧版（save-10 / DB 基线 101），旧项目保留但需新建。`SegmentedControl` 新增 `scrollable` 选项，其他调用处不受影响。证据见 [CHANGELOG](CHANGELOG.md)。
+> 当前版本：**V1.1.0** · versionCode 1010000。V1.1.0 完成**启动流程收束**：点"开始故事"默认走本地基线（本地编译→同一校验器→原子采用，**零 LLM 请求**，模拟器实测点击到可行动 p95≈1.9s；协议 save-10/迁移 101+102 不变），"AI 定制主线（较慢）"保留为显式入口；向导目标建议本地生成（"AI 换一批"才发请求）；14 种 LLM 请求全部登记使用策略表并有普查测试守卫；冷启动拆分（boot_end p95 2083→1118ms，unknown 恢复保留关键路径）；自由输入高置信本地匹配（零误绑黄金样本）。证据见 [docs/reviews/convergence/](docs/reviews/convergence/) 与 [CHANGELOG](CHANGELOG.md)。
+>
+> V1.0.0 引入第九阶段「战役主线规划与持续后果」：开局填写意图后由真实模型生成战役提案（核心目标/基调/第一个问题），一键开始冒险；游玩页新增战役主线卡（当前目标/最近进展/已完成阶段）；主线进度、四档后果与延迟后果全部来自本地规则结算。存档/数据库协议不兼容旧版（save-10 / DB 基线 101），旧项目保留但需新建。`SegmentedControl` 新增 `scrollable` 选项，其他调用处不受影响。
 >
 > V0.9.0 新增玩家头像系统：四题材（东方武侠/欧洲奇幻/日系二次元/赛博科幻）× 男女 × 5 职业共 40 个预设头像（WebP ≈1.24 MB），「我的」页头像选择卡（题材页签 + 男女瓦片 + 不使用头像回退），游玩页右上角常驻 32dp 圆形头像；头像为 App 级玩家身份，随四套皮肤自适应描边/角标但不随世界换肤，存储键 `shineword.ui.avatar.v1`，非法值归一化为未设置。核心回归 922 项全绿；证据见 [头像系统验收报告](docs/reviews/AVATAR_SYSTEM_BUILD_REVIEW.md)。
 >

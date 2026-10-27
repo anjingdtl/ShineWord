@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-27
+
+### 启动流程收束：本地优先开局（新能力，协议不变）
+
+存档 `shineword-save-10`、SQLite 基线 101+102 与 ActionContract 协议**均不变**；本版本把 LLM 从启动关键路径与低价值回合路径移出（依据 [启动收束方案](docs/Shine-TRPG_STARTUP_CONVERGENCE_PLAN.md)，证据见 [docs/reviews/convergence/](docs/reviews/convergence/)）。
+
+#### 新增
+
+- **本地基线开局（默认路径）**：点"开始故事"本地编译战役计划→同一套校验器（计划/因果/结局/完成路线）→原子采用→直达游玩页，**零 LLM 请求**；实测（ShineQA 模拟器 API 37）点击到可行动 p95≈1.9s（原 LLM 路径均值 97.9s 且需二次确认）。基线方法全部带显式 L1 策略（固定档位+显式空证据集），采用后即本地可结算；provisional 后继阶段由既有后台阶段预备补全。"AI 定制主线（较慢）"保留为向导显式入口，行为不变。
+- **向导去 LLM 化**：开局目标建议改为本地模板生成（实测中位 78ms、挂载/改锚点零请求）；`opening_goal` 仅在显式点击"AI 换一批"时发出（沿用原治理：账本/缓存/在位检查，失败静默保留本地建议）。
+- **LLM 使用策略表（policy as code）**：全部 14 种请求种类登记档位/UI 阻塞许可/本地回退（`usagePolicy`），后台档禁止阻塞 UI；普查测试解析 `LlmRequestKind` 联合类型，新增未登记种类即门禁失败。
+- **StartupTrace 仪器**：进程内环形缓冲（容量 128、字段白名单标量，无 Key/正文/玩家输入）+ 设备单行 JSON 输出；覆盖冷启动、向导、开局计划、回合 Planner/Narrator 全事件点。
+- **自由输入本地路由**：高置信匹配（首步原文/唯一标题包含/唯一 ≥4 字特征片段）命中即走本地 L1；歧义与改写一律仍走 Planner（黄金样本零误绑）。
+
+#### 变更
+
+- **新创作门槛**：observe/talk/interact/move 无骰动作在证据白名单为空或仅一项时禁止 `planner_required`（解析层拒绝；skill_check 保留模型档位选择）；存档产物不受影响、不补默认值。
+- **冷启动拆分**：FTS5 探测与风格分析恢复延后到首屏之后（`deferredRecovery`；unknown 请求恢复**保留在关键路径**）；实测 boot_end p95 2083→1118ms（模拟器）。
+- 向导 `getWorldSetup` 改用只读 stub 会话，不再每次改锚点构建真实 provider；MiniMax 预设 wire id 更正为 `MiniMax-M3.1-Flash`（供应商已移除 `-Preview` 后缀，经 `/models` 验证）。
+
+#### 工程
+
+- 核心测试 1377→**1405**（新增收束 28 项：本地基线 7、自由输入匹配 7、普查 4、本地目标 6、trace 4）；`compileAndValidateCandidate` 从 LLM 作业闭包提取为模型来源无关的公共管线（零行为变化重构）。
+- 文档收束：`docs/INDEX.md`（现行/历史分级）、README 顶部当前施工入口、progress 里程碑状态表；方案文档登记为唯一执行入口。
+
+#### 未闭合（登记于 [验收矩阵](docs/reviews/convergence/ACCEPTANCE_MATRIX.md)）
+
+- W4C Narrator 降级 RFC 待批准（批准后解锁离线回合）；真实模型完整旅程（C-17）与外部试玩（C-18）待安排；设备证据均为模拟器，真机未验。
+
+- 升级版本至 **V1.1.0**（versionCode **1010000**）。本轮经 Draft PR #18 快进合入 main；发版 tag `v1.1.0`。
+
 ## [1.0.0] - 2026-10-06
 
 ### 第九阶段：战役主线规划与持续后果（不兼容变更）
