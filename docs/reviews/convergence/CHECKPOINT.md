@@ -4,9 +4,10 @@
 
 ## 当前状态
 
-- 里程碑进度：**C0–C4 全部完成**（工程收束达成：C-01~C-12、C-16 PASS；见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)）
-- 分支：`codex/startup-convergence-w0`（单分支承载全部工作包；提交序列见 git log，convergence scope）。最终门禁：`verify:core` 1405/1405、`verify:version` OK、mobile typecheck OK。
-- 待用户决策：**D4**（W4C RFC 是否批准实施——同时解锁 C-15 离线回合）；**D6/C-17**（真实模型完整旅程的预算授权）；**C-18**（外部试玩安排）。**D1**（W6 序章）维持不实施。
+- **已发版 V1.1.0**（2026-10-27，tag `v1.1.0`，GitHub Release 附正式 APK；versionCode 1010000）。收束轮经 PR #18 快进合入 main（`9914e4b`），发版提交 `e5a5a80`，两提交 CI 双绿。
+- 工程收束达成（C-01~C-12、C-16 PASS；见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)）。
+- **注意**：发版冒烟因 debug→release 签名变更执行了卸载重装，ShineQA AVD 上的测试数据（fangkai-nvwang 世界、profile、Keychain）已清除；若做 C-17 需重建世界（约 1–2 次物理请求，scoped 账本 `.tmp/convergence/minimax-scoped-20261026.json` 仍有效，4/60）。
+- 待用户决策：**D4**（W4C RFC 批准→解锁 C-15）；**C-17** 预算授权；**C-18** 外部试玩。**D1**（W6 序章）维持不实施。
 
 ## 已完成工作包
 
