@@ -21,6 +21,14 @@ import type { NarrativeCandidate } from './v2Turn';
  */
 export const NARRATOR_LOCAL_DEGRADE_DEADLINE_MS = 45_000;
 
+/**
+ * A transport failure this fast never completed a server roundtrip (a real
+ * model call cannot return in under two seconds), so treating it as
+ * pre-connection cannot double-bill. Only the T-B narrator path uses this;
+ * the ledger attempt still records outcome_unknown and is never replayed.
+ */
+export const NARRATOR_FAST_FAIL_MS = 2_000;
+
 const GRADE_LABEL: Record<RollGrade, string> = {
   full_success: '大成功',
   success: '成功',

@@ -1,6 +1,7 @@
-# W4C RFC：Narrator 期限与本地降级（仅评审稿，未实施）
+# W4C RFC：Narrator 期限与本地降级（已批准实施，2026-10-27）
 
-> 状态：**RFC — 等待用户批准（D4）**。本文件不改变任何运行行为；`v2Turn.ts` 的提交顺序、账本规则与恢复路径在批准前保持原样。
+> 状态：**已批准（D4）并实施**（`narrationTemplate.ts` + `v2Turn.ts` 降级接线；测试 `tests/convergence-narration-*.test.cjs`）。
+> **实施附录（2026-10-28，设备实测发现）**：RN fetch 的连接拒连没有错误码（"Network request failed" 无 `ECONNREFUSED`），传输层按保守合同标 `dispatchState:'unknown'`——§2.1 的"未派出才降级"规则在真实离线设备上无法触发，回合会卡进 unknown 确认流，与已批准的 T-B 档合同（"回退本地模板，不进入 unknown 死路"）冲突。实施时为 **narrator 专属**补充快速失败窗：传输失败且单次尝试 `< 2s`（`NARRATOR_FAST_FAIL_MS`）视为未建立连接——任何真实模型往返都不可能在 2 秒内返回传输错误，故不可能已计费。账本 attempt 仍如实记 `outcome_unknown`（可审计），降级路径永不重发。慢速切断（如 87s 处断连）仍走原 unknown 确认流。此扩展不适用于 planner 等其他请求种类。
 > 编制：启动收束施工 agent，2026-10-26。依据：收束方案 §6 W4c、§10 D4；`docs/reviews/phase9-5` 的 unknown 警告。
 
 ## 1. 现状：叙事在提交之前，且受账本 unknown 规则约束

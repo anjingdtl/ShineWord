@@ -32,6 +32,12 @@ function narratorFailure(kind) {
     return new LlmRequestFailure('connection refused', [{ attempt: 1, durationMs: 2, httpStatus: null,
       outcome: 'transport_error', dispatchState: 'not_sent' }]);
   }
+  if (kind === 'fast_offline') {
+    // RN fetch offline: no error code, dispatchState unknown, but returns
+    // far faster than any server roundtrip could.
+    return new LlmRequestFailure('Network request failed', [{ attempt: 1, durationMs: 110, httpStatus: null,
+      outcome: 'transport_error', dispatchState: 'unknown' }]);
+  }
   // uncertain: dispatched transport cut — must NOT degrade
   return new LlmRequestFailure('socket cut', [{ attempt: 1, durationMs: 90_000, httpStatus: null,
     outcome: 'transport_error', dispatchState: 'sent' }]);
@@ -46,7 +52,7 @@ async function playOneTurn(h) {
     guidanceChoice: { decisionPoint: guidance.decisionPoint, candidateRef: step.candidateRef } });
 }
 
-for (const kind of ['http_reject', 'not_sent_refusal']) {
+for (const kind of ['http_reject', 'not_sent_refusal', 'fast_offline']) {
   test(`definite Narrator failure (${kind}) degrades to the local template and still commits`, async t => {
     let narratorAttempts = 0;
     const h = await fixture({

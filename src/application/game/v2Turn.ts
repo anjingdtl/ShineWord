@@ -15,7 +15,7 @@ import type { LlmProvider, LlmRequest, ReasoningTier } from '../llm/types';
 import { LlmRequestFailure } from '../llm/types';
 import { classifyLlmFailure } from '../llm/requestLedger';
 import { SchedulerQueueError } from '../worldBuild/rateScheduler';
-import { localNarrationCandidate, NARRATOR_LOCAL_DEGRADE_DEADLINE_MS } from './narrationTemplate';
+import { localNarrationCandidate, NARRATOR_FAST_FAIL_MS, NARRATOR_LOCAL_DEGRADE_DEADLINE_MS } from './narrationTemplate';
 import { requireCompiledRules, assertRuleAction } from '../content/runtimeRules';
 import { BudgetInfeasibleError, stableFingerprint } from '../llm/requestPlan';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
@@ -672,9 +672,15 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       if (error instanceof LlmRequestFailure) {
         // Definite = every attempt either never dispatched, was definitely
         // rejected by the provider, or produced an unrepairable response.
-        // Transport errors after dispatch stay uncertain (outcome_unknown).
+        // RN fetch cannot prove refusal (no error code), so an offline
+        // endpoint surfaces as dispatchState 'unknown'. For the T-B narrator
+        // contract only ("回退本地模板，不进入 unknown 死路"), a transport
+        // failure within FAST_FAIL window is pre-connection: no server
+        // roundtrip means no billing. The ledger attempt itself stays
+        // outcome_unknown and is never replayed by this path.
         return error.requestMetrics.length > 0 && error.requestMetrics.every(metric =>
-          metric.dispatchState === 'not_sent' || metric.outcome === 'invalid_response' || metric.outcome === 'http_error');
+          metric.dispatchState === 'not_sent' || metric.outcome === 'invalid_response' || metric.outcome === 'http_error'
+          || (metric.outcome === 'transport_error' && metric.durationMs < NARRATOR_FAST_FAIL_MS));
       }
       return false;
     };

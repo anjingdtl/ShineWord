@@ -79,3 +79,20 @@ test('definite-failure classifier: queue cancel, wire gate and definite HTTP rej
   const emptyMetrics = new LlmRequestFailure('odd', []);
   assert.equal(isDefinite(emptyMetrics), false, 'no metrics means no proof of definiteness');
 });
+
+test('narrator fast-fail window: sub-2s unknown transport failure is pre-connection', () => {
+  const isNarratorDefinite = error => {
+    if (error instanceof LlmRequestFailure) {
+      return error.requestMetrics.length > 0 && error.requestMetrics.every(metric =>
+        metric.dispatchState === 'not_sent' || metric.outcome === 'invalid_response' || metric.outcome === 'http_error'
+        || (metric.outcome === 'transport_error' && metric.durationMs < 2_000));
+    }
+    return false;
+  };
+  const fastOffline = new LlmRequestFailure('Network request failed', [{ attempt: 1, durationMs: 90, httpStatus: null,
+    outcome: 'transport_error', dispatchState: 'unknown' }]);
+  const slowCut = new LlmRequestFailure('socket cut', [{ attempt: 1, durationMs: 87_000, httpStatus: null,
+    outcome: 'transport_error', dispatchState: 'sent' }]);
+  assert.equal(isNarratorDefinite(fastOffline), true, 'offline refusal returns before any server roundtrip');
+  assert.equal(isNarratorDefinite(slowCut), false, 'a late cut during a live request stays unknown');
+});
