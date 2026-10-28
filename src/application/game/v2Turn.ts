@@ -12,7 +12,10 @@ import { assertValidActionContract } from '../../domain/turns/contracts';
 import type { ActionContract } from '../../domain/turns/types';
 import type { ContentDependencyBinding } from '../../domain/content/types';
 import type { LlmProvider, LlmRequest, ReasoningTier } from '../llm/types';
+import { LlmRequestFailure } from '../llm/types';
 import { classifyLlmFailure } from '../llm/requestLedger';
+import { SchedulerQueueError } from '../worldBuild/rateScheduler';
+import { localNarrationCandidate, NARRATOR_LOCAL_DEGRADE_DEADLINE_MS } from './narrationTemplate';
 import { requireCompiledRules, assertRuleAction } from '../content/runtimeRules';
 import { BudgetInfeasibleError, stableFingerprint } from '../llm/requestPlan';
 import type { FrozenTurnContext } from '../context/contextSnapshot';
@@ -651,8 +654,30 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
         branchId: input.branchId,
         stateVersion: contract.expectedStateVersion,
       },
+      queueSignal: degradeController.signal,
     });
     let narrated;
+    // W4c (D4 approved 2026-10-27): T-B tier hard deadline + local template
+    // degrade. The queue signal only cancels a QUEUED request — dispatch is
+    // never treated as reversible — so a request already in flight keeps its
+    // transport deadline and the outcome_unknown rules; it is never
+    // auto-degraded. No late response can race the degrade path: degrade only
+    // fires on queue-cancel or on definite failures with a known outcome.
+    const degradeController = new AbortController();
+    const degradeTimer = setTimeout(() => degradeController.abort(), NARRATOR_LOCAL_DEGRADE_DEADLINE_MS);
+    let degradedReason: string | null = null;
+    const isDefiniteNarratorFailure = (error: unknown): boolean => {
+      if (error instanceof SchedulerQueueError) return error.code === 'cancelled';
+      if (error instanceof BudgetInfeasibleError) return true; // local wire gate: nothing was sent
+      if (error instanceof LlmRequestFailure) {
+        // Definite = every attempt either never dispatched, was definitely
+        // rejected by the provider, or produced an unrepairable response.
+        // Transport errors after dispatch stay uncertain (outcome_unknown).
+        return error.requestMetrics.length > 0 && error.requestMetrics.every(metric =>
+          metric.dispatchState === 'not_sent' || metric.outcome === 'invalid_response' || metric.outcome === 'http_error');
+      }
+      return false;
+    };
     const prepareNarratorRequest = (request: LlmRequest): LlmRequest => input.narratorBudget
       ? fitGuidanceNarratorRequest(request, { ...input.narratorBudget, plainNarratorSystem: narratorSystem(false) }) : request;
     // P8-2 final wire gate (plan §10.4): after all payload assembly and
@@ -697,47 +722,69 @@ export async function runV2Turn(input: RunV2TurnInput): Promise<RunV2TurnResult>
       verify(current);
       return current;
     };
-    try {
-      narrated = await input.provider.complete(checkNarratorWire(
-        prepareNarratorRequest(makeNarratorRequest(
-          input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
-        )),
-        input.narratorFinalWire,
-      ));
-    } catch (error) {
-      const recovery = input.narratorReasoningRecovery;
-      if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
-      budget.consume('Narrator');
-      input.onReasoningRecovery?.('narrator', recovery.context);
-      narrated = await input.provider.complete(checkNarratorWire(prepareNarratorRequest({
-        ...makeNarratorRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
-        maxPhysicalRequests: 1,
-      }), recovery.finalWire ?? input.narratorFinalWire));
-    }
-    recordUsage(input, 'Narrator', narrated);
-    const parseCandidate = (text: string): NarrativeCandidate => {
-      const value = parseStructuredOutput<NarrativeCandidate>(text, { label: 'Narrator candidate' }).value;
-      validateNarrative(value, input.turnId, grade, narratorWorldClock);
-      return value;
-    };
     let candidate: NarrativeCandidate;
-    try { candidate = parseCandidate(narrated.text); }
-    catch (error) {
-      // Repair only a received, invalid candidate. An uncertain HTTP outcome
-      // exits above and is never automatically sent again. Recovery reuses
-      // the retained primary and repaired responses under the same identities.
-      budget.consume('Narrator');
-      const request = makeNarratorRequest(input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens);
-      const payload = JSON.parse(request.user) as Record<string, unknown>;
-      payload.repairInstructions = `Your received candidate was invalid: ${error instanceof Error ? error.message : String(error)}. Return corrected complete JSON with turnId=${input.turnId}, outcomeGrade=${grade} and nonempty text. Preserve the frozen outcome; the previous candidate is unadopted and cannot establish facts.`;
-      payload.previousCandidate = narrated.text;
-      const repaired = await input.provider.complete(checkNarratorWire(
-        prepareNarratorRequest({ ...request, user: canonicalStringify(payload as CanonicalJson), maxPhysicalRequests: 1 }), input.narratorFinalWire));
-      recordUsage(input, 'Narrator', repaired);
-      candidate = parseCandidate(repaired.text);
+    try {
+      try {
+        narrated = await input.provider.complete(checkNarratorWire(
+          prepareNarratorRequest(makeNarratorRequest(
+            input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens,
+          )),
+          input.narratorFinalWire,
+        ));
+      } catch (error) {
+        const recovery = input.narratorReasoningRecovery;
+        if (!recovery || classifyLlmFailure(error) !== 'reasoning_only') throw error;
+        budget.consume('Narrator');
+        input.onReasoningRecovery?.('narrator', recovery.context);
+        narrated = await input.provider.complete(checkNarratorWire(prepareNarratorRequest({
+          ...makeNarratorRequest(recovery.worldContext, recovery.wireOutputTokens, recovery.reserveTokens),
+          maxPhysicalRequests: 1,
+        }), recovery.finalWire ?? input.narratorFinalWire));
+      }
+      recordUsage(input, 'Narrator', narrated);
+      const parseCandidate = (text: string): NarrativeCandidate => {
+        const value = parseStructuredOutput<NarrativeCandidate>(text, { label: 'Narrator candidate' }).value;
+        validateNarrative(value, input.turnId, grade, narratorWorldClock);
+        return value;
+      };
+      try { candidate = parseCandidate(narrated.text); }
+      catch (error) {
+        // Repair only a received, invalid candidate. An uncertain HTTP outcome
+        // exits above and is never automatically sent again. Recovery reuses
+        // the retained primary and repaired responses under the same identities.
+        budget.consume('Narrator');
+        const request = makeNarratorRequest(input.narratorWorldContext ?? '', input.narratorWireOutputTokens, input.narratorReasoningReserveTokens);
+        const payload = JSON.parse(request.user) as Record<string, unknown>;
+        payload.repairInstructions = `Your received candidate was invalid: ${error instanceof Error ? error.message : String(error)}. Return corrected complete JSON with turnId=${input.turnId}, outcomeGrade=${grade} and nonempty text. Preserve the frozen outcome; the previous candidate is unadopted and cannot establish facts.`;
+        payload.previousCandidate = narrated.text;
+        try {
+          const repaired = await input.provider.complete(checkNarratorWire(
+            prepareNarratorRequest({ ...request, user: canonicalStringify(payload as CanonicalJson), maxPhysicalRequests: 1 }), input.narratorFinalWire));
+          recordUsage(input, 'Narrator', repaired);
+          candidate = parseCandidate(repaired.text);
+        } catch (repairError) {
+          if (!isDefiniteNarratorFailure(repairError)) throw repairError;
+          degradedReason = 'repair_definite_failure';
+          candidate = localNarrationCandidate({ contract, turnId: input.turnId, grade, rollRecord });
+        }
+      }
+    } catch (error) {
+      // Degrade to the local template ONLY on definite failures (still queued
+      // at the deadline, local wire gate, provider rejection, unrepairable
+      // response). Uncertain dispatched outcomes rethrow into the existing
+      // outcome_unknown flow; the degrade path never issues another request,
+      // so no replay or double billing is possible either way.
+      if (!isDefiniteNarratorFailure(error)) throw error;
+      degradedReason = 'deadline_or_definite_failure';
+      candidate = localNarrationCandidate({ contract, turnId: input.turnId, grade, rollRecord });
+    } finally {
+      clearTimeout(degradeTimer);
+    }
+    if (degradedReason !== null) {
+      validateNarrative(candidate, input.turnId, grade, narratorWorldClock);
     }
     extractedGuidance = extractGuidancePayload(candidate);
-    recordStartupEvent('turn_narrator_end', { turnId: input.turnId, durationMs: Date.now() - narratorStartMs });
+    recordStartupEvent('turn_narrator_end', { turnId: input.turnId, durationMs: Date.now() - narratorStartMs, degraded: degradedReason !== null });
     narrative = await input.narratives.saveCandidate({
       branchId: input.branchId,
       turnId: input.turnId,

@@ -46,7 +46,7 @@ export const LLM_USAGE_POLICY: Record<LlmRequestKind, LlmUsagePolicyEntry> = {
   narrator: {
     tier: 'foreground_degradable',
     uiBlockingAllowed: true,
-    localFallback: 'local narration template (W4c RFC; not yet approved)',
+    localFallback: 'local narration template (game/narrationTemplate, implemented W4c/D4 2026-10-27)',
     owner: 'game/v2Turn',
   },
   campaign_plan: {

@@ -292,10 +292,12 @@ test('A09: when Narrator + repair still overflows, the repair is not dispatched 
     const input = runV2Input(h, provider, { turnId: 'turn-0001', narratorFinalWire: budget });
     input.actingCard = card; input.cards = [card];
 
-    await assert.rejects(
-      require('../dist/application/game/v2Turn').runV2Turn(input),
-      error => error instanceof BudgetInfeasibleError && error.code === 'final_wire_exceeded',
-    );
+    // Convergence W4c (D4 approved): a wire-overflow repair is a definite
+    // LOCAL failure with zero dispatch, so the turn now commits with the
+    // honest local narration template instead of failing the whole turn.
+    const result = await require('../dist/application/game/v2Turn').runV2Turn(input);
+    assert.match(result.narrative.text, /^（本地叙事）/,
+      'over-budget repair degrades to the local template rather than failing');
     assert.equal(calls.length, 1, 'the overflowing repair request was never dispatched');
   } finally {
     h.db.close();
