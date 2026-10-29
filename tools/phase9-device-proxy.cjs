@@ -34,8 +34,8 @@ function createQaProxy({ endpoint, expectedModel, capabilities, budget = default
           worldId: req.headers['x-phase9-world-id'],
           stateVersion: Number.isInteger(Number(req.headers['x-phase9-state-version'])) ? Number(req.headers['x-phase9-state-version']) : undefined,
           profileFingerprint: req.headers['x-phase9-profile-fingerprint'] });
-      } catch (reserveError) {
-        report({ status: 429, failure: 'qa_dispatch_denied', dispatched: false, reason: String(reserveError?.message || reserveError).slice(0, 160) });
+      } catch {
+        report({ status: 429, failure: 'qa_dispatch_denied', dispatched: false });
         res.writeHead(429, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'QA request reservation denied before upstream dispatch' }));
         return;
