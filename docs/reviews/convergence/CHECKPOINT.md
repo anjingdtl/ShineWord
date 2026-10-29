@@ -4,10 +4,11 @@
 
 ## 当前状态
 
-- **已发版 V1.1.0**（2026-10-27，tag `v1.1.0`，GitHub Release 附正式 APK；versionCode 1010000）。收束轮经 PR #18 快进合入 main（`9914e4b`），发版提交 `e5a5a80`，两提交 CI 双绿。
-- 工程收束达成（C-01~C-12、C-16 PASS；见 [ACCEPTANCE_MATRIX.md](ACCEPTANCE_MATRIX.md)）。
-- **注意**：发版冒烟因 debug→release 签名变更执行了卸载重装，ShineQA AVD 上的测试数据（fangkai-nvwang 世界、profile、Keychain）已清除；若做 C-17 需重建世界（约 1–2 次物理请求，scoped 账本 `.tmp/convergence/minimax-scoped-20261026.json` 仍有效，4/60）。
-- 待用户决策：**D4**（W4C RFC 批准→解锁 C-15）；**C-17** 预算授权；**C-18** 外部试玩。**D1**（W6 序章）维持不实施。
+- **D4/C-17/C-18 三项批准已执行**（2026-10-27/29）。分支 `codex/convergence-w4c-narrator-degrade`（W4c 实现 `1d391f4`、fast-fail 修复 `967821f`、journey 驱动与文档）。最终门禁 `verify:core` **1415/1415**。
+- **W4c 已实施**：45s 队列期限 + 确定性/sub-2s 传输失败 → 本地模板降级（真实旅程中实际触发并正常提交）；慢速切断保持 unknown。设备实测发现 RN fetch 拒连无错误码 → RFC 实施附录新增 narrator 专属 fast-fail 窗（2s）。
+- **C-17 完成（PASS-PARTIAL）**：host 侧 production pipeline 真实旅程——本地基线 0 请求开局、L1+真实 Narrator、真实 Planner、降级提交、预算硬顶、冻结安全拒绝。预算共支 **30/60**（详见 [C17_REAL_JOURNEY_BRIEFING.md](C17_REAL_JOURNEY_BRIEFING.md)，含 18 笔抽取重试的诚实记录）。
+- **C-18 材料就绪**：[C18_PLAYTEST_GUIDE.md](C18_PLAYTEST_GUIDE.md) 任务单待真人执行。
+- 设备遗留（如实登记）：ShineQA 模拟器三次崩溃；设备战役 A 带 unknown 待确认状态（不自动重放）；dist 的 V1.1.0 debug APK 含 W4c 修复前代码，合入后需重构建。
 
 ## 已完成工作包
 
@@ -37,13 +38,13 @@ scoped 预算 `convergence-20261026`（上限 60 物理请求）：已用 **4**�
 
 ## 未完成项与阻塞
 
-- **D4 待决策**：W4C RFC（批准后按 RFC §4 顺序实施，解锁 C-15）。
-- **C-17**（真实模型完整旅程）：BLOCKED——待预算授权。本会话已用 4/60（world_extract/style_analyzer/opening_goal/后台 campaign_plan 各 1）；scoped 账本 `.tmp/convergence/minimax-scoped-20261026.json`。设备测试世界 fangkai-nvwang 保持可游玩。
-- **C-18**（外部试玩）：BLOCKED 待安排。
-- 真机、首次运行空库冷启动、K3 p95 大样本：NOT RUN。
+- **C-18**：等真人按 [C18_PLAYTEST_GUIDE.md](C18_PLAYTEST_GUIDE.md) 执行并记录。
+- C-17 长旅程（80 决定级）与后台预备在本轮预算内的派发：NOT RUN（剩余授权预算 30 保留；机制证据在设备侧 2026-10-26 已有）。
+- 真机验证、K3 p95 大样本：NOT RUN。
+- 发版：W4c 合入 main 后建议发 V1.1.1（PATCH：narrator 降级与 fast-fail 修复），另需重建含修复的 debug APK 供设备复测。
 
 ## 下一步（换会话接手）
 
-1. 用户批准 D4 → 实施 W4c（模板→期限→not_sent 关闭→端到端强杀矩阵→usagePolicy 回填）→ C-15 离线 10 回合。
-2. C-17：授权预算后用 fangkai-nvwang 世界跑完整旅程（本地开局 + 后台增强 + 80 决定级样本）。
-3. 推送分支并开 Draft PR（交付规则允许；尚未推送）。
+1. 推送 `codex/convergence-w4c-narrator-degrade` 并开 Draft PR（由用户决定合并）。
+2. 用户执行 C-18 试玩并回填记录。
+3. （可选）合入后发 V1.1.1；若继续 C-17 长旅程，剩余预算 30，建议先解决 MiniMax 抽取输出兼容性（独立评审，勿放宽校验器）。

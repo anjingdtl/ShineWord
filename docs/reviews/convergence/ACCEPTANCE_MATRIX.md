@@ -17,12 +17,12 @@
 | C-10 | 后继预备在稳定边界触发并可采用 | **PASS** | 自动化测试 + 设备观察 | `evaluateStagePreparationTarget`→provisional 后继；设备上后台 campaign_plan 实际生成后继（1 次请求，非阻塞） |
 | C-11 | 自由输入本地匹配黄金样本零误绑 | **PASS** | 自动化测试 | `tests/convergence-freeform-match.test.cjs` 7 项（歧义/近义/空输入一律不绑） |
 | C-12 | L1 与 L2 黄金套件结果一致 | **PARTIAL** | 自动化测试（沿用） | 结算路径未改，phase9-5 L1 等价套件原样通过；但"真实 LLM 计划 planner_required 比例基线与上限"未采（需真实请求） |
-| C-13 | W4C RFC 提交并获批 | **PARTIAL — RFC 已交付，待批准** | 文档评审 | `W4C_NARRATION_DEGRADE_RFC.md`（恢复矩阵/触发/模板/迟到处置/账本影响）；D4 决策待用户 |
+| C-13 | W4C RFC 提交并获批 | **PASS（已批准并实施）** | 文档评审 + 自动化测试 + 真实模型 | RFC 2026-10-27 获批（D4）；实施 `narrationTemplate.ts` + `v2Turn.ts`（45s 队列期限、确定性与 sub-2s 传输失败降级、慢速切断保持 unknown）；测试 9 项；真实旅程中降级路径实际触发并正常提交（见 C17 简报 §1） |
 | C-14 | 冷启动 p95 相对基线下降 | **PASS**（模拟器） | 模拟器 | n=5：boot_end p95 2083→1118ms（-46%）、db_runtime 889→445ms；unknown 恢复保留关键路径 |
-| C-15 | 离线 10 回合 | **BLOCKED** | — | 依赖 W4c/D4（Narrator 先于提交，离线时回合无法完成；W6 未批准，K7 口径为已构建世界离线） |
+| C-15 | 离线 10 回合 | **PARTIAL** | 自动化测试 + 真实降级案例 | 自动化：offline fast-fail→本地模板提交（convergence-narrator-degrade 9 用例）；真实旅程 turn-0002 降级提交与冻结安全拒绝；**设备飞行模式 10 回合 NOT RUN**（设备环境多轮 unknown 污染+模拟器不稳定，见 C17 简报） |
 | C-16 | INDEX/README/progress 对齐、verify:version 绿 | **PASS** | 自动化测试 | `docs/INDEX.md` 新增、README 顶部入口、progress 状态表逐里程碑更新；`verify:version` OK |
-| C-17 | 真实模型验证：本地基线 + 后台增强完整旅程 | **BLOCKED** | 真实模型 + 真实旅程 | 待用户预算授权（本会话授权额度内已完成开局世界构建与局部取证：4/60 请求；完整 80 决定级旅程未做） |
-| C-18 | 外部试玩：开始故事体感对比 | **BLOCKED** | 外部试玩 | 待用户安排 |
+| C-17 | 真实模型验证：本地基线 + 后台增强的完整旅程 | **PASS-PARTIAL** | 真实模型 + 真实旅程 | [C17_REAL_JOURNEY_BRIEFING.md](C17_REAL_JOURNEY_BRIEFING.md)：本地基线 0 请求开局（两次）、L1+真实 Narrator 回合、真实 Planner 回合、Narrator 失败降级提交、预算硬顶、冻结安全拒绝；30/60 授权预算已用。未覆盖：80 决定级长旅程、后台预备本轮内派发（机制证据在先） |
+| C-18 | 外部试玩：开始故事体感对比 | **BLOCKED：材料就绪待真人** | 外部试玩 | [C18_PLAYTEST_GUIDE.md](C18_PLAYTEST_GUIDE.md) 任务单已备；执行与记录待用户/玩家 |
 
 ## 结论
 
