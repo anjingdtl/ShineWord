@@ -15,6 +15,44 @@ import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../..
 export const LLM_EXTRACTOR_VERSION = 'llm-extractor-1';
 export const DEFAULT_LLM_EXTRACTOR_MAX_OUTPUT_TOKENS = 8000;
 
+/**
+ * Extractor wire schema (final-closeout R4): the key vocabulary that licenses
+ * the deterministic form-A vendor repair for MiniMax-class malformed JSON
+ * (`repairDroppedKeyClosingQuote`). Any key outside this set is never touched.
+ * Form B (missing closing brace) needs no vocabulary: it only inserts a brace
+ * where no valid JSON can exist without one.
+ */
+export const EXTRACTION_REPAIR_VOCABULARY: ReadonlySet<string> = new Set([
+  'entities', 'facts', 'events', 'ruleMappings',
+  'key', 'type', 'name', 'aliases',
+  'subject', 'predicate', 'value', 'status', 'confidence', 'segment', 'quote',
+  'title', 'summary', 'order', 'dependsOn',
+  'target', 'kind', 'mapping', 'evidenceQuotes',
+]);
+export const EXTRACTION_STRUCTURAL_REPAIR = {
+  vocabulary: EXTRACTION_REPAIR_VOCABULARY,
+} as const;
+
+/**
+ * Form B recovery: when the vendor dropped a nested object's closing brace,
+ * the element-level evidence key lands inside that nested object. Reading it
+ * from the observed artifact location restores the model's intent; the quotes
+ * themselves still pass the strict verbatim evidence verification downstream,
+ * so this only recovers parse shape, never authority.
+ */
+export function evidenceRefsFromCandidate(candidate: { evidenceQuotes?: unknown; mapping?: unknown }): string[] {
+  const direct = Array.isArray(candidate.evidenceQuotes)
+    ? candidate.evidenceQuotes.filter((ref): ref is string => typeof ref === 'string')
+    : [];
+  if (direct.length > 0) return direct;
+  const mapping = candidate.mapping;
+  if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
+    const nested = (mapping as Record<string, unknown>).evidenceQuotes;
+    if (Array.isArray(nested)) return nested.filter((ref): ref is string => typeof ref === 'string');
+  }
+  return [];
+}
+
 export function worldBuildExtractorVersion(tier: ReasoningTier): string {
   return `${LLM_EXTRACTOR_VERSION}#${tier}`;
 }
@@ -59,7 +97,10 @@ function asString(value: unknown): string | null {
 }
 
 export function parseExtractorJson(text: string): RawExtraction {
-  return parseStructuredOutput<RawExtraction>(text, { label: 'Extractor output' }).value;
+  return parseStructuredOutput<RawExtraction>(text, {
+    label: 'Extractor output',
+    structuralRepair: EXTRACTION_STRUCTURAL_REPAIR,
+  }).value;
 }
 
 /**
@@ -202,9 +243,7 @@ export class LlmChunkExtractor implements ChunkExtractor {
         mapping: candidate.mapping && typeof candidate.mapping === 'object' && !Array.isArray(candidate.mapping)
           ? candidate.mapping as Record<string, unknown>
           : {},
-        evidenceRefs: Array.isArray(candidate.evidenceQuotes)
-          ? candidate.evidenceQuotes.filter((ref): ref is string => typeof ref === 'string')
-          : [],
+        evidenceRefs: evidenceRefsFromCandidate(candidate),
       });
     }
 

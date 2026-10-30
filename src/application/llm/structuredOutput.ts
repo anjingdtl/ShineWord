@@ -21,8 +21,10 @@ import {
   findBalancedJsonSpans,
   looksTruncated,
   repairTrailingCommas,
+  repairVendorStructuralArtifacts,
   stripMarkdownFence,
   stripReasoningWrappers,
+  type StructuralRepairOptions,
 } from './responseNormalizer';
 
 export type StructuredFailureCode =
@@ -48,6 +50,13 @@ export interface StructuredParseOptions {
   fieldAliases?: Record<string, string>;
   /** field -> observed value -> canonical value (whitelist only). */
   enumAliases?: Record<string, Record<string, string>>;
+  /**
+   * Vendor structural repair (final-closeout R4): declares the schema
+   * vocabulary that licenses the deterministic form-A/form-B repairs for
+   * MiniMax-class malformed JSON. Callers that do not declare it keep the
+   * exact pre-existing behaviour (no repair attempted).
+   */
+  structuralRepair?: StructuralRepairOptions;
   /** Schema/semantic/authority gate; throws to reject a candidate. */
   validate?: (value: unknown) => void;
 }
@@ -95,43 +104,63 @@ export function parseStructuredOutput<T>(raw: string, options: StructuredParseOp
     // Fenced content that itself failed balance may still parse after repair.
   }
 
-  const errors: string[] = [];
-  for (const candidate of candidates) {
-    for (const text of [candidate.text, repairTrailingCommas(candidate.text) ?? '']) {
-      if (!text.trim()) continue;
+  /** Attempts one candidate: parse, safe repairs, aliases, validation. */
+  const attemptCandidate = (text: string, origin: string): { value: T; steps: string[] } | { error: string } => {
+    for (const variant of [text, repairTrailingCommas(text) ?? '']) {
+      if (!variant.trim()) continue;
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(variant);
       } catch {
         continue;
       }
-      if (text !== candidate.text) repairSteps.push('repair_trailing_comma');
+      const steps = text !== variant ? ['repair_trailing_comma'] : [];
 
       const decoded = decodeDoubleEncoded(parsed);
-      if (decoded !== parsed) repairSteps.push('decode_double_encoded');
+      if (decoded !== parsed) steps.push('decode_double_encoded');
       if (!isPlainObject(decoded)) continue;
 
       let normalized: unknown = decoded;
       if (options.fieldAliases) {
         const aliased = applyFieldAliases(normalized, options.fieldAliases);
         normalized = aliased.value;
-        repairSteps.push(...aliased.applied.map(step => `alias:${step}`));
+        steps.push(...aliased.applied.map(step => `alias:${step}`));
       }
       if (options.enumAliases) {
         const enumed = applyEnumAliases(normalized, options.enumAliases);
         normalized = enumed.value;
-        repairSteps.push(...enumed.applied.map(step => `enum:${step}`));
+        steps.push(...enumed.applied.map(step => `enum:${step}`));
       }
 
       if (options.validate) {
         try {
           options.validate(normalized);
         } catch (error) {
-          errors.push(`${candidate.origin}: ${error instanceof Error ? error.message : String(error)}`);
-          continue;
+          return { error: `${origin}: ${error instanceof Error ? error.message : String(error)}` };
         }
       }
-      return { value: normalized as T, repairSteps };
+      return { value: normalized as T, steps };
+    }
+    return { error: `${origin}: not parseable` };
+  };
+
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    const attempt = attemptCandidate(candidate.text, candidate.origin);
+    if ('value' in attempt) {
+      return { value: attempt.value, repairSteps: [...repairSteps, ...attempt.steps] };
+    }
+    if (!/not parseable/.test(attempt.error)) errors.push(attempt.error);
+  }
+
+  if (options.structuralRepair) {
+    const repairedText = repairVendorStructuralArtifacts(cleaned, options.structuralRepair);
+    if (repairedText !== null && repairedText !== cleaned.trim()) {
+      const attempt = attemptCandidate(repairedText, 'vendor_repair');
+      if ('value' in attempt) {
+        return { value: attempt.value, repairSteps: [...repairSteps, 'repair_vendor_structural_artifacts', ...attempt.steps] };
+      }
+      if (!/not parseable/.test(attempt.error)) errors.push(attempt.error);
     }
   }
 

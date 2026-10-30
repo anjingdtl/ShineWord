@@ -18,7 +18,7 @@ import { codePointLength } from '../../domain/world/textOffsets';
 import { LlmRequestFailure, normalizeReasoningTier, type LlmPhysicalRequestMetric, type LlmRequest, type ReasoningTier } from '../../application/llm/types';
 import type { ReasoningEffort } from '../worldBuild/groupPlanner';
 import type { LlmCompleteFn } from './llmExtractor';
-import { parseExtractorJson } from './llmExtractor';
+import { parseExtractorJson, evidenceRefsFromCandidate } from './llmExtractor';
 import { governWorldBuildRequest, type WorldBuildRequestGovernance } from '../worldBuild/llmRequest';
 
 export const LLM_GROUP_EXTRACTOR_VERSION = 'llm-group-extractor-1';
@@ -391,9 +391,7 @@ export class LlmGroupExtractor {
         mapping: candidate.mapping && typeof candidate.mapping === 'object' && !Array.isArray(candidate.mapping)
           ? candidate.mapping as Record<string, unknown>
           : {},
-        evidenceRefs: Array.isArray(candidate.evidenceQuotes)
-          ? candidate.evidenceQuotes.filter((ref): ref is string => typeof ref === 'string')
-          : [],
+        evidenceRefs: evidenceRefsFromCandidate(candidate),
       });
     }
 

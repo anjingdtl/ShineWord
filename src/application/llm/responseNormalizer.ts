@@ -140,6 +140,186 @@ export function repairTrailingCommas(text: string): string | null {
 export const MAX_DOUBLE_DECODE_LAYERS = 2;
 
 /**
+ * Vendor structural repair (final-closeout V1.1.1, R4): MiniMax-M3.1-class
+ * long-thinking generations deterministically emit two JSON artifacts that
+ * GLM/DeepSeek do not, both on HTTP 200 / finish_reason=stop responses:
+ *   Form A: a dropped closing quote of a known schema key (`"quote":"v"`
+ *           emitted as `"quote:v"`), which cascades into unparseable JSON.
+ *   Form B: a missing closing brace of a nested object inside an array
+ *           element (`"mapping":{"functions":[...],"evidenceQuotes":[...]}`),
+ *           which misnests the following keys and breaks the element.
+ * Both repairs are SYNTACTIC ONLY - form A is whitelist-bound to the caller's
+ * declared key vocabulary, form B only inserts a brace where no valid JSON can
+ * exist without one - and run only after strict parsing already failed, so a
+ * well-formed response is byte-identical to its input. Schema, evidence and
+ * authority validation stay strict downstream; a repair can never mint a
+ * valid-looking fact that the verbatim-quote checks would not also accept.
+ */
+
+/** Form A repair: `"key:"` -> `"key":"` for whitelisted keys only. */
+export function repairDroppedKeyClosingQuote(text: string, keys: ReadonlySet<string>): string {
+  return text.replace(/"([A-Za-z_][A-Za-z0-9_]*):"/g, (match, key: string) => (
+    keys.has(key) ? `"${key}":"` : match));
+}
+
+interface RepairEdit {
+  /** Character offset in the input where an insertion happens. */
+  offset: number;
+  /** Text to insert at that offset. */
+  insert: string;
+}
+
+interface ReadStringResult {
+  value: string;
+  /** Offset just past the closing quote. */
+  end: number;
+}
+
+/**
+ * Form B scan: one string-aware pass that records deterministic `}`
+ * insertions. Single trigger rule, structurally unambiguous: an object opener
+ * where a KEY is expected is never valid JSON, so the dangling object must be
+ * closed first (the model dropped its closer inside an array element). When
+ * that happens the following element-level keys may land one level deeper
+ * than intended; extractors recover the known misnested evidence key
+ * explicitly, and every recovered quote still passes the strict verbatim
+ * verification downstream. Truncation is NOT repaired: input that simply ends
+ * with open frames gets no insertion, so the caller's truncated-output
+ * classification stays intact. Any structure this scan does not recognize
+ * aborts the repair (null) rather than guessing.
+ */
+function scanMissingClosingBraces(text: string): RepairEdit[] | null {
+  const edits: RepairEdit[] = [];
+  const frames: Array<{ kind: 'object' | 'array'; objectState: 'expect-key' | 'after-key' | 'after-colon' | 'after-value' | null }> = [];
+  let i = 0;
+  const readStringAt = (start: number): ReadStringResult | null => {
+    let j = start + 1;
+    let esc = false;
+    while (j < text.length) {
+      const ch = text[j];
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') return { value: text.slice(start + 1, j), end: j + 1 };
+      j += 1;
+    }
+    return null; // unterminated string: nothing structural to decide here
+  };
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === '"') {
+      const str = readStringAt(i);
+      if (str === null) return null; // unterminated: leave for truncation handling
+      const top = frames[frames.length - 1];
+      if (top?.kind === 'object') {
+        if (top.objectState === 'expect-key') top.objectState = 'after-key';
+        else if (top.objectState === 'after-colon') top.objectState = 'after-value';
+        else return null; // genuinely malformed beyond these artifacts
+      }
+      i = str.end;
+      continue;
+    }
+    if (ch === ':') {
+      const top = frames[frames.length - 1];
+      if (top?.kind !== 'object' || top.objectState !== 'after-key') return null;
+      top.objectState = 'after-colon';
+      i += 1;
+      continue;
+    }
+    if (ch === ',') {
+      const top = frames[frames.length - 1];
+      if (top?.kind === 'object') {
+        if (top.objectState !== 'after-value') return null;
+        top.objectState = 'expect-key';
+      } else if (top?.kind !== 'array') return null;
+      i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      const top = frames[frames.length - 1];
+      if (top?.kind === 'object') {
+        if (top.objectState === 'after-colon') top.objectState = 'after-value';
+        else if (top.objectState === 'expect-key') {
+          // Close the dangling object and retry the opener at the outer level.
+          // The comma immediately before belongs to the OUTER container, so
+          // the closer goes before it (element boundary: `"]}` + `,` + `{`).
+          frames.pop();
+          const offset = text[i - 1] === ',' ? i - 1 : i;
+          edits.push({ offset, insert: '}' });
+          continue;
+        } else return null;
+      }
+      frames.push({ kind: 'object', objectState: 'expect-key' });
+      i += 1;
+      continue;
+    }
+    if (ch === '[') {
+      const top = frames[frames.length - 1];
+      if (top?.kind === 'object') {
+        if (top.objectState !== 'after-colon') return null;
+        top.objectState = 'after-value';
+      }
+      frames.push({ kind: 'array', objectState: null });
+      i += 1;
+      continue;
+    }
+    if (ch === '}') {
+      const top = frames[frames.length - 1];
+      if (top?.kind !== 'object') return null;
+      if (top.objectState !== 'after-value' && top.objectState !== 'expect-key') return null;
+      frames.pop();
+      i += 1;
+      continue;
+    }
+    if (ch === ']') {
+      const top = frames[frames.length - 1];
+      if (top?.kind !== 'array') return null;
+      frames.pop();
+      i += 1;
+      continue;
+    }
+    if (/\s/.test(ch)) { i += 1; continue; }
+    const literal = /^(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(text.slice(i));
+    if (!literal) return null; // unknown artifact class: never guess
+    const top = frames[frames.length - 1];
+    if (top?.kind === 'object') {
+      if (top.objectState !== 'after-colon') return null;
+      top.objectState = 'after-value';
+    }
+    i += literal[0].length;
+    continue;
+  }
+  if (frames.length > 0) return null; // truncation is not a repair target
+  return edits;
+}
+
+export interface StructuralRepairOptions {
+  /** All schema keys eligible for the form-A quote repair. */
+  vocabulary: ReadonlySet<string>;
+}
+
+/**
+ * Applies both vendor structural repairs. Returns null when the input does
+ * not exhibit them (or exhibits something this repair does not understand);
+ * callers must treat null as "no candidate", never as a silent fallback.
+ */
+export function repairVendorStructuralArtifacts(text: string, options: StructuralRepairOptions): string | null {
+  const quoted = repairDroppedKeyClosingQuote(text, options.vocabulary);
+  const edits = scanMissingClosingBraces(quoted);
+  // Form A alone can already make the text parseable; a form-B scan abort
+  // (unrecognized structure) must not discard that repair. JSON.parse on the
+  // candidate remains the final judge either way.
+  if (edits === null || edits.length === 0) return quoted !== text ? quoted : null;
+  let repaired = '';
+  let cursor = 0;
+  for (const edit of edits) {
+    repaired += quoted.slice(cursor, edit.offset) + edit.insert;
+    cursor = edit.offset;
+  }
+  repaired += quoted.slice(cursor);
+  return repaired;
+}
+
+/**
  * Unwraps double-encoded JSON: '"{\"a\":1}"' -> the object. At most 2 layers
  * (plan §45); returns null when the value is not a JSON-encoded string.
  */
