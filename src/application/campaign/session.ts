@@ -3670,11 +3670,18 @@ export class CampaignSession {
         anchorEvents: [], locations: [], locationOptions: [], canonCharacters: [], companionTemplates: [], encounterTemplates: [],
       };
     }
-    const entries = await this.loadPackageEntries(worldId, revision);
-    const pkg = await this.deps.worldStore.getWorldPackage(worldId, revision);
-    const anchorEvents = await this.deps.worldStore.listEvents(worldId);
+    // The five canon reads are independent; dispatching them together keeps
+    // the opening wizard's anchored projection under one SQLite round-trip
+    // latency instead of five (C-03: mount→suggestion p95 on-device). Read
+    // order never affected any projection, and results are identical.
+    const [entries, pkg, anchorEvents, rawFacts, worldEntities] = await Promise.all([
+      this.loadPackageEntries(worldId, revision),
+      this.deps.worldStore.getWorldPackage(worldId, revision),
+      this.deps.worldStore.listEvents(worldId),
+      this.deps.worldStore.listFacts(worldId),
+      this.deps.worldStore.listEntities(worldId),
+    ]);
     const hasCanonTimeAnchor = anchorEvents.some(event => event.status === 'canon' && event.worldTimeOrder !== null);
-    const rawFacts = await this.deps.worldStore.listFacts(worldId);
     const facts = rawFacts;
     const skills = entries
       .filter(entry => entry.kind === 'skill' && entry.visibility === 'public'
@@ -3703,7 +3710,7 @@ export class CampaignSession {
     // location entities (the extractor always produces those) - a package
     // without scene entries still offers real novel places to start at
     // instead of blocking the opening wizard (G02).
-    const canonLocations = (await this.deps.worldStore.listEntities(worldId))
+    const canonLocations = worldEntities
       .filter(entity => entity.type === 'location')
       .filter(entity => facts.some(fact => fact.subjectEntityId === entity.entityId
         && fact.status !== 'speculation' && fact.status !== 'conflict'
