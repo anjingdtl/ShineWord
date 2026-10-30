@@ -75,23 +75,31 @@ function syntheticSource(chapterCount, chunksPerChapter, chunkCp) {
   return { chapters, chunks };
 }
 
-test('V2-01 many small chapters merge into one large batch; no 14/32 chunk cap', () => {
+test('V2-01 chapter-first batches respect the artifact coverage limit; no chunk-count cap', () => {
   // 20 chapters x 5 chunks = 100 storage chunks, 1,200 cp each (1.2M cp book).
+  // Final-closeout R4: batches are bounded by the published-artifact coverage
+  // limit (12,000 code points), not by chunk counts and not by the model
+  // window — an oversized group could never publish.
   const { chapters, chunks } = syntheticSource(20, 5, 1_200);
   const batches = planAnalysisBatches(chapters, chunks, BUDGET_1M, {
     sourceRatio: SOURCE_RATIO_PROBE_START, density: DEFAULT_EXTRACTION_DENSITY,
   });
-  assert.equal(batches.length, 1, 'whole book fits one batch at 12% of 1M');
-  assert.equal(batches[0].segments.length, 100, 'all 100 storage chunks in the single batch');
-  assert.equal(batches[0].slices.length, 20, 'one AnalysisSlice per chapter');
-  assert.equal(batches[0].chapterIds.length, 20);
-  assert.ok(batches[0].estInputTokens > 100_000, 'batch is genuinely large');
+  assert.ok(batches.length > 1, 'a 1.2M cp book must split under the 12k coverage cap');
+  for (const batch of batches) {
+    const coverage = batch.segments.reduce((sum, segment) => sum + segment.charCount, 0);
+    assert.ok(coverage <= 12_000, `batch coverage ${coverage} exceeds the artifact limit`);
+  }
+  const covered = batches.flatMap(batch => batch.segments.map(segment => segment.chunkId));
+  assert.equal(covered.length, 100, 'all 100 storage chunks covered exactly once');
+  assert.equal(new Set(covered).size, 100);
+  assert.equal(batches[0].slices.length, 1, 'whole-chapter slices pack conservatively: one 6k-cp slice plus header stays under the cap, the second would exceed it');
 });
 
 test('V2-02 budget resolution: window share, hard input, density budget all bind', () => {
   // 1M window, ratio 0.12 -> 125,829 (window share binds).
   const byRatio = resolveAnalysisBatchBudget(BUDGET_1M, { sourceRatio: 0.12, density: 0.06 });
-  assert.equal(byRatio.sourceTargetTokens, Math.floor(1_048_576 * 0.12));
+  // Final-closeout R4: the artifact coverage limit binds above the window share.
+  assert.equal(byRatio.sourceTargetTokens, 12_000);
   // Tiny window with a big output reserve: hard input room binds below the
   // 30% window share.
   const tiny = { ...BUDGET_1M, contextWindowTokens: 30_000, maxContentOutputTokens: 20_000 };
@@ -99,7 +107,34 @@ test('V2-02 budget resolution: window share, hard input, density budget all bind
   assert.equal(byHard.sourceTargetTokens, 30_000 - 20_000 - 0 - 2_000 - 1_500);
   // Huge density: the output-density budget binds.
   const byDensity = resolveAnalysisBatchBudget(BUDGET_1M, { sourceRatio: 0.30, density: 0.5 });
-  assert.equal(byDensity.sourceTargetTokens, Math.floor((16_384 * 0.85) / 0.5));
+  // The coverage cap also binds above the density budget.
+  assert.equal(byDensity.sourceTargetTokens, 12_000);
+  // Final-closeout R4: one analysis batch becomes one publish group, and a
+  // published artifact's coverage may not exceed 12,000 code points — the
+  // domain limit binds above every other budget for large-context models.
+  const byCap = resolveAnalysisBatchBudget(BUDGET_1M, { sourceRatio: 0.12, density: 0.06 });
+  assert.equal(byCap.sourceTargetTokens, 12_000);
+});
+
+test('V2-02b batches never exceed the segment-artifact coverage limit', () => {
+  // A 1M-context model previously produced ~126k-token batches; the artifact
+  // guard rejects any published coverage over 12,000 code points, so oversized
+  // groups burned paid extraction requests and then failed publication
+  // deterministically (real 2026-10-30 device evidence). The planner must
+  // pack every batch inside the domain limit.
+  const { chapters, chunks } = syntheticSource(30, 5, 1_200); // 180k cp book
+  const batches = planAnalysisBatches(chapters, chunks, BUDGET_1M, {
+    sourceRatio: 0.30, density: 0.06,
+  });
+  assert.ok(batches.length > 1, 'a 180k cp book must split under the 12k coverage cap');
+  for (const batch of batches) {
+    const coverage = batch.segments.reduce((sum, segment) => sum + segment.charCount, 0);
+    assert.ok(coverage <= 12_000, `batch coverage ${coverage} exceeds the 12,000 code-point artifact limit`);
+  }
+  // Every storage chunk stays covered exactly once.
+  const covered = batches.flatMap(batch => batch.segments.map(segment => segment.chunkId));
+  assert.equal(covered.length, 150);
+  assert.equal(new Set(covered).size, 150);
 });
 
 test('V2-03 over-long chapter is sliced at chunk boundaries, fields stay exact', () => {

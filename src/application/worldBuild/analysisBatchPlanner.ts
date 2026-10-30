@@ -34,6 +34,7 @@
  * usage - never again "800 tokens per storage chunk".
  */
 import type { SourceChapter, SourceChunk } from '../../domain/world/types';
+import { SEGMENT_ARTIFACT_LIMITS } from '../../domain/content/segmentArtifact';
 import { orderChunksByChapter } from './chapterBatchPlanner';
 import type { ExtractSegment, ModelBudget } from './groupPlanner';
 
@@ -120,6 +121,12 @@ export function resolveAnalysisBatchBudget(
       Math.floor(budget.contextWindowTokens * sourceRatio),
       hardInputBudget,
       densityBudgetTokens,
+      // One analysis batch becomes one publish group, and a published segment
+      // artifact's coverage may not exceed the domain limit (final-closeout
+      // R4: oversized groups burned paid requests and then failed the artifact
+      // guard deterministically). Source "tokens" here are code points, so the
+      // domain limit applies directly.
+      SEGMENT_ARTIFACT_LIMITS.codePoints,
     ),
   );
   return { hardInputBudget, sourceTargetTokens, densityBudgetTokens, usableOutputTokens, sourceRatio, density };
