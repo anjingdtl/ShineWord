@@ -36,7 +36,7 @@ function readCredentials() {
     const m = line.match(/^([^：:]{1,40})[：:]\s*(.+)$/);
     if (m) fields[m[1].trim()] = m[2].trim();
   }
-  const endpoint = fields['base_url（OpenAI 兼容）'] || fields['base_url'] || fields.endpoint;
+  const endpoint = fields['base_url（OpenAI 兼容）'] || fields['base_url'] || fields['端点'] || fields.endpoint;
   const model = fields['模型'] || fields.model;
   const key = fields['key'] || fields['api key'] || fields['密钥'];
   if (!endpoint || !model || !key) throw new Error('credential file incomplete');
@@ -65,11 +65,21 @@ process.env.PHASE9_BUDGET_SCOPE_ID = SCOPE_ID;
 const budget = require(budgetModulePath);
 const { postQaHttp } = requireP('tools/phase9-http.cjs');
 
-function profileFor(endpoint) {
-  // Mirrors tools/convergence-real-journey.cjs profileFor (QA high tier) so the
-  // reproduction matches the C-17 host path that failed 18/18.
+function profileFor(endpoint, model) {
+  if (String(process.env.CLOSEOUT_PROVIDER || '').toLowerCase() === 'glm') {
+    // GLM-5.3-Flash preset (mobile/src/profileStore.ts): JSON mode supported,
+    // streaming supported, dialect resolved by the shared policy. Streaming is
+    // mandatory for extended ops (the ~300s buffered-gateway kill, AGENTS).
+    return {
+      id: 'closeout-host', name: 'closeout-host', endpoint, model, keyRef: 'memory',
+      reasoningTier: 'high', contentOutputTokens: 16_384,
+      capabilities: { supportsJson: true, supportsStreaming: true, reportsUsage: true,
+        contextWindow: 1_048_576, maxOutputTokens: 131_072, supportsPromptCache: true },
+    };
+  }
+  // MiniMax M3.1 Flash preset + QA high tier (the C-17 host path).
   return {
-    id: 'closeout-host', name: 'closeout-host', endpoint, model: 'MiniMax-M3.1-Flash', keyRef: 'memory',
+    id: 'closeout-host', name: 'closeout-host', endpoint, model: model || 'MiniMax-M3.1-Flash', keyRef: 'memory',
     reasoningTier: 'high', reasoningDialect: 'generic', contentOutputTokens: 16_384,
     capabilities: { supportsJson: false, supportsStreaming: true, reportsUsage: true,
       contextWindow: 1_000_000, maxOutputTokens: 524_288, supportsPromptCache: true },
@@ -88,7 +98,7 @@ function capturePaths(n) {
 async function main() {
   fs.mkdirSync(CAPTURES, { recursive: true });
   const creds = readCredentials();
-  const profile = profileFor(creds.endpoint);
+  const profile = profileFor(creds.endpoint, creds.model);
   const manifest = budget.readManifest();
   console.log(`[budget] scope=${manifest.scopeId} spent=${manifest.spentPhysicalRequests}/${manifest.capPhysicalRequests}${existed ? ' (reused existing ledger)' : ' (initialized)'}`);
 
@@ -146,6 +156,18 @@ async function main() {
     const runIds = imported.runIds.length > 0 ? imported.runIds
       : (await h.adapter.queryAll("SELECT run_id FROM world_build_runs WHERE world_id=? AND status NOT IN ('completed','canceled','failed_terminal') ORDER BY created_at DESC", [imported.worldId])).map(r => r.run_id);
     console.log(`[resume] runs: ${runIds.join(', ') || 'none'}`);
+    if (process.env.CLOSEOUT_SWITCH_API === '1') {
+      // Provider switch (MiniMax quota exhausted → GLM): re-freeze each non-
+      // terminal run onto the CURRENT profile through the production flow.
+      for (const runId of runIds) {
+        try {
+          const newRunId = await h.sourceImport.useCurrentApiForRun(runId, profile);
+          console.log(`[switch-api] ${runId.slice(-16)} -> ${String(newRunId).slice(-16)}`);
+        } catch (error) {
+          console.log(`[switch-api] ${runId.slice(-16)} refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+        }
+      }
+    }
     let lastBlocker = null;
     for (const runId of runIds) {
       for (let cycle = 0; cycle < 4; cycle += 1) {
@@ -166,6 +188,14 @@ async function main() {
             for (const factId of detail.factIds ?? []) {
               await h.runtime.worldStore.resolveCanonFactConflict(imported.worldId, factId, 'complementary');
             }
+          } else if (issue.kind === 'mapping_constraint') {
+            // The production review flow (ReviewPanel.rejectConstraint →
+            // worldStore.rejectMappingConstraint) rejects the proposed rule
+            // while keeping the evidenced facts; the next package version
+            // excludes the proposal. Rules are opt-in, facts are authority.
+            await h.runtime.worldStore.rejectMappingConstraint(imported.worldId, issue.issueId, issue.detailJson);
+            console.log('[review] mapping_constraint rejected via production flow (facts retained)');
+            continue;
           }
           await h.runtime.worldStore.resolveReviewIssue(imported.worldId, issue.issueId, 'resolved', true);
         }

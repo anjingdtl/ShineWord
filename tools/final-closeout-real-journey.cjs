@@ -31,7 +31,7 @@ function readCredentials() {
     const m = line.match(/^([^：:]{1,40})[：:]\s*(.+)$/);
     if (m) fields[m[1].trim()] = m[2].trim();
   }
-  const endpoint = fields['base_url（OpenAI 兼容）'] || fields['base_url'] || fields.endpoint;
+  const endpoint = fields['base_url（OpenAI 兼容）'] || fields['base_url'] || fields['端点'] || fields.endpoint;
   const model = fields['模型'] || fields.model;
   const key = fields['key'] || fields['api key'] || fields['密钥'];
   if (!endpoint || !model || !key) throw new Error('credential file incomplete');
@@ -53,9 +53,17 @@ process.env.PHASE9_BUDGET_SCOPE_ID = SCOPE_ID;
 const budget = require(budgetModulePath);
 const { postQaHttp } = requireP('tools/phase9-http.cjs');
 
-function profileFor(endpoint) {
+function profileFor(endpoint, model) {
+  if (String(process.env.CLOSEOUT_PROVIDER || '').toLowerCase() === 'glm') {
+    return {
+      id: 'closeout-journey', name: 'closeout-journey', endpoint, model, keyRef: 'memory',
+      reasoningTier: 'high', contentOutputTokens: 16_384,
+      capabilities: { supportsJson: true, supportsStreaming: true, reportsUsage: true,
+        contextWindow: 1_048_576, maxOutputTokens: 131_072, supportsPromptCache: true },
+    };
+  }
   return {
-    id: 'closeout-journey', name: 'closeout-journey', endpoint, model: 'MiniMax-M3.1-Flash', keyRef: 'memory',
+    id: 'closeout-journey', name: 'closeout-journey', endpoint, model: model || 'MiniMax-M3.1-Flash', keyRef: 'memory',
     reasoningTier: 'high', reasoningDialect: 'generic', contentOutputTokens: 16_384,
     capabilities: { supportsJson: false, supportsStreaming: true, reportsUsage: true,
       contextWindow: 1_000_000, maxOutputTokens: 524_288, supportsPromptCache: true },
@@ -73,7 +81,7 @@ function log(event) { fs.appendFileSync(jsonl, JSON.stringify({ at: new Date().t
 async function main() {
   fs.mkdirSync(WORK, { recursive: true });
   const creds = readCredentials();
-  const profile = profileFor(creds.endpoint);
+  const profile = profileFor(creds.endpoint, creds.model);
   const manifest = budget.readManifest();
   console.log(`[budget] scope=${manifest.scopeId} spent=${manifest.spentPhysicalRequests}/${manifest.capPhysicalRequests}`);
 
