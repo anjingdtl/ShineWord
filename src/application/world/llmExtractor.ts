@@ -121,13 +121,15 @@ export class LlmChunkExtractor implements ChunkExtractor {
       : LLM_EXTRACTOR_VERSION;
   }
 
-  async extract({ chunk, chunkText, unitId, route, reserveMultiplier }: {
+  async extract({ chunk, chunkText, unitId, route, reserveMultiplier, reserveTokensOverride }: {
     chunk: StoredChunk;
     chunkText: string;
     worldId: string;
     unitId?: string;
     route?: string;
     reserveMultiplier?: number;
+    /** Elastic reserve from measured usage; takes precedence over multiplier. */
+    reserveTokensOverride?: number;
   }): Promise<ExtractionResult> {
     const baseRequest: LlmRequest = {
       role: 'Extractor',
@@ -147,6 +149,7 @@ export class LlmChunkExtractor implements ChunkExtractor {
         logicalRequestId: `world-extract:${this.governance.runId}:${unitId ?? chunk.chunkId}:${route ?? 'all'}`,
         governance: this.governance,
         reserveMultiplier,
+        reserveTokensOverride,
       })
       : baseRequest;
     const response = await this.complete(request);

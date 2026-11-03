@@ -22,6 +22,20 @@ export interface GovernWorldBuildRequestInput {
   governance: WorldBuildRequestGovernance;
   /** Optional same-tier reserve increase for a bounded reasoning-only retry. */
   reserveMultiplier?: number;
+  /**
+   * Elastic reasoning reserve sized from MEASURED usage of the failed
+   * attempt (final-closeout R4). Takes precedence over the multiplier: the
+   * kernel clamps it to what the model context can actually fit, so a large
+   * window lets the reserve grow to cover measured thinking while a small
+   * window fails honestly with ReasoningCapabilityInsufficientError.
+   */
+  reserveTokensOverride?: number;
+  /**
+   * Measured exhausted sample accompanying the override (final-closeout R4):
+   * the kernel validates the override against the observed usage and fails
+   * honestly when the model context cannot fit it.
+   */
+  reasoningUsageFeedback?: { completed: number[]; exhausted: number[] };
 }
 
 /**
@@ -70,8 +84,10 @@ export function governWorldBuildRequest(input: GovernWorldBuildRequestInput): Ll
       tier: reasoningTier,
       providerDialect: profile.reasoningDialect ?? reasoningDialectForModel(profile.model),
       model: profile.model,
-      reserveMultiplier: input.reserveMultiplier,
-      reserveTokensOverride: input.governance.frozenReserveTokensByRequestKind?.[input.requestKind],
+      reserveMultiplier: input.reserveTokensOverride !== undefined ? undefined : input.reserveMultiplier,
+      reserveTokensOverride: input.reserveTokensOverride
+        ?? input.governance.frozenReserveTokensByRequestKind?.[input.requestKind],
+      ...(input.reasoningUsageFeedback ? { usageFeedback: input.reasoningUsageFeedback } : {}),
     },
   });
   const policy = plan.reasoningPolicy;

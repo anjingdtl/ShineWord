@@ -120,3 +120,60 @@ test('a production player turn freezes separate Planner and Narrator usage from 
     assert.equal(requests.find(r => r.role === 'Narrator').maxOutputTokens, 10500);
   } finally { h.db.close(); }
 });
+
+test('final-closeout: measured reasoning drives a context-elastic reserve for world extraction', () => {
+  // Real device evidence (2026-11-02): GLM high-tier world_extract on a
+  // 1M-context model measured 30,452 reasoning tokens against a 16,384
+  // cold-start reserve — the retry burned paid requests at the same
+  // insufficient size because the escalation was a fixed ×1.5 on the cold
+  // value. The elastic controller must size the retry from the MEASUREMENT
+  // (× REASONING_ONLY_RESERVE_MULTIPLIER) and the kernel must clamp it only
+  // by what the model context can actually fit.
+  const measured = 30452;
+  const override = Math.ceil(measured * 1.5); // 45678, what recoverReasoningPolicy produces
+  const extraction = input => resolveReasoningPolicy({
+    tier: 'high', providerDialect: 'glm', model: 'glm-5.3-flash',
+    requestKind: 'world_extract', modelMaxOutputTokens: 131_072,
+    contextWindowTokens: 1_048_576, ...input,
+  });
+  const elastic = extraction({ reserveTokensOverride: override });
+  assert.equal(elastic.reserveTokens, override, 'a 1M-context model keeps the measured-sized reserve intact');
+  assert.equal(elastic.reserveClamped, false);
+  assert.equal(elastic.reserveTokens + 6_000 <= 131_072, true, 'content + reserve fits the wire ceiling');
+
+  // Without the override the cold-start reserve stays at the schedule value —
+  // which is exactly the insufficiency the escalation must escape.
+  assert.equal(extraction({}).reserveTokens, 16_384);
+
+  // A model whose output ceiling cannot fit the observed usage + the
+  // business minimum refuses before dispatch instead of silently truncating
+  // reasoning again (maximumReserve = 32768 − 2000 < 30453).
+  assert.throws(
+    () => extraction({ modelMaxOutputTokens: 31_000, reserveTokensOverride: override,
+      usageFeedback: { completed: [], exhausted: [measured] } }),
+    /observed reasoning usage/,
+  );
+  // ...but a ceiling that fits the observed usage while clamping the full
+  // override honestly clamps (32768 − 2000 = 30768 ≥ observed + min? no —
+  // observed 30452 + min 2000 = 32452 > 32768 is false here).
+  const clamped = extraction({ modelMaxOutputTokens: 34_000, reserveTokensOverride: override,
+    usageFeedback: { completed: [], exhausted: [measured] } });
+  assert.equal(clamped.reserveTokens, 32_000); assert.equal(clamped.reserveClamped, true);
+
+  // The recovered policy from a length-exhausted attempt produces the same
+  // measured-sized override through the production helper.
+  const { recoverReasoningPolicy, observedReasoningTokensFromFailure } = require('../dist/application/llm/reasoningFeedback');
+  const { LlmRequestFailure } = require('../dist/application/llm/types');
+  const error = new LlmRequestFailure('LLM 请求失败（HTTP 200，length）', [
+    { attempt: 1, durationMs: 600_000, httpStatus: 200, outcome: 'invalid_response',
+      completionState: 'length', usage: { inputTokens: 4047, outputTokens: 30576,
+        reasoningTokens: 30_452, cachedInputTokens: 0, estimated: false } },
+  ]);
+  const observed = observedReasoningTokensFromFailure(error);
+  assert.equal(observed, 30_452);
+  const recovered = recoverReasoningPolicy(
+    { tier: 'high', providerDialect: 'glm', model: 'glm-5.3-flash', requestKind: 'world_extract' },
+    16_384, observed,
+  );
+  assert.equal(recovered.reserveTokensOverride, override);
+});

@@ -23,6 +23,8 @@ import { applyExtraction, eventIdFor, type EvidenceSource, type Sha256Hex } from
 import type { ExtractionResult } from '../../domain/world/types';
 import { LlmRequestFailure } from '../llm/types';
 import { OutcomeUnknownReplayError, classifyLlmFailure } from '../llm/requestLedger';
+import { observedReasoningTokensFromFailure } from '../llm/reasoningFeedback';
+import { REASONING_ONLY_RESERVE_MULTIPLIER } from '../llm/reasoningPolicy';
 import { BudgetInfeasibleError } from '../llm/requestPlan';
 import {
   DEFAULT_MODEL_BUDGET,
@@ -105,6 +107,8 @@ export interface UnitExtractor {
     worldId: string;
     route?: string;
     reserveMultiplier?: number;
+    /** Elastic reserve from measured usage; takes precedence over multiplier. */
+    reserveTokensOverride?: number;
   }): Promise<ExtractionResult>;
 }
 
@@ -896,24 +900,73 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
     });
   };
 
-  /** Retry the same unit once at the frozen tier with a bounded reserve increase. */
+  /**
+   * Elastic reasoning-reserve escalation (final-closeout R4, restores the
+   * intended recoverReasoningPolicy behaviour): after a reasoning-only or
+   * length-exhausted failure, the retry reserve is sized from the MEASURED
+   * reasoning usage × REASONING_ONLY_RESERVE_MULTIPLIER. The kernel clamps
+   * the override to maximumReserve = wireCeiling − business minimum, so the
+   * reserve elastically follows the model context: a 1M-window model grows
+   * the reserve to cover 30k+ measured thinking tokens while a small-window
+   * model fails honestly with ReasoningCapabilityInsufficientError. The
+   * measured size is remembered per unit so later attempts and resume cycles
+   * keep it instead of resetting to the cold-start value.
+   */
+  const measuredReserveByUnit = new Map<string, { override: number; measured: number }>();
+  const reasoningReserveOverrideFor = (unit: BuildUnitRecord): { reserveTokensOverride: number;
+    reasoningUsageFeedback: { completed: number[]; exhausted: number[] } } | undefined => {
+    const learned = measuredReserveByUnit.get(unit.unitId);
+    if (!learned) return undefined;
+    return { reserveTokensOverride: learned.override,
+      reasoningUsageFeedback: { completed: [], exhausted: [learned.measured] } };
+  };
+  const learnReasoningReserve = (unit: BuildUnitRecord, error: unknown): void => {
+    const observed = observedReasoningTokensFromFailure(error)
+      ?? (() => {
+        if (!(error instanceof LlmRequestFailure) || !error.requestMetrics.length) return undefined;
+        const last = error.requestMetrics.at(-1)!;
+        const usage = last.usage;
+        return usage?.estimated === false ? Math.max(usage.reasoningTokens ?? 0, usage.outputTokens ?? 0) || undefined : undefined;
+      })();
+    if (typeof observed !== 'number' || observed <= 0) return;
+    const prior = measuredReserveByUnit.get(unit.unitId);
+    const measured = Math.max(prior?.measured ?? 0, observed);
+    const override = Math.max(prior?.override ?? 0, Math.ceil(observed * REASONING_ONLY_RESERVE_MULTIPLIER));
+    measuredReserveByUnit.set(unit.unitId, { override, measured: Math.max(measured, Math.floor(override * 0.66)) });
+  };
+
+  type ElasticReserve = {
+    reserveTokensOverride?: number;
+    reasoningUsageFeedback?: { completed: number[]; exhausted: number[] };
+    reserveMultiplier?: number };
+  /** Retry the same unit once with a context-elastic measured reserve. */
   const runWithReasoningReserveBump = async (
     unit: BuildUnitRecord,
-    makeRequest: (reserveMultiplier?: number) => Promise<GroupExtractionResult>,
+    makeRequest: (elastic?: ElasticReserve) => Promise<GroupExtractionResult>,
   ): Promise<GroupExtractionResult> => {
+    const learned = reasoningReserveOverrideFor(unit);
     try {
-      return await makeRequest();
+      return await makeRequest(learned ? {
+        reserveTokensOverride: learned.reserveTokensOverride,
+        reasoningUsageFeedback: learned.reasoningUsageFeedback,
+      } : undefined);
     } catch (error) {
-      if (!isReasoningOnlyFailure(error) || !deps.budget || reasoningBumpRetried.has(unit.unitId)) {
-        throw error;
+      if (!isReasoningOnlyFailure(error) && !observedReasoningTokensFromFailure(error)) throw error;
+      if (deps.budget && !reasoningBumpRetried.has(unit.unitId)) {
+        reasoningBumpRetried.add(unit.unitId);
+        learnReasoningReserve(unit, error);
+        if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
+          await deps.runStore.appendUnitRequestMetrics(
+            unit.unitId, fencingToken, error.requestMetrics, now(),
+          );
+        }
       }
-      reasoningBumpRetried.add(unit.unitId);
-      if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
-        await deps.runStore.appendUnitRequestMetrics(
-          unit.unitId, fencingToken, error.requestMetrics, now(),
-        );
-      }
-      return await makeRequest(1.5);
+      // Measured override when available; otherwise the bounded ×1.5 fallback.
+      const afterLearn = reasoningReserveOverrideFor(unit);
+      return await makeRequest(afterLearn ? {
+        reserveTokensOverride: afterLearn.reserveTokensOverride,
+        reasoningUsageFeedback: afterLearn.reasoningUsageFeedback,
+      } : { reserveMultiplier: 1.5 });
     }
   };
 
@@ -1084,14 +1137,20 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         };
         let extraction: ExtractionResult;
         try {
-          extraction = await deps.extractor.extract(extractInput);
+          const elastic = reasoningReserveOverrideFor(unit);
+          extraction = await deps.extractor.extract({ ...extractInput,
+            ...(elastic ? { reserveTokensOverride: elastic.reserveTokensOverride, reasoningUsageFeedback: elastic.reasoningUsageFeedback } : {}) });
         } catch (error) {
-          if (!isReasoningOnlyFailure(error) || !deps.budget || reasoningBumpRetried.has(unit.unitId)) throw error;
+          if ((!isReasoningOnlyFailure(error) && !observedReasoningTokensFromFailure(error))
+            || !deps.budget || reasoningBumpRetried.has(unit.unitId)) throw error;
           reasoningBumpRetried.add(unit.unitId);
+          learnReasoningReserve(unit, error);
           if (error instanceof LlmRequestFailure && error.requestMetrics.length > 0) {
             await deps.runStore.appendUnitRequestMetrics(unit.unitId, fencingToken, error.requestMetrics, now());
           }
-          extraction = await deps.extractor.extract({ ...extractInput, reserveMultiplier: 1.5 });
+          const elastic = reasoningReserveOverrideFor(unit);
+          extraction = await deps.extractor.extract({ ...extractInput,
+            ...(elastic ? { reserveTokensOverride: elastic.reserveTokensOverride, reasoningUsageFeedback: elastic.reasoningUsageFeedback } : {}) });
         }
         // A user pause/stop waits for this paid request's fenced commit. Dropping
         // a successful response here would bill the same unit again on resume.
@@ -1121,14 +1180,14 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
         if (resident && bookSegments) {
           const firstSegment = globalSegmentIndexOf.get(ranges[0]!.chunkId) ?? 1;
           const lastSegment = globalSegmentIndexOf.get(ranges[ranges.length - 1]!.chunkId) ?? firstSegment;
-          const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
+          const makeRequest = async (elastic?: ElasticReserve): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extractResident({
               unitId: unit.unitId,
               segments: bookSegments,
               scope: { firstSegment, lastSegment },
               worldId: run.worldId,
               registrySummary,
-              reserveMultiplier,
+              ...(elastic ? { reserveTokensOverride: elastic.reserveTokensOverride, reasoningUsageFeedback: elastic.reasoningUsageFeedback } : {}),
               route: route ?? undefined,
             });
           group = await runWithReasoningReserveBump(unit, makeRequest);
@@ -1191,9 +1250,10 @@ export async function executeRun(deps: CoordinatorDeps, runId: string): Promise<
           }));
           const checkpointId = `job-extract-request-${requestHash}`;
           const checkpoint = await deps.worldStore.getJob(run.worldId, checkpointId);
-          const makeRequest = async (reserveMultiplier?: number): Promise<GroupExtractionResult> =>
+          const makeRequest = async (elastic?: ElasticReserve): Promise<GroupExtractionResult> =>
             deps.groupExtractor!.extract({
-              unitId: unit.unitId, segments, worldId: run.worldId, reserveMultiplier,
+              unitId: unit.unitId, segments, worldId: run.worldId,
+              ...(elastic ? { reserveTokensOverride: elastic.reserveTokensOverride, reasoningUsageFeedback: elastic.reasoningUsageFeedback } : {}),
               route: route ?? undefined,
               focusSummary: registrySummary,
             });

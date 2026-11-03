@@ -120,6 +120,14 @@ export interface GroupExtractInput {
   reasoningEffort?: ReasoningEffort;
   /** Same-tier reserve increase for one bounded reasoning-only retry. */
   reserveMultiplier?: number;
+  /**
+   * Elastic reasoning reserve sized from the measured usage of a failed
+   * attempt; takes precedence over reserveMultiplier (kernel clamps it to
+   * what the model context can fit).
+   */
+  reserveTokensOverride?: number;
+  /** Measured exhausted sample accompanying the override for kernel validation. */
+  reasoningUsageFeedback?: { completed: number[]; exhausted: number[] };
   /** Route focus (dual-route runs); omit for full-scope extraction. */
   route?: ExtractRoute;
 }
@@ -142,6 +150,9 @@ export interface ResidentExtractInput {
   /** Per-call reasoning effort override. */
   reasoningEffort?: ReasoningEffort;
   reserveMultiplier?: number;
+  reserveTokensOverride?: number;
+  /** Measured exhausted sample accompanying the override for kernel validation. */
+  reasoningUsageFeedback?: { completed: number[]; exhausted: number[] };
   /** Route focus (dual-route runs); omit for full-scope extraction. */
   route?: ExtractRoute;
 }
@@ -214,6 +225,8 @@ export class LlmGroupExtractor {
         logicalRequestId: `world-extract:${this.governance.runId}:${input.unitId}:${input.route ?? 'all'}`,
         governance: this.governance,
         reserveMultiplier: input.reserveMultiplier,
+        reserveTokensOverride: input.reserveTokensOverride,
+        reasoningUsageFeedback: input.reasoningUsageFeedback,
       })
       : baseRequest;
     const response = await this.complete(request);
@@ -257,6 +270,8 @@ export class LlmGroupExtractor {
         logicalRequestId: `world-extract:${this.governance.runId}:${input.unitId}:${input.route ?? 'all'}`,
         governance: this.governance,
         reserveMultiplier: input.reserveMultiplier,
+        reserveTokensOverride: input.reserveTokensOverride,
+        reasoningUsageFeedback: input.reasoningUsageFeedback,
       })
       : baseRequest;
     const response = await this.complete(request);
