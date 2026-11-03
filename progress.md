@@ -1,6 +1,31 @@
 # ShineWord 项目进度
 
-## 当前：启动收束（Startup Convergence，2026-10-26 开始）
+## 当前：V1.1.1 最终收口（Final Closeout，2026-10-29 开始）
+
+分支 `fix/v111-final-closeout`（从 main `afcf8dc` 建立）。验收报告：[docs/reviews/final-closeout-v111/FINAL_REPORT.md](docs/reviews/final-closeout-v111/FINAL_REPORT.md)。
+
+**门禁全量 1435/1435 全绿**（基线 1415 + 20 新测试）。版本 V1.1.1 不变（versionCode 1010100）。
+
+本轮核心修复：
+1. **MiniMax JSON 畸形修复**（`a9d5ac1`）：键名闭引号丢失 + 嵌套对象丢括号的语法层修复，解决 C-17 18 笔重试不发布
+2. **规划器 12k 覆盖上限**（`c4ee674`）：大批次不再超出 artifact 守卫限制，解决设备 GLM 世界构建反复 `invalid_artifact_structure`
+3. **弹性思考预留**（`a4fcc3f`）：重试预留量从实测思考量 × 1.5 推导（内核按模型上下文钳制），解决 GLM 高档思考耗尽输出预算
+4. **安全测试 + 路由矩阵**（`b28ce77`）：QA 代理拒绝泄漏审计 + L1/L2 行为矩阵 12 类覆盖
+5. **getWorldSetup 并行读**（`df0e1d4`）：C-03 挂载→建议 5 读合并为单次往返
+
+R4 真实小说证据：设备端 nvwang（放开那个女巫）rev1+rev2 通过真实 GLM 抽取→审查→发布管线成立。
+
+R2/R5/R8 设备测试：受模拟器环境不稳定（Keychain 锁定+GLM 流中断）阻断，登记 PARTIAL。
+
+| 账本 | 花费/上限 | 供应商 |
+|---|---|---|
+| scope1 | 28/30 | MiniMax |
+| ext1+ext2 | 60/60 | MiniMax→GLM |
+| ext3 | 14+/30 | GLM |
+| dev2+dev3 | 36+/60 | GLM |
+| 合计 | ~168 | |
+
+## 历史：启动收束（Startup Convergence，2026-10-26 开始）
 
 依据：[启动流程收束方案](docs/Shine-TRPG_STARTUP_CONVERGENCE_PLAN.md)。施工分支 `codex/startup-convergence-w0`（从 main `e7f5e9d` 建立）。检查点与证据：[docs/reviews/convergence/](docs/reviews/convergence/)（[CHECKPOINT](docs/reviews/convergence/CHECKPOINT.md)）。
 
