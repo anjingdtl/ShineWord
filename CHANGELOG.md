@@ -2,7 +2,25 @@
 
 本项目的全部版本变更记录。版本规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 
-## [Unreleased]
+## [1.1.2] - 2026-11-03
+
+### V1.1.1 最终收口（修复与打磨，无新子系统）
+
+#### 修复
+
+- **MiniMax 供应商 JSON 畸形修复**：MiniMax-M3.1-Flash 抽取响应确定性产生键名闭引号丢失与嵌套对象丢右括号两种畸形（HTTP 200 / finish=stop），导致解析失败重试循环。语法层白名单修复仅在严格解析失败后触发；修复后仍走严格逐字证据校验。含错位 evidenceQuotes 键恢复。
+- **规划器批次覆盖上限**：分析批次 bounded by 已发布工件覆盖上限（12,000 码点），超大批次在付费抽取前被规划器拆分，不再出现 HTTP 200 → artifact 守卫拒绝 → 重派 → 循环。
+- **弹性思考预留**：reasoning-only / length-exhausted 失败后重试预留量从实测思考用量 × REASONING_ONLY_RESERVE_MULTIPLIER 推导（内核按模型上下文钳制上限），解决 GLM 高档思考耗尽全部输出预算的重试循环。
+- **getWorldSetup 5 读并行**：开局向导锚定投影的 5 个独立 canon 读合并为单次往返（C-03 挂载→建议 p95 优化）。
+
+#### 测试
+
+- 新增 `minimax-json-repair`（12 用例）、`final-closeout-security`（2 用例）、`convergence-l1l2-routing-matrix`（6 用例）、`analysis-planner-v2` 更新 3 处、`reasoning-feedback` 新增 1 用例。
+- 全量 1435/1435。
+
+#### 安全
+
+- 无新增安全变更；新增 QA 代理 scoped hard-cap 拒绝泄漏审计与 pre-dispatch 拒绝持久化审计测试。
 
 ## [1.1.1] - 2026-10-29
 
